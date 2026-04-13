@@ -1,7 +1,5 @@
 {
-  "redirects": [
-    { "source": "/", "destination": "/docs/index.html", "permanent": false }
-  ],
+  "outputDirectory": "docs",
   "headers": [
     {
       "source": "/(.*)",
