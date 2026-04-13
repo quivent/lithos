@@ -166,10 +166,11 @@ def quantize(weights: np.ndarray, group_size: int = 128) -> dict:
         cutoff = np.sort(s_sensitivities)[actual_s - target_s]
         is_class_s = sensitivity > cutoff
 
-    # Scale factors for codebook-based quantization
-    # For 8-level codebook max = 2.152, for 6-level max = 1.894
-    scale_8 = group_scale / 2.152
-    scale_6 = group_scale / 1.894
+    # Single scale factor per group, normalized by codebook range
+    # Codebook values are for unit Gaussian; scale maps to actual weight range
+    # scale = sigma estimate for the group
+    group_std = np.std(groups, axis=1)
+    group_std = np.maximum(group_std, 1e-10)
 
     # Quantize each group
     all_indices_6 = []
@@ -183,10 +184,10 @@ def quantize(weights: np.ndarray, group_size: int = 128) -> dict:
     for g in range(n_groups):
         grp = groups[g]
         if is_class_s[g]:
-            idx = _quantize_group_8(grp, scale_8[g], group_zero[g])
+            idx = _quantize_group_8(grp, group_std[g], group_zero[g])
             indices_per_group[g] = idx
         else:
-            idx = _quantize_group_6(grp, scale_6[g], group_zero[g])
+            idx = _quantize_group_6(grp, group_std[g], group_zero[g])
             indices_per_group[g] = idx
 
     # Pack indices per group
@@ -212,8 +213,7 @@ def quantize(weights: np.ndarray, group_size: int = 128) -> dict:
         'n_weights': n,
         'group_size': group_size,
         'n_groups': n_groups,
-        'scales_8': scale_8.astype(np.float16),
-        'scales_6': scale_6.astype(np.float16),
+        'scales': group_std.astype(np.float16),
         'zeros': group_zero.astype(np.float16),
         'is_class_s': np.packbits(is_class_s),
         'n_class_s': int(np.sum(is_class_s)),
@@ -232,8 +232,7 @@ def dequantize(packed: dict) -> np.ndarray:
 
     is_class_s_bits = np.unpackbits(packed['is_class_s'])[:n_groups].astype(bool)
 
-    scales_8 = packed['scales_8'].astype(np.float32)
-    scales_6 = packed['scales_6'].astype(np.float32)
+    scales = packed['scales'].astype(np.float32)
     zeros = packed['zeros'].astype(np.float32)
 
     s_indices = packed['group_class_s_indices']
@@ -250,7 +249,7 @@ def dequantize(packed: dict) -> np.ndarray:
             start = gi * group_size
             idx = all_idx_8[start:start + group_size]
             vals = CODEBOOK_8[idx]
-            result[g * group_size:(g + 1) * group_size] = vals * scales_8[g] + zeros[g]
+            result[g * group_size:(g + 1) * group_size] = vals * scales[g] + zeros[g]
 
     if len(packed['packed_6']) > 0:
         all_idx_6 = _unpack_6level(packed['packed_6'], len(i_indices) * group_size)
@@ -258,7 +257,7 @@ def dequantize(packed: dict) -> np.ndarray:
             start = gi * group_size
             idx = all_idx_6[start:start + group_size]
             vals = CODEBOOK_6[idx]
-            result[g * group_size:(g + 1) * group_size] = vals * scales_6[g] + zeros[g]
+            result[g * group_size:(g + 1) * group_size] = vals * scales[g] + zeros[g]
 
     return result[:n].reshape(packed['original_shape'])
 
@@ -274,10 +273,9 @@ def layer_size_bytes(packed: dict) -> int:
     total = 0
     # Header (fixed overhead)
     total += 64
-    # Scales and zeros: FP16 each per group
-    total += packed['n_groups'] * 2  # scales_8
-    total += packed['n_groups'] * 2  # scales_6
-    total += packed['n_groups'] * 2  # zeros
+    # Scales and zeros: FP16 each per group (scale + zero = 32 bits = 4 bytes)
+    total += packed['n_groups'] * 2  # scales (FP16)
+    total += packed['n_groups'] * 2  # zeros (FP16)
     # Sensitivity map (packed bits)
     total += len(packed['is_class_s'])
     # Packed indices - 6-level: each uint32 holds 21 bits of data

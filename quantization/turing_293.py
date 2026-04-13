@@ -226,26 +226,28 @@ def dequantize(packed: dict) -> np.ndarray:
     zeros = packed['zeros'].astype(np.float32)
     groups_per_tile = TILE_SIZE // group_size
 
-    # Unpack all tile types
-    unpacked = {}
-    for tt, nbits, key, nkey in [(T2, 2, 'packed_t2', 'n_q_t2'),
-                                   (T3, 3, 'packed_t3', 'n_q_t3'),
-                                   (T4, 4, 'packed_t4', 'n_q_t4')]:
-        if len(packed[key]) > 0:
-            unpacked[tt] = _unpack_nbits(packed[key], nbits, packed[nkey])
-        else:
-            unpacked[tt] = np.array([], dtype=np.uint8)
+    # Compute words per tile for each bit width
+    words_per_tile = {
+        T2: (TILE_SIZE + 15) // 16,  # 2-bit: 16 per word
+        T3: (TILE_SIZE + 9) // 10,   # 3-bit: 10 per word
+        T4: (TILE_SIZE + 7) // 8,    # 4-bit: 8 per word
+    }
 
     result = np.zeros(n_tiles * TILE_SIZE, dtype=np.float32)
 
-    offsets = {T2: 0, T3: 0, T4: 0}
+    # Track word offsets per type (not value offsets)
+    word_offsets = {T2: 0, T3: 0, T4: 0}
 
     for t in range(n_tiles):
         ttype = tile_types[t]
         n_bits = [2, 3, 4][ttype]
+        wpt = words_per_tile[ttype]
+        key = ['packed_t2', 'packed_t3', 'packed_t4'][ttype]
 
-        tile_q = unpacked[ttype][offsets[ttype]:offsets[ttype] + TILE_SIZE]
-        offsets[ttype] += TILE_SIZE
+        # Unpack this tile's words
+        tile_words = packed[key][word_offsets[ttype]:word_offsets[ttype] + wpt]
+        tile_q = _unpack_nbits(tile_words, n_bits, TILE_SIZE)
+        word_offsets[ttype] += wpt
 
         for gi in range(groups_per_tile):
             g_idx = t * groups_per_tile + gi
