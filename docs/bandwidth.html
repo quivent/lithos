@@ -47,6 +47,7 @@
 .engine-pytorch   { color: var(--engine-pytorch); }
 
 .measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+.target { color: var(--accent); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
 .pitfall { color: var(--red); }
 .numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.92em; }
 
@@ -431,6 +432,56 @@ footer {
 </div>
 
 <p>The <span class="numbers">&gt;70%</span> target leaves margin below the <span class="numbers">~90%</span> hardware ceiling. HBM row activation, refresh, and bank conflicts account for the gap between <span class="numbers">90%</span> and <span class="numbers">100%</span>.</p>
+</section>
+
+<!-- Single-Launch Architecture -->
+<section id="single-launch">
+<h2>The Single-Launch Double Win</h2>
+
+<p><span class="engine engine-lithos">Lithos</span> takes kernel fusion to its logical endpoint: one kernel launch for the entire forward pass. One function, one <code>cuLaunchKernel</code> call, all 64 layers executed sequentially within that function. This eliminates two independent sources of idle HBM time.</p>
+
+<h3>Win 1: Zero launch overhead</h3>
+
+<p>Each kernel launch has a fixed cost: CPU writes the launch descriptor, GPU reads it, the CWD dispatches work to SMs. Measured cost: <span class="measure">2&ndash;5 &micro;s per launch</span>.</p>
+
+<p>A 64-layer forward pass has <span class="measure">~448</span> operation boundaries (64 layers &times; ~7 operations per layer). At <span class="measure">~3 &micro;s average</span>, that is <span class="measure">~1.3 ms</span> of pure overhead per token &mdash; time when the HBM controller is ready to deliver weights but no warp has issued an <code>LDG</code>. One launch replaces all of it with a single <span class="measure">3 &micro;s</span> cost.</p>
+
+<h3>Win 2: Zero intermediate HBM traffic</h3>
+
+<p>Between separate launches, intermediate values must be written to HBM &mdash; the only memory visible to both launches. Within a single launch, intermediates stay in registers (<span class="measure">1 cycle</span>) or shared memory (<span class="measure">23 cycles</span>).</p>
+
+<div class="mathbox">
+<div><span class="op">Boundaries per forward pass:</span>  64 layers &times; ~7 ops = <span class="cy">~448</span></div>
+<div><span class="op">Traffic per boundary:</span>         20 KB &times; 2 (write + read) = <span class="cy">40 KB</span></div>
+<div><span class="op">Total redundant traffic:</span>      448 &times; 40 KB = <span class="cy">~17 MB</span></div>
+<div>&nbsp;</div>
+<div><span class="op">At 4 TB/s, 17 MB takes ~4 &micro;s of bus time.</span></div>
+<div><span class="op">But latency dominates:</span>        <span class="cy">~800 cycles</span> per HBM round-trip (write 400 + read 400)</div>
+<div>&nbsp;&nbsp;448 &times; 800 = 358,400 cycles = <span class="cy">~196 &micro;s</span> at 1.83 GHz</div>
+</div>
+
+<p>One launch eliminates <span class="measure">17 MB</span> of redundant HBM traffic and <span class="measure">196 &micro;s</span> of round-trip latency per token. All intermediates stay in registers or shared memory.</p>
+
+<h3>Combined savings</h3>
+
+<div class="mathbox">
+<div><span class="op">Launch overhead eliminated:</span>   <span class="res">~1.3 ms</span></div>
+<div><span class="op">HBM latency eliminated:</span>      <span class="res">~0.2 ms</span></div>
+<div><span class="op">Total savings:</span>               <span class="res">~1.5 ms per token</span></div>
+<div>&nbsp;</div>
+<div><span class="op">Current per-token time (vLLM):</span>  <span class="cy">5.58 ms</span>  (179 tok/s)</div>
+<div><span class="op">Reduction:</span>                   1.5 / 5.58 = <span class="res">~27%</span></div>
+<div><span class="op">Projected rate from this alone:</span> <span class="res">~245 tok/s</span></div>
+</div>
+
+<p>Single-launch architecture eliminates both launch overhead and intermediate memory traffic. The combined savings are <span class="target">~1.5 ms per token</span> on GH200, representing <span class="target">~27%</span> of the current per-token time measured with <span class="engine engine-vllm">vLLM</span>. This is a design target, not a measurement.</p>
+
+<h3>Engineering constraint: registers and code size</h3>
+
+<p>One function doing 64 layers does not need 64&times; the registers. Operations execute sequentially &mdash; layer 0 finishes before layer 1 starts. The compiler reuses registers. Peak register usage equals the most register-hungry single operation (the tensor core tile), not the sum of all operations.</p>
+
+<p>Compiled code size does grow (more instructions = larger cubin), but instructions stream from L2 cache to the SM's instruction cache on demand. This is identical to how a CPU handles large functions &mdash; the instruction cache holds the hot working set, not the entire binary.</p>
+
 </section>
 
 <!-- Empirical -->

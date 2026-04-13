@@ -236,6 +236,9 @@ td code {
 .diagram .accent { color: var(--accent); }
 .diagram .dim { color: var(--text-faint); }
 
+/* Target / projected values */
+.target { color: var(--accent); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+
 /* Utility */
 .mt-1 { margin-top: 1rem; }
 .mt-2 { margin-top: 2rem; }
@@ -641,6 +644,57 @@ footer {
     <p>Eliminates ptxas JIT time (<span class="mono" style="color: var(--cyan);">100ms&ndash;2s</span> per kernel). For memory-bound workloads, explicit stall counts and register reuse flags in the control word can schedule loads and computes more tightly than the generic ptxas scheduler. The SASS path requires reverse engineering of the Hopper pipeline that is not yet complete.</p>
   </div>
 </div>
+
+</section>
+
+
+<!-- Single-Launch Architecture -->
+<section id="single-launch">
+<h2>Single-Launch Architecture</h2>
+
+<p>The optimizations above converge on a single architectural decision: emit one kernel launch for the entire forward pass. One function, one <code>cuLaunchKernel</code> call, all 64 layers executed sequentially within that function. This produces two independent wins.</p>
+
+<h3>Win 1: Zero launch overhead</h3>
+
+<p>Each kernel launch costs CPU time: writing the launch descriptor, GPU reading it, the CWD dispatching work to SMs. Measured cost: <span class="measure">2&ndash;5 &micro;s per launch</span>.</p>
+
+<p>A conventional forward pass has <span class="measure">~448</span> operation boundaries (64 layers &times; ~7 operations per layer). At <span class="measure">~3 &micro;s average</span> per launch, that is <span class="measure">~1.3 ms</span> of pure dispatch overhead per token. A single launch replaces all of it with one <span class="measure">3 &micro;s</span> overhead.</p>
+
+<div class="callout">
+<p>Savings from eliminating launch overhead: <span class="target">~1.3 ms per token</span>.</p>
+</div>
+
+<h3>Win 2: Zero intermediate HBM traffic</h3>
+
+<p>Between separate kernel launches, intermediate values must be written to HBM &mdash; the only memory both launches can see. Within a single launch, intermediates stay in registers (<span class="measure">1 cycle</span>) or shared memory (<span class="measure">23 cycles</span>).</p>
+
+<p>The math for a 64-layer forward pass:</p>
+
+<pre>
+Boundaries:          64 layers &times; ~7 ops/layer    = <span style="color: var(--cyan);">~448 boundaries</span>
+Per boundary:        20 KB activation &times; 2 (write+read) = <span style="color: var(--cyan);">40 KB</span>
+Total traffic:       448 &times; 40 KB               = <span style="color: var(--cyan);">~17 MB</span> redundant HBM traffic
+
+At 4 TB/s raw bandwidth, 17 MB takes ~4 &micro;s.
+But the LATENCY dominates: <span style="color: var(--cyan);">~800 cycles</span> per HBM round-trip (write 400 + read 400).
+448 &times; 800 = 358,400 cycles = <span style="color: var(--cyan);">~196 &micro;s</span> at 1.83 GHz.
+</pre>
+
+<p>One launch: all intermediates stay in registers or shared memory. <span class="measure">17 MB</span> of HBM traffic eliminated. <span class="measure">196 &micro;s</span> of stall cycles eliminated.</p>
+
+<div class="callout">
+<p>Savings from eliminating intermediate traffic: <span class="target">~196 &micro;s per token</span>.</p>
+</div>
+
+<h3>Combined savings</h3>
+
+<p>Single-launch architecture eliminates both launch overhead and intermediate memory traffic. The combined savings are <span class="target">~1.5 ms per token</span> on GH200, representing <span class="target">~27%</span> of the current per-token time measured with <span class="engine engine-vllm">vLLM</span> (<span class="measure">5.58 ms/token</span> at <span class="measure">179 tok/s</span>). Applied to the baseline, this alone would yield <span class="target">~245 tok/s</span>. This is a design target, not a measurement.</p>
+
+<h3>Why one function does not mean 64&times; the registers</h3>
+
+<p>Operations within the function execute sequentially &mdash; layer 0 finishes before layer 1 starts. The compiler reuses registers. Peak register usage equals the most register-hungry single operation (the tensor core tile), not the sum of all operations.</p>
+
+<p>The compiled code size does grow: more instructions produce a larger cubin. But instructions stream from L2 cache to the SM's instruction cache on demand. This is identical to how a CPU handles large functions &mdash; the instruction cache holds the hot working set, not the entire binary.</p>
 
 </section>
 
