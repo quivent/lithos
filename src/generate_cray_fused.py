@@ -124,7 +124,7 @@ def main() -> int:
     print(f"  Max active blocks per SM: {max_blks}")
     print(f"  Max cooperative grid: {max_blks * sm_count}")
 
-    grid_size = sm_count  # 1 block per SM
+    grid_size = min(NUM_BLOCKS, max_blks * sm_count)
     total_threads = grid_size * THREADS_PER_BLOCK
     print(f"  Using grid: ({grid_size}, 1, 1)  block: ({THREADS_PER_BLOCK}, 1, 1)")
     print(f"  Total threads: {total_threads}")
@@ -271,7 +271,6 @@ def main() -> int:
         ctypes.c_uint64(d_normed.value),
         ctypes.c_uint64(d_sync_workspace.value),
         ctypes.c_uint64(d_norm_partials.value),
-        ctypes.c_uint32(grid_size),               # grid_size_param
     ]
 
     # ------------------------------------------------------------------
