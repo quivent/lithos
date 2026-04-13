@@ -1,37 +1,3 @@
-.global code_PARSE_TOKENS
-.global emit_add_reg_v2
-.global emit_and_reg_v2
-.global emit_b_cond_v2
-.global emit_b_v2
-.global emit_bl_v2
-.global emit_cbz_v2
-.global emit_cmp_reg_v2
-.global emit_cur_v2
-.global emit_eor_reg_v2
-.global emit_load_width_v2
-.global emit_lsl_reg_v2
-.global emit_lsr_reg_v2
-.global emit_mov_imm16_v2
-.global emit_mov_imm64_v2
-.global emit_mov_reg_v2
-.global emit_movk_imm16_v2
-.global emit_mul_reg_v2
-.global emit_nop_v2
-.global emit_orr_reg_v2
-.global emit_ret_v2
-.global emit_sdiv_reg_v2
-.global emit_store_width_v2
-.global emit_sub_reg_v2
-.global emit_svc_v2
-.global entry_p_parse_tokens
-.global entry_p_parse_tokens_v2
-.global parse_dollar_reg_v2
-.global parse_int_v2
-.global parse_tokens_v2
-.global sym_add_v2
-.global sym_lookup_v2
-.global sym_pop_scope_v2
-
 // lithos-parser-v2.s — Stack-language parser for Lithos .ls token streams
 //
 // Compilation model:
@@ -43,7 +9,7 @@
 //   - Composition args: X0-X7 per AAPCS64
 //
 // Threading: Native ARM64 subroutine calls (bl/ret), not DTC.
-//   The parser is called FROM the DTC bootstrap via code_PARSE_TOKENS.
+//   The parser is called FROM the DTC bootstrap via code_PARSE_TOKENS_V2.
 //
 // Register conventions (inherited from lithos-bootstrap.s):
 //   X26 = IP   (DTC instruction pointer)
@@ -2471,12 +2437,12 @@ v2_err_underflow:
     svc     #0
 
 // ============================================================
-// DTC wrapper — code_PARSE_TOKENS
+// DTC wrapper — code_PARSE_TOKENS_V2
 //   Stack: ( tok-buf tok-count src-buf -- )
 // ============================================================
 .align 4
-.global code_PARSE_TOKENS
-code_PARSE_TOKENS:
+.global code_PARSE_TOKENS_V2
+code_PARSE_TOKENS_V2:
     stp     x26, x25, [sp, #-16]!
     stp     x24, x23, [sp, #-16]!
     stp     x22, x20, [sp, #-16]!
@@ -2557,7 +2523,7 @@ entry_p_parse_tokens:
     .byte   12
     .ascii  "parse-tokens"
     .align  3
-    .quad   code_PARSE_TOKENS
+    .quad   code_PARSE_TOKENS_V2
 
 entry_p_parse_tokens_v2:
     .quad   entry_p_parse_tokens
@@ -2565,4 +2531,4 @@ entry_p_parse_tokens_v2:
     .byte   15
     .ascii  "parse-tokens-v2"
     .align  3
-    .quad   code_PARSE_TOKENS
+    .quad   code_PARSE_TOKENS_V2
