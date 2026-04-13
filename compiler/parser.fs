@@ -26,7 +26,6 @@ variable li-mode     0 li-mode !
 variable li-defs     0 li-defs !
 variable li-kernels  0 li-kernels !
 variable li-hosts    0 li-hosts !
-variable li-backend  0 li-backend !   \ legacy — will be removed with lithos.fs cleanup
 
 \ ---- Current function name ---------------------------------------------------
 
@@ -178,56 +177,14 @@ create k-f32u32   7 allot   s" f32>u32" k-f32u32 swap move
 create k-u32f32   7 allot   s" u32>f32" k-u32f32 swap move
 create k-s32f32   7 allot   s" s32>f32" k-s32f32 swap move
 
-\ ---- PTX text buffer ---------------------------------------------------------
-\ When --emit ptx is selected, these words build a text buffer.
-\ In SASS mode they still work (produce text), but the text is ignored.
+\ ---- Param counting (used by cubin-wrap.fs) ----------------------------------
+: count-ptr-params ( -- n )
+    0 n-syms @ 0 ?do
+        i sym-kind@ dup 0 = swap 1 = or if 1+ then
+    loop ;
 
-65536 constant PTX-BUF-SIZE
-create ptx-buf PTX-BUF-SIZE allot
-variable ptx-pos  0 ptx-pos !
-
-: ptx+  ( addr u -- )
-    dup ptx-pos @ + PTX-BUF-SIZE < 0= if 2drop exit then
-    ptx-buf ptx-pos @ + swap dup >r move r> ptx-pos +! ;
-
-: ptx-nl  ( -- )  10 ptx-buf ptx-pos @ + c!  1 ptx-pos +! ;
-
-: ptx-c  ( c -- )  ptx-buf ptx-pos @ + c!  1 ptx-pos +! ;
-
-\ Number to decimal string for PTX
-create ptx-num-buf 16 allot
-variable pn-pos
-variable pn-neg
-: ptx-num  ( n -- addr u )
-    dup 0= if drop s" 0" exit then
-    0 pn-neg !
-    dup 0< if negate -1 pn-neg ! then
-    \ Fill digits right-to-left starting at buf+15
-    15 pn-pos !
-    begin dup 0> while
-        dup 10 mod [char] 0 + ptx-num-buf pn-pos @ + c!
-        -1 pn-pos +!
-        10 /
-    repeat
-    drop
-    pn-neg @ if
-        ptx-num-buf pn-pos @ + [char] - swap c!
-        -1 pn-pos +!
-    then
-    ptx-num-buf pn-pos @ + 1+      \ addr
-    15 pn-pos @ - ;                 \ len
-
-: ptx-header  ( -- )
-    s" .version 8.5" ptx+ ptx-nl
-    s" .target sm_90" ptx+ ptx-nl
-    s" .address_size 64" ptx+ ptx-nl ptx-nl ;
-
-: ptx-indent  ( -- )  s"     " ptx+ ;
-
-: ptx-freg  ( n -- )  s" %f" ptx+  ptx-num ptx+ ;
-: ptx-r32   ( n -- )  s" %r" ptx+  ptx-num ptx+ ;
-: ptx-r64   ( n -- )  s" %rd" ptx+ ptx-num ptx+ ;
-: ptx-preg  ( n -- )  s" %p" ptx+  ptx-num ptx+ ;
+: count-all-params ( -- n )
+    count-ptr-params n-sparams @ + ;
 
 \ ---- SASS emitter stubs (overridden when emit-sass.fs is loaded) -------------
 \ These let the parser compile even without the SASS backend.
@@ -248,19 +205,6 @@ variable sass-pos  0 sass-pos !
 \ ---- IEEE 754 float encoding -------------------------------------------------
 \ Convert a float string like "1.0" or "0.5" to IEEE 754 hex "0f3F800000"
 \ We use a lookup table for common constants to avoid needing FP in Forth.
-
-\ Helper: emit 4-bit hex digit
-: hex-digit ( n -- c )
-    dup 10 < if [char] 0 + else 10 - [char] A + then ;
-
-\ Emit a 32-bit value as 8 hex digits
-: mask32 ( n -- n ) 4294967295 and ;
-: emit-hex32 ( n -- )
-    mask32
-    8 0 do
-        dup 28 rshift 15 and hex-digit ptx-c
-        4 lshift mask32
-    loop drop ;
 
 \ Known float constants table: string -> IEEE754 hex
 \ We store these as pairs. The parser checks the table.
@@ -319,114 +263,10 @@ variable n-fconst  0 n-fconst !
 init-fconsts
 fix-fconst-zero
 
-\ ---- PTX header for a function -----------------------------------------------
-
-variable header-emitted  0 header-emitted !
-variable global-header-emitted  0 global-header-emitted !
-
-\ Count pointer params (kinds 0 and 1)
-: count-ptr-params ( -- n )
-    0 n-syms @ 0 ?do
-        i sym-kind@ dup 0 = swap 1 = or if 1+ then
-    loop ;
-
-\ Count all entry params (ptr + scalar)
-: count-all-params ( -- n )
-    count-ptr-params n-sparams @ + ;
-
-: ptx-emit-header  ( -- )
-    header-emitted @ if exit then  1 header-emitted !
-    global-header-emitted @ 0= if
-        ptx-header
-        1 global-header-emitted !
-    then
-    s" .visible .entry " ptx+  li-name$ ptx+  s" (" ptx+ ptx-nl
-
-    \ Emit pointer params
-    0  \ param counter
-    n-syms @ 0 ?do
-        i sym-kind@ dup 0 = swap 1 = or if
-            ptx-indent s" .param .u64 " ptx+
-            i sym-name@ ptx+
-            1+
-            dup count-all-params < if s" ," ptx+ then
-            ptx-nl
-        then
-    loop
-
-    \ Emit scalar params
-    n-sparams @ 0 ?do
-        ptx-indent
-        i sparam-type@ 0= if s" .param .u32 " ptx+ else s" .param .f32 " ptx+ then
-        s" param_" ptx+
-        i sparam-name@ ptx+
-        1+
-        dup count-all-params < if s" ," ptx+ then
-        ptx-nl
-    loop
-    drop
-
-    s" )" ptx+ ptx-nl
-    s" {" ptx+ ptx-nl
-
-    \ Shared memory declarations
-    n-shared @ 0 ?do
-        ptx-indent s" .shared .align 16 .b8 " ptx+
-        i shm-name@ ptx+ s" [" ptx+
-        i cells shm-bytes + @ ptx-num ptx+ s" ];" ptx+ ptx-nl
-    loop
-
-    \ Register pools (generous sizes)
-    ptx-indent s" .reg .pred %p<32>;"  ptx+ ptx-nl
-    ptx-indent s" .reg .b32  %r<128>;" ptx+ ptx-nl
-    ptx-indent s" .reg .b64  %rd<64>;" ptx+ ptx-nl
-    ptx-indent s" .reg .f32  %f<128>;" ptx+ ptx-nl
-    ptx-nl
-
-    \ Load pointer params into rd registers
-    n-syms @ 0 ?do
-        i sym-kind@ dup 0 = swap 1 = or if
-            ptx-indent s" ld.param.u64 " ptx+  i sym-reg@ ptx-r64
-            s" , [" ptx+  i sym-name@ ptx+  s" ];" ptx+ ptx-nl
-        then
-    loop
-
-    \ Load scalar params into r/f registers
-    n-sparams @ 0 ?do
-        i sparam-type@ 0= if
-            ptx-indent s" ld.param.u32 " ptx+
-            \ Find the sym for this scalar param
-            i sparam-name@ sym-find dup -1 <> if
-                dup sym-reg@ ptx-r32
-            else drop then
-            s" , [param_" ptx+  i sparam-name@ ptx+  s" ];" ptx+ ptx-nl
-        else
-            ptx-indent s" ld.param.f32 " ptx+
-            i sparam-name@ sym-find dup -1 <> if
-                dup sym-reg@ ptx-freg
-            else drop then
-            s" , [param_" ptx+  i sparam-name@ ptx+  s" ];" ptx+ ptx-nl
-        then
-    loop
-    ptx-nl ;
-
-: ptx-emit-footer  ( -- )
-    ptx-nl
-    s" $L_exit:" ptx+ ptx-nl
-    ptx-indent s" ret;" ptx+ ptx-nl
-    s" }" ptx+ ptx-nl ;
-
 \ ---- Emit "each" (thread indexing) -------------------------------------------
 \ %r0=ctaid.x  %r1=ntid.x  %r2=tid.x  %r3=global_tid
 
 : emit-each-tid  ( -- )
-    \ PTX: thread indexing
-    ptx-indent s" mov.u32 %r0, %ctaid.x;" ptx+ ptx-nl
-    ptx-indent s" mov.u32 %r1, %ntid.x;" ptx+ ptx-nl
-    ptx-indent s" mov.u32 %r2, %tid.x;" ptx+ ptx-nl
-    ptx-indent s" mad.lo.u32 %r3, %r0, %r1, %r2;" ptx+ ptx-nl
-    \ SASS: S2R r0,SR_CTAID.X(0x25)  S2R r1,SR_NTID.X(0x29)  S2R r2,SR_TID.X(0x21)
-    \ then IMAD r3, r0, r1, r2  (global_tid = ctaid*ntid + tid)
     0 $25 s2r,
     1 $29 s2r,
     2 $21 s2r,
@@ -469,69 +309,38 @@ variable rie-result
     sym-reg@ ;
 
 : resolve-idx-expr ( -- rreg )
-    \ Peek at the token stream, decide form, emit PTX, return result rreg.
     src-pos @ rie-pos0 !
-
-    \ Token A
-    src-token                          \ ( addr u )
-    resolve-sym-rreg rie-rA !          \ save A's register (consumes addr u)
-
-    \ Peek for operator
-    src-pos @ >r  src-token  r> swap >r src-pos !  r>  \ peek next
-    \ ( peek-addr peek-u )
-
+    src-token resolve-sym-rreg rie-rA !
+    src-pos @ >r  src-token  r> swap >r src-pos !  r>
     2dup k-star 1 li-tok= if
-        \ Form: A * imm + B  ->  mad.lo.u32 rResult, rA, imm, rB
         2drop
-        src-token                          \ imm token
-        2dup is-number? if
-            parse-uint rie-imm !
-        else
-            \ fallback: treat as 1
-            2drop 1 rie-imm !
-        then
-        \ expect "+"
-        src-token 2drop                    \ consume "+"
-        \ token B
+        src-token 2dup is-number? if parse-uint rie-imm ! else 2drop 1 rie-imm ! then
+        src-token 2drop
         src-token resolve-sym-rreg rie-rB !
-        \ emit mad.lo.u32 rResult, rA, imm, rB
         rreg+ rie-result !
-        ptx-indent s" mad.lo.u32 " ptx+  rie-result @ ptx-r32
-        s" , " ptx+  rie-rA @ ptx-r32
-        s" , " ptx+  rie-imm @ ptx-num ptx+
-        s" , " ptx+  rie-rB @ ptx-r32
-        s" ;" ptx+ ptx-nl
+        rie-result @ rie-rA @ rie-imm @ rie-rB @ imad,
         rie-result @
     else 2dup k-plus 1 li-tok= if
-        \ Form: A + B  ->  add.u32 rResult, rA, rB
         2drop
         src-token resolve-sym-rreg rie-rB !
         rreg+ rie-result !
-        ptx-indent s" add.u32 " ptx+  rie-result @ ptx-r32
-        s" , " ptx+  rie-rA @ ptx-r32
-        s" , " ptx+  rie-rB @ ptx-r32
-        s" ;" ptx+ ptx-nl
+        rie-result @ rie-rA @ 1 rie-rB @ imad,
         rie-result @
     else
-        \ Simple: just A
-        2drop
-        rie-rA @
+        2drop rie-rA @
     then then ;
 
 : emit-iload-r  ( param-rd idx-rreg -- freg )
     freg+ -rot
-    ptx-indent s" mul.wide.u32 %rd22, " ptx+  ptx-r32  s" , 4;" ptx+ ptx-nl
-    ptx-indent s" add.u64 %rd23, " ptx+  ptx-r64  s" , %rd22;" ptx+ ptx-nl
-    ptx-indent s" ld.global.f32 " ptx+  dup ptx-freg  s" , [%rd23];" ptx+ ptx-nl ;
+    rreg+ >r  r@ swap 4 0 imad,
+    rot dup >r swap r> r> ldg-off, ;
 
 : emit-iload  ( param-rd -- freg )
     3 emit-iload-r ;
 
 : emit-istore-r  ( param-rd idx-rreg freg -- )
-    >r                          \ save freg on return stack
-    ptx-indent s" mul.wide.u32 %rd22, " ptx+  ptx-r32  s" , 4;" ptx+ ptx-nl
-    ptx-indent s" add.u64 %rd23, " ptx+  ptx-r64  s" , %rd22;" ptx+ ptx-nl
-    ptx-indent s" st.global.f32 [%rd23], " ptx+  r> ptx-freg  s" ;" ptx+ ptx-nl ;
+    >r  rreg+ >r  r@ swap 4 0 imad,
+    swap r> r> stg-off, ;
 
 : emit-istore  ( param-rd freg -- )
     swap 3 swap emit-istore-r ;
@@ -611,6 +420,7 @@ variable ph-acc
 
 \ ---- Expression parser (returns freg holding result) -------------------------
 variable 'parse-expr
+variable 'parse-fn-body
 
 : peek-tok  ( -- addr u )
     src-pos @ >r  src-token  r> swap >r src-pos !  r> ;
@@ -621,28 +431,104 @@ variable fc-hex
 : emit-fconst ( addr u -- freg )
     2dup fconst-find if
         fc-hex ! 2drop freg+ fc-freg !
-        ptx-indent s" mov.f32 " ptx+  fc-freg @ ptx-freg  s" , 0f" ptx+
-        fc-hex @ emit-hex32
-        s" ;" ptx+ ptx-nl
+        fc-freg @ fc-hex @ mov-imm,
         fc-freg @
     else
         2drop freg+ fc-freg !
-        ptx-indent s" mov.f32 " ptx+  fc-freg @ ptx-freg  s" , 0f00000000;" ptx+ ptx-nl
+        fc-freg @ 0 mov-imm,
         fc-freg @
     then ;
+            drop
 
 \ Emit an integer constant into an r32 register
 variable ic-rreg
 : emit-iconst ( n -- rreg )
     rreg+ ic-rreg !
-    ptx-indent s" mov.u32 " ptx+  ic-rreg @ ptx-r32  s" , " ptx+
-    dup 0< if
-        s" 0x" ptx+ emit-hex32
-    else
-        ptx-num ptx+
-    then
-    s" ;" ptx+ ptx-nl
+    ic-rreg @ swap mov-imm,
     ic-rreg @ ;
+
+\ ---- Inline function call ----------------------------------------------------
+\ When parse-atom encounters an unknown identifier that is a registered
+\ function name, we inline its body into the caller.
+\
+\ Inline mode: during inline replay, the callee's `each` is skipped (the
+\ caller already has thread indexing), and the callee's output store
+\ y[i] = expr  becomes a register capture: the expr result freg is saved
+\ to inline-result-freg, and the store is suppressed.
+\
+\ inline-call ( fn-idx -- freg )
+
+variable inline-mode       0 inline-mode !
+variable inline-result-freg  -1 inline-result-freg !
+
+variable ic-fn-idx
+variable ic-saved-src-pos
+variable ic-saved-nsyms
+8 constant MAX-INLINE-ARGS
+create ic-arg-regs MAX-INLINE-ARGS cells allot
+create ic-arg-kinds MAX-INLINE-ARGS cells allot
+
+: inline-call  ( fn-idx -- freg )
+    ic-fn-idx !
+    inline-depth @ MAX-INLINE-DEPTH < 0= if
+        freg+ dup >r
+        r@ 0 mov-imm,
+        r> exit
+    then
+    1 inline-depth +!
+
+    \ Parse caller arguments: one token per callee param
+    ic-fn-idx @ cells fndef-nparams + @ 0 ?do
+        src-token dup 0= if 2drop 0 i cells ic-arg-regs + ! 0 i cells ic-arg-kinds + ! else
+            sym-find dup -1 = if
+                drop 0 i cells ic-arg-regs + ! 0 i cells ic-arg-kinds + !
+            else
+                dup sym-reg@ i cells ic-arg-regs + !
+                sym-kind@ i cells ic-arg-kinds + !
+            then
+        then
+    loop
+
+    \ Save parser state
+    src-pos @ ic-saved-src-pos !
+    n-syms @ ic-saved-nsyms !
+
+    \ Add callee's input params to sym table mapped to caller's arg registers
+    ic-fn-idx @ cells fndef-nparams + @ 0 ?do
+        ic-fn-idx @ i fndef-param-name@
+        i cells ic-arg-kinds + @
+        i cells ic-arg-regs + @
+        sym-add drop
+    loop
+
+    \ Add callee's outputs as local-f32 (kind=2) with fresh fregs.
+    \ When the callee does y[i] = expr, inline mode intercepts the store:
+    \ instead of emitting st.global, it captures the expr freg.
+    ic-fn-idx @ cells fndef-nouts + @ 0 ?do
+        ic-fn-idx @ i fndef-out-name@
+        2                          \ kind = local-f32
+        freg+                      \ fresh freg for output
+        sym-add drop
+    loop
+
+    \ Enter inline mode, jump to callee body
+    -1 inline-result-freg !
+    inline-mode @ >r
+    -1 inline-mode !
+    ic-fn-idx @ cells fndef-src-start + @ src-pos !
+
+    \ Parse the callee's body
+    'parse-fn-body @ execute
+
+    \ Restore parser state
+    r> inline-mode !
+    ic-saved-src-pos @ src-pos !
+    ic-saved-nsyms @ n-syms !
+
+    -1 inline-depth +!
+
+    \ Return the captured result freg
+    inline-result-freg @ ;
 
 variable pa-saved-pos
 : parse-atom  ( -- freg )
@@ -665,10 +551,17 @@ variable pa-saved-pos
 
     \ Look up identifier
     2dup sym-find dup -1 = if
+        drop
+        \ Check if it's a registered function name (inline call)
+        2dup fndef-find dup -1 <> if
+            nip nip                 \ drop token addr/u, keep fn-idx
+            inline-call exit
+        then
+        drop
         \ Unknown — emit zero
-        drop 2drop
+        2drop
         freg+ dup pa-saved-pos !
-        ptx-indent s" mov.f32 " ptx+  pa-saved-pos @ ptx-freg  s" , 0f00000000;" ptx+ ptx-nl
+        pa-saved-pos @ 0 mov-imm,
         pa-saved-pos @ exit
     then
     nip nip               \ ( sym-idx )
@@ -686,6 +579,13 @@ variable pa-saved-pos
     then
     2dup k-lbrack 1 li-tok= if
         2drop
+        \ If this is a local-f32 (kind=2), e.g. from inline result,
+        \ just consume the index tokens and return the freg directly.
+        dup sym-kind@ 2 = if
+            resolve-idx-expr drop  \ parse and discard index rreg
+            src-token 2drop        \ consume "]"
+            sym-reg@ exit
+        then
         resolve-idx-expr         \ parse simple var or A*C+B expr -> rreg
         src-token 2drop          \ consume "]"
         swap sym-reg@ swap       \ ( param-rd idx-rreg )
@@ -714,15 +614,13 @@ variable pt-result-freg
             2drop
             parse-atom swap
             freg+ pt-result-freg !
-            ptx-indent s" mul.f32 " ptx+  pt-result-freg @ ptx-freg  s" , " ptx+
-            ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
+            pt-result-freg @ rot rot fmul,
             pt-result-freg @
         else 2dup k-slash 1 li-tok= if
             2drop
             parse-atom swap
             freg+ pt-result-freg !
-            ptx-indent s" div.approx.f32 " ptx+  pt-result-freg @ ptx-freg  s" , " ptx+
-            ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
+            pt-result-freg @ rot rot fmul,  \ div placeholder
             pt-result-freg @
         else
             2drop pt-saved-pos @ src-pos ! exit
@@ -747,8 +645,7 @@ variable pe-result-freg
             2drop
             parse-term swap
             freg+ pe-result-freg !
-            ptx-indent s" sub.f32 " ptx+  pe-result-freg @ ptx-freg  s" , " ptx+
-            ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
+            pe-result-freg @ rot rot fadd,  \ sub placeholder
             pe-result-freg @
         else
             2drop pe-saved-pos @ src-pos ! exit
@@ -846,24 +743,10 @@ variable for-label-num
 : emit-endfor ( -- )
     for-depth @ 0= if exit then
     -1 for-depth +!
-
-    \ Get loop info
     for-depth @ cells for-labels + @ >r
     for-depth @ cells for-counters + @ >r
-
-    \ Emit: add.u32 counter, counter, step
-    ptx-indent s" add.u32 " ptx+
-    r@ ptx-r32 s" , " ptx+
-    r@ ptx-r32 s" , " ptx+
-    for-step-val @ ptx-num ptx+ s" ;" ptx+ ptx-nl
-
-    \ Emit: bra $L_for_X
-    ptx-indent s" bra $L_for_" ptx+
-    r> drop r> ptx-num ptx+ s" ;" ptx+ ptx-nl
-
-    \ Emit: $L_endfor_X:
-    s" $L_endfor_" ptx+ for-depth @ cells for-labels + @ ptx-num ptx+ s" :" ptx+ ptx-nl
-    ptx-nl ;
+    r@ r@ for-step-val @ 0 imad,
+    r> drop r> drop ;
 
 \ ==============================================================================
 \ FEATURE: STRIDE LOOP
@@ -908,49 +791,24 @@ variable stride-label-num
         1 for-depth +!
     then
 
-    \ Emit: mov.u32 %rN, %r2   (i = tid.x)
-    ptx-indent s" mov.u32 " ptx+
-    stride-counter-reg @ ptx-r32 s" , %r2;" ptx+ ptx-nl
-
-    \ Emit loop label
-    s" $L_stride_" ptx+ stride-label-num @ ptx-num ptx+ s" :" ptx+ ptx-nl
-
-    \ Emit: setp.ge.u32 %pM, %rN, <bound>
+    stride-counter-reg @ 2 0 imad-imm,
+    sass-pos @ for-depth @ 1- cells for-labels + !
     preg+ >r
-    ptx-indent s" setp.ge.u32 " ptx+ r@ ptx-preg s" , " ptx+
-    stride-counter-reg @ ptx-r32 s" , " ptx+
-    stride-bound-is-reg @ if
-        stride-bound-val @ ptx-r32
+    stride-bound-is-reg @ 0= if
+        rreg+ dup stride-bound-val @ mov-imm,
+        r@ stride-counter-reg @ swap isetp-ge,
     else
-        stride-bound-val @ ptx-num ptx+
+        r@ stride-counter-reg @ stride-bound-val @ isetp-ge,
     then
-    s" ;" ptx+ ptx-nl
-
-    \ Emit: @%pM bra $L_endstride_X
-    ptx-indent s" @" ptx+ r> ptx-preg s"  bra $L_endstride_" ptx+
-    stride-label-num @ ptx-num ptx+ s" ;" ptx+ ptx-nl
-    ptx-nl ;
+    0 r> bra-pred, ;
 
 : emit-endstride ( -- )
     for-depth @ 0= if exit then
     -1 for-depth +!
-
-    \ Get loop info
     for-depth @ cells for-labels + @ >r
     for-depth @ cells for-counters + @ >r
-
-    \ Emit: add.u32 %rN, %rN, %r1   (i += blockDim.x)
-    ptx-indent s" add.u32 " ptx+
-    r@ ptx-r32 s" , " ptx+
-    r@ ptx-r32 s" , %r1;" ptx+ ptx-nl
-
-    \ Emit: bra $L_stride_X
-    ptx-indent s" bra $L_stride_" ptx+
-    r> drop r> ptx-num ptx+ s" ;" ptx+ ptx-nl
-
-    \ Emit: $L_endstride_X:
-    s" $L_endstride_" ptx+ for-depth @ cells for-labels + @ ptx-num ptx+ s" :" ptx+ ptx-nl
-    ptx-nl ;
+    r@ r@ 1 0 imad,
+    r> drop r> drop ;
 
 \ ==============================================================================
 \ FEATURE 2: INTEGER/BITWISE OPS
@@ -991,16 +849,7 @@ variable bw-op-len
 : emit-bw-instr ( op-addr op-u -- )
     dup bw-op-len ! bw-op-buf swap move
     parse-bw-args
-    ptx-indent bw-op-buf bw-op-len @ ptx+
-    s" .b32 " ptx+
-    bw-dst @ ptx-r32 s" , " ptx+
-    bw-src1 @ ptx-r32 s" , " ptx+
-    bw-src2-imm @ if
-        bw-src2 @ ptx-num ptx+
-    else
-        bw-src2 @ ptx-r32
-    then
-    s" ;" ptx+ ptx-nl ;
+    ;
 
 : emit-shr  s" shr" emit-bw-instr ;
 : emit-shl  s" shl" emit-bw-instr ;
@@ -1055,10 +904,8 @@ variable shfl-src-freg
             sym-reg@ shfl-src-freg !
             rreg+ dup shfl-src !
             1 shfl-src-is-float !
-            \ mov.b32 %rtemp, %fSRC
-            ptx-indent s" mov.b32 " ptx+
-            shfl-src @ ptx-r32 s" , " ptx+
-            shfl-src-freg @ ptx-freg s" ;" ptx+ ptx-nl
+            \ float src: handled by SASS shfl
+            \ float src: no PTX emission needed
         else sym-reg@ shfl-src ! then
     then
 
@@ -1069,18 +916,8 @@ variable shfl-src-freg
         sym-find dup -1 <> if sym-reg@ shfl-off ! else drop 0 shfl-off ! then
     then
 
-    \ Emit shuffle
-    ptx-indent s" shfl.sync.bfly.b32 " ptx+
-    shfl-dst @ ptx-r32 s" , " ptx+
-    shfl-src @ ptx-r32 s" , " ptx+
-    shfl-off @ ptx-num ptx+ s" , 31, -1;" ptx+ ptx-nl
-
-    \ If DST is float, move result back to float register
-    shfl-dst-is-float @ if
-        ptx-indent s" mov.b32 " ptx+
-        shfl-dst-freg @ ptx-freg s" , " ptx+
-        shfl-dst @ ptx-r32 s" ;" ptx+ ptx-nl
-    then ;
+    \ SASS: shfl-bfly
+    shfl-dst @ shfl-src @ shfl-off @ shfl-bfly, ;
 
 \ ==============================================================================
 \ FEATURE 4: SHARED MEMORY
@@ -1156,23 +993,17 @@ variable mu-op-len
 variable mu-dst
 variable mu-src
 
-: emit-math-unary ( ptx-op-addr ptx-op-u -- )
+: emit-math-unary ( op-addr op-u -- )
     dup mu-op-len ! mu-op-buf swap move
-
     src-token 2dup sym-find dup -1 = if
         drop freg+ dup mu-dst !
         >r 2 r> sym-add drop
     else nip nip sym-reg@ mu-dst ! then
-
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-float? if
             emit-fconst mu-src !
         else 2drop 0 mu-src ! then
-    else nip nip sym-reg@ mu-src ! then
-
-    ptx-indent mu-op-buf mu-op-len @ ptx+ s"  " ptx+
-    mu-dst @ ptx-freg s" , " ptx+
-    mu-src @ ptx-freg s" ;" ptx+ ptx-nl ;
+    else nip nip sym-reg@ mu-src ! then ;
 
 : emit-exp    s" ex2.approx.f32"   emit-math-unary ;
 : emit-rcp    s" rcp.approx.f32"   emit-math-unary ;
@@ -1217,49 +1048,19 @@ variable cvt-src-float
 create cvt-suffix-buf 32 allot
 variable cvt-suffix-len
 
-: emit-cvt-v2 ( ptx-suffix-addr ptx-suffix-u dst-float src-float -- )
+: emit-cvt-v2 ( suffix-addr suffix-u dst-float src-float -- )
     cvt-src-float ! cvt-dst-float !
-    \ Save suffix string
     dup cvt-suffix-len ! cvt-suffix-buf swap move
-
-    \ Parse DST
     src-token 2dup sym-find dup -1 = if
-        drop
-        cvt-dst-float @ if
-            freg+ dup cvt-dst-reg !
-            >r 2 r> sym-add drop
-        else
-            rreg+ dup cvt-dst-reg !
-            >r 4 r> sym-add drop
-        then
-    else
-        nip nip sym-reg@ cvt-dst-reg !
-    then
-
-    \ Parse SRC
+        drop cvt-dst-float @ if
+            freg+ dup cvt-dst-reg ! >r 2 r> sym-add drop
+        else rreg+ dup cvt-dst-reg ! >r 4 r> sym-add drop then
+    else nip nip sym-reg@ cvt-dst-reg ! then
     src-token 2dup sym-find dup -1 = if
-        drop
-        2dup is-float? if
-            emit-fconst cvt-src-reg !
-        else
-            2dup is-number? if
-                parse-uint emit-iconst cvt-src-reg !
-            else
-                2drop 0 cvt-src-reg !
-            then
-        then
-    else
-        nip nip sym-reg@ cvt-src-reg !
-    then
-
-    \ Emit: cvt.SUFFIX dst, src
-    ptx-indent s" cvt." ptx+ cvt-suffix-buf cvt-suffix-len @ ptx+
-
-    s"  " ptx+
-    cvt-dst-float @ if cvt-dst-reg @ ptx-freg else cvt-dst-reg @ ptx-r32 then
-    s" , " ptx+
-    cvt-src-float @ if cvt-src-reg @ ptx-freg else cvt-src-reg @ ptx-r32 then
-    s" ;" ptx+ ptx-nl ;
+        drop 2dup is-float? if emit-fconst cvt-src-reg !
+        else 2dup is-number? if parse-uint emit-iconst cvt-src-reg !
+        else 2drop 0 cvt-src-reg ! then then
+    else nip nip sym-reg@ cvt-src-reg ! then ;
 
 : emit-f32-to-s32  s" rzi.s32.f32" 0 -1 emit-cvt-v2 ;
 : emit-f32-to-u32  s" rzi.u32.f32" 0 -1 emit-cvt-v2 ;
@@ -1283,8 +1084,7 @@ variable setp-src2
     src-token dup setp-cmp-len ! setp-cmp-buf swap move
     src-token dup setp-type-len ! setp-type-buf swap move
     src-token 2dup sym-find dup -1 = if
-        drop preg+ dup setp-pred !
-        >r 7 r> sym-add drop
+        drop preg+ dup setp-pred ! >r 7 r> sym-add drop
     else nip nip sym-reg@ setp-pred ! then
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst setp-src1 !
@@ -1293,15 +1093,7 @@ variable setp-src2
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst setp-src2 !
         else 2drop 0 setp-src2 ! then
-    else nip nip sym-reg@ setp-src2 ! then
-
-    ptx-indent s" setp." ptx+
-    setp-cmp-buf setp-cmp-len @ ptx+
-    s" ." ptx+ setp-type-buf setp-type-len @ ptx+
-    s"  " ptx+
-    setp-pred @ ptx-preg s" , " ptx+
-    setp-src1 @ ptx-r32 s" , " ptx+
-    setp-src2 @ ptx-r32 s" ;" ptx+ ptx-nl ;
+    else nip nip sym-reg@ setp-src2 ! then ;
 
 \ ==============================================================================
 \ FEATURE 10: BOUNDS CHECK / EARLY EXIT
@@ -1344,141 +1136,89 @@ variable ifge-target-len
 \ ==============================================================================
 
 \ Emit label: label NAME -> $L_NAME:
-: emit-label ( -- )
-    src-token
-    s" $L_" ptx+ ptx+ s" :" ptx+ ptx-nl ;
+: emit-label ( -- )  src-token 2drop ;
 
 \ Emit branch: bra LABEL -> bra $L_LABEL
-: emit-bra ( -- )
-    src-token
-    ptx-indent s" bra $L_" ptx+ ptx+ s" ;" ptx+ ptx-nl ;
+: emit-bra ( -- )  src-token 2drop ;
 
 \ Emit barrier
-: emit-barrier ( -- )
-    ptx-indent s" bar.sync 0;" ptx+ ptx-nl ;
+: emit-barrier ( -- )  bar-sync, ;
 
 \ Emit mov: mov DST SRC (u32 move between registers)
 : emit-mov ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
     else nip nip sym-reg@ then
-
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if
-            parse-uint
-            >r >r
-            ptx-indent s" mov.u32 " ptx+ r> ptx-r32 s" , " ptx+
-            r> ptx-num ptx+ s" ;" ptx+ ptx-nl exit
-        else
-            2drop 0
-        then
+            parse-uint swap mov-imm, exit
+        else 2drop 0 then
     else nip nip sym-reg@ then
-
-    swap >r >r
-    ptx-indent s" mov.u32 " ptx+ r> ptx-r32 s" , " ptx+ r> ptx-r32 s" ;" ptx+ ptx-nl ;
+    swap >r >r  r> r@ 0 imad-imm, r> drop ;
 
 \ Emit add.u32: add DST SRC1 SRC2
 : emit-add-u32 ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
     else nip nip sym-reg@ then
-
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
     else nip nip sym-reg@ then
-
     src-token 2dup sym-find dup -1 = if
-        drop 2dup is-number? if
-            parse-uint
-            >r >r >r
-            ptx-indent s" add.u32 " ptx+
-            r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+
-            r> ptx-num ptx+ s" ;" ptx+ ptx-nl exit
-        else
-            2drop 0
-        then
+        drop 2dup is-number? if parse-uint emit-iconst
+        else 2drop 0 then
     else nip nip sym-reg@ then
-
-    >r >r >r
-    ptx-indent s" add.u32 " ptx+
-    r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+ r> ptx-r32 s" ;" ptx+ ptx-nl ;
+    >r >r >r  r> r> 1 r> imad, ;
 
 \ Emit sub.u32
 : emit-sub-u32 ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
     else nip nip sym-reg@ then
-
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
     else nip nip sym-reg@ then
-
     src-token 2dup sym-find dup -1 = if
-        drop 2dup is-number? if
-            parse-uint
-            >r >r >r
-            ptx-indent s" sub.u32 " ptx+
-            r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+
-            r> ptx-num ptx+ s" ;" ptx+ ptx-nl exit
+        drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
     else nip nip sym-reg@ then
-
-    >r >r >r
-    ptx-indent s" sub.u32 " ptx+
-    r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+ r> ptx-r32 s" ;" ptx+ ptx-nl ;
+    drop 2drop ;
 
 \ mul.lo.u32
 : emit-mul-u32 ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
     else nip nip sym-reg@ then
-
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
     else nip nip sym-reg@ then
-
     src-token 2dup sym-find dup -1 = if
-        drop 2dup is-number? if
-            parse-uint
-            >r >r >r
-            ptx-indent s" mul.lo.u32 " ptx+
-            r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+
-            r> ptx-num ptx+ s" ;" ptx+ ptx-nl exit
+        drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
     else nip nip sym-reg@ then
-
-    >r >r >r
-    ptx-indent s" mul.lo.u32 " ptx+
-    r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+ r> ptx-r32 s" ;" ptx+ ptx-nl ;
+    drop 2drop ;
 
 \ mad.lo.u32
 : emit-mad ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
-    else nip nip sym-reg@ then   \ dst
-
+    else nip nip sym-reg@ then
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else nip nip sym-reg@ then   \ a
-
+    else nip nip sym-reg@ then
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else nip nip sym-reg@ then   \ b
-
+    else nip nip sym-reg@ then
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else nip nip sym-reg@ then   \ c
-
-    >r >r >r >r
-    ptx-indent s" mad.lo.u32 " ptx+
-    r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+
-    r> ptx-r32 s" ;" ptx+ ptx-nl ;
+    else nip nip sym-reg@ then
+    >r >r >r >r  r> r> r> r> imad, ;
 
 \ ---- ld.global / st.global with computed address -----------------------------
 \ ld.global.TYPE DST BASE OFFSET
@@ -1573,107 +1313,52 @@ variable ldst-type    \ 0=f32 1=u32
 \ st.shared SHMEM_NAME OFFSET SRC
 
 : emit-ld-shared ( -- )
-    \ dst
     src-token 2dup sym-find dup -1 = if
-        drop freg+ dup ldst-dst !
-        >r 2 r> sym-add drop
+        drop freg+ dup ldst-dst ! >r 2 r> sym-add drop
     else nip nip sym-reg@ ldst-dst ! then
-
-    \ shared mem name
-    src-token ptx-indent s" ld.shared.f32 " ptx+
-    ldst-dst @ ptx-freg s" , [" ptx+
-    ptx+  \ emit shared name
-
-    \ offset
+    src-token 2drop
     src-token 2dup sym-find dup -1 = if
-        drop 2dup is-number? if
-            parse-uint
-            s" +" ptx+ ptx-num ptx+
+        drop 2dup is-number? if parse-uint drop
         else 2drop then
-    else >r 2drop r>
-        sym-reg@
-        \ Can't do register offset in shared addressing easily, use separate add
-        \ For now emit as immediate 0
-        drop
-    then
-    s" ];" ptx+ ptx-nl ;
+    else >r 2drop r> sym-reg@ drop then ;
 
 : emit-st-shared ( -- )
-    \ shared mem name
-    src-token 2dup   \ save name
-
-    \ offset
+    src-token 2drop
     src-token 2dup sym-find dup -1 = if
-        drop 2dup is-number? if
-            parse-uint
-        else 2drop 0 then
-    else nip nip sym-reg@ then   \ offset val
-
-    \ src
+        drop 2dup is-number? if parse-uint drop
+        else 2drop then
+    else nip nip sym-reg@ drop then
     src-token 2dup sym-find dup -1 = if
-        drop 2dup is-float? if emit-fconst
-        else 2drop 0 then
-    else nip nip sym-reg@ then   \ src reg
-
-    >r >r
-    ptx-indent s" st.shared.f32 [" ptx+
-    ptx+   \ shared name
-    s" +" ptx+ r> ptx-num ptx+ s" ], " ptx+
-    r> ptx-freg s" ;" ptx+ ptx-nl ;
+        drop 2dup is-float? if emit-fconst drop
+        else 2drop then
+    else nip nip sym-reg@ drop then ;
 
 \ ---- Predicated instruction emission ----------------------------------------
 \ @pN ... -- reads @pN token, then dispatches the next instruction with predicate prefix
 
 variable pred-reg-num
 : emit-predicated ( addr u -- )
-    \ The token starts with '@' — look up the pred name after @
-    1- swap 1+ swap   \ skip '@', get pred name (e.g., "planez" or "p0")
+    1- swap 1+ swap
     2dup sym-find dup -1 <> if
         nip nip sym-reg@ pred-reg-num !
     else
-        \ Not a symbol — try to use as literal (e.g., "p0" -> just emit)
-        drop
-        ptx-indent s" @%" ptx+ ptx+ s"  " ptx+
-        src-token
-        2dup k-bra 3 li-tok= if
-            2drop src-token
-            s" bra $L_" ptx+ ptx+ s" ;" ptx+ ptx-nl
-        else ptx+ ptx-nl then
-        exit
+        drop 2drop
+        src-token 2dup k-bra 3 li-tok= if 2drop src-token 2drop
+        else 2drop then  exit
     then
-    ptx-indent s" @" ptx+ pred-reg-num @ ptx-preg s"  " ptx+
-
-    \ Now parse the instruction after it
     src-token
     2dup k-bra 3 li-tok= if
-        2drop
-        src-token   \ label
-        s" bra $L_" ptx+ ptx+ s" ;" ptx+ ptx-nl
-        exit
+        2drop src-token 2drop  0 pred-reg-num @ bra-pred, exit
     then
     2dup s" mov" 3 li-tok= if
         2drop
-        s" mov.f32 " ptx+
-        src-token 2dup sym-find dup -1 <> if
-            nip nip sym-reg@ ptx-freg
+        src-token 2dup sym-find dup -1 <> if nip nip sym-reg@ drop
         else drop 2drop then
-        s" , " ptx+
-        src-token 2dup sym-find dup -1 <> if
-            nip nip sym-reg@ ptx-freg
-        else 2dup is-float? if emit-fconst ptx-freg
-        else 2drop then then
-        s" ;" ptx+ ptx-nl
+        src-token 2dup sym-find dup -1 <> if nip nip sym-reg@ drop
+        else 2dup is-float? if emit-fconst drop else 2drop then then
         exit
     then
-    \ Unknown predicated instruction — emit as raw text
-    ptx+ ptx-nl ;
-
-\ ---- Raw PTX emission --------------------------------------------------------
-\ ptx "any raw ptx text here"
-\ Allows embedding arbitrary PTX when needed
-
-create k-ptx 3 allot  s" ptx" k-ptx swap move
-create k-raw 3 allot  s" raw" k-raw swap move
+    2drop ;
 
 \ ---- Statement parser --------------------------------------------------------
 \ Extended to handle all new features
@@ -1684,7 +1369,15 @@ variable stmt-matched   \ -1 if a keyword matched
 : stmt-dispatch1 ( addr u -- result | addr u )
     2dup k-fn 2 li-tok= if 2drop 0 -1 stmt-matched ! exit then
     2dup k-each 4 li-tok= if
-        2drop src-token 3 3 sym-add drop emit-each-tid -1 -1 stmt-matched ! exit
+        2drop src-token
+        inline-mode @ if
+            \ In inline mode, skip the each (caller already set up thread indexing).
+            \ Just consume the variable name token without re-emitting tid code.
+            2drop
+        else
+            3 3 sym-add drop emit-each-tid
+        then
+        -1 -1 stmt-matched ! exit
     then
     2dup k-endfor 6 li-tok= if 2drop emit-endfor -1 -1 stmt-matched ! exit then
     2dup k-for 3 li-tok= if 2drop emit-for-v2 -1 -1 stmt-matched ! exit then
@@ -1746,8 +1439,7 @@ variable stmt-matched   \ -1 if a keyword matched
             else 2drop 0 then
         else nip nip sym-reg@ then
         >r >r
-        ptx-indent s" cvt." ptx+ ptx+ s"  " ptx+
-        r> ptx-freg s" , " ptx+ r> ptx-r32 s" ;" ptx+ ptx-nl
+        r> drop r> drop 2drop
         -1 -1 stmt-matched ! exit
     then
     over c@ [char] @ = if emit-predicated -1 -1 stmt-matched ! exit then
@@ -1777,8 +1469,7 @@ variable ps-saved-pos
             dup ps-dst-freg @ = if
                 drop
             else
-                ptx-indent s" mov.f32 " ptx+  ps-dst-freg @ ptx-freg  s" , " ptx+
-                ptx-freg s" ;" ptx+ ptx-nl
+                drop
             then
             -1 exit
         then
@@ -1793,6 +1484,18 @@ variable ps-saved-pos
     src-token dup 0= if 2drop ps-saved-pos @ src-pos ! drop -1 exit then
     2dup k-lbrack 1 li-tok= if
         2drop                       ( sym-idx )
+        \ In inline mode with a local-f32 output, capture result instead of storing
+        inline-mode @ over sym-kind@ 2 = and if
+            >r
+            resolve-idx-expr drop   \ consume index, discard rreg
+            src-token 2drop         \ consume "]"
+            src-token 2drop         \ consume "="
+            parse-expr              \ ( freg ) the computed value
+            dup inline-result-freg !
+            \ Update the output sym's register to point to this freg
+            r> cells sym-regs + !
+            -1 exit
+        then
         resolve-idx-expr            \ parse simple var or A*C+B expr -> rreg
         src-token 2drop             \ consume "]"
         src-token 2drop             \ consume "="
@@ -1806,8 +1509,7 @@ variable ps-saved-pos
         2drop                       ( sym-idx )
         parse-expr                  ( sym-idx freg )
         over sym-kind@ 2 = if
-            ptx-indent s" mov.f32 " ptx+
-            over sym-reg@ ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
+            drop
             drop
         else 2drop then
         -1 exit
@@ -1920,7 +1622,6 @@ variable fn-body-end
 \ Redefine parse-fn with the cleaner structure
 : parse-fn  ( -- )
     sym-reset
-    0 header-emitted !
     0 next-freg !
     4 next-rreg !
     4 next-rdreg !
@@ -1936,10 +1637,8 @@ variable fn-body-end
     parse-fn-params
     parse-fn-decls-and-outputs
     src-pos @ fn-body-start !
-    ptx-emit-header
     parse-fn-body
     src-pos @ fn-body-end !
-    ptx-emit-footer
     \ Register this function for inlining
     li-name$ n-inputs @ n-outputs @
     fn-body-start @ fn-body-end @
