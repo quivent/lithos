@@ -1,26 +1,26 @@
-# kernels — stack language
-#
-# - Each body line is one op on the stack.
-# - A bare name (arg, literal, primitive constant) pushes to the stack.
-# - `op operand` = push operand, then pop-two binary op.
-# - Bare binary op = pop-two, combine.
-# - Bare `*` with stack depth 1 = square (implicit dup).
-# - Bare unary (√, Σ, log, sin, cos) = apply to top.
-# - A named kernel consumes its args from the stack, pushes its result.
-# - `acc` = dup top.
+\\ kernels — Lithos composition language
+\\
+\\ - Each body line is one op on the stack.
+\\ - A bare name (arg, literal, primitive constant) pushes to the stack.
+\\ - `op operand` = push operand, then pop-two binary op.
+\\ - Bare binary op = pop-two, combine.
+\\ - Bare `*` with stack depth 1 = square (implicit dup).
+\\ - Bare unary (√, Σ, ln, ≅, ≡) = apply to top.
+\\ - A named kernel consumes its args from the stack, pushes its result.
+\\ - `acc` = dup top.
 
 
-# ==== top-level composition ====
+\\ ==== top-level composition ====
 
-DeltaNet_Inference
+DeltaNet_Inference :
   Embed
-  Layer × 64
+  Layer * 64
   RMSNorm
   LMHead
   Sample
 
 
-Layer
+Layer :
   RMSNorm
   Attention
   Residual
@@ -29,11 +29,11 @@ Layer
   Residual
 
 
-Attention
+Attention :
   dispatch to DeltaNet or FullAttention by layer index
 
 
-DeltaNet
+DeltaNet :
   QKVProjection
   Conv1d on Q
   Conv1d on K
@@ -49,7 +49,7 @@ DeltaNet
   OutputProjection
 
 
-FullAttention
+FullAttention :
   QKVProjection
   RoPE
   ScaledDotProduct
@@ -58,7 +58,7 @@ FullAttention
   OutputProjection
 
 
-MLP    # SwiGLU
+MLP :    \\ SwiGLU
   GateProjection
   UpProjection
   SiLU on gate
@@ -66,58 +66,57 @@ MLP    # SwiGLU
   DownProjection
 
 
-# ==== scalar utilities ====
+\\ ==== scalar utilities ====
 
-negate x
+negate x :
   0
   - x
 
 
-reciprocal x
+reciprocal x :
   1
   / x
 
 
-exp x
-  e
-  ^ x
+exp x :
+  e^ x
 
 
-square x
+square x :
   x
   *
 
 
-abs x
+abs x :
   x
   *
   √
 
 
-sigmoid x
+sigmoid x :
   0
   - x
-  exp
+  e^
   + 1
   reciprocal
 
 
-SiLU x
+SiLU x :
   x
   sigmoid
   * x
 
 
-softplus x
+softplus x :
   x
-  exp
+  e^
   + 1
-  log
+  ln
 
 
-# ==== 2-D rotation (pair) ====
+\\ ==== 2-D rotation (pair) ====
 
-rotate_x x y c s
+rotate_x x y c s :
   x
   * c
   y
@@ -125,7 +124,7 @@ rotate_x x y c s
   -
 
 
-rotate_y x y c s
+rotate_y x y c s :
   x
   * s
   y
@@ -133,15 +132,15 @@ rotate_y x y c s
   +
 
 
-# ==== vector ops ====
+\\ ==== vector ops ====
 
-dot u v
+dot u v :
   u
   * v
   Σ
 
 
-Normalize x
+Normalize x :
   x
   *
   Σ
@@ -151,7 +150,7 @@ Normalize x
   * x
 
 
-L2Norm x
+L2Norm x :
   x
   *
   Σ
@@ -160,72 +159,82 @@ L2Norm x
   * x
 
 
-RMSNorm x γ
+RMSNorm x γ :
   x
   Normalize
   * γ
 
 
-Residual x saved
+Residual x saved :
   x
   + saved
 
 
-Softmax x
+Softmax x :
   x
   x
-  max
+  △
   -
-  exp
+  e^
   acc
   Σ
   /
 
 
-Sample logits
+Sample logits :
   logits
-  argmax
+  # △
 
 
-Embed token_id
+Embed token_id :
   lookup token_id in embedding table
 
 
-# ==== projections ====
+\\ ==== projections ====
 
-MatVec W x
+MatVec W x :
   each row i of W
     dot W[i] x
 
 
-QKVProjection x
+QKVProjection x :
   MatVec W_q x
   MatVec W_k x
   MatVec W_v x
 
 
-OutputProjection x    → MatVec W_o x
-ZProjection      x    → MatVec W_z x
-GateProjection   x    → MatVec W_gate x
-UpProjection     x    → MatVec W_up x
-DownProjection   x    → MatVec W_down x
-LMHead           x    → MatVec W_vocab x
+OutputProjection x :
+  MatVec W_o x
+
+ZProjection x :
+  MatVec W_z x
+
+GateProjection x :
+  MatVec W_gate x
+
+UpProjection x :
+  MatVec W_up x
+
+DownProjection x :
+  MatVec W_down x
+
+LMHead x :
+  MatVec W_vocab x
 
 
-# ==== DeltaNet pieces ====
+\\ ==== DeltaNet pieces ====
 
-DecayGate a_proj dt_bias A_log
+DecayGate a_proj dt_bias A_log :
   a_proj
   + dt_bias
   softplus
-  e
-  ^ A_log
+  e^ A_log
   negate
   *
-  exp
+  e^
 
 
-DeltaUpdate S K V β decay
+DeltaUpdate S K V β decay :
   V
   K
   ***
@@ -241,13 +250,13 @@ DeltaUpdate S K V β decay
   +++
 
 
-OutputGate x output
+OutputGate x output :
   ZProjection x
   sigmoid
   * output
 
 
-ScaledDotProduct Q K_cache d_head
+ScaledDotProduct Q K_cache d_head :
   each K in K_cache
     Q
     K
@@ -256,40 +265,36 @@ ScaledDotProduct Q K_cache d_head
     /
 
 
-RoPE Q K pos
+RoPE Q K pos :
   each pair Q_x Q_y
-    rotate_x Q_x Q_y cos[pos] sin[pos]
-    rotate_y Q_x Q_y cos[pos] sin[pos]
+    rotate_x Q_x Q_y ≡ pos ≅ pos
+    rotate_y Q_x Q_y ≡ pos ≅ pos
   each pair K_x K_y
-    rotate_x K_x K_y cos[pos] sin[pos]
-    rotate_y K_x K_y cos[pos] sin[pos]
+    rotate_x K_x K_y ≡ pos ≅ pos
+    rotate_y K_x K_y ≡ pos ≅ pos
 
 
-Conv1d input weights history
+Conv1d input weights history :
   shift_history
   input
   * weights
   Σ
 
 
-shift_history
-  history[0] = history[1]
-  history[1] = history[2]
-  history[2] = history[3]
-  history[3] = new input
+shift_history :
+  ← 32 history 0 → 32 history 1
+  ← 32 history 1 → 32 history 2
+  ← 32 history 2 → 32 history 3
+  ← 32 history 3 input
 
 
-*** u v
+outer u v :
   each i
     each j
       u[i] * v[j]
 
 
-matmul A B
+matmul A B :
   each row i of A
     each col j of B
       dot A[i] B[:,j]
-
-
-# ==== leaves still needing primitives in primitives.ls ====
-# log, sin, cos

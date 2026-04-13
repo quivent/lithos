@@ -1,13 +1,19 @@
-primitives
+\\ primitives — Lithos atomic operations
 
-operators
-  +
-  -
-  *
-  /
-  √
-  ^
-  Σ
+\\ arithmetic
+\\ + - * /
 
-constants
-  e
+\\ dimensional
+\\ ** ***
+
+\\ reductions
+\\ Σ △ ▽ #
+
+\\ math — one instruction
+\\ 2^ log₂ √ 1/ 1/√ ≅ ≡
+
+\\ math — composites
+\\ e^ ln
+
+\\ memory
+\\ → ← ↑ ↓

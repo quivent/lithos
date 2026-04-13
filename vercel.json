@@ -1,5 +1,6 @@
 {
   "outputDirectory": "docs",
+  "cleanUrls": true,
   "headers": [
     {
       "source": "/(.*)",

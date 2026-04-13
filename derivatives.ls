@@ -1,15 +1,15 @@
-# derivatives — vectors and vector operations
+\\ derivatives — vectors and vector operations
 
 
-vector
+vector :
   v ∈ ℝⁿ
 
 
-index v i
+index v i :
   v[i]
 
 
-max a b
+max a b :
   a
   - b
   *
@@ -19,9 +19,9 @@ max a b
   / 2
 
 
-max_vec v
-  fold max over v
+max_vec v :
+  △ v
 
 
-argmax v
-  irreducible — returns i such that v[i] = max v
+argmax v :
+  # △ v
