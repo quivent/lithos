@@ -102,7 +102,7 @@ class LoadedKernels:
     norm_func: int = 0
     activate_func: int = 0
     rotate_func: int = 0
-    embed_func: int = 0
+    embed_func: int = 0             # F16 embed kernel (reads F16, outputs F32)
     sample_func: int = 0
 
 
@@ -379,6 +379,11 @@ _LAUNCH_LOG: List[str] = []  # for testing/debugging
 # Global CUDADriver instance -- set by LithosEngine when in real-execution mode
 _CUDA_DRIVER: Optional[Any] = None
 
+# Set of kernel names (prefixes) that are safe to actually launch on GPU.
+# Kernels not in this set will be logged but not launched.
+# This allows incremental bring-up: start with embed+norm, add more as they work.
+_LIVE_KERNELS: set[str] = set()
+
 
 def _gpu_launch(
     func_handle: int,
@@ -411,8 +416,13 @@ def _gpu_launch(
     )
     _LAUNCH_LOG.append(entry)
 
-    if _CUDA_DRIVER is not None and func_handle != 0:
-        # Build typed ctypes args from raw int params
+    # Check if this kernel is in the live set (for incremental bring-up)
+    should_launch = _CUDA_DRIVER is not None and func_handle != 0
+    if should_launch and _LIVE_KERNELS:
+        # Only launch if the kernel name matches a live prefix
+        should_launch = any(name.startswith(prefix) for prefix in _LIVE_KERNELS)
+
+    if should_launch:
         typed_args: list[Any] = []
         for i, val in enumerate(params):
             if param_types is not None and i < len(param_types):
@@ -485,6 +495,7 @@ class LithosEngine:
         # Last logits pointer (set after final lm_head projection)
         self._logits_ptr: int = 0
         self._logits_count: int = 0  # number of f32 logits at _logits_ptr
+        self._logits_are_real: bool = False  # True only when lm_head actually ran
 
     # ------------------------------------------------------------------
     # Public API
@@ -521,6 +532,8 @@ class LithosEngine:
         # Advance sequence position
         self.kv_cache.advance(n_tokens)
         self.seq_pos += n_tokens
+        # Remember last token for decode_step's embed
+        self._last_token_id = token_ids[-1] if token_ids else 0
 
     def decode_step(self) -> int:
         """Generate a single token.
@@ -557,6 +570,7 @@ class LithosEngine:
         # Advance
         self.kv_cache.advance(1)
         self.seq_pos += 1
+        self._last_token_id = token_id
 
         return token_id
 
@@ -1008,6 +1022,12 @@ class LithosEngine:
         )
         self._logits_ptr = self.act_bufs.output_ptr
         self._logits_count = n_tokens * self.config.vocab_size
+        # Check if lm_head actually launched (vs log-only)
+        self._logits_are_real = (
+            _CUDA_DRIVER is not None
+            and self.kernels.projection_func != 0
+            and (not _LIVE_KERNELS or any("lm_head".startswith(p) for p in _LIVE_KERNELS))
+        )
         self.act_bufs.swap()
 
     def _launch_sample(self) -> int:
@@ -1024,8 +1044,8 @@ class LithosEngine:
         vocab = self.config.vocab_size
         logits_ptr = self._logits_ptr
 
-        if logits_ptr == 0:
-            _LAUNCH_LOG.append("LAUNCH sample: no logits pointer, returning 0")
+        if logits_ptr == 0 or not self._logits_are_real:
+            _LAUNCH_LOG.append("LAUNCH sample: logits not computed (kernels log-only), returning 0")
             return 0
 
         # Synchronize GPU before reading logits
@@ -1082,6 +1102,18 @@ class LithosEngine:
     @staticmethod
     def clear_launch_log() -> None:
         _LAUNCH_LOG.clear()
+
+    @staticmethod
+    def set_live_kernels(prefixes: set[str]) -> None:
+        """Control which kernels actually launch on GPU.
+
+        Pass a set of name prefixes (e.g. {"embed", "norm"}).
+        Only kernels whose name starts with one of these will be
+        dispatched to cuLaunchKernel; others are logged only.
+        Pass an empty set to launch ALL kernels (no filter).
+        """
+        global _LIVE_KERNELS
+        _LIVE_KERNELS = set(prefixes)
 
     def print_layer_map(self) -> None:
         """Print the layer type assignment for all 64 layers."""

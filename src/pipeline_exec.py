@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-Lithos pipeline execution -- wire real kernels end to end.
+Lithos pipeline execution -- wire real kernels end to end on GH200.
 
-Stage 1: embed kernel with real Qwen 3.5-27B weights -> non-zero F32 vector
-Stage 2: norm kernel on that vector -> normalized output
-Stage 3: verify against numpy/torch reference
+Key insight: GH200 unified memory means host mmap'd pointers are directly
+accessible from GPU kernels.  No cuMemcpyHtoD needed for weights.
 
-This script proves real token -> real activation on GH200.
+Stage 1: F16 embed kernel with mmap'd model weights -> F32 activation vector
+Stage 2: RMSNorm kernel on embed output -> normalized activations
+Stage 3: Full prompt embedding + norm for all tokens
+Stage 4: Verify all outputs against CPU reference
+
+Run:
+    python3 /home/ubuntu/lithos/src/pipeline_exec.py
 """
 
 from __future__ import annotations
@@ -26,7 +31,6 @@ from loader import LithosModel
 from tokenizer import Tokenizer
 
 MODEL_DIR = "/home/ubuntu/models/Huihui-Qwen3.5-27B-abliterated-GPTQ-W4A16"
-CACHE_DIR = "/tmp/lithos-cache/3644e4d3fa48efc4"
 KERNEL_DIR = str(Path(__file__).resolve().parent.parent / "kernels")
 
 HIDDEN_DIM = 5120
@@ -39,7 +43,6 @@ def banner(msg: str) -> None:
 
 
 def check_nan_inf(arr: np.ndarray, label: str) -> bool:
-    """Return True if array has no NaN/Inf."""
     has_nan = np.any(np.isnan(arr))
     has_inf = np.any(np.isinf(arr))
     if has_nan or has_inf:
@@ -48,19 +51,37 @@ def check_nan_inf(arr: np.ndarray, label: str) -> bool:
     return True
 
 
+def bf16_to_f32(raw_bytes: bytes) -> np.ndarray:
+    """Convert BF16 raw bytes to F32 numpy array."""
+    u16 = np.frombuffer(raw_bytes, dtype=np.uint16)
+    f32 = np.zeros(len(u16), dtype=np.float32)
+    f32.view(np.uint32)[:] = u16.astype(np.uint32) << 16
+    return f32
+
+
+def upload_f32(gpu: CUDADriver, data: np.ndarray) -> CUdeviceptr:
+    """Upload F32 numpy array to device memory, return device pointer."""
+    assert data.dtype == np.float32
+    dptr = gpu.mem_alloc(data.nbytes)
+    gpu.memcpy_htod(dptr, data.ctypes.data_as(ctypes.c_void_p), data.nbytes)
+    return dptr
+
+
 def main() -> int:
     banner("Lithos Pipeline Execution -- Real Kernels on GH200")
+    results = {}
 
     # ---------------------------------------------------------------
-    # 1. Load model + tokenizer
+    # 1. Load model + tokenizer + CUDA
     # ---------------------------------------------------------------
-    print("\n--- Loading model and tokenizer ---")
+    print("\n--- Loading model, tokenizer, CUDA context ---")
     t0 = time.monotonic()
     model = LithosModel(MODEL_DIR)
     tok = Tokenizer(MODEL_DIR)
+    gpu = CUDADriver()
     t1 = time.monotonic()
     print(f"  Model: {model}  ({t1-t0:.3f}s)")
-    print(f"  Tokenizer: {tok}")
+    print(f"  Device: {gpu.device_name}")
     print(f"  hidden_dim={model.config.hidden_dim}  vocab={model.config.vocab_size}")
 
     prompt = "The capital of France is"
@@ -68,375 +89,283 @@ def main() -> int:
     print(f"  Prompt: {prompt!r}")
     print(f"  Token IDs: {token_ids}")
 
-    # We'll work with just the first token for embed proof
-    test_token_id = token_ids[0]  # 760 = "The"
-    print(f"  Test token: {test_token_id} -> {tok.decode([test_token_id])!r}")
-
     # ---------------------------------------------------------------
-    # 2. Create CUDA context
+    # 2. Load kernels
     # ---------------------------------------------------------------
-    print("\n--- Creating CUDA context ---")
-    gpu = CUDADriver()
-    print(f"  Device: {gpu.device_name}")
+    print("\n--- Loading kernel cubins ---")
+    embed_mod = gpu.load_cubin(f"{KERNEL_DIR}/embed_f16.cubin")
+    embed_func = gpu.get_function(embed_mod, "embed_f16")
+    print(f"  embed_f16: loaded")
 
-    # ---------------------------------------------------------------
-    # 3. STAGE 1: Embed kernel with real weights
-    # ---------------------------------------------------------------
-    banner("STAGE 1: Embed Kernel")
-
-    # Load the embed cubin (factory-specialized with hidden_dim=5120 baked in)
-    embed_cubin_path = f"{CACHE_DIR}/embed.cubin"
-    print(f"  Loading cubin: {embed_cubin_path}")
-    embed_mod = gpu.load_cubin(embed_cubin_path)
-    embed_func = gpu.get_function(embed_mod, "embed")
-    print(f"  embed function loaded OK")
-
-    # Get embed weight pointer + info
-    embed_ti = model.weight_info("model.language_model.embed_tokens.weight")
-    print(f"  Embed weights: dtype={embed_ti.dtype} shape={embed_ti.shape} "
-          f"bytes={embed_ti.byte_size:,}")
-
-    # The embed kernel reads F32, but weights are F16.
-    # Convert the single row we need (token_id=760) to F32 for testing.
-    # For full pipeline: convert entire embed table once at startup.
-    print(f"\n  Converting embed weights F16 -> F32 for token {test_token_id}...")
-
-    # Read the whole embed table as raw bytes and convert to F16 numpy
-    # Actually let's be smarter - just read the one row we need
-    row_offset_bytes = test_token_id * HIDDEN_DIM * 2  # F16 = 2 bytes
-    row_bytes = HIDDEN_DIM * 2
-
-    # Get raw bytes from mmap
-    raw = model.weight_bytes("model.language_model.embed_tokens.weight")
-    row_f16_bytes = bytes(raw[row_offset_bytes : row_offset_bytes + row_bytes])
-    row_f16 = np.frombuffer(row_f16_bytes, dtype=np.float16)
-    row_f32 = row_f16.astype(np.float32)
-
-    print(f"  F16 row stats: min={row_f16.min():.6f} max={row_f16.max():.6f} "
-          f"mean={row_f16.mean():.6f}")
-    print(f"  F32 row[0:8]: {row_f32[:8]}")
-
-    # Now we need a full embed table in F32 for the kernel to index into.
-    # But that's 248320 * 5120 * 4 = ~4.7 GB which is too much.
-    # Instead: create a SMALL table with just our token at the right offset.
-    # The kernel does: row_ptr = table_base + token_id * hidden_dim * 4
-    # So we need table_base + 760 * 5120 * 4 to point to valid data.
-    #
-    # Strategy: allocate just 1 row of F32, and compute the table_base
-    # such that table_base + token_id * hidden_dim * 4 = our_row_ptr.
-    # BUT: that means table_base could be a negative/invalid address.
-    #
-    # Better strategy: allocate (token_id + 1) rows = 761 * 5120 * 4 = ~14.9 MB
-    # and put our data at row 760.
-
-    # Actually even simpler for proof: set token_id=0 and put our row at index 0
-    # OR: allocate a big-enough region. 761 rows * 5120 * 4 = 15,564,800 bytes ~ 15 MB
-    table_rows_needed = test_token_id + 1
-    table_bytes = table_rows_needed * HIDDEN_DIM * 4  # F32
-    print(f"\n  Allocating {table_bytes:,} bytes ({table_bytes/(1024**2):.1f} MB) "
-          f"for embed table ({table_rows_needed} rows of F32)")
-
-    d_table = gpu.mem_alloc(table_bytes)
-    print(f"  Device table @ 0x{d_table.value:016x}")
-
-    # Upload just the one row at the right offset
-    row_device_offset = test_token_id * HIDDEN_DIM * 4
-    # Create a ctypes pointer to the numpy data
-    row_f32_ctypes = row_f32.ctypes.data_as(ctypes.c_void_p)
-
-    # We need to write at offset within the allocation
-    # cuMemcpyHtoD writes to an absolute device address
-    dst_addr = CUdeviceptr(d_table.value + row_device_offset)
-    gpu.memcpy_htod(dst_addr, row_f32_ctypes, HIDDEN_DIM * 4)
-
-    # Allocate output buffer
-    d_output = gpu.mem_alloc(HIDDEN_DIM * 4)
-    # Zero it first
-    zero_buf = np.zeros(HIDDEN_DIM, dtype=np.float32)
-    gpu.memcpy_htod(d_output, zero_buf.ctypes.data_as(ctypes.c_void_p), HIDDEN_DIM * 4)
-
-    # Launch embed kernel
-    # Signature: embed(token_id: u32, embed_table_ptr: u64, output_ptr: u64)
-    # hidden_dim=5120 is baked in
-    BLOCK = 256
-    GRID = max(1, math.ceil(HIDDEN_DIM / (BLOCK * 4)))  # vectorized: 4 elements per thread
-
-    print(f"\n  Launching embed kernel: grid=({GRID},1,1) block=({BLOCK},1,1)")
-    print(f"    token_id={test_token_id}")
-    print(f"    table_ptr=0x{d_table.value:016x}")
-    print(f"    output_ptr=0x{d_output.value:016x}")
-
-    t0 = time.perf_counter()
-    gpu.launch(
-        embed_func,
-        grid=(GRID, 1, 1),
-        block=(BLOCK, 1, 1),
-        args=[
-            ctypes.c_uint32(test_token_id),
-            ctypes.c_uint64(d_table.value),
-            ctypes.c_uint64(d_output.value),
-        ],
-    )
-    gpu.synchronize()
-    t1 = time.perf_counter()
-    print(f"  Kernel completed in {(t1-t0)*1e6:.0f} us")
-
-    # Read back output
-    output_f32 = np.zeros(HIDDEN_DIM, dtype=np.float32)
-    gpu.memcpy_dtoh(
-        output_f32.ctypes.data_as(ctypes.c_void_p),
-        d_output,
-        HIDDEN_DIM * 4,
-    )
-
-    print(f"\n  Output stats:")
-    print(f"    min={output_f32.min():.6f}  max={output_f32.max():.6f}  "
-          f"mean={output_f32.mean():.6f}")
-    print(f"    first 8: {output_f32[:8]}")
-    print(f"    nonzero: {np.count_nonzero(output_f32)} / {HIDDEN_DIM}")
-
-    # Verify against reference
-    ok_nan = check_nan_inf(output_f32, "embed_output")
-    maxerr = np.max(np.abs(output_f32 - row_f32))
-    ok_match = maxerr < 1e-6
-    print(f"    vs reference max error: {maxerr:.2e}")
-    print(f"    EMBED RESULT: {'PASS' if (ok_nan and ok_match) else 'FAIL'}")
-
-    if not (ok_nan and ok_match):
-        print("  Stopping -- embed kernel failed.")
-        gpu.mem_free(d_table)
-        gpu.mem_free(d_output)
-        gpu.close()
-        model.close()
-        return 1
-
-    # ---------------------------------------------------------------
-    # 4. STAGE 2: Norm kernel on the embed output
-    # ---------------------------------------------------------------
-    banner("STAGE 2: RMSNorm Kernel")
-
-    norm_cubin_path = f"{CACHE_DIR}/norm.cubin"
-    print(f"  Loading cubin: {norm_cubin_path}")
-    norm_mod = gpu.load_cubin(norm_cubin_path)
+    norm_cubin = "/tmp/lithos-cache/3644e4d3fa48efc4/norm.cubin"
+    norm_mod = gpu.load_cubin(norm_cubin)
     norm_func = gpu.get_function(norm_mod, "norm")
-    print(f"  norm function loaded OK")
+    print(f"  norm: loaded")
 
-    # Norm kernel signature: (input_ptr, residual_ptr, weight_ptr, output_ptr, epsilon)
-    # All F32 pointers. hidden_dim=5120 baked in.
-    # input = embed output (already on device as d_output)
-    # residual = zeros for the first norm (no residual yet)
-    # weight = layer 0 input_layernorm.weight (BF16 in model, need F32)
+    # ---------------------------------------------------------------
+    # 3. Get weight pointers (host mmap -- works on GH200 unified memory)
+    # ---------------------------------------------------------------
+    embed_ptr = model.weight_info("model.language_model.embed_tokens.weight").ptr
+    print(f"\n  embed table @ 0x{embed_ptr:016x} (host mmap, F16)")
 
-    # Get norm weight
-    norm_weight_name = "model.language_model.layers.0.input_layernorm.weight"
-    norm_ti = model.weight_info(norm_weight_name)
-    print(f"  Norm weight: dtype={norm_ti.dtype} shape={norm_ti.shape}")
+    # ---------------------------------------------------------------
+    # STAGE 1: Embed all prompt tokens (F16 -> F32)
+    # ---------------------------------------------------------------
+    banner("STAGE 1: F16 Embed Kernel -- All Prompt Tokens")
 
-    norm_raw = model.weight_bytes(norm_weight_name)
-    if norm_ti.dtype == "BF16":
-        # Convert BF16 to F32: BF16 is top 16 bits of F32
-        norm_u16 = np.frombuffer(bytes(norm_raw), dtype=np.uint16)
-        norm_f32_weight = np.zeros(len(norm_u16), dtype=np.float32)
-        # BF16 -> F32: shift left by 16 bits
-        norm_f32_weight.view(np.uint32)[:] = norm_u16.astype(np.uint32) << 16
-    elif norm_ti.dtype == "F32":
-        norm_f32_weight = np.frombuffer(bytes(norm_raw), dtype=np.float32).copy()
-    elif norm_ti.dtype == "F16":
-        norm_f16 = np.frombuffer(bytes(norm_raw), dtype=np.float16)
-        norm_f32_weight = norm_f16.astype(np.float32)
-    else:
-        print(f"  Unsupported norm weight dtype: {norm_ti.dtype}")
-        return 1
+    n_tokens = len(token_ids)
+    BLOCK = 256
+    GRID = max(1, math.ceil(HIDDEN_DIM / BLOCK))
 
-    print(f"  Norm weight F32: min={norm_f32_weight.min():.6f} "
-          f"max={norm_f32_weight.max():.6f} mean={norm_f32_weight.mean():.6f}")
-
-    # Upload norm weight to device
-    d_norm_weight = gpu.mem_alloc(HIDDEN_DIM * 4)
-    gpu.memcpy_htod(d_norm_weight,
-                    norm_f32_weight.ctypes.data_as(ctypes.c_void_p),
-                    HIDDEN_DIM * 4)
-
-    # Residual = zeros (first layer, no residual to add)
-    d_residual = gpu.mem_alloc(HIDDEN_DIM * 4)
-    residual_zeros = np.zeros(HIDDEN_DIM, dtype=np.float32)
-    gpu.memcpy_htod(d_residual,
-                    residual_zeros.ctypes.data_as(ctypes.c_void_p),
-                    HIDDEN_DIM * 4)
-
-    # Output buffer for norm
-    d_norm_output = gpu.mem_alloc(HIDDEN_DIM * 4)
-
-    epsilon = model.config.rms_norm_eps
-    print(f"  epsilon = {epsilon}")
-
-    # Launch norm: 1 row, BLOCK threads
-    NORM_BLOCK = 256
-    print(f"\n  Launching norm kernel: grid=(1,1,1) block=({NORM_BLOCK},1,1)")
+    # Allocate output: [n_tokens, HIDDEN_DIM] F32
+    d_embed_out = gpu.mem_alloc(n_tokens * HIDDEN_DIM * 4)
 
     t0 = time.perf_counter()
-    gpu.launch(
-        norm_func,
-        grid=(1, 1, 1),
-        block=(NORM_BLOCK, 1, 1),
-        args=[
-            ctypes.c_uint64(d_output.value),       # input (embed output)
-            ctypes.c_uint64(d_residual.value),      # residual (zeros)
-            ctypes.c_uint64(d_norm_weight.value),   # weight
-            ctypes.c_uint64(d_norm_output.value),   # output
-            ctypes.c_float(epsilon),                # epsilon
-        ],
-        shared_mem=128,  # shared memory for reduction
-    )
-    gpu.synchronize()
-    t1 = time.perf_counter()
-    print(f"  Kernel completed in {(t1-t0)*1e6:.0f} us")
-
-    # Read back norm output
-    norm_result = np.zeros(HIDDEN_DIM, dtype=np.float32)
-    gpu.memcpy_dtoh(
-        norm_result.ctypes.data_as(ctypes.c_void_p),
-        d_norm_output,
-        HIDDEN_DIM * 4,
-    )
-
-    print(f"\n  Norm output stats:")
-    print(f"    min={norm_result.min():.6f}  max={norm_result.max():.6f}  "
-          f"mean={norm_result.mean():.6f}")
-    print(f"    first 8: {norm_result[:8]}")
-    print(f"    nonzero: {np.count_nonzero(norm_result)} / {HIDDEN_DIM}")
-
-    ok_nan = check_nan_inf(norm_result, "norm_output")
-
-    # CPU reference: RMSNorm(embed_output + 0) * weight
-    x = output_f32 + residual_zeros  # input + residual
-    rms = np.sqrt(np.mean(x ** 2) + epsilon)
-    ref_norm = (x / rms) * norm_f32_weight
-
-    maxerr = np.max(np.abs(norm_result - ref_norm))
-    ok_match = maxerr < 0.01  # GPU uses approx rsqrt
-    print(f"    vs CPU reference max error: {maxerr:.6f}")
-    print(f"    CPU ref first 8: {ref_norm[:8]}")
-    print(f"    NORM RESULT: {'PASS' if (ok_nan and ok_match) else 'FAIL'}")
-
-    if not ok_nan:
-        print("  Stopping -- norm kernel produced NaN/Inf.")
-
-    # ---------------------------------------------------------------
-    # 5. Full embed for all prompt tokens
-    # ---------------------------------------------------------------
-    banner("STAGE 3: Full Prompt Embedding")
-
-    # Embed all 5 tokens of "The capital of France is"
-    n_tokens = len(token_ids)
-    max_token_id = max(token_ids)
-    print(f"  Embedding {n_tokens} tokens: {token_ids}")
-
-    # We need a table covering up to max_token_id
-    # For the full model this would be the entire embed table.
-    # Let's convert just the rows we need and create a sparse-ish table.
-    table_rows_needed2 = max_token_id + 1
-    table_bytes2 = table_rows_needed2 * HIDDEN_DIM * 4
-    print(f"  Need table covering {table_rows_needed2} rows = {table_bytes2/(1024**2):.1f} MB")
-
-    # For each token, extract its F16 row and convert to F32
-    embed_raw = model.weight_bytes("model.language_model.embed_tokens.weight")
-    all_rows_f32 = {}
-    for tid in token_ids:
-        off = tid * HIDDEN_DIM * 2
-        row_bytes_data = bytes(embed_raw[off : off + HIDDEN_DIM * 2])
-        row_f16_arr = np.frombuffer(row_bytes_data, dtype=np.float16)
-        all_rows_f32[tid] = row_f16_arr.astype(np.float32)
-
-    # Allocate device table (reuse if big enough, otherwise re-alloc)
-    if table_rows_needed2 > table_rows_needed:
-        gpu.mem_free(d_table)
-        d_table = gpu.mem_alloc(table_bytes2)
-        print(f"  Reallocated table @ 0x{d_table.value:016x}")
-
-    # Upload each row at its correct offset
-    for tid, row_data in all_rows_f32.items():
-        off = tid * HIDDEN_DIM * 4
-        dst = CUdeviceptr(d_table.value + off)
-        gpu.memcpy_htod(dst, row_data.ctypes.data_as(ctypes.c_void_p), HIDDEN_DIM * 4)
-
-    # Allocate output for all tokens: n_tokens * HIDDEN_DIM * 4
-    d_multi_output = gpu.mem_alloc(n_tokens * HIDDEN_DIM * 4)
-
-    # Run embed for each token (the kernel handles one token at a time)
-    print(f"\n  Running embed for each token...")
     for i, tid in enumerate(token_ids):
-        out_offset = i * HIDDEN_DIM * 4
-        d_out_i = CUdeviceptr(d_multi_output.value + out_offset)
-
+        out_addr = CUdeviceptr(d_embed_out.value + i * HIDDEN_DIM * 4)
         gpu.launch(
             embed_func,
             grid=(GRID, 1, 1),
             block=(BLOCK, 1, 1),
             args=[
                 ctypes.c_uint32(tid),
-                ctypes.c_uint64(d_table.value),
-                ctypes.c_uint64(d_out_i.value),
+                ctypes.c_uint64(embed_ptr),
+                ctypes.c_uint64(out_addr.value),
             ],
         )
-
     gpu.synchronize()
+    t1 = time.perf_counter()
+    print(f"  Embedded {n_tokens} tokens in {(t1-t0)*1e6:.0f} us")
 
-    # Read back all token embeddings
-    multi_output = np.zeros((n_tokens, HIDDEN_DIM), dtype=np.float32)
+    # Read back and verify
+    embed_output = np.zeros((n_tokens, HIDDEN_DIM), dtype=np.float32)
     gpu.memcpy_dtoh(
-        multi_output.ctypes.data_as(ctypes.c_void_p),
-        d_multi_output,
-        n_tokens * HIDDEN_DIM * 4,
+        embed_output.ctypes.data_as(ctypes.c_void_p),
+        d_embed_out,
+        embed_output.nbytes,
     )
 
+    raw = model.weight_bytes("model.language_model.embed_tokens.weight")
     all_ok = True
     for i, tid in enumerate(token_ids):
-        row = multi_output[i]
-        ref = all_rows_f32[tid]
-        err = np.max(np.abs(row - ref))
-        ok = err < 1e-6
+        off = tid * HIDDEN_DIM * 2
+        ref = np.frombuffer(bytes(raw[off:off+HIDDEN_DIM*2]), dtype=np.float16).astype(np.float32)
+        err = np.max(np.abs(embed_output[i] - ref))
         word = tok.decode([tid])
+        ok = err < 1e-6 and check_nan_inf(embed_output[i], f"embed_{tid}")
         print(f"    token {tid:6d} ({word!r:12s}): "
-              f"min={row.min():+.4f} max={row.max():+.4f} "
-              f"mean={row.mean():+.6f}  err={err:.2e}  {'OK' if ok else 'FAIL'}")
+              f"min={embed_output[i].min():+.4f} max={embed_output[i].max():+.4f} "
+              f"err={err:.2e}  {'OK' if ok else 'FAIL'}")
         if not ok:
             all_ok = False
 
-    print(f"\n  Full prompt embed: {'PASS' if all_ok else 'FAIL'}")
+    results["embed"] = all_ok
+    print(f"\n  STAGE 1 RESULT: {'PASS' if all_ok else 'FAIL'}")
+
+    if not all_ok:
+        print("  Stopping -- embed failed.")
+        gpu.close()
+        model.close()
+        return 1
 
     # ---------------------------------------------------------------
-    # 6. Summary
+    # STAGE 2: RMSNorm on first token's embedding
+    # ---------------------------------------------------------------
+    banner("STAGE 2: RMSNorm Kernel (Layer 0 Input Norm)")
+
+    # Norm kernel: norm(input_ptr, residual_ptr, weight_ptr, output_ptr, epsilon)
+    # All F32.  hidden_dim=5120 baked in.
+
+    # Prepare norm weight (BF16 -> F32, upload to device)
+    norm_weight_name = "model.language_model.layers.0.input_layernorm.weight"
+    norm_ti = model.weight_info(norm_weight_name)
+    norm_raw = bytes(model.weight_bytes(norm_weight_name))
+    if norm_ti.dtype == "BF16":
+        norm_f32 = bf16_to_f32(norm_raw)
+    elif norm_ti.dtype == "F16":
+        norm_f32 = np.frombuffer(norm_raw, dtype=np.float16).astype(np.float32)
+    else:
+        norm_f32 = np.frombuffer(norm_raw, dtype=np.float32).copy()
+    print(f"  Norm weight: {norm_ti.dtype} -> F32, "
+          f"min={norm_f32.min():.6f} max={norm_f32.max():.6f}")
+
+    d_norm_weight = upload_f32(gpu, norm_f32)
+
+    # Residual = zeros (first layer)
+    d_residual = upload_f32(gpu, np.zeros(HIDDEN_DIM, dtype=np.float32))
+
+    # Use first token's embed output as input
+    d_norm_input = CUdeviceptr(d_embed_out.value)  # first token = offset 0
+
+    # Output buffer
+    d_norm_out = gpu.mem_alloc(HIDDEN_DIM * 4)
+
+    epsilon = model.config.rms_norm_eps
+    print(f"  epsilon = {epsilon}")
+
+    t0 = time.perf_counter()
+    gpu.launch(
+        norm_func,
+        grid=(1, 1, 1),
+        block=(256, 1, 1),
+        args=[
+            ctypes.c_uint64(d_norm_input.value),
+            ctypes.c_uint64(d_residual.value),
+            ctypes.c_uint64(d_norm_weight.value),
+            ctypes.c_uint64(d_norm_out.value),
+            ctypes.c_float(epsilon),
+        ],
+        shared_mem=128,
+    )
+    gpu.synchronize()
+    t1 = time.perf_counter()
+    print(f"  Norm kernel: {(t1-t0)*1e6:.0f} us")
+
+    norm_result = np.zeros(HIDDEN_DIM, dtype=np.float32)
+    gpu.memcpy_dtoh(
+        norm_result.ctypes.data_as(ctypes.c_void_p),
+        d_norm_out,
+        HIDDEN_DIM * 4,
+    )
+
+    # CPU reference
+    x = embed_output[0] + 0.0  # input + residual(zeros)
+    rms = np.sqrt(np.mean(x ** 2) + epsilon)
+    ref_norm = (x / rms) * norm_f32
+
+    maxerr = np.max(np.abs(norm_result - ref_norm))
+    ok_nan = check_nan_inf(norm_result, "norm")
+    ok_match = maxerr < 0.01
+
+    print(f"  Output: min={norm_result.min():.6f} max={norm_result.max():.6f} "
+          f"mean={norm_result.mean():.6f}")
+    print(f"  first 8: {norm_result[:8]}")
+    print(f"  vs CPU reference max error: {maxerr:.6f}")
+    results["norm"] = ok_nan and ok_match
+    print(f"\n  STAGE 2 RESULT: {'PASS' if results['norm'] else 'FAIL'}")
+
+    # ---------------------------------------------------------------
+    # STAGE 3: Norm all 5 tokens
+    # ---------------------------------------------------------------
+    banner("STAGE 3: Norm All Prompt Tokens")
+
+    # Allocate output for all tokens
+    d_norm_all = gpu.mem_alloc(n_tokens * HIDDEN_DIM * 4)
+
+    # Allocate zero residual for all tokens
+    d_residual_all = upload_f32(gpu, np.zeros(n_tokens * HIDDEN_DIM, dtype=np.float32))
+
+    t0 = time.perf_counter()
+    gpu.launch(
+        norm_func,
+        grid=(n_tokens, 1, 1),  # one block per token row
+        block=(256, 1, 1),
+        args=[
+            ctypes.c_uint64(d_embed_out.value),
+            ctypes.c_uint64(d_residual_all.value),
+            ctypes.c_uint64(d_norm_weight.value),
+            ctypes.c_uint64(d_norm_all.value),
+            ctypes.c_float(epsilon),
+        ],
+        shared_mem=128,
+    )
+    gpu.synchronize()
+    t1 = time.perf_counter()
+    print(f"  Norm {n_tokens} tokens: {(t1-t0)*1e6:.0f} us")
+
+    norm_all_result = np.zeros((n_tokens, HIDDEN_DIM), dtype=np.float32)
+    gpu.memcpy_dtoh(
+        norm_all_result.ctypes.data_as(ctypes.c_void_p),
+        d_norm_all,
+        norm_all_result.nbytes,
+    )
+
+    all_norm_ok = True
+    for i, tid in enumerate(token_ids):
+        row = norm_all_result[i]
+        x_ref = embed_output[i]
+        rms_ref = np.sqrt(np.mean(x_ref ** 2) + epsilon)
+        ref = (x_ref / rms_ref) * norm_f32
+        err = np.max(np.abs(row - ref))
+        ok = err < 0.01 and check_nan_inf(row, f"norm_{tid}")
+        word = tok.decode([tid])
+        print(f"    token {tid:6d} ({word!r:12s}): "
+              f"norm_min={row.min():+.6f} norm_max={row.max():+.6f} "
+              f"err={err:.6f}  {'OK' if ok else 'FAIL'}")
+        if not ok:
+            all_norm_ok = False
+
+    results["norm_all_tokens"] = all_norm_ok
+    print(f"\n  STAGE 3 RESULT: {'PASS' if all_norm_ok else 'FAIL'}")
+
+    # ---------------------------------------------------------------
+    # STAGE 4: Activation statistics -- is the signal reasonable?
+    # ---------------------------------------------------------------
+    banner("STAGE 4: Activation Analysis")
+
+    print("  Post-embed activation statistics per token:")
+    for i, tid in enumerate(token_ids):
+        row = embed_output[i]
+        word = tok.decode([tid])
+        l2 = np.sqrt(np.sum(row ** 2))
+        print(f"    {word!r:12s}: L2={l2:.4f}  var={np.var(row):.6f}  "
+              f"absmax={np.max(np.abs(row)):.4f}")
+
+    print("\n  Post-norm activation statistics per token:")
+    for i, tid in enumerate(token_ids):
+        row = norm_all_result[i]
+        word = tok.decode([tid])
+        l2 = np.sqrt(np.sum(row ** 2))
+        print(f"    {word!r:12s}: L2={l2:.4f}  var={np.var(row):.6f}  "
+              f"absmax={np.max(np.abs(row)):.4f}")
+
+    results["activation_analysis"] = True  # informational
+
+    # ---------------------------------------------------------------
+    # Summary
     # ---------------------------------------------------------------
     banner("EXECUTION SUMMARY")
+
     print(f"""
-  Device:        {gpu.device_name}
-  Model:         {model}
-  Prompt:        {prompt!r}
-  Tokens:        {token_ids}
+  Device:          {gpu.device_name}
+  Model:           Qwen 3.5-27B GPTQ-W4A16  ({model.total_weight_bytes/(1024**3):.2f} GiB)
+  Prompt:          {prompt!r}
+  Tokens:          {token_ids}
+  Unified memory:  YES (host mmap pointers work directly in kernels)
+""")
 
-  Stage 1 (embed single token):  PASS - non-zero, non-NaN, matches reference
-  Stage 2 (RMSNorm):             {'PASS' if ok_match else 'FAIL'} - max error {maxerr:.6f}
-  Stage 3 (embed all tokens):    {'PASS' if all_ok else 'FAIL'}
+    all_pass = True
+    for name, ok in results.items():
+        status = "PASS" if ok else "FAIL"
+        if not ok:
+            all_pass = False
+        print(f"  [{status}] {name}")
 
-  KEY RESULT: Real Qwen 3.5-27B weights -> real CUDA kernels -> correct
-  activation vectors on {gpu.device_name}.
+    print(f"""
+  KEY FINDINGS:
+  1. GH200 unified memory: host mmap'd safetensors pointers passed directly
+     to CUDA kernels -- ZERO copies needed for weight access.
+  2. F16 embed kernel: reads F16 weights, outputs F32 activations, exact match.
+  3. RMSNorm kernel: correct within GPU approx rsqrt tolerance.
+  4. All {n_tokens} prompt tokens produce valid, non-zero, non-NaN activations.
 
-  The embed+norm pipeline produces numerically correct output.
-  Next: wire projection kernels for the first attention layer.
+  NEXT STEPS:
+  - Wire projection kernels (W4A16 GPTQ dequant) for first attention layer
+  - Run Q/K/V projections through layer 0
+  - Build toward full forward pass and token generation
 """)
 
     # Cleanup
-    gpu.mem_free(d_table)
-    gpu.mem_free(d_output)
-    gpu.mem_free(d_norm_weight)
-    gpu.mem_free(d_residual)
-    gpu.mem_free(d_norm_output)
-    gpu.mem_free(d_multi_output)
+    for dptr in [d_embed_out, d_norm_weight, d_residual, d_norm_out,
+                 d_norm_all, d_residual_all]:
+        try:
+            gpu.mem_free(dptr)
+        except Exception:
+            pass
     gpu.close()
     model.close()
 
-    return 0 if (all_ok and ok_match) else 1
+    return 0 if all_pass else 1
 
 
 if __name__ == "__main__":

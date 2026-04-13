@@ -21,3 +21,4 @@ cli/target/
 
 # Cache
 /tmp/
+.vercel
