@@ -3249,50 +3249,21 @@ load_weights:
     b.lt    .shard_open_fail
     mov     x21, x0                // fd
 
-    // ---- cuMemAllocHost + pread (iter-17 fix) ----
-    // File-backed mmap fails: cuMemHostRegister NOT_PERMITTED (801).
-    // Fix: cuMemAllocHost gives pinned host pages; pread fills them.
-    stp     x23, x24, [sp, #-16]!
-    stp     x25, x26, [sp, #-16]!
-    stp     x27, x28, [sp, #-16]!
-
-    adrp    x0, shard_alloc_ptr
-    add     x0, x0, :lo12:shard_alloc_ptr  // pp = &shard_alloc_ptr
-    mov     x1, x28                         // bytesize = file_size
-    bl      cuMemAllocHost
-    cbnz    x0, .shard_alloc_fail
-
-    adrp    x22, shard_alloc_ptr
-    add     x22, x22, :lo12:shard_alloc_ptr
-    ldr     x22, [x22]                      // x22 = pinned host buf ptr
-
-    ldp     x27, x28, [sp], #16
-    ldp     x25, x26, [sp], #16
-    ldp     x23, x24, [sp], #16
-
-    // pread loop: x21=fd, x22=buf, x28=file_size
-    mov     x12, x22                        // write cursor
-    mov     x9, #0                          // file offset
-    mov     x10, x28                        // remaining
-
-.shard_pread_loop:
-    cbz     x10, .shard_pread_done
-    mov     x11, #(256 * 1024 * 1024)
-    cmp     x10, x11
-    csel    x2, x10, x11, lo               // chunk = min(remaining, 256MB)
-    mov     x0, x21                         // fd
-    mov     x1, x12                         // buf
-    mov     x3, x9                          // offset
-    mov     x8, #SYS_PREAD64
+    // ---- mmap shard with PROT_READ|PROT_WRITE (COW) ----
+    // GH200 ATS: GPU reads host pages through NVLink-C2C.
+    // MAP_PRIVATE + PROT_WRITE = COW pages, no actual writes needed.
+    // No cuMemAllocHost, no cuMemHostRegister, no pread.
+    mov     x0, #0                 // addr = NULL
+    mov     x1, x28                // length = file_size
+    mov     x2, #PROT_RW           // COW-writable (PROT_READ|PROT_WRITE=3)
+    mov     x3, #MAP_PRIVATE       // private mapping
+    mov     x4, x21                // fd
+    mov     x5, #0                 // offset = 0
+    mov     x8, #SYS_MMAP
     svc     #0
-    cmp     x0, #0
-    b.le    .shard_pread_fail
-    add     x12, x12, x0
-    add     x9, x9, x0
-    sub     x10, x10, x0
-    b       .shard_pread_loop
-
-.shard_pread_done:
+    cmn     x0, #1
+    b.eq    .shard_alloc_fail
+    mov     x22, x0                // x22 = mmap'd shard base
     adrp    x1, shard_bases
     add     x1, x1, :lo12:shard_bases
     str     x22, [x1, x26, lsl #3]
