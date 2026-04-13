@@ -25,6 +25,36 @@
 \   The driver requires EIATTR_COOP_GROUP_INSTR_OFFSETS and
 \   EIATTR_COOP_GROUP_MASK_REGIDS in .nv.info.<kernel> to accept
 \   cuLaunchCooperativeKernel.  build-cubin emits them when cooperative?=1.
+\
+\ ---- Megakernel n-kparams values (from compiler/megakernel-params.fs) ----
+\
+\ For megakernel cubins, bypass count-all-params and set n-kparams directly:
+\
+\   DeltaNet megakernel (48 layers, cooperative):
+\     n-kparams = DN-NKPARAMS = 1280
+\     cbuf0 param region = 10240 bytes  (0x2800)
+\     Layout: 48 × 208-byte layer blocks + 72 bytes global + 184 bytes pad
+\     To build: DN-NKPARAMS n-kparams !  1 cooperative? !
+\               s" deltanet_mega" li-set-name  write-cubin
+\
+\   Full-attention megakernel (16 layers, cooperative):
+\     n-kparams = FA-NKPARAMS = 448
+\     cbuf0 param region = 3584 bytes  (0xE00)
+\     Layout: 16 × 208-byte layer blocks + 56 bytes global + 200 bytes pad
+\     To build: FA-NKPARAMS n-kparams !  1 cooperative? !
+\               s" attention_mega" li-set-name  write-cubin
+\
+\ EIATTR_PARAM_CBANK in .nv.info.<kernel> encodes the param-region byte count
+\ in bits [31:16] of the second u32 (see emit-sass.fs line ~850):
+\   DeltaNet: ( 10240 << 16 ) | 0x210  = 0x28000210
+\   FA:       (  3584 << 16 ) | 0x210  = 0x0E000210
+\
+\ Grid-sync counter and flag GPU addresses are written into the global-params
+\ struct by launcher.s at each token step (cuMemAlloc once at startup, then
+\ their device VAs are stored at fixed offsets in the global-ptrs array that
+\ build-deltanet-params / build-attention-params reads).  No cbuf0 patching
+\ is needed at launch time; the entire param buffer is rebuilt each step via
+\ build-deltanet-params / build-attention-params.
 
 variable cw-fd
 
