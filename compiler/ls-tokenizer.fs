@@ -8,6 +8,11 @@
 \
 \ Produces a flat stream of token records for downstream consumption.
 
+\ ---- Bootstrap compatibility words ------------------------------------------
+\ forth-bootstrap provides <, >, =, 0<, 0>, 0= but not the composite forms.
+: >=  ( a b -- flag )  < 0= ;
+: <=  ( a b -- flag )  > 0= ;
+
 \ ---- Token type constants ----------------------------------------------------
 
  0 constant PRIM_MUL
@@ -22,12 +27,16 @@
  9 constant PRIM_OUTER
 10 constant PRIM_PROJECT
 11 constant PRIM_MATVEC
-12 constant LIT_INT
-13 constant LIT_FLOAT
-14 constant NAME_REF
-15 constant DEF_START
-16 constant DEF_END
-17 constant OPERAND
+12 constant PRIM_SUM      \ Σ — reduce-sum over a vector (full warp+cross-warp reduce)
+13 constant LIT_INT
+14 constant LIT_FLOAT
+15 constant NAME_REF
+16 constant DEF_START
+17 constant DEF_END
+18 constant OPERAND
+19 constant TOK_REPEAT   \ NAME × N — inline a definition N times with grid-sync barriers
+                         \ token.val      = N (repeat count)
+                         \ token.name-addr/len = name of definition to repeat
 
 \ ---- Token buffer ------------------------------------------------------------
 \ Each token record: 5 cells = type, value, name-addr, name-len, operand-offset
@@ -131,6 +140,10 @@ create p-outer   5 allot  s" outer"   p-outer   swap move
 create p-project 7 allot  s" project" p-project swap move
 create p-matvec  6 allot  s" matvec"  p-matvec  swap move
 
+\ UTF-8 Σ: 0xCE 0xA3 (2 bytes for U+03A3)
+create p-sum 2 allot
+206 p-sum c!  163 p-sum 1+ c!
+
 \ UTF-8 sqrt: 0xE2 0x88 0x9A (3 bytes for U+221A)
 create p-sqrt 3 allot
 226 p-sqrt c!  136 p-sqrt 1+ c!  154 p-sqrt 2 + c!
@@ -147,6 +160,9 @@ create p-rsqrt 5 allot
 create p-times 2 allot
 195 p-times c!  151 p-times 1+ c!
 
+\ is-times? ( addr u -- flag )  True when the string is exactly the × glyph.
+: is-times?  ( addr u -- flag )  p-times 2 ls-str= ;
+
 : match-prim  ( addr u -- type true | false )
   2dup p-mul     1 ls-str= if 2drop PRIM_MUL   -1 exit then
   2dup p-times   2 ls-str= if 2drop PRIM_MUL   -1 exit then
@@ -158,9 +174,10 @@ create p-times 2 allot
   2dup p-rsqrt   5 ls-str= if 2drop PRIM_RSQRT -1 exit then
   2dup p-rcp     2 ls-str= if 2drop PRIM_RCP   -1 exit then
   2dup p-sqrt    3 ls-str= if 2drop PRIM_SQRT  -1 exit then
-  2dup p-outer   5 ls-str= if 2drop PRIM_OUTER -1 exit then
+  2dup p-outer   5 ls-str= if 2drop PRIM_OUTER   -1 exit then
   2dup p-project 7 ls-str= if 2drop PRIM_PROJECT -1 exit then
   2dup p-matvec  6 ls-str= if 2drop PRIM_MATVEC  -1 exit then
+  2dup p-sum     2 ls-str= if 2drop PRIM_SUM     -1 exit then
   2drop 0 ;
 
 \ ---- Line parsing ------------------------------------------------------------
@@ -187,61 +204,113 @@ create p-times 2 allot
     1+
   repeat ;
 
-\ Parse body line (indented): extract first word, optional second word
-: parse-body-line  ( -- )
-  line-indent dup line-len @ >= if drop exit then
-  dup find-ws  \ stack: start end
-  2dup = if 2drop exit then
-  \ first word: addr = line-buf+start, len = end-start
-  over line-buf + swap over -   \ addr1 u1  (first word)
-  \ Check for second word (operand)
-  2dup 2>r
-  find-ws skip-ws              \ wait -- need to recalculate from line
-  2r> 2drop
-  \ Redo: recompute from scratch
-  drop  \ clean up
+\ ---- parse-body-line variables (avoid deep stack juggling) ------------------
+variable pbl-w1a   \ first word: address in line-buf
+variable pbl-w1u   \ first word: byte length
+variable pbl-w2a   \ second word: address
+variable pbl-w2u   \ second word: byte length
+variable pbl-w3a   \ third word: address
+variable pbl-w3u   \ third word: byte length
+variable pbl-nw    \ number of words found (1, 2, or 3+)
 
-  \ Simpler approach: get first word boundaries
-  line-indent
-  dup find-ws    \ s1 e1
-  over line-buf + over 2 pick -   \ s1 e1 addr1 u1
-  2>r                              \ save first word
-  skip-ws                          \ e1 -> s2
-  dup line-len @ < if              \ there's a second word
-    dup find-ws over line-buf + over 2 pick -  \ s2 e2 addr2 u2
-    2>r
-    2drop                          \ drop s2 e2
-    \ We have first word (2r@ from outer) and operand
-    2r> 2r>                        \ op-addr op-u word-addr word-u
-    2swap                          \ word-addr word-u op-addr op-u
-    \ Try to match first word as primitive
-    2swap match-prim if            \ prim-type ; operand on stack
-      \ Emit primitive with operand
-      >r                           \ save type
-      dup op-store                 \ op-addr op-u -> off
-      -rot                         \ off op-addr op-u
-      r> 0 2swap tok-emit-raw     \ type=prim val=0 name-addr=op-addr name-len=op-u op-off=off
-      drop                         \ drop the extra off -- wait, rethink
-    else                           \ not a prim, it's name_ref + operand... just emit name
-      2drop                        \ drop operand, just emit as name_ref
-      NAME_REF -rot tok-with-name
+\ pbl-extract-word ( off -- off' )
+\ Starting at byte offset 'off' in line-buf, skip any leading whitespace,
+\ then read one whitespace-delimited word and write it into the pbl-wNa/u
+\ pair whose index equals the current value of pbl-nw (1, 2, or 3).
+\ Returns the offset after the word.
+\ Caller increments pbl-nw after calling.
+variable pbl-ws   variable pbl-we
+
+: pbl-extract-word  ( off -- off' )
+  skip-ws                               \ ( s )
+  dup line-len @ >= if exit then        \ at end of line — no word
+  dup pbl-ws !                          \ save start
+  dup find-ws pbl-we !                  \ save end
+  pbl-ws @ line-buf + pbl-nw @ 1 = if pbl-w1a ! else
+                       pbl-nw @ 2 = if pbl-w2a ! else
+                                        pbl-w3a ! then then
+  pbl-we @ pbl-ws @ -  pbl-nw @ 1 = if pbl-w1u ! else
+                        pbl-nw @ 2 = if pbl-w2u ! else
+                                        pbl-w3u ! then then
+  1 pbl-nw +!
+  pbl-we @ ;
+
+\ parse-body-line  ( -- )
+\ Parses one indented body line.  Handles three patterns:
+\   TOKEN                      -> NAME_REF, primitive, or literal (1 word)
+\   PRIM operand               -> primitive with operand (2 words)
+\   NAME × N                   -> TOK_REPEAT  inline N times (3 words)
+
+: parse-body-line  ( -- )
+  \ ---- guard: blank/all-whitespace line ----
+  line-indent dup line-len @ >= if drop exit then
+  \ ---- initialise word slots ----
+  1 pbl-nw !
+  0 pbl-w1a !  0 pbl-w1u !
+  0 pbl-w2a !  0 pbl-w2u !
+  0 pbl-w3a !  0 pbl-w3u !
+  \ ---- extract up to three words ----
+  \ Each pbl-extract-word consumes the incoming offset and returns the
+  \ offset after the word (or returns unchanged if at end-of-line).
+  \ The final returned offset is dropped after extraction is complete.
+  pbl-extract-word     \ word 1 (pbl-nw was 1, now 2); stack: ( off1 )
+  pbl-nw @ 2 = if     \ only if word 1 was found
+    pbl-extract-word   \ word 2 (pbl-nw was 2, now 3); stack: ( off2 )
+  then
+  pbl-nw @ 3 = if     \ only if word 2 was found
+    pbl-extract-word   \ word 3 (pbl-nw was 3, now 4); stack: ( off3 )
+  then
+  drop                             \ discard the last offset (not needed further)
+  \ pbl-nw is now 1+number-of-words-found (1 means 0 found, 2 means 1, etc.)
+  \ Adjust: actual word count = pbl-nw @ 1-
+  pbl-w1u @ 0= if exit then             \ no first word at all — skip
+
+  \ ---- three-word case: NAME × N ----
+  pbl-nw @ 1- 3 >= if
+    pbl-w2a @  pbl-w2u @  is-times? if
+      \ Emit TOK_REPEAT  val=N  name=w1
+      \ tok-emit-raw ( type val name-addr name-len op-off -- )
+      TOK_REPEAT
+      pbl-w3a @  pbl-w3u @  ls-parse-int   \ N
+      pbl-w1a @  pbl-w1u @                  \ name
+      0 tok-emit-raw
+      exit
     then
+    \ Three words, second is not ×: fall through to single-word emit of w1.
+  then
+
+  \ ---- two-word case: PRIM operand ----
+  pbl-nw @ 1- 2 = if
+    pbl-w1a @  pbl-w1u @  match-prim if   \ ( -- prim-type )
+      \ Emit primitive token — tok-emit-raw ( type val name-addr name-len op-off -- )
+      pbl-w2a @  pbl-w2u @  op-store      \ ( prim-type op-off )
+      swap                                 \ ( op-off prim-type )
+      0                                    \ ( op-off prim-type 0=val )
+      pbl-w2a @  pbl-w2u @                 \ ( op-off prim-type 0 name-addr name-u )
+      \ tok-emit-raw wants ( type val name-addr name-len op-off )
+      \ rearrange: ( op-off prim-type 0 w2a w2u ) -> ( prim-type 0 w2a w2u op-off )
+      4 roll                               \ ( prim-type 0 w2a w2u op-off )
+      tok-emit-raw
+      exit
+    then
+    \ w1 not a primitive but has a second word: emit w1 as NAME_REF, ignore w2.
+    pbl-w1a @  pbl-w1u @  NAME_REF -rot tok-with-name
+    exit
+  then
+
+  \ ---- single-word case ----
+  pbl-w1a @  pbl-w1u @
+  2dup match-prim if
+    2drop tok-simple
   else
-    drop                           \ drop s2
-    2r>                            \ retrieve first word
-    \ Single word: primitive, literal, or name-ref
-    2dup match-prim if
-      2drop tok-simple
-    else
-      2dup is-number? if
-        2dup has-dot? if
-          2drop LIT_FLOAT 0 tok-with-val  \ float (no real parse)
-        else
-          ls-parse-int LIT_INT swap tok-with-val
-        then
+    2dup is-number? if
+      2dup has-dot? if
+        2drop LIT_FLOAT 0 tok-with-val
       else
-        NAME_REF -rot tok-with-name
+        ls-parse-int LIT_INT swap tok-with-val
       then
+    else
+      NAME_REF -rot tok-with-name
     then
   then ;
 
@@ -329,12 +398,14 @@ variable in-def  0 in-def !
   dup PRIM_OUTER   = if drop ." PRIM_OUTER"   exit then
   dup PRIM_PROJECT = if drop ." PRIM_PROJECT" exit then
   dup PRIM_MATVEC  = if drop ." PRIM_MATVEC"  exit then
+  dup PRIM_SUM     = if drop ." PRIM_SUM"     exit then
   dup LIT_INT      = if drop ." LIT_INT"      exit then
   dup LIT_FLOAT    = if drop ." LIT_FLOAT"    exit then
   dup NAME_REF     = if drop ." NAME_REF"     exit then
   dup DEF_START    = if drop ." DEF_START"    exit then
   dup DEF_END      = if drop ." DEF_END"      exit then
   dup OPERAND      = if drop ." OPERAND"      exit then
+  dup TOK_REPEAT   = if drop ." TOK_REPEAT"  exit then
   . ;
 
 \ ---- Test --------------------------------------------------------------------

@@ -1,215 +1,167 @@
 \ ls-compiler.fs — Main compiler dispatcher for the Lithos .ls stack language.
 \
-\ Loads a .ls source file, tokenizes it (via ls-tokenizer.fs), builds a
-\ definition table, then compiles named definitions to Hopper SASS, wraps
-\ the result in an ELF cubin (via cubin-wrap.fs), and saves to disk.
+\ Loads a .ls source, tokenizes it (ls-tokenizer.fs), builds a definition
+\ table (pass 1), then compiles named definitions to Hopper SASS (pass 2),
+\ wraps the result in an ELF cubin, and writes to disk.
 \
-\ Load order (must already be included before this file):
-\   compiler/ls-tokenizer.fs    — tokenizer + token stream
-\   compiler/emit-elementwise.fs — element-wise SASS pattern emitters
-\     (this file pulls in sass/emit-sass.fs, which supplies sinst, etc.)
-\   compiler/emit-reduce.fs     — reduction emitters
-\   compiler/emit-gemv.fs       — GEMV/project emitters
-\   sass/emit-sass.fs           — raw SASS encoders (already via above)
+\ Required load order (include before this file):
+\   compiler/ls-tokenizer.fs      — tokenizer + token stream
+\   compiler/emit-elementwise.fs  — element-wise SASS emitters
+\     (transitively includes sass/emit-sass.fs)
+\   compiler/emit-reduce.fs       — reduction emitters
+\   compiler/emit-gemv.fs         — GEMV / project emitters
+\   compiler/parser.fs            — provides li-set-name, li-name$,
+\                                   n-kparams, freg+, rreg+, preg+
+\   compiler/cubin-wrap.fs        — write-cubin
 \
-\ This file provides:
-\   ls-compile-kernel  ( name-addr name-len -- )
-\   ls-compile-file    ( filename-addr filename-len -- )
-\
-\ ============================================================
-\ DEPENDENCIES — pull in the emitter stack if not yet loaded
-\ ============================================================
-\ Each include guard is implemented by checking whether a sentinel
-\ word is already defined. Forth's [DEFINED] / defined? is not
-\ universal; we use a forward-definition trick: try to find each
-\ key word and skip the include if found.
-\
-\ Instead of fragile guards, we document the required load order
-\ and rely on the caller to include prerequisites. The words below
-\ are referenced by name; if they are missing the Forth system will
-\ report an "undefined word" error at compile time pointing clearly
-\ to the missing dependency.
+\ Public interface:
+\   ls-compile-kernel ( name-addr name-len -- )
+\   ls-compile-file   ( filename-addr filename-len -- )
+\   ls-test-vadd      ( -- )   built-in smoke test
 
 \ ============================================================
 \ REGISTER ALLOCATORS
 \ ============================================================
-\ parser.fs defines freg+, rreg+, preg+. If parser.fs has NOT been
-\ loaded (stand-alone use of this file), we define minimal versions
-\ here. We detect by checking whether `next-rreg` is defined.
-\
-\ Convention (mirrors parser.fs):
-\   R0..R3  — reserved for prologue (tid, ctaid, blockDim, scratch)
-\   F0..    — float registers, allocated from 0
-\   P0..P5  — predicate registers (P6, P7 reserved by hardware)
+\ Shadow parser.fs's rreg+/freg+/preg+ with local versions that
+\ use our own counter variables.  If parser.fs was loaded first its
+\ definitions are overridden — behaviour is identical either way.
+\ R0-R3 reserved (prologue: tid, ctaid, blockDim, scratch).
+\ P6/P7 reserved by SASS hardware.
 
-variable lsc-rreg-base   4 lsc-rreg-base !   \ first allocatable int reg
-variable lsc-freg-base   0 lsc-freg-base !   \ first allocatable float reg
-variable lsc-preg-base   0 lsc-preg-base !   \ first allocatable pred reg
-
-\ Allocators — forward to parser.fs versions when present, else use locals.
-\ We always define these so the rest of the file resolves cleanly. If
-\ parser.fs has already defined rreg+ etc., the later definitions shadow
-\ them (which is fine — Forth words are looked up latest-first).
-variable lsc-rreg-counter
-variable lsc-freg-counter
-variable lsc-preg-counter
+variable lsc-rreg-ctr
+variable lsc-freg-ctr
+variable lsc-preg-ctr
 
 : lsc-regs-reset  ( -- )
-  lsc-rreg-base @ lsc-rreg-counter !
-  lsc-freg-base @ lsc-freg-counter !
-  lsc-preg-base @ lsc-preg-counter ! ;
+  4 lsc-rreg-ctr !
+  0 lsc-freg-ctr !
+  0 lsc-preg-ctr ! ;
 
 lsc-regs-reset
 
-: rreg+  ( -- n )  lsc-rreg-counter @ dup 1+ lsc-rreg-counter ! ;
-: freg+  ( -- n )  lsc-freg-counter @ dup 1+ lsc-freg-counter ! ;
+: rreg+  ( -- n )  lsc-rreg-ctr @ dup 1+ lsc-rreg-ctr ! ;
+: freg+  ( -- n )  lsc-freg-ctr @ dup 1+ lsc-freg-ctr ! ;
 
-\ Predicate registers: skip P6 and P7 (reserved by SASS hardware)
 : preg+  ( -- n )
-  lsc-preg-counter @
-  dup 6 = if drop 8 lsc-preg-counter ! 8 exit then  \ skip over P6/P7
-  dup 7 = if drop 8 lsc-preg-counter ! 8 exit then
-  dup 1+ lsc-preg-counter ! ;
-
-\ ============================================================
-\ VALUE STACK  (tracks live register IDs during compilation)
-\ ============================================================
-\ Conceptually this IS the Forth data stack: each emitter word
-\ consumes/produces register IDs on the normal Forth stack. No
-\ separate stack structure is needed — Forth's own stack serves.
-\ The helpers below are just documentation aliases.
-
-\ ( -- )  push-reg: push a register ID onto the value stack (just a normal Forth push)
-\ ( n -- )  pop-reg:  consume a register ID (just DROP or use as argument)
+  lsc-preg-ctr @
+  dup 5 > if               \ counter > 5 means next would be P6 or P7
+    drop 8                 \ skip to P8
+    9 lsc-preg-ctr !       \ next call returns P9
+    exit
+  then
+  dup 1+ lsc-preg-ctr ! ;
 
 \ ============================================================
 \ DEFINITION TABLE
 \ ============================================================
-\ Maps definition names → a saved slice of the token stream.
-\ We store: name-addr(32), name-len, first-tok-index, tok-count
-\ and copy the name bytes into our own name pool so the original
-\ line-buf / op-pool can be reused.
-\
-\ Up to MAX-DEFS definitions, name strings up to DEF-NAME-MAX bytes.
+\ Maps definition names to body token slices [first-idx, count).
+\ Names are interned into defpool to survive tokenizer reuse.
 
-64  constant MAX-DEFS
-32  constant DEF-NAME-MAX
+variable lsc-rep-n   0 lsc-rep-n !   \ repeat count for current TOK_REPEAT unroll
 
-\ Name pool — packed strings for definition names
-2048 constant DEF-NAME-POOL-SZ
-create def-name-pool DEF-NAME-POOL-SZ allot
-variable def-name-pos  0 def-name-pos !
+64    constant MAX-DEFS
+2048  constant DEFPOOL-SZ
 
-\ Per-definition metadata arrays (parallel)
-create def-name-addr MAX-DEFS cells allot    \ pointer into def-name-pool
-create def-name-len  MAX-DEFS cells allot    \ byte length of name
-create def-first-tok MAX-DEFS cells allot    \ index of first body token
-create def-tok-cnt   MAX-DEFS cells allot    \ number of body tokens
-variable def-count   0 def-count !
+create defpool   DEFPOOL-SZ allot
+variable defpool-pos  0 defpool-pos !
 
-\ def-name-intern ( addr u -- pool-addr )
-\ Copy a name string into def-name-pool, return its address.
-: def-name-intern  ( addr u -- pool-addr )
-  def-name-pos @ def-name-pool +  >r    \ R: dst
-  dup def-name-pos +!                   \ advance pool pointer
-  r@ swap move                          \ copy bytes
-  r> ;                                  \ return dst address
+create dt-nptr  MAX-DEFS cells allot   \ pointer into defpool
+create dt-nlen  MAX-DEFS cells allot   \ name byte count
+create dt-ftok  MAX-DEFS cells allot   \ first body token index
+create dt-tcnt  MAX-DEFS cells allot   \ body token count
+variable dt-n   0 dt-n !
 
-\ def-register ( name-addr name-len first-tok-idx tok-count -- )
-\ Register a compiled definition in the table.
-: def-register  ( name-addr name-len first-tok body-count -- )
-  def-count @ MAX-DEFS >= if 2drop 2drop exit then
-  def-count @ >r                        \ R: slot index
-  r@ cells def-tok-cnt  + !             \ body-count
-  r@ cells def-first-tok + !            \ first-tok-idx
-  \ intern the name
-  def-name-intern                       \ ( name-addr -- pool-addr )
-  r@ cells def-name-addr + !
-  r> dup cells def-name-len + !
-  \ wait — name-len is already consumed by def-name-intern? No:
-  \ def-name-intern ( addr u -- pool-addr ) consumes both.
-  \ But we need to store the length too. Re-examine the stack.
-  \ Stack picture at the dup: we have used name-len inside intern.
-  \ We need to save name-len before calling intern.  Fix below.
-  drop  \ discard the attempted store — see corrected version
-  1 def-count +! ;
+\ dtnc-* scratch for dt-name-copy
+variable dtnc-src  variable dtnc-len  variable dtnc-dst
 
-\ Corrected def-register — stores length separately before interning.
-: def-register  ( name-addr name-len first-tok body-count -- )
-  def-count @ MAX-DEFS >= if 2drop 2drop exit then
-  def-count @ >r                         \ R: slot
-  r@ cells def-tok-cnt  + !              \ body-count
-  r@ cells def-first-tok + !             \ first-tok-idx
-  \ name-addr name-len on stack
-  over r@ cells def-name-len + !         \ save name-len (peeked with over)
-  def-name-intern                        \ ( addr u -- pool-addr )
-  r> cells def-name-addr + !             \ save pool-addr; R: empty
-  1 def-count +! ;
+\ dt-name-copy ( src-addr src-len -- dst-addr )
+\ Copies src-len bytes from src-addr into defpool.  Returns dst-addr.
+: dt-name-copy  ( src-addr src-len -- dst-addr )
+  dtnc-len !  dtnc-src !                      \ save args
+  defpool-pos @ defpool + dtnc-dst !           \ compute dst
+  dtnc-len @ defpool-pos +!                    \ advance pool pointer
+  dtnc-src @  dtnc-dst @  dtnc-len @  move    \ MOVE ( src dst u )
+  dtnc-dst @ ;                                 \ return dst-addr
 
-\ def-find ( name-addr name-len -- idx true | false )
-\ Linear search through the definition table.
-: def-find  ( addr u -- idx true | false )
-  def-count @ 0= if 2drop 0 exit then
-  def-count @ 0 do
-    i cells def-name-len + @  over =  if         \ lengths match?
-      2dup  i cells def-name-addr + @  over       \ addr u pool-addr u
+\ dtr-* scratch for dt-register
+variable dtr-slot  variable dtr-na  variable dtr-nu
+
+: dt-register  ( name-addr name-len first-tok body-count -- )
+  dt-n @ MAX-DEFS >= if 2drop 2drop exit then
+  dt-n @ dtr-slot !
+  dtr-slot @ cells dt-tcnt + !           \ body-count
+  dtr-slot @ cells dt-ftok + !           \ first-tok
+  dtr-nu !  dtr-na !                     \ name-len name-addr
+  dtr-nu @  dtr-slot @ cells dt-nlen + ! \ store name length
+  dtr-na @  dtr-nu @  dt-name-copy       \ intern; ( -- dst-addr )
+  dtr-slot @ cells dt-nptr + !            \ store pool pointer
+  1 dt-n +! ;
+
+\ dt-find scratch
+variable dtf-src  variable dtf-u
+
+\ dt-find ( addr u -- idx true | false )
+\ ls-str= ( a1 u1 a2 u2 -- flag ) — both strings with their lengths.
+: dt-find  ( addr u -- idx true | false )
+  dtf-u !  dtf-src !
+  dt-n @ 0= if 0 exit then
+  dt-n @ 0 do
+    i cells dt-nlen + @ dtf-u @ =  if         \ quick length pre-check
+      dtf-src @  dtf-u @                       \ a1 u1
+      i cells dt-nptr + @  dtf-u @             \ a2 u2
       ls-str=  if
-        2drop i -1 unloop exit
+        i -1 unloop exit
       then
     then
   loop
-  2drop 0 ;
+  0 ;
 
 \ ============================================================
-\ PASS 1 — BUILD DEFINITION TABLE
+\ PASS 1 — CATALOGUE DEFINITIONS
 \ ============================================================
-\ Walk the full token stream once, recording where each definition
-\ body starts and ends. Leaves tok-cursor just past the last token.
 
-variable p1-in-def       0 p1-in-def !
-variable p1-def-name-a   0 p1-def-name-a !
-variable p1-def-name-u   0 p1-def-name-u !
-variable p1-def-start    0 p1-def-start !   \ tok-cursor at first body token
+variable p1-open   0 p1-open !
+variable p1-na     0 p1-na !
+variable p1-nu     0 p1-nu !
+variable p1-bst    0 p1-bst !   \ first body token index
+
+: p1-close  ( -- )
+  p1-na @  p1-nu @
+  p1-bst @
+  tok-cursor @ 1-  p1-bst @ -   \ body count (exclude current token)
+  dt-register
+  0 p1-open ! ;
 
 : ls-pass1  ( -- )
-  0 def-count !
-  0 p1-in-def !
+  0 dt-n !  0 defpool-pos !
+  0 p1-open !
   ls-reset-cursor
   begin ls-tokens-done? 0= while
-    ls-next-token              \ ( -- type )
+    ls-next-token
     dup DEF_START = if
       drop
-      \ Close any open definition first
-      p1-in-def @ if
-        p1-def-name-a @  p1-def-name-u @
-        p1-def-start @
-        tok-cursor @ 1-  p1-def-start @ -   \ body-count (tokens between start and now)
-        def-register
-      then
-      \ Begin new definition: name is in the PREVIOUS token (the DEF_START token)
-      \ The token just consumed via ls-next-token is DEF_START; name is in its fields.
-      \ ls-token-name reads from tok-cursor-1.
-      ls-token-name  p1-def-name-u !  p1-def-name-a !
-      tok-cursor @ p1-def-start !     \ next token will be first body token
-      -1 p1-in-def !
+      p1-open @ if p1-close then
+      ls-token-name  p1-nu !  p1-na !
+      tok-cursor @ p1-bst !
+      -1 p1-open !
     else
     dup DEF_END = if
       drop
-      p1-in-def @ if
-        p1-def-name-a @  p1-def-name-u @
-        p1-def-start @
-        tok-cursor @ 1-  p1-def-start @ -   \ body tokens (exclude the DEF_END itself)
-        def-register
-        0 p1-in-def !
-      then
+      p1-open @ if p1-close then
     else
-      \ All other tokens: just skip during pass 1
       drop
     then then
-  repeat ;
+  repeat
+  p1-open @ if
+    p1-na @  p1-nu @
+    p1-bst @
+    tok-cursor @  p1-bst @ -
+    dt-register
+    0 p1-open !
+  then ;
 
 \ ============================================================
-\ PEEK AHEAD — check next token without consuming
+\ PEEK
 \ ============================================================
 
 : ls-peek-type  ( -- type | -1 )
@@ -217,450 +169,365 @@ variable p1-def-start    0 p1-def-start !   \ tok-cursor at first body token
   tok-cursor @ tok-record @ ;
 
 \ ============================================================
-\ OPERAND CHECK — is the immediately following token a literal?
+\ PARAM NAME TABLE
 \ ============================================================
-\ Used by PRIM_MUL and PRIM_ADD to choose scalar vs vector variant.
+\ scan-params records each param's name and register ID.
+\ compile-token uses param-find to push the right reg on demand.
 
-: next-is-literal?  ( -- flag )
-  ls-peek-type dup LIT_INT = swap LIT_FLOAT = or ;
+16 constant MAX-PARAMS
+20 constant PNAME-MAX
 
-\ ============================================================
-\ COMPILE-TIME VALUE STACK HELPERS
-\ ============================================================
-\ The Forth stack IS the value stack. Emitter words (emit-mul,
-\ emit-add, etc.) operate on register-ID values sitting on the
-\ Forth stack. Comments use ( ra rb -- rd ) notation throughout.
+create param-regs   MAX-PARAMS cells allot
+create param-nbufs  MAX-PARAMS PNAME-MAX * allot
+create param-nlens  MAX-PARAMS cells allot
+variable n-loaded-params  0 n-loaded-params !
 
-\ ============================================================
-\ FORWARD DECLARATION: compile-token
-\ ============================================================
-\ compile-body-tokens calls compile-token recursively (for NAME_REF
-\ inlining). In Forth, forward references are handled with a deferred
-\ word that is later filled in.
+\ pf-* scratch for param-find
+variable pf-src  variable pf-u
 
-defer compile-token-fwd
+: param-find  ( addr u -- reg | -1 )
+  pf-u !  pf-src !
+  n-loaded-params @ 0= if -1 exit then
+  n-loaded-params @ 0 do
+    i cells param-nlens + @ pf-u @ =  if         \ quick length check
+      pf-src @  pf-u @                            \ a1 u1
+      i PNAME-MAX * param-nbufs +  pf-u @         \ a2 u2
+      ls-str=  if
+        i cells param-regs + @ unloop exit
+      then
+    then
+  loop
+  -1 ;
 
-\ ============================================================
-\ COMPILE BODY TOKENS
-\ ============================================================
-\ Compile a slice of the token stream [first-idx .. first-idx+count).
-\ Saves and restores tok-cursor so the caller's position is unaffected.
+\ scp-* scratch for scan-params
+variable scp-end   variable scp-saved
+variable scp-pa    variable scp-pu    \ current param name
 
-variable cb-saved-cursor
+: scan-params  ( def-idx -- first-body-cursor )
+  dup  cells dt-ftok + @              \ ( def-idx first )
+  swap cells dt-tcnt + @              \ ( first count )
+  over + scp-end !                   \ end = first + count; stack: ( first )
+  tok-cursor @ scp-saved !           \ save outer cursor
+  tok-cursor !                       \ cursor = first
+  0 n-loaded-params !
 
-: compile-body-tokens  ( first-idx count -- )
-  over +                         \ ( first end )
-  swap tok-cursor !              \ set cursor to first-idx (tok-cursor = first)
   begin
-    tok-cursor @ over <          \ while cursor < end
+    tok-cursor @ scp-end @ <
+    ls-peek-type NAME_REF = and
   while
-    ls-next-token
-    compile-token-fwd
+    ls-next-token drop
+    ls-token-name  scp-pu !  scp-pa !
+
+    scp-pu @  n-loaded-params @ cells param-nlens + !
+    scp-pa @  n-loaded-params @ PNAME-MAX * param-nbufs +  scp-pu @  move
+
+    n-loaded-params @  emit-load-param
+    n-loaded-params @ cells param-regs + !
+    1 n-loaded-params +!
   repeat
-  drop ;
+
+  tok-cursor @
+  scp-saved @ tok-cursor ! ;
+
+\ ============================================================
+\ FORWARD DECLARATION (compile-body-tokens ↔ compile-token)
+\ ============================================================
+
+defer compile-token-impl
+
+\ ============================================================
+\ COMPILE A BODY SLICE
+\ ============================================================
+
+variable cbs-saved
+
+: compile-body-tokens  ( first-idx tok-count -- )
+  over + >r
+  tok-cursor @ cbs-saved !
+  tok-cursor !
+  begin tok-cursor @ r@ < while
+    ls-next-token  compile-token-impl
+  repeat
+  r> drop
+  cbs-saved @ tok-cursor ! ;
 
 \ ============================================================
 \ COMPILE ONE TOKEN
 \ ============================================================
-\ Dispatches on token type, manipulates the value stack (Forth stack),
-\ and calls the appropriate emitter word.
 
-\ scratch variable for scalar immediate value
-variable lsc-imm
+\ ============================================================
+\ COOPERATIVE GRID-SYNC BARRIER STUB
+\ ============================================================
+\ emit-grid-sync  ( -- )
+\ Emitted between successive unrolled iterations of a NAME x N
+\ body (e.g. Layer x 64).  The Forth value stack at the call site
+\ holds live registers carrying the inter-layer hidden state.
+\ The barrier instruction is a pure synchronisation side-effect
+\ and must not modify any GP register.
+\
+\ STUB: replace nop, with the real SM90 cooperative grid-sync
+\ SASS sequence when ready:
+\   MEMBAR.SC.CLUSTER ; BAR.SYNC ; MEMBAR.SC.CLUSTER
+\ (or the SM90a grid-scope variant).
+\
+: emit-grid-sync  ( -- )
+  nop, ;                      \ placeholder -- real barrier goes here
 
 : compile-token  ( type -- )
 
-  \ ---- OPERAND / NAME_REF: push reference operand (not a value) ----
-  \ OPERAND tokens are secondary words following a primitive; they are
-  \ consumed by the primitive's look-ahead logic (next-is-literal? / ls-next-token).
-  \ NAME_REF either inlines a definition or loads a parameter pointer.
-  dup OPERAND = if drop exit then
-
-  \ ---- LIT_INT: push integer literal as immediate (used as scalar) ----
-  dup LIT_INT = if
-    drop
-    ls-token-val           \ ( -- int-value )
-    exit                   \ leave value on stack for next emitter to consume
-  then
-
-  \ ---- LIT_FLOAT: push float literal (IEEE 754 representation) ----
-  dup LIT_FLOAT = if
-    drop
-    ls-token-val           \ value stored as int-encoded float
-    exit
-  then
-
-  \ ---- DEF_START / DEF_END: skip during body compilation ----
-  \ (pass 1 already catalogued these; pass 2 should not see them
-  \  inside compile-body-tokens since we use index ranges)
+  dup OPERAND   = if drop exit then
   dup DEF_START = if drop exit then
   dup DEF_END   = if drop exit then
 
-  \ ---- NAME_REF: inline a named definition ----
+  dup LIT_INT   = if drop  ls-token-val  exit then
+  dup LIT_FLOAT = if drop  ls-token-val  exit then
+
   dup NAME_REF = if
     drop
-    ls-token-name                     \ ( -- addr u )
-    def-find if                       \ ( -- idx )
-      dup cells def-first-tok + @     \ ( idx first )
-      swap cells def-tok-cnt  + @     \ ( first count )
-      \ Save outer cursor, compile body, restore outer cursor
-      tok-cursor @ >r
+    ls-token-name                       \ ( -- addr u )
+    \ 1. Param name?
+    2dup param-find dup -1 <> if        \ ( addr u reg ) if found
+      -rot 2drop                         \ drop addr/u, keep reg
+      exit
+    then
+    drop                                 \ discard the -1
+    \ 2. User definition?
+    dt-find if                           \ ( -- idx )
+      dup  cells dt-ftok + @
+      swap cells dt-tcnt + @
       compile-body-tokens
-      r> tok-cursor !
     else
-      \ Unknown name: not a definition. Could be a kernel parameter
-      \ reference (pointer loaded at prologue time). For now, emit a
-      \ placeholder load and push the result register.
-      \ In a full compiler this would look up the param slot.
-      emit-load-param drop           \ ( param-idx -- reg ): use 0 as placeholder
+      0 emit-load-param                  \ placeholder
     then
     exit
   then
 
-  \ ---- PRIM_MUL (0): element-wise multiply or scalar multiply ----
   dup PRIM_MUL = if
     drop
-    next-is-literal? if
-      ls-next-token drop             \ consume the LIT token
-      ls-token-val                   \ ( ra -- ra imm )
-      emit-mul-scalar                \ ( ra imm -- rd )
+    ls-peek-type dup LIT_INT = swap LIT_FLOAT = or if
+      ls-next-token drop  ls-token-val
+      emit-mul-scalar
     else
-      emit-mul                       \ ( ra rb -- rd )
+      emit-mul
     then
     exit
   then
 
-  \ ---- PRIM_ADD (1): element-wise add or scalar add ----
   dup PRIM_ADD = if
     drop
-    next-is-literal? if
-      ls-next-token drop
-      ls-token-val                   \ ( ra -- ra imm )
+    ls-peek-type dup LIT_INT = swap LIT_FLOAT = or if
+      ls-next-token drop  ls-token-val
       emit-add-scalar
     else
-      emit-add                       \ ( ra rb -- rd )
+      emit-add
     then
     exit
   then
 
-  \ ---- PRIM_SUB (2) ----
-  dup PRIM_SUB = if  drop  emit-sub  exit  then
+  dup PRIM_SUB   = if drop  emit-sub    exit then
+  dup PRIM_DIV   = if drop  emit-div    exit then
+  dup PRIM_EXP   = if drop  emit-exp    exit then
+  dup PRIM_LOG   = if drop  emit-log    exit then
+  dup PRIM_SQRT  = if drop  emit-sqrt   exit then
+  dup PRIM_RCP   = if drop  emit-rcp    exit then
+  dup PRIM_RSQRT = if drop  emit-rsqrt  exit then
 
-  \ ---- PRIM_DIV (3) ----
-  dup PRIM_DIV = if  drop  emit-div  exit  then
-
-  \ ---- PRIM_EXP (4) ----
-  dup PRIM_EXP = if  drop  emit-exp  exit  then
-
-  \ ---- PRIM_LOG (5) ----
-  dup PRIM_LOG = if  drop  emit-log  exit  then
-
-  \ ---- PRIM_SQRT (6) ----
-  dup PRIM_SQRT = if  drop  emit-sqrt  exit  then
-
-  \ ---- PRIM_RCP (7) ----
-  dup PRIM_RCP = if  drop  emit-rcp  exit  then
-
-  \ ---- PRIM_RSQRT (8) ----
-  dup PRIM_RSQRT = if  drop  emit-rsqrt  exit  then
-
-  \ ---- PRIM_OUTER (9): 2-D outer product — nested multiply ----
-  \ outer u v:  for each pair (u[i], v[j]) emit FMUL into a result register.
-  \ At this level we have two vector registers on the stack.
-  \ We emit emit-mul as a representative single-step (the outer loop
-  \ structure requires the host loop; here we emit the body primitive).
+  \ PRIM_OUTER (9): emit the per-element multiply of the outer product body
   dup PRIM_OUTER = if
-    drop
-    emit-mul                         \ ( ra rb -- rd ): body of the outer product
-    exit
+    drop  emit-mul  exit
   then
 
-  \ ---- PRIM_PROJECT (10): projection — emit_gemv_kernel ----
-  \ PRIM_PROJECT = quantized weight matrix projection (W4A16 dequant GEMV).
-  \ The value stack at this point should hold: W scales x y K N.
-  \ emit-gemv-kernel ( W-reg scales-reg x-reg y-reg K N -- )
+  \ PRIM_PROJECT (10): GPTQ W4A16 quantized GEMV
+  \ Value stack: ( W-reg scales-reg x-reg y-reg K N )
   dup PRIM_PROJECT = if
-    drop
-    emit-gemv-kernel               \ consumes 6 values from the value stack
-    exit
+    drop  emit-gemv-kernel  exit
   then
 
-  \ ---- PRIM_MATVEC (11): state-matrix matvec (no dequant) ----
-  \ PRIM_MATVEC is conceptually similar to GEMV but applied to the full-
-  \ precision state matrix S (no quantization). For now we emit the same
-  \ GEMV kernel body since the underlying MAC pattern is identical;
-  \ the caller is responsible for passing a full-precision weight pointer
-  \ (scale=1.0, zero=0). A future specialisation can skip dequant entirely.
+  \ PRIM_MATVEC (11): full-precision state-matrix × vector
+  \ Same hardware path; caller uses scale=1.0, zero=0.
   dup PRIM_MATVEC = if
+    drop  emit-gemv-kernel  exit
+  then
+
+  \ PRIM_SUM (12): Σ — cross-thread warp+smem reduction
+  \ Each thread holds a partial scalar (result of per-element multiply).
+  \ Emits intra-warp butterfly + cross-warp smem broadcast.
+  \ Value stack: ( partial-reg -- result-reg )
+  dup PRIM_SUM = if
+    drop  emit-Σ  exit
+  then
+
+  \ ---- TOK_REPEAT (19): NAME x N  inline N times with grid-sync barriers ----
+  \ Token layout (set by tokenizer parse-body-line):
+  \   ls-token-val      = N  (repeat count)
+  \   ls-token-name     = name of definition to inline
+  \
+  \ Register threading:
+  \   The Forth value stack carries the model state across iterations.
+  \   After each compile-body-tokens call the stack holds the output
+  \   register(s) produced by that iteration.  Those registers are
+  \   exactly the inputs consumed by the next iteration.  The stack
+  \   threads state automatically -- no separate bookkeeping needed.
+  \
+  \ emit-grid-sync contract:
+  \   Called BETWEEN iterations (not after the last one).
+  \   On entry the value stack holds live registers carrying the
+  \   inter-layer hidden state.  The barrier is a pure side-effect
+  \   and must leave all GP registers undisturbed.
+  dup TOK_REPEAT = if
     drop
-    emit-gemv-kernel               \ same hardware pattern, no dequant (scale=FP32-ONE)
+    ls-token-val              \ ( -- N )
+    ls-token-name             \ ( -- N name-addr name-len )
+    dt-find 0= if             \ definition not in table -- skip
+      drop exit               \ pop N; 0= consumed the false flag
+    then                      \ ( -- N def-idx )
+    dup  cells dt-ftok + @    \ ( N def-idx first-tok )
+    swap cells dt-tcnt + @    \ ( N first-tok body-count )
+    rot                       \ ( first-tok body-count N )
+    lsc-rep-n !               \ save N; stack: ( first-tok body-count )
+    lsc-rep-n @ 0 do
+      \ Replay the body token slice for iteration i.
+      \ 2dup keeps first-tok/body-count for subsequent iterations.
+      2dup compile-body-tokens
+      \ Grid-sync barrier between iterations, not after the last.
+      i lsc-rep-n @ 1- < if emit-grid-sync then
+    loop
+    2drop                     \ discard first-tok / body-count
     exit
   then
 
-  \ ---- Unknown token type: drop silently ----
   drop ;
 
-\ Wire the deferred word to the concrete definition.
-' compile-token is compile-token-fwd
+' compile-token is compile-token-impl
 
 \ ============================================================
-\ PROLOGUE EMISSION
+\ ls-compile-kernel
 \ ============================================================
-\ emit-prologue (from emit-elementwise.fs) emits S2R + IMAD for
-\ the standard thread-indexing sequence. After return R0 = global tid.
-\ We also reserve R0..R3 so subsequent rreg+ calls start at R4.
 
-: ls-emit-prologue  ( -- )
-  lsc-regs-reset
-  emit-prologue ;        \ S2R R0,tid  S2R R1,ctaid  IMAD R0,R1,R2,R0
+variable lk-def-idx
+variable lk-first-body
 
-\ ============================================================
-\ PARAMETER POINTER LOADING
-\ ============================================================
-\ .ls kernels list their pointer parameters in the DEF_START parameter
-\ tokens (the NAME_REF tokens following the definition name).
-\ We walk those tokens and call emit-load-param for each.
-\ Returns: count of params loaded.
+create lk-outbuf  128 allot
+variable lk-outlen
 
-variable lp-count
+\ lkn-* scratch for lk-mk-outname
+variable lkn-len
 
-: ls-load-params  ( def-idx -- n-params )
-  \ The tokens immediately after DEF_START are NAME_REF (one per param).
-  \ Pass 1 stored first-tok index; we walk forward until a non-NAME_REF.
-  \ However, the tokenizer includes parameter names as NAME_REF tokens
-  \ WITHIN the def-first-tok range — they precede the body proper.
-  \ We scan from first-tok, emit-load-param for each NAME_REF, and stop
-  \ when we see a non-NAME_REF or reach end of body.
-  0 lp-count !
-  dup cells def-first-tok + @    \ first-tok-idx
-  swap cells def-tok-cnt  + @    \ body token count
-  over + swap                    \ ( end first )
-  tok-cursor @ >r                \ save outer cursor
-  tok-cursor !                   \ set cursor to first body token
-  begin
-    tok-cursor @ over <          \ while cursor < end
-  while
-    ls-peek-type NAME_REF =      \ next token is a NAME_REF?
-    0= if leave then             \ no — body begins here; stop
-    ls-next-token drop           \ consume the NAME_REF
-    \ ls-token-name gives the param name; we don't use it for emit-load-param
-    \ (param index = ordinal position starting at 0)
-    lp-count @  emit-load-param  \ ( param-idx -- reg )
-    drop                         \ discard the reg for now (caller sets up params)
-    1 lp-count +!
-  repeat
-  drop
-  r> tok-cursor !                \ restore outer cursor
-  lp-count @ ;
-
-\ ============================================================
-\ TOP-LEVEL KERNEL COMPILER
-\ ============================================================
-\ ls-compile-kernel ( name-addr name-len -- )
-\ Finds the named definition, emits prologue + body + epilogue,
-\ wraps in cubin, and saves to "<name>.cubin".
-
-\ Scratch buffer for output filename
-create lsc-out-buf 128 allot
-variable lsc-out-len
-
-: ls-make-outname  ( name-addr name-len -- out-addr out-len )
-  \ Build "<name>.cubin" in lsc-out-buf
-  dup lsc-out-len !
-  lsc-out-buf swap move            \ copy name
-  s" .cubin" lsc-out-buf lsc-out-len @ + swap move
-  6 lsc-out-len +!
-  lsc-out-buf lsc-out-len @ ;
-
-variable lsc-def-idx
-variable lsc-first-body-tok        \ cursor position of first real body token
+: lk-mk-outname  ( name-addr name-len -- )
+  lkn-len !                              \ save name length
+  lk-outbuf  lkn-len @  move            \ MOVE ( src dst u ): name-addr lk-outbuf lkn-len@
+  \ Fix: MOVE ( src dst u ) = ( name-addr lk-outbuf lkn-len@ )
+  \ After "lkn-len !": stack = ( name-addr )
+  \ "lk-outbuf" -> ( name-addr lk-outbuf )
+  \ "lkn-len @" -> ( name-addr lk-outbuf lkn-len@ )
+  \ "move" consumes ( src dst u ) = ( name-addr lk-outbuf lkn-len@ ) ✓
+  lkn-len @  lk-outlen !                \ name part of output length
+  s" .cubin"
+  lk-outbuf lk-outlen @ + swap          \ dst=lk-outbuf+name-len; swap with u=6
+  move                                   \ MOVE ( ".cubin"-addr dst 6 ) ✓
+  6 lk-outlen +! ;
 
 : ls-compile-kernel  ( name-addr name-len -- )
-  2dup def-find 0= if
-    cr ." ls-compiler: definition not found: " type cr
-    exit
+  2dup dt-find 0= if
+    cr ." ls-compiler: definition not found: " type cr  exit
   then
-  lsc-def-idx !
+  lk-def-idx !
+  2dup lk-mk-outname
+  2drop
 
-  \ Reset SASS buffer and register allocator
   sass-reset
   lsc-regs-reset
 
-  \ Set kernel name for cubin metadata
-  2dup li-set-name                   \ sets li-name-buf / li-name-len
+  \ Set kernel name for cubin ELF metadata (li-set-name from parser.fs)
+  lk-outbuf  lk-outlen @ 6 -
+  li-set-name
 
-  \ Set param count for cubin nv.info
-  lsc-def-idx @ cells def-first-tok + @   \ first body token index
-  lsc-def-idx @ cells def-tok-cnt  + @    \ body token count
+  \ Scan leading param NAME_REFs; emit-load-param for each
+  lk-def-idx @ scan-params lk-first-body !
+  n-loaded-params @ n-kparams !
 
-  \ ---- Count param NAME_REFs at start of body ----
-  \ (so cubin-wrap knows how many pointer params to declare)
-  over +                             \ end index
-  swap                               \ ( end first )
-  tok-cursor @ >r
-  tok-cursor !                       \ cursor -> first body tok
-  0 lp-count !
-  begin
-    tok-cursor @ over <
-    ls-peek-type NAME_REF = and
-  while
-    ls-next-token drop
-    1 lp-count +!
-  repeat
-  lsc-first-body-tok @ tok-cursor @ lsc-first-body-tok !   \ save first real body tok
-  \ correction: save current cursor (past param tokens) as first body start
-  tok-cursor @ lsc-first-body-tok !
-  drop                               \ drop end index
-  r> tok-cursor !
-  lp-count @ n-kparams !             \ tell cubin how many params
+  emit-prologue
 
-  \ ---- Emit kernel prologue ----
-  ls-emit-prologue
-
-  \ ---- Load pointer parameters into registers (R4..R4+n-params-1) ----
-  \ Each param gets emit-load-param called with its ordinal index.
-  \ The registers are pushed onto the value stack in param order.
-  lp-count @ 0 do
-    i emit-load-param               \ ( idx -- reg ) pushes reg onto Forth stack
-  loop
-
-  \ ---- Compile body tokens ----
-  \ Body starts after param NAME_REFs. We use the first-body-tok index.
-  lsc-def-idx @ cells def-first-tok + @   \ raw first tok
-  \ fast-forward past param NAME_REFs
-  tok-cursor @ >r
-  over tok-cursor !
-  lp-count @ 0 do
-    ls-tokens-done? 0= if
-      ls-peek-type NAME_REF = if ls-next-token drop then
-    then
-  loop
-  tok-cursor @ lsc-first-body-tok !
-  r> tok-cursor !
-
-  \ Now compile [first-body-tok .. first-tok + body-count)
-  lsc-first-body-tok @
-  lsc-def-idx @ cells def-first-tok + @
-  lsc-def-idx @ cells def-tok-cnt  + @  +
-  lsc-first-body-tok @ -                 \ adjusted count
+  \ Compile body tokens (params are pushed on demand by NAME_REF dispatch)
+  lk-first-body @
+  lk-def-idx @ cells dt-ftok + @
+  lk-def-idx @ cells dt-tcnt + @ +
+  lk-first-body @ -
   compile-body-tokens
 
-  \ ---- Drop any leftover values on the stack ----
-  \ A well-formed kernel should have stored its result via emit-array-store.
-  \ Any register IDs left are discarded.
+  emit-epilogue
 
-  \ ---- Emit epilogue ----
-  emit-epilogue                          \ EXIT instruction
-
-  \ ---- Wrap in cubin and save ----
-  2dup ls-make-outname                   \ ( name-addr name-len out-addr out-len )
-  2swap drop drop                        \ drop name, keep out-addr out-len
+  lk-outbuf  lk-outlen @
   write-cubin
-  cr ." Compiled: " lsc-out-buf lsc-out-len @ type cr ;
+  cr ." ls-compiler: wrote " lk-outbuf lk-outlen @ type cr ;
 
 \ ============================================================
-\ FILE LOADER
+\ ls-compile-file
 \ ============================================================
-\ ls-compile-file ( filename-addr filename-len -- )
-\ Slurps the .ls file, tokenizes it, builds the definition table,
-\ then compiles every top-level definition that maps to a real kernel
-\ (i.e., whose body contains at least one primitive token).
 
-\ File read buffer
-131072 constant LS-MAX-FILE-SZ
-create ls-file-buf LS-MAX-FILE-SZ allot
-variable ls-file-sz  0 ls-file-sz !
-
-variable lf-fid
-
-: ls-slurp-file  ( filename-addr filename-len -- ok )
-  r/o open-file if drop 0 exit then    \ ( fid )
-  lf-fid !
-  ls-file-buf LS-MAX-FILE-SZ lf-fid @ read-file drop
-  ls-file-sz !
-  lf-fid @ close-file drop
-  ls-file-sz @ 0> ;
+65536 constant LSF-MAX
+create lsf-buf  LSF-MAX allot
+variable lsf-len  0 lsf-len !
+variable lsf-fd
 
 : ls-compile-file  ( filename-addr filename-len -- )
-  2dup ls-slurp-file 0= if
-    cr ." ls-compiler: cannot open file: " type cr
-    exit
+  r/o open-file if
+    drop  cr ." ls-compiler: cannot open file" cr  exit
   then
-  2drop
+  lsf-fd !
+  lsf-buf LSF-MAX lsf-fd @ read-file drop  lsf-len !
+  lsf-fd @ close-file drop
+  lsf-len @ 0= if  cr ." ls-compiler: empty file" cr  exit  then
 
-  \ Tokenize the loaded source
-  ls-file-buf ls-file-sz @ ls-tokenize
-
-  \ Build the definition table (pass 1)
+  lsf-buf lsf-len @ ls-tokenize
   ls-pass1
 
-  \ Compile every definition in the table
-  def-count @ 0 do
-    i cells def-name-addr + @    \ name pool-addr
-    i cells def-name-len  + @    \ name length
+  cr ." ls-compiler: " dt-n @ . ." definitions found" cr
+
+  dt-n @ 0 do
+    i cells dt-nptr + @
+    i cells dt-nlen + @
     ls-compile-kernel
   loop ;
 
 \ ============================================================
-\ CONVENIENCE: compile a named kernel from an already-tokenized stream
+\ SMOKE TEST: vadd
 \ ============================================================
-\ ls-compile-named ( name-addr name-len -- )
-\ Like ls-compile-kernel but expects ls-tokenize and ls-pass1 already done.
-
-: ls-compile-named  ( name-addr name-len -- )
-  ls-compile-kernel ;
-
-\ ============================================================
-\ SIMPLE TEST ENTRY POINT
-\ ============================================================
-\ Compile the built-in vadd test definition and verify a cubin is produced.
-\
-\   vadd a b c n
-\     a
-\     b
-\     +
-\     c
-\     n
-\
-\ Expected code sequence:
+\ Expected compilation flow:
 \   emit-prologue
-\   emit-load-param(0) -> Ra    (pointer to a)
-\   emit-load-param(1) -> Rb    (pointer to b)
-\   emit-load-param(2) -> Rc    (pointer to c)
-\   emit-load-param(3) -> Rn    (pointer to n — length)
-\   NAME_REF "a" -> inline: already loaded above (pushed as Ra)
-\   NAME_REF "b" -> inline: already loaded above (pushed as Rb)
-\   emit-add (Ra Rb -- Rd)
-\   NAME_REF "c" -> pushed as Rc
-\   NAME_REF "n" -> pushed as Rn
+\   emit-load-param(0..3) -> R4..R7 (pointers: a b c n)
+\   NAME_REF "a" -> param-find -> push R4
+\   NAME_REF "b" -> param-find -> push R5
+\   PRIM_ADD     -> emit-add(R4,R5) -> R8
+\   NAME_REF "c" -> param-find -> push R6
+\   NAME_REF "n" -> param-find -> push R7
 \   emit-epilogue
 
-create vadd-test-src 512 allot
-variable vadd-test-len  0 vadd-test-len !
+create lsc-tsrc  512 allot
+variable lsc-tsrc-len  0 lsc-tsrc-len !
 
-: vadd+c  ( c -- )  vadd-test-src vadd-test-len @ + c!  1 vadd-test-len +! ;
-: vadd+s  ( addr u -- )  0 do dup i + c@ vadd+c loop drop ;
+: lsct+c  ( c -- )  lsc-tsrc lsc-tsrc-len @ + c!  1 lsc-tsrc-len +! ;
+: lsct+s  ( addr u -- )  0 do dup i + c@ lsct+c loop drop ;
 
-: build-vadd-test-src  ( -- addr u )
-  0 vadd-test-len !
-  s" vadd a b c n"  vadd+s  10 vadd+c
-  s"   a"           vadd+s  10 vadd+c
-  s"   b"           vadd+s  10 vadd+c
-  s"   +"           vadd+s  10 vadd+c
-  s"   c"           vadd+s  10 vadd+c
-  s"   n"           vadd+s  10 vadd+c
-  vadd-test-src vadd-test-len @ ;
+: lsc-build-vadd-src  ( -- addr u )
+  0 lsc-tsrc-len !
+  s" vadd a b c n" lsct+s  10 lsct+c
+  s"   a"          lsct+s  10 lsct+c
+  s"   b"          lsct+s  10 lsct+c
+  s"   +"          lsct+s  10 lsct+c
+  s"   c"          lsct+s  10 lsct+c
+  s"   n"          lsct+s  10 lsct+c
+  lsc-tsrc lsc-tsrc-len @ ;
 
 : ls-test-vadd  ( -- )
-  cr ." === ls-compiler vadd test ===" cr
-  build-vadd-test-src ls-tokenize
+  cr ." === ls-compiler vadd smoke test ===" cr
+  lsc-build-vadd-src ls-tokenize
   ls-pass1
-  cr ." Definitions found: " def-count @ . cr
-  def-count @ 0 > if
-    0 cells def-name-addr + @
-    0 cells def-name-len  + @
-    2dup cr ." Compiling: " type cr
+  cr ." Definitions: " dt-n @ . cr
+  dt-n @ 0> if
+    0 cells dt-nptr + @
+    0 cells dt-nlen + @
+    2dup ." Compiling: " type cr
     ls-compile-kernel
-    cr ." vadd.cubin written." cr
   then
   cr ." === done ===" cr ;
