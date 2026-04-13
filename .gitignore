@@ -22,3 +22,13 @@ cli/target/
 # Cache
 /tmp/
 .vercel
+bootstrap/lithos-bootstrap
+bootstrap/lithos-bootstrap.o
+kernel/*.ko
+kernel/*.o
+kernel/*.mod
+kernel/*.mod.c
+kernel/*.symvers
+kernel/.*.cmd
+kernel/modules.order
+compiler/_transform.py

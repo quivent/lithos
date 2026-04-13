@@ -2,8 +2,8 @@
 
 ## Tool
 
-`/home/ubuntu/lithos/sass/emit-sass.fs` — Forth source.
-`/home/ubuntu/lithos/sass/emit-sass-auto.fs` — auto-generated opcode vocabulary from `tools/sass_probe.py`.
+`/home/ubuntu/lithos/gpu/emit.fs` — GPU machine code emitter source.
+(emit-sass-auto.fs deleted — opcode constants are a subset of gpu/emit.fs)
 
 No ptxas, no PTX. SASS opcodes are emitted as raw 16-byte instruction+control word pairs directly into a buffer, then wrapped in a minimal ELF.
 

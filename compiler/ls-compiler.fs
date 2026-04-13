@@ -238,17 +238,15 @@ variable scp-pa    variable scp-pu
 \ ============================================================
 
 variable lsc-rep-n  0 lsc-rep-n !
+variable lsc-grid-size  1 lsc-grid-size !   \ cooperative launch grid size (CTAs)
 
 \ ============================================================
-\ COOPERATIVE GRID-SYNC BARRIER STUB
+\ COOPERATIVE GRID-SYNC — uses real implementation from gpu/emit.fs
 \ ============================================================
-\ emit-grid-sync ( -- )
-\ Placed here (before compile-token) because compile-token references it.
-\ Placeholder: emits a NOP.  Replace with the real SM90 cooperative
-\ grid-sync sequence when the encoder is available:
-\   MEMBAR.SC.CLUSTER ; BAR.SYNC ; MEMBAR.SC.CLUSTER
-
-: emit-grid-sync  ( -- )  nop, ;
+\ emit-grid-sync ( sync-counter-addr-reg done-flag-addr-reg grid-size -- )
+\ is defined in gpu/emit.fs (loaded before this file).  The stub that
+\ was here shadowed it with a NOP — removed so compile-token now
+\ reaches the real 19-instruction cooperative barrier sequence.
 
 \ ============================================================
 \ FORWARD DECLARATION

@@ -13,7 +13,7 @@ CUDA graphs aren't needed — when dispatch is measured in native code nanosecon
 ## 1. Compiler backend
 
 ### 1a. Cubin ELF wrapping — **BLOCKING**
-- `compiler/cubin-wrap.fs` currently emits only the 64-byte ELF header.
+- `compiler/elf-wrap.fs` currently emits only the 64-byte ELF header.
 - Missing: section header table (`.shstrtab`, `.strtab`, `.symtab`, `.nv.info`, `.nv.info.<kernel>`, `.nv.constant0.<kernel>`, `.text.<kernel>`, `.nv.callgraph`, `.nv.shared.<kernel>` when needed).
 - Missing: `.nv.info` structured attributes (`EIATTR_REGCOUNT`, `EIATTR_FRAME_SIZE`, `EIATTR_PARAM_CBANK`, `EIATTR_KPARAM_INFO`, `EIATTR_MIN/MAX_STACK_SIZE`, `EIATTR_CUDA_API_VERSION`, `EIATTR_MAX_THREADS`).
 - Missing: symbol table entry with `STB_GLOBAL` / `STT_FUNC` / `STO_CUDA_ENTRY` (0x10).
@@ -169,7 +169,7 @@ Replaces ~80 MB of `libcuda.so`. Binary size impact: negligible (Lithos words co
 ### 4.2 What's still needed to make this work
 
 - **Lithos syscall wrappers** — `openat`, `close`, `ioctl`, `mmap`, `munmap` as Lithos words callable from the compiler/launcher. Exist as inline ARM64 in `src/launcher.s` but not as first-class Lithos words in `forth-bootstrap.s`. FFI survey estimate: ~1 day to lift them.
-- **Struct marshaling helpers** — generalized `put-u32 @ offset`, `put-u64 @ offset`, field-packing for the NVIDIA RM ioctl structs. Pattern exists in `sass/emit-sass.fs` for ELF headers; generalize it.
+- **Struct marshaling helpers** — generalized `put-u32 @ offset`, `put-u64 @ offset`, field-packing for the NVIDIA RM ioctl structs. Pattern exists in `gpu/emit.fs` for ELF headers; generalize it.
 - **ABI reference** — precise struct layouts and ioctl numbers for all 25 calls, from `open-gpu-kernel-modules` source. (Research worker in flight.)
 - **QMD encoder** — the Queue Memory Descriptor format for Hopper compute launches. Documented in open-gpu-kernel-modules under class `HOPPER_COMPUTE_A` / `HOPPER_COMPUTE_B`. Fields: entry PC, register count, shared mem, param block base + size, grid/block dims, barrier config, constant bank bindings. ~128 bytes.
 
@@ -248,4 +248,4 @@ Ordered by "blocks the most downstream work":
 9. End-to-end "Paris" test — bit-identical top-1 token + cosine 1.0 at every layer
 10. Polish: outer-product syntax *(2b)*, `max` intrinsic *(2c)*, scheduler *(1d)*
 
-Items 1, 4, and 5 are parallel-safe (different files). Items 2 and 4 serialize on `parser.fs`. Item 3 touches both `sass/emit-sass.fs` and `parser.fs`/language spec.
+Items 1, 4, and 5 are parallel-safe (different files). Items 2 and 4 serialize on `parser.fs`. Item 3 touches both `gpu/emit.fs` and `parser.fs`/language spec.

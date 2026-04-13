@@ -19,7 +19,7 @@ See [docs: The Compiler](https://docs-delta-mauve.vercel.app/compiler) for the f
 | `emit-sass.fs`  | cubin binary | Hopper-specific. Skips the driver JIT. Microsecond load. |
 | `emit-arm64.fs` | ARM64 ELF    | CPU-side orchestrator: layer loop, KV cache, tokenization, sampling, API server. |
 
-The language surface is stack-based. A `kernel` word routes to the PTX or SASS emitter; a `host` word routes to the ARM64 emitter. Same syntax, same stack model, different machine code.
+The language surface is stack-based. A `kernel` word routes to the GPU machine code emitter; a `host` word routes to the ARM64 emitter. Same syntax, same stack model, different machine code.
 
 ## What Lithos Emits
 
@@ -74,7 +74,7 @@ A language that emits kernels in microseconds, hosted by a runtime with nothing 
 | Component | Description |
 |-----------|-------------|
 | **Language** | `core.fs` + `patterns.fs` — 1,459 lines of Forth defining the Lithos vocabulary |
-| **SASS emitter** | `sass/emit-sass.fs` — direct binary instruction emission words |
+| **GPU emitter** | `gpu/emit.fs` — direct sm90 binary instruction emission words |
 | 13 cubins | 132KB total — embed, norm, rotate, attention_score, fused_attention, fused_deltanet, conv1d, fused_mlp, activate, projection, recurrence, recurrence_rollback, sample |
 | Host: loader | `src/loader.py` — SafeTensors -> GPU, direct mmap *(temporary)* |
 | Host: engine | `src/engine.py` — kernel dispatch loop *(temporary)* |
@@ -188,7 +188,7 @@ The 90× speed gap is entirely kernel optimization. Our hand-written PTX project
 
 **Time breakdown:** MLP projections 49%, DeltaNet recurrence 10%, other projections 20%, lm_head 4%, rest 17%.
 
-**What works today:** correct end-to-end inference (Qwen3-30B-A3B, DeltaNet hybrid, 64 layers, GPTQ W4A16), 13 compiled cubins + 3 fused + DeltaNet-specific kernels (132 KB total), GPTQ W4A16 dequantization correct (zero-point 8.0 per auto-GPTQ convention), GH200 unified memory (mmap'd weight pointers passed directly to GPU kernels), Lithos compiler in Forth (produces valid PTX from `.li` files), SASS emitter (vector-add runs correctly on GH200, direct cubin, no ptxas), 5 quantization schemes designed + implementations, 23+ documentation pages, language spec (1,459 lines), kernel factory (config.json → specialized cubins in 92 ms), model loader (18.21 GB mmap in 9 ms), CUDA driver bindings, OpenAI-compatible API server (228 ms startup), SASS encoding (47 opcodes mapped), benchmark suite (3.59 TB/s measured bandwidth, 2.3 µs kernel launch), Rust CLI.
+**What works today:** correct end-to-end inference (Qwen3-30B-A3B, DeltaNet hybrid, 64 layers, GPTQ W4A16), 13 compiled cubins + 3 fused + DeltaNet-specific kernels (132 KB total), GPTQ W4A16 dequantization correct (zero-point 8.0 per auto-GPTQ convention), GH200 unified memory (mmap'd weight pointers passed directly to GPU kernels), Lithos compiler in Forth (produces valid GPU binary from `.li` files), GPU machine code emitter (vector-add runs correctly on GH200, direct ELF, no ptxas), 5 quantization schemes designed + implementations, 23+ documentation pages, language spec (1,459 lines), kernel factory (config.json → specialized ELFs in 92 ms), model loader (18.21 GB mmap in 9 ms), CUDA driver bindings, OpenAI-compatible API server (228 ms startup), sm90 encoding (47 opcodes mapped), benchmark suite (3.59 TB/s measured bandwidth, 2.3 µs kernel launch), Rust CLI.
 
 **What's next:** tensor core optimization of projection kernels (WGMMA instructions, TMA async loads — accounts for 69% of forward pass time), prefill GEMM integration, speculative decoding (MTP) wiring, KV cache spill to LPDDR5X, self-hosting via Eighth.
 

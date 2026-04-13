@@ -1,8 +1,8 @@
 \ test_minimal_gemv.fs — Minimal GEMV kernel: C[tid] = A[tid] * B[tid]
-\ Proves the SASS-direct pipeline end-to-end using emit-sass.fs builder words.
+\ Proves the GPU-direct pipeline end-to-end using gpu/emit.fs builder words.
 \ Target: Hopper sm_90. No PTX, no ptxas.
 
-include emit-sass.fs
+include /home/ubuntu/lithos/gpu/emit.fs
 
 \ ============================================================
 \ REGISTER MAP
@@ -77,13 +77,13 @@ build-cubin  ( -- addr u )
 \ ============================================================
 \ PIPELINE STATUS
 \ ============================================================
-\ build-cubin is a stub (emit-sass.fs line 316-328):
+\ build-cubin is a stub (gpu/emit.fs):
 \   - Resets cubin buffer
 \   - Returns cubin-buf + cubin-pos (0 bytes)
 \   - Does NOT yet write ELF header, section headers, .text, .nv.info
 \
-\ WHAT IS MISSING for a loadable cubin:
-\   1. cubin-elf-header call (word exists at line 287, not called by build-cubin)
+\ WHAT IS MISSING for a loadable ELF:
+\   1. cubin-elf-header call (word exists in gpu/emit.fs, not called by build-cubin)
 \   2. .shstrtab section — section name strings
 \   3. .strtab / .symtab — kernel symbol
 \   4. .nv.info — register count (numregs=12), param count, shared mem
