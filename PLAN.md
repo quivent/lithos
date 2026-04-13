@@ -7,8 +7,8 @@ Everything that can run simultaneously does. Blocked items wait.
 ## PROGRESS
 
 ```
-WAVE 1:  [███████░] 6/8 complete, 2 running (1a, 1d)
-WAVE 2:  [░░░░░░░░] 0/1 blocked
+WAVE 1:  [████████] 7/8 complete, 1 running (1d)
+WAVE 2:  [░░░░░░░░] 0/1 IN PROGRESS — bootstrap worker running
 WAVE 3:  [░░░░░░░░] 0/4 blocked
 WAVE 4:  [░░░░░░░░] 0/3 blocked
 WAVE 5:  [░░░░░░░░] 0/2 blocked
@@ -20,7 +20,7 @@ TOTAL:   [████░░░░] 6/18
 ## WAVE 1 — no dependencies, start now
 
 ```
-1a. [░░] Wire compiler.ls              IN PROGRESS — worker running
+1a. [██] Wire compiler.ls              DONE (4739 lines, 7 sections)
 1b. [██] Rewrite 9 inference kernels   DONE
 1c. [██] arch/hopper.dict + arm64.dict DONE (99 + 27 lines)
 1d. [░░] QMD differential probe        IN PROGRESS — 4 probe tools written, no fields.md yet
@@ -97,7 +97,7 @@ TOTAL:   [████░░░░] 6/18
 ## WAVE 2 — blocked on 1a (compiler.ls wired)
 
 ```
-2a. [░░] Bootstrap compile              BLOCKED on 1a
+2a. [░░] Bootstrap compile              IN PROGRESS — worker running
 ```
 
 ### 2a. Bootstrap compile
