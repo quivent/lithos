@@ -113,9 +113,9 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   </div>
   <div class="ov-card">
     <h3>Bootstrap</h3>
-    <div class="bar"><div class="fill partial" style="width:35%"></div></div>
-    <div class="pct partial">60%</div>
-    <div class="note">Expressions work. Needs compositions + bindings (no = in language).</div>
+    <div class="bar"><div class="fill partial" style="width:75%"></div></div>
+    <div class="pct partial">75%</div>
+    <div class="note">Links. Compositions compile. compiler.ls parses to line 247. Three bug fixes running.</div>
   </div>
   <div class="ov-card">
     <h3>Runtime</h3>
@@ -164,8 +164,10 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Smoke test: <code>var x 42</code> &rarr; valid ARM64 ELF</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">24 new ARM64 emission helpers, verified against objdump</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Expression parsing works: <code>var y x + 1</code> &rarr; valid ELF</div></div>
-  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">4 parallel workers: expr-eval.s, compose.s, control.s, parser rewrite <span class="blocking">RUNNING</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Compositions (<code>name args :</code>) + bindings (<code>name expr</code>) <span class="blocking">BLOCKING</span></div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">3 parser modules landed: expr-eval.s (1022), compose.s (844), control.s (842)</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Compositions compile: <code>add a b :</code> &rarr; valid ELF</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">compiler.ls parses through line 247 (comments + declarations + first compositions)</div></div>
+  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">3 bug-fix workers: sequential bindings, symbol scoping, parenthesized expressions <span class="blocking">RUNNING</span></div></div>
   <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>compiler.ls</code> parses cleanly end-to-end <span class="blocking">BLOCKING</span></div></div>
 </div>
 </section>

@@ -12,8 +12,8 @@ All sources use `.ls` extension. Zero Forth. Zero Python. Zero CUDA runtime.
 ```
 FOUNDATIONS   [████████] complete   language, kernels, grammar, dicts, docs
 COMPILER      [████████] DONE — rewritten to pure Lithos syntax (zero =, fn, ->, load_u, syscall)
-BOOTSTRAP     [█████░░░] expressions work, 4 parallel parser workers running (expr, compose, control, rewrite)
-RUNTIME       [████████] all .ls written, register_count found (SPD 0x094), pushbuffer needs SPD
+BOOTSTRAP     [██████░░] links, compositions compile, compiler.ls parses to line 247. Three bug-fix workers running.
+RUNTIME       [████████] all .ls written, register_count found (SPD 0x094). Pushbuffer needs 5-part update.
 HARDWARE      [██████░░] GSP+FSP wired, cbuf0 probe DONE, QMD builder untested
 INTEGRATION   [██░░░░░░] launcher.ls written (162 lines), not compiled, nothing executes end-to-end
 FIRST TOKEN   [░░░░░░░░] blocked on all above
