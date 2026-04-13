@@ -161,6 +161,11 @@ class PrefillEngine:
         self._preload_qk_norms()
         print(f"  KV cache initialized ({self.kv_cache.memory_bytes() / 1024 / 1024:.1f} MB)")
 
+        # CUDA streams for concurrent gate/up projections
+        self.stream0 = self.gpu.stream_create()
+        self.stream1 = self.gpu.stream_create()
+        print(f"  CUDA streams created for concurrent MLP projections")
+
         t1 = time.monotonic()
         print(f"  Init time: {t1-t0:.3f}s")
 
@@ -188,7 +193,14 @@ class PrefillEngine:
         lm_head_mod = gpu.load_cubin(f"{KERNEL_DIR}/lm_head.cubin")
         self.lm_head_func = gpu.get_function(lm_head_mod, "lm_head")
 
-        print("    embed_f16, norm, gptq_matvec_tc, activate, lm_head: loaded")
+        # Note: recurrence.cubin implements a different DeltaNet variant (output before
+        # state update, undecayed kT@S). The correct recurrence uses vectorized numpy.
+        # Kernel loaded for future use if the PTX is corrected.
+        recurrence_mod = gpu.load_cubin(f"{KERNEL_DIR}/recurrence.cubin")
+        self.recurrence_func = gpu.get_function(recurrence_mod, "recurrence")
+        gpu.set_max_dynamic_shared(self.recurrence_func, 67080)
+
+        print("    embed_f16, norm, gptq_matvec_tc, activate, lm_head, recurrence: loaded")
 
     def _alloc_buffers(self):
         gpu = self.gpu
@@ -209,6 +221,7 @@ class PrefillEngine:
         gpu.memcpy_htod(self.d_zero,
                         np.zeros(HIDDEN_DIM, dtype=np.float32).ctypes.data_as(ctypes.c_void_p),
                         HIDDEN_DIM * 4)
+
         print(f"    GPU buffers allocated")
 
     def _preload_norms(self):
@@ -333,12 +346,18 @@ class PrefillEngine:
             shared_mem=128,
         )
 
-    def gpu_gptq_matvec(self, prefix, d_input, d_output, K, N):
+    def gpu_gptq_matvec(self, prefix, d_input, d_output, K, N, stream=None):
         qw_ptr = self.model.weight_info(f"{prefix}.qweight").ptr
         sc_ptr = self.model.weight_info(f"{prefix}.scales").ptr
-        self.gpu.memcpy_htod(d_output,
-                             np.zeros(N, dtype=np.float32).ctypes.data_as(ctypes.c_void_p),
-                             N * 4)
+        zeros_buf = np.zeros(N, dtype=np.float32)
+        if stream is not None:
+            self.gpu.memcpy_htod_async(d_output,
+                                       zeros_buf.ctypes.data_as(ctypes.c_void_p),
+                                       N * 4, stream)
+        else:
+            self.gpu.memcpy_htod(d_output,
+                                 zeros_buf.ctypes.data_as(ctypes.c_void_p),
+                                 N * 4)
         # Optimized tiled kernel with dynamic shared memory (K * 4 bytes for input vector)
         self.gpu.launch(
             self.proj_func,
@@ -353,6 +372,7 @@ class PrefillEngine:
                 ctypes.c_uint32(K),
             ],
             shared_mem=K * 4,
+            stream=stream,
         )
 
 
@@ -384,11 +404,14 @@ class PrefillEngine:
         PROF.start("mlp_gate_up_proj")
         self.gpu_gptq_matvec(f"{prefix}.mlp.gate_proj",
                               self.d_norm_out, self.d_gate,
-                              HIDDEN_DIM, INTERMEDIATE_SIZE)
+                              HIDDEN_DIM, INTERMEDIATE_SIZE,
+                              stream=self.stream0)
         self.gpu_gptq_matvec(f"{prefix}.mlp.up_proj",
                               self.d_norm_out, self.d_up,
-                              HIDDEN_DIM, INTERMEDIATE_SIZE)
-        self.gpu.synchronize()
+                              HIDDEN_DIM, INTERMEDIATE_SIZE,
+                              stream=self.stream1)
+        self.gpu.stream_synchronize(self.stream0)
+        self.gpu.stream_synchronize(self.stream1)
         PROF.stop()
 
         PROF.start("mlp_activate")
@@ -554,31 +577,28 @@ class PrefillEngine:
         decay = np.exp(-A_exp * dt)  # [48], in (0, 1)
         PROF.stop()
 
-        # --- DeltaNet recurrence with state ---
+        # --- DeltaNet recurrence with state (vectorized) ---
         PROF.start("dn_recurrence_cpu")
         S = self.dn_S[layer_idx]  # [48, 128, 128] = [Hv, Dv, Dk]
-        output_heads = np.zeros((NUM_VALUE_HEADS, VALUE_HEAD_DIM), dtype=np.float32)
 
-        for h in range(NUM_VALUE_HEADS):
-            key_idx = h // HEADS_PER_KEY
-            q_h = q[key_idx]   # [Dk]
-            k_h = k[key_idx]   # [Dk]
-            v_h = v[h]         # [Dv]
+        # Expand k, q from [16, Dk] to [48, Dk] via GQA repeat
+        k_exp = np.repeat(k, HEADS_PER_KEY, axis=0)  # [48, Dk]
+        q_exp = np.repeat(q, HEADS_PER_KEY, axis=0)  # [48, Dk]
 
-            # Step 1: Apply decay
-            S[h] *= decay[h]
+        # Step 1: Apply decay -- S[h] *= decay[h] for all heads
+        S *= decay[:, None, None]  # [48, Dv, Dk]
 
-            # Step 2: Compute k^T @ S
-            kv_mem = S[h] @ k_h  # [Dv]
+        # Step 2: Compute kv_mem = S @ k for all heads: [48, Dv]
+        kv_mem = np.einsum('hvk,hk->hv', S, k_exp)
 
-            # Step 3: Delta
-            delta = (v_h - kv_mem) * beta[h]  # [Dv]
+        # Step 3: Delta
+        delta = (v - kv_mem) * beta[:, None]  # [48, Dv]
 
-            # Step 4: State update
-            S[h] += np.outer(delta, k_h)  # [Dv, Dk]
+        # Step 4: State update: S[h] += outer(delta[h], k[h])
+        S += np.einsum('hv,hk->hvk', delta, k_exp)
 
-            # Step 5: Output
-            output_heads[h] = S[h] @ q_h
+        # Step 5: Output: output[h] = S[h] @ q[h]
+        output_heads = np.einsum('hvk,hk->hv', S, q_exp)
 
         self.dn_S[layer_idx] = S
         PROF.stop()

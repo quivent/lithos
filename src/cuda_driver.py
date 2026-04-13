@@ -157,6 +157,14 @@ def _load_libcuda() -> ctypes.CDLL:
     lib.cuStreamSynchronize.argtypes = [CUstream]
     lib.cuStreamSynchronize.restype = CUresult
 
+    # -- cuMemcpyHtoDAsync_v2 -------------------------------------------------
+    lib.cuMemcpyHtoDAsync_v2.argtypes = [CUdeviceptr, c_void_p, c_size_t, CUstream]
+    lib.cuMemcpyHtoDAsync_v2.restype = CUresult
+
+    # -- cuFuncSetAttribute ---------------------------------------------------
+    lib.cuFuncSetAttribute.argtypes = [CUfunction, c_int, c_int]
+    lib.cuFuncSetAttribute.restype = CUresult
+
     return lib
 
 
@@ -256,6 +264,13 @@ class CUDADriver:
         _check(
             "cuMemcpyDtoH_v2",
             self._lib.cuMemcpyDtoH_v2(dst, src, c_size_t(nbytes)),
+        )
+
+    def memcpy_htod_async(self, dst: CUdeviceptr, src: Any, nbytes: int, stream: CUstream) -> None:
+        """Async copy *nbytes* from host *src* to device *dst* on *stream*."""
+        _check(
+            "cuMemcpyHtoDAsync_v2",
+            self._lib.cuMemcpyHtoDAsync_v2(dst, src, c_size_t(nbytes), stream),
         )
 
     # -- Streams -------------------------------------------------------------
