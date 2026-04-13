@@ -112,12 +112,20 @@ def quantize(weights: np.ndarray, group_size: int = 128) -> dict:
     scales = group_max / 3.0
     scales = np.maximum(scales, 1e-10)
 
-    # Quantize and pack all groups
-    all_packed = np.zeros((n_groups, SUBPACKS_PER_GROUP), dtype=np.uint32)
+    # Quantize all groups (vectorized)
+    # q = round(w / scale), clamped to [-3, 3]
+    scales_expanded = scales[:, None]  # (n_groups, 1)
+    q_all = np.round(groups / np.maximum(scales_expanded, 1e-30)).astype(np.int32)
+    q_all = np.clip(q_all, -3, 3).astype(np.int8)
 
-    for g in range(n_groups):
-        q = _quantize_group(groups[g], scales[g])
-        all_packed[g] = _pack_group(q)
+    # Pack all groups (vectorized)
+    # Convert to unsigned: add offset 3, so values in [0..6]
+    unsigned = (q_all.astype(np.int32) + HEPT_OFFSET).astype(np.uint32)
+    # Reshape to (n_groups, 16 subpacks, 8 values)
+    unsigned_sp = unsigned.reshape(n_groups, SUBPACKS_PER_GROUP, SUBPACK_SIZE)
+    # Mixed-radix encode: sum(val[i] * 7^i for i in 0..7)
+    powers = np.array([7**i for i in range(SUBPACK_SIZE)], dtype=np.uint32)
+    all_packed = np.sum(unsigned_sp * powers[None, None, :], axis=2).astype(np.uint32)
 
     return {
         'scheme': 'HGQ-384',
@@ -137,11 +145,23 @@ def dequantize(packed: dict) -> np.ndarray:
     scales = packed['scales'].astype(np.float32)
     all_packed = packed['packed_subpacks']
 
-    result = np.zeros(n_groups * 128, dtype=np.float32)
+    # Vectorized mixed-radix decode
+    # For each subpack: split into lo (mod 2401) and hi (div 2401)
+    flat_packed = all_packed.reshape(-1)  # (n_groups * 16,)
+    lo = (flat_packed % 2401).astype(np.int32)
+    hi = (flat_packed // 2401).astype(np.int32)
 
-    for g in range(n_groups):
-        q = _unpack_group(all_packed[g]).astype(np.float32)
-        result[g * 128:(g + 1) * 128] = q * scales[g]
+    # LUT lookup for all subpacks at once
+    codes_lo = LUT4[lo]  # (n_sp, 4)
+    codes_hi = LUT4[hi]  # (n_sp, 4)
+    all_codes = np.concatenate([codes_lo, codes_hi], axis=1)  # (n_sp, 8)
+
+    # Convert to signed and reshape
+    all_codes_signed = all_codes.astype(np.float32) - HEPT_OFFSET  # {0..6} -> {-3..3}
+    all_codes_signed = all_codes_signed.reshape(n_groups, 128)  # (n_groups, 128)
+
+    # Dequantize: w = q * scale
+    result = (all_codes_signed * scales[:, None]).flatten()
 
     return result[:n].reshape(packed['original_shape'])
 

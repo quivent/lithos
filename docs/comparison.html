@@ -882,7 +882,8 @@ def rmsnorm_kernel(x_ptr, w_ptr, y_ptr, N,
     <tr><td>ExLlamaV2</td><td>Python/CUDA</td><td>~10 s</td><td class="num">~135</td><td>RTX 4090</td><td>Limited</td><td>Custom CUDA</td><td>Minimal</td><td>Yes</td></tr>
     <tr><td>MLC-LLM</td><td>Python/TVM</td><td>minutes</td><td class="num">~165</td><td>RTX 4090</td><td>Yes</td><td>Auto-scheduled TIR</td><td>TVM</td><td>Yes</td></tr>
     <tr><td>DeepSpeed-FastGen</td><td>Python</td><td>~30 s</td><td class="num">~180</td><td>A100</td><td>SplitFuse</td><td>Custom CUDA + cuBLAS</td><td>PyTorch</td><td>Yes</td></tr>
-    <tr class="lithos-row"><td><strong>Lithos</strong> <span class="small">(target)</span></td><td>Forth; Python host today</td><td>~2 s</td><td class="num">&gt;400</td><td>GH200</td><td>Planned</td><td>PTX/SASS direct</td><td>libcuda only</td><td>Yes</td></tr>
+    <tr class="lithos-row"><td><strong>Lithos</strong> <span class="small">(measured)</span></td><td>Forth; Python host today</td><td>~228 ms</td><td class="num">~2</td><td>GH200</td><td>Planned</td><td>PTX/SASS direct</td><td>libcuda only</td><td>Yes</td></tr>
+    <tr class="lithos-row"><td><strong>Lithos</strong> <span class="small">(target)</span></td><td>Forth; Python host today</td><td>~228 ms</td><td class="num">&gt;400</td><td>GH200</td><td>Planned</td><td>PTX/SASS direct</td><td>libcuda only</td><td>Yes</td></tr>
   </tbody>
 </table>
 </div>
@@ -898,6 +899,10 @@ def rmsnorm_kernel(x_ptr, w_ptr, y_ptr, N,
 <p><strong>Native engines</strong> (llama.cpp, ExLlamaV2, TensorRT-LLM, MLX) write their own kernels. They control the compute path but still launch many kernels per layer. Ceiling: ~300 tok/s at batch=1.</p>
 
 <p><strong>Direct-to-silicon</strong> (Lithos) eliminates the kernel boundary entirely. One fused kernel per layer, with the programmer controlling instruction scheduling. The only approach that can theoretically reach &gt;70% bandwidth utilisation at batch=1.</p>
+
+<h3>Where Lithos stands today (measured, April 2025)</h3>
+
+<p>First end-to-end run: <span class="measure">~2 tok/s</span> on GH200, <span class="measure">90&times; slower</span> than vLLM's 179 tok/s. Output is correct &mdash; "Paris" rank 1, logit 18.057, all 64 layers verified layer-by-layer (cosine 1.0). The gap is entirely kernel optimization: our hand-written PTX projection kernel does not use tensor cores for the batch=1 GEMV. vLLM's cuBLAS runs at 3460 GB/s (86% peak); our kernel does not come close. The architecture is proven. The kernels need tensor core tiling, WGMMA instructions, and TMA async loads. This is the next phase of work.</p>
 
 </section>
 

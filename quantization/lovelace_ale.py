@@ -152,15 +152,29 @@ def quantize(weights: np.ndarray, group_size: int = 128) -> dict:
         cb = _train_codebook(sub_data, N_CODEBOOK_ENTRIES, n_iter=10)
         codebooks.append(cb.astype(np.float32))
 
-    # Encode each block
+    # Encode all blocks (vectorized per sub-space)
     pq_indices = np.zeros((n_blocks, n_sub), dtype=np.uint8)
-    pq_reconstructed = np.zeros_like(centered)
+    pq_reconstructed = np.zeros_like(centered).reshape(n_blocks, block_size)
 
-    for b in range(n_blocks):
-        block = centered_blocks[b]
-        idx = _encode_pq(block, codebooks)
-        pq_indices[b] = idx
-        pq_reconstructed[b * block_size:(b + 1) * block_size] = _decode_pq(idx, codebooks)
+    for s in range(n_sub):
+        sub_vecs = centered_blocks[:, s * SUB_DIM:(s + 1) * SUB_DIM]  # (n_blocks, SUB_DIM)
+        cb = codebooks[s]  # (N_CODEBOOK_ENTRIES, SUB_DIM)
+        # Compute distances: (n_blocks, N_CODEBOOK_ENTRIES)
+        # Use chunked computation to avoid memory issues
+        chunk_size = 10000
+        for start in range(0, n_blocks, chunk_size):
+            end = min(start + chunk_size, n_blocks)
+            chunk = sub_vecs[start:end]  # (chunk, SUB_DIM)
+            # ||a - b||^2 = ||a||^2 + ||b||^2 - 2*a.b
+            a_sq = np.sum(chunk**2, axis=1, keepdims=True)  # (chunk, 1)
+            b_sq = np.sum(cb**2, axis=1, keepdims=True).T   # (1, N_CB)
+            ab = chunk @ cb.T                                 # (chunk, N_CB)
+            dists = a_sq + b_sq - 2 * ab
+            best = np.argmin(dists, axis=1).astype(np.uint8)
+            pq_indices[start:end, s] = best
+            pq_reconstructed[start:end, s * SUB_DIM:(s + 1) * SUB_DIM] = cb[best]
+
+    pq_reconstructed = pq_reconstructed.flatten()
 
     # === STRATUM III: Residual Texture (INT32 bitplane coding) ===
     residual = centered - pq_reconstructed
@@ -174,24 +188,22 @@ def quantize(weights: np.ndarray, group_size: int = 128) -> dict:
     res_scales = np.max(np.abs(res_groups), axis=1).astype(np.float32)
     res_scales = np.maximum(res_scales, 1e-10)
 
-    # Quantize residual: uniform 2-level (sign only) for values above threshold
-    # This gives ~0.75 bpw: 1 bit for sign per value, but only ~75% are non-zero
-    # Scale represents the typical magnitude of non-zero residuals
+    # Quantize residual to ternary {-1, 0, +1} * scale
+    # For each group: sign(residual) * round(|residual| / scale)
+    # Using scale = max(|residual|) / 1.0 so that q = round(r / scale) gives {-1, 0, 1}
+    # More precisely: q = sign(r) if |r| > 0.5 * scale, else 0
     res_quantized = np.zeros_like(res_padded, dtype=np.int8)
     for g in range(n_res_groups):
         grp = res_groups[g]
-        # Use median absolute value as threshold to make ~50% sparse
-        abs_vals = np.abs(grp)
-        median_abs = np.median(abs_vals)
-        threshold_val = median_abs * 0.5
-        signs = np.sign(grp)
+        threshold_val = 0.5 * res_scales[g]
+        signs = np.sign(grp).astype(np.int8)
+        mask = np.abs(grp) > threshold_val
         q = np.zeros(RESIDUAL_GROUP, dtype=np.int8)
-        mask = abs_vals > threshold_val
-        q[mask] = 1
-        res_quantized[g * RESIDUAL_GROUP:(g + 1) * RESIDUAL_GROUP] = (q * signs).astype(np.int8)
-        # Adjust scale to be mean of selected magnitudes
+        q[mask] = signs[mask]
+        res_quantized[g * RESIDUAL_GROUP:(g + 1) * RESIDUAL_GROUP] = q
+        # Adjust scale to mean magnitude of selected values for better reconstruction
         if np.any(mask):
-            res_scales[g] = np.mean(abs_vals[mask])
+            res_scales[g] = np.mean(np.abs(grp[mask]))
 
     # Pack residual: 2 bits per value (ternary: {-1, 0, +1} -> {0, 1, 2})
     res_unsigned = (res_quantized + 1).astype(np.uint8)  # map {-1,0,1} -> {0,1,2}

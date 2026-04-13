@@ -206,16 +206,23 @@ def quantize(weights: np.ndarray, group_size: int = 16) -> dict:
     target_bpw = 2.93
     bit_alloc = _allocate_bits(sensitivity, n, target_bpw, group_size)
 
-    # Quantize each group at its allocated precision
-    # n_levels: 2-bit -> 4 levels, 3-bit -> 8 levels, 4-bit -> 16 levels
+    # Quantize each group at its allocated precision (vectorized per bit-width)
+    n_levels_map = 2 ** bit_alloc  # per group
     q_values = np.zeros(n_groups * group_size, dtype=np.uint8)
 
-    for g in range(n_groups):
-        nbits = bit_alloc[g]
+    for nbits in [2, 3, 4]:
+        mask = bit_alloc == nbits
+        if not np.any(mask):
+            continue
+        g_indices = np.where(mask)[0]
         n_levels = 2 ** nbits
-        grp = groups[g]
-        q = _quantize_uniform(grp, n_levels, scales[g])
-        q_values[g * group_size:(g + 1) * group_size] = q
+        max_q = n_levels - 1
+        for g in g_indices:
+            grp = groups[g]
+            normalized = grp / scales[g]
+            q = np.round((normalized + 1.0) / 2.0 * max_q).astype(np.int32)
+            q = np.clip(q, 0, max_q)
+            q_values[g * group_size:(g + 1) * group_size] = q.astype(np.uint8)
 
     # Pack by bit-width groups
     mask_2 = bit_alloc == 2

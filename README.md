@@ -176,20 +176,22 @@ Measured on GH200 480GB, head-to-head against vLLM on the same box.
 
 vLLM's time is dominated by `torch.compile` (30–60 s) and memory profiling (~36 s) — work Lithos doesn't need because it ships pre-compiled cubins and uses `mmap` instead of a profiled `cudaMalloc` pool. Lithos's 228 ms is dominated by **CUDA context creation (127 ms of 228)** — NVIDIA driver setup that nobody can avoid.
 
-**Steady-state (per-token):**
+**Steady-state (per-token, measured April 2025):**
 
-| Metric | vLLM | Lithos |
-|--------|------|--------|
-| TTFT (10 prompts) | 73.2 ms | pending engine wiring |
-| Inter-token latency | 19.2 ms | pending |
-| Streaming throughput | 44.8 tok/s | pending |
+| Metric | vLLM | Lithos | Notes |
+|--------|------|--------|-------|
+| Forward pass (5-token prefill) | — | **2.44 s** | Down from 25.23 s (10.3× optimization in one session) |
+| Per-token latency | 5.58 ms | **~490 ms** | ~2 tok/s vs 179 tok/s |
+| Correctness | correct | **correct** | "Paris" rank 1, logit 18.057, all 64 layers cosine 1.0 |
 
-**What works today:** language spec (1,459 lines), 13 compiled cubins (132 KB total), kernel factory (config.json → specialized cubins in 92 ms), model loader (18.21 GB mmap in 9 ms), CUDA driver bindings, engine orchestrator (64-layer loop, 915 kernel dispatches planned per forward pass), OpenAI-compatible API server (228 ms startup), SASS encoding (47 opcodes mapped), direct SASS emitter (noop kernels execute; memory ops in progress), benchmark suite (3.59 TB/s measured bandwidth, 2.3 µs kernel launch), 12 documentation pages, Rust CLI.
+The 90× speed gap is entirely kernel optimization. Our hand-written PTX projection kernel does not use tensor cores for the batch=1 GEMV. vLLM's cuBLAS runs at 3460 GB/s (86% of 4 TB/s peak). The architecture is proven; the kernels need tensor core tiling.
 
-**What's pending:** real kernel launches (the `_gpu_launch` hook is still a log-and-return stub — replacing it with `cuLaunchKernel` is the next commit), correctness validation vs PyTorch reference, prefill GEMM integration, speculative decoding (MTP) wiring, KV cache spill to LPDDR5X, a Lithos compiler written from scratch (currently Python scaffolding interprets `.fs` files), and self-hosting via Eighth (blocked on forward-reference depth bug).
+**Time breakdown:** MLP projections 49%, DeltaNet recurrence 10%, other projections 20%, lm_head 4%, rest 17%.
 
-The infrastructure is in place and measured. Per-token numbers land the moment the launch stub becomes a real dispatch.
+**What works today:** correct end-to-end inference (Qwen3-30B-A3B, DeltaNet hybrid, 64 layers, GPTQ W4A16), 13 compiled cubins + 3 fused + DeltaNet-specific kernels (132 KB total), GPTQ W4A16 dequantization correct (zero-point 8.0 per auto-GPTQ convention), GH200 unified memory (mmap'd weight pointers passed directly to GPU kernels), Lithos compiler in Forth (produces valid PTX from `.li` files), SASS emitter (vector-add runs correctly on GH200, direct cubin, no ptxas), 5 quantization schemes designed + implementations, 23+ documentation pages, language spec (1,459 lines), kernel factory (config.json → specialized cubins in 92 ms), model loader (18.21 GB mmap in 9 ms), CUDA driver bindings, OpenAI-compatible API server (228 ms startup), SASS encoding (47 opcodes mapped), benchmark suite (3.59 TB/s measured bandwidth, 2.3 µs kernel launch), Rust CLI.
+
+**What's next:** tensor core optimization of projection kernels (WGMMA instructions, TMA async loads — accounts for 69% of forward pass time), prefill GEMM integration, speculative decoding (MTP) wiring, KV cache spill to LPDDR5X, self-hosting via Eighth.
 
 ## Status
 
-Early development. Language vocabulary at 1,459 lines. Startup and model-load paths fully measured; per-token path pending `_gpu_launch` wiring. Python host is temporary; Forth/Rust self-hosted runtime is the next milestone.
+Correct end-to-end inference achieved (April 2025). Qwen3-30B-A3B on GH200: "Paris" rank 1, all 64 layers verified. ~2 tok/s, 90× slower than vLLM — gap is kernel optimization (no tensor cores in projection kernel), not architecture. Startup 228 ms (130–525× faster than vLLM). Language vocabulary at 1,459 lines. Python host is temporary; Forth/Rust self-hosted runtime is the next milestone.
