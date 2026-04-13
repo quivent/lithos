@@ -1,15 +1,3 @@
-.global code_LEX_COUNT
-.global code_LEX_TOKENS
-.global code_LEX_TOKEN_FETCH
-.global code_LITHOS_LEX
-.global do_lithos_lex
-.global emit_tok
-.global entry_lex_count
-.global entry_lex_token_fetch
-.global entry_lex_tokens
-.global entry_lithos_lex
-.global lex_kw_table
-
 // lithos-lexer.s — ARM64 assembly lexer for Lithos .ls source files
 //
 // Tokenizes a source buffer into a flat array of (type, offset, length)
@@ -83,7 +71,6 @@
 .equ TOK_LABEL,     33
 .equ TOK_EXIT_KW,   34
 .equ TOK_HOST,      35
-.equ TOK_TRAP,      89      // trap (syscall)
 
 // Memory / register arrows (UTF-8 multi-byte)
 .equ TOK_LOAD,      36      // → E2 86 92
@@ -187,8 +174,6 @@ lex_kw_table:
     .ascii "exit"
     .byte 4, TOK_HOST
     .ascii "host"
-    .byte 4, TOK_TRAP
-    .ascii "trap"
     // 5-char
     .byte 5, TOK_PARAM
     .ascii "param"

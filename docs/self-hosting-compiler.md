@@ -2,10 +2,10 @@
 
 ## Overview
 
-The self-hosting compiler is a single `.li` source file (`compiler.li`) that
+The self-hosting compiler is a single `.ls` source file (`compiler.ls`) that
 compiles to a native ARM64 ELF binary. This binary replaces the Forth
 bootstrap (`lithos.fs` + `parser.fs` + `emit-*.fs` + `gpu/emit.fs`)
-entirely. It reads `.li` template files and safetensors weight files, and
+entirely. It reads `.ls` template files and safetensors weight files, and
 emits per-layer sm90 GPU machine code wrapped in ELF cubins, linked into
 cooperative megakernels, then boots the GPU and submits work -- all from a
 single native process with zero dependencies.
@@ -14,9 +14,9 @@ single native process with zero dependencies.
 
 ## 1. File Structure
 
-One file: `compiler.li`. Not multiple files with includes.
+One file: `compiler.ls`. Not multiple files with includes.
 
-Rationale: the `.li` language has no include mechanism today, and adding one
+Rationale: the `.ls` language has no include mechanism today, and adding one
 creates complexity (search paths, circular dependencies, build ordering).
 A single file is consistent with Lithos philosophy -- the compiler is one
 function that transforms input to output.
@@ -28,7 +28,7 @@ compilation or linking. The entire compiler is one compilation unit.
 Estimated structure:
 
 ```
-compiler.li
+compiler.ls
   |-- Section 0: Constants and data tables         (~300 lines)
   |-- Section 1: Syscall wrappers                  (~100 lines)
   |-- Section 2: Bump allocator + string ops        (~80 lines)
@@ -49,20 +49,20 @@ compiler.li
 
 ## 2. The Bootstrap Problem
 
-The compiler is written in `.li`. The compiler compiles `.li` to ARM64.
+The compiler is written in `.ls`. The compiler compiles `.ls` to ARM64.
 Who compiles the compiler?
 
 **Answer: the Forth bootstrap compiles it exactly once.**
 
 ```
 Phase 1 (bootstrap compile):
-  forth-bootstrap lithos.fs compiler.li --emit arm64 -o lithos-stage1
+  forth-bootstrap lithos.fs compiler.ls --emit arm64 -o lithos-stage1
 
 Phase 2 (self-compile):
-  ./lithos-stage1 compiler.li -o lithos
+  ./lithos-stage1 compiler.ls -o lithos
 
 Phase 3 (verify):
-  ./lithos compiler.li -o lithos-verify
+  ./lithos compiler.ls -o lithos-verify
   diff lithos lithos-verify   # must be identical (fixed point)
 ```
 
@@ -71,13 +71,13 @@ After Phase 2 succeeds, the Forth bootstrap is never needed again. The
 in one executable.
 
 The Forth bootstrap already has the machinery for this:
-- `parser.fs` parses `.li` syntax and emits GPU machine code
+- `parser.fs` parses `.ls` syntax and emits GPU machine code
 - `emit-arm64.fs` has a code buffer and ARM64 instruction writer
 - `arm64-wrap.fs` wraps ARM64 code in an ELF executable
 
 What's missing is the ARM64 instruction encoder (currently a stub that emits
 `mov x0, #0; ret`). The bootstrap needs a real ARM64 emitter before it can
-compile `compiler.li`. This encoder is ~400 lines of Forth added to
+compile `compiler.ls`. This encoder is ~400 lines of Forth added to
 `emit-arm64.fs`, covering the ~30 ARM64 instructions the compiler uses.
 
 ### Bootstrap ARM64 instruction set (minimum viable)
@@ -125,7 +125,7 @@ This allows the simplest possible memory model.
   ... gap ...
 
 +---------------------------+  mmap'd at runtime (per input file):
-| Input .li file            |  mmap'd read-only (MAP_PRIVATE)
+| Input .ls file            |  mmap'd read-only (MAP_PRIVATE)
 +---------------------------+
 
 +---------------------------+  mmap'd at runtime:
@@ -169,7 +169,7 @@ registers or two struct fields.
 
 ### 4.1 Input
 
-The `.li` source file is mmap'd read-only. The lexer walks the byte buffer
+The `.ls` source file is mmap'd read-only. The lexer walks the byte buffer
 with a position cursor, identical to `lexer.fs` but producing a token array
 instead of yielding one token at a time.
 
@@ -220,7 +220,7 @@ host fn tokenize src src_len -> tokens n_tokens
         n_tokens++
 ```
 
-Newlines are significant because `.li` uses indentation for scoping (like
+Newlines are significant because `.ls` uses indentation for scoping (like
 Python). The current Forth lexer discards newlines (treating them as
 whitespace) and relies on `each`/`endfor` keywords for structure. The
 self-hosting compiler preserves newlines to enable proper indentation-based
@@ -240,7 +240,7 @@ statement directly calls the sm90 instruction emitter. When parsing a host
 function, each statement directly calls the ARM64 emitter.
 
 This is the right design for Lithos:
-- `.li` is a simple language with no forward references within a function
+- `.ls` is a simple language with no forward references within a function
 - Expressions are small (no deeply nested trees)
 - One-pass keeps memory usage minimal
 - It matches the proven Forth implementation
@@ -337,12 +337,12 @@ The parser sets a mode flag when entering a function. All emit calls within
 that function body go to the selected backend. The mode flag is checked at
 emit time, not parse time -- the parser logic is shared.
 
-### 6.2 How this works in compiler.li
+### 6.2 How this works in compiler.ls
 
 The compiler itself is written as `host fn` declarations: `host fn main`,
 `host fn parse_file`, `host fn emit_fadd`, etc. These compile to ARM64.
 
-The `.li` template files it reads as input contain `fn` declarations (GPU
+The `.ls` template files it reads as input contain `fn` declarations (GPU
 kernels). When the compiler parses those, it calls the sm90 emitter to
 write GPU instructions into `sass_buf`.
 
@@ -383,7 +383,7 @@ The opcode table from `opcodes-sm90.fs` becomes a read-only data section
 in the ARM64 binary:
 
 ```
-\ In compiler.li, expressed as host-visible constants:
+\ In compiler.ls, expressed as host-visible constants:
 const OP_FMUL       = 0x7220
 const OP_FADD       = 0x7221
 const OP_FFMA       = 0x7223
@@ -660,7 +660,7 @@ These are the same records built by the current Forth `build-elf` when
 A megakernel is one GPU kernel that executes all N layers of the model
 sequentially, with grid-sync between layers. The linker:
 
-1. Parses each layer's `.li` template
+1. Parses each layer's `.ls` template
 2. For each layer, emits the instruction sequence into `sass_buf`
 3. Between layers, emits grid-sync instructions
 4. Tracks grid-sync offsets for the ELF COOP_GROUP records
@@ -721,7 +721,7 @@ The compiler emits `n_kparams` and param-region size into the ELF's
 
 ## 11. Language Extensions for Host Code
 
-The current `.li` syntax handles GPU math (f32/u32 operations, array
+The current `.ls` syntax handles GPU math (f32/u32 operations, array
 indexing, shared memory, warp shuffles). Host-side code needs additional
 capabilities.
 
@@ -770,7 +770,7 @@ host fn str_eq a a_len b b_len -> result
     result = 1
 ```
 
-This is a host function written in `.li` -- it compiles to ARM64 `ldrb`,
+This is a host function written in `.ls` -- it compiles to ARM64 `ldrb`,
 `cmp`, `b.ne` instructions.
 
 ### 11.3 Syscall wrappers
@@ -829,7 +829,7 @@ host fn parse_tensor_entry st pos result_ptr
 
 ### 11.5 Control flow additions
 
-The GPU `.li` has `each`, `stride`, `for`, `if<`, `if>=`, `if==`.
+The GPU `.ls` has `each`, `stride`, `for`, `if<`, `if>=`, `if==`.
 Host code adds:
 
 | Construct | Syntax | Compiles to |
@@ -905,7 +905,7 @@ host fn gsp_phase5_start_fmc bar0 fmc_params_pa
     store32(bar0 + 0x111388, 1)        \ CPUCTL: STARTCPU
 ```
 
-Total GSP boot: ~600 lines of `.li` host functions. Each function is a
+Total GSP boot: ~600 lines of `.ls` host functions. Each function is a
 sequence of `store32`, `load32`, `poll_bits`, and `bar4_bump_alloc` calls.
 Structurally identical to the C in `lithos_gsp.c` but without any kernel
 API -- pure memory-mapped I/O.
@@ -975,7 +975,7 @@ host fn submit_kernel channel cubin_gpu_va grid_dim block_dim params_ptr
 | `lithos.fs` | 120 | Driver / main |
 | **Total** | **5809** | |
 
-### 13.2 Estimated .li self-hosting compiler
+### 13.2 Estimated .ls self-hosting compiler
 
 | Section | Lines | Notes |
 |---------|-------|-------|
@@ -997,7 +997,7 @@ host fn submit_kernel channel cubin_gpu_va grid_dim block_dim params_ptr
 
 ### 13.3 Analysis
 
-The `.li` version is ~5200 lines vs ~5800 lines of Forth. The `.li` code
+The `.ls` version is ~5200 lines vs ~5800 lines of Forth. The `.ls` code
 is longer per-function (explicit variable names, no stack tricks) but shorter
 overall because:
 - No Forth boilerplate (variable declarations, create/allot patterns)
@@ -1015,15 +1015,15 @@ Without GSP boot, the compiler proper is ~4600 lines.
 ## 14. Data Flow Summary
 
 ```
-compiler.li
+compiler.ls
     |
     v  (bootstrap compile via Forth, or self-compile)
 lithos (ARM64 ELF binary)
     |
-    |-- reads: model.li (template describing model architecture)
+    |-- reads: model.ls (template describing model architecture)
     |-- reads: model.safetensors (quantized weights)
     |
-    |-- Phase 1: Parse model.li
+    |-- Phase 1: Parse model.ls
     |       tokenize -> parse -> emit sm90 per kernel function
     |
     |-- Phase 2: Read safetensors metadata
@@ -1056,7 +1056,7 @@ inference output (token IDs)
 ## 15. Open Questions
 
 1. **ARM64 encoder completeness.** The Forth bootstrap needs a real ARM64
-   encoder before it can compile `compiler.li`. This is ~400 lines of new
+   encoder before it can compile `compiler.ls`. This is ~400 lines of new
    Forth in `emit-arm64.fs`. Priority: this is the critical path for
    bootstrap.
 
@@ -1082,6 +1082,6 @@ inference output (token IDs)
 
 6. **Multi-model support.** The current architecture compiles one model
    at a time. Supporting multiple model architectures (DeltaNet vs.
-   full-attention) requires either separate `.li` templates or a template
+   full-attention) requires either separate `.ls` templates or a template
    parameter mechanism. Current approach: separate templates per
    architecture, compiler selects based on CLI flag.

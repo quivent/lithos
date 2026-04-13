@@ -2,6 +2,8 @@ ls_code_buf build/ls-shared.o
 ls_code_pos build/ls-shared.o
 ls_comp_count build/ls-shared.o
 ls_comp_table build/ls-shared.o
+ls_data_buf build/ls-shared.o
+ls_data_pos build/ls-shared.o
 ls_elf_buf build/ls-shared.o
 ls_elf_pos build/ls-shared.o
 ls_source_buf_ptr build/ls-shared.o
@@ -509,7 +511,6 @@ parse_comp_call build/lithos-parser.o
 parse_composition build/lithos-parser.o
 parse_composition_or_stmt build/lithos-parser.o
 parse_const_decl build/lithos-parser.o
-parse_dollar_reg build/lithos-parser.o
 parse_each build/lithos-parser.o
 parse_error build/lithos-parser.o
 parse_error_regspill build/lithos-parser.o

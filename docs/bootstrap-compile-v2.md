@@ -180,7 +180,7 @@ parse error                   # BLOCKED — parser gap
   1884–1890, 1904–1910 (all `str x{20|22|1}, [sp, #-8]!` → `stp xN, xzr,
   [sp, #-16]!` and matching loads; cubin_sym offsets shifted by 8).
 
-No other files were touched. No `.fs` file was modified. No `.li` file
+No other files were touched. No `.fs` file was modified. No `.ls` file
 was created.
 
 ## What needs to happen to unblock Wave 3

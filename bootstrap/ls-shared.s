@@ -27,8 +27,8 @@
 //   ls_sym_table       24 KB  — 512 entries × 48 B  (covers
 //                                bootstrap 256×48, expr 128×48,
 //                                parser 512×24)
-//   ls_comp_table      3 KB   — 64 entries × 48 B (composition defs)
-//   ls_elf_buf         512 KB — output ELF / cubin
+//   ls_comp_table      12 KB  — 256 entries × 48 B (composition defs)
+//   ls_elf_buf         4 MB   — output ELF / cubin (megakernels)
 //   ls_source_buf_ptr  8 B    — pointer to mmap'd source
 //
 // NB: ls_source_buf itself is allocated at run-time via mmap
@@ -42,9 +42,9 @@
 .equ LS_SYM_MAX,         512
 .equ LS_SYM_TABLE_SIZE,  (LS_SYM_ENTRY_SIZE * LS_SYM_MAX)   // 24 576
 .equ LS_COMP_ENTRY_SIZE, 48
-.equ LS_COMP_MAX,        64
-.equ LS_COMP_TABLE_SIZE, (LS_COMP_ENTRY_SIZE * LS_COMP_MAX) // 3072
-.equ LS_ELF_BUF_SIZE,    524288           // 512 KB
+.equ LS_COMP_MAX,        256
+.equ LS_COMP_TABLE_SIZE, (LS_COMP_ENTRY_SIZE * LS_COMP_MAX) // 12288
+.equ LS_ELF_BUF_SIZE,    4194304          // 4 MB (megakernel cubins)
 .equ LS_SOURCE_BUF_SIZE, 16777216         // 16 MB (allocated via mmap)
 
 // ------------------------------------------------------------
@@ -76,6 +76,9 @@ ls_source_buf_ptr:  .quad 0           // base of mmap'd source buffer
 .globl ls_source_len
 ls_source_len:      .quad 0           // total source bytes
 
+.globl ls_data_pos
+ls_data_pos:        .quad 0           // byte offset into ls_data_buf
+
 // ------------------------------------------------------------
 // .bss — the big shared buffers
 // ------------------------------------------------------------
@@ -100,3 +103,7 @@ ls_comp_table:      .space LS_COMP_TABLE_SIZE
 .align 12
 .globl ls_elf_buf
 ls_elf_buf:         .space LS_ELF_BUF_SIZE
+
+.align 12
+.globl ls_data_buf
+ls_data_buf:        .space 65536      // 64 KB for data segment (string literals etc.)

@@ -1,6 +1,12 @@
 /*
- * cbuf0_probe.c — Find register_count and other fields in cbuf0 (constant buffer 0).
+ * cbuf0_probe.c — SUPERSEDED by cbuf0_probe2.c (cleaner extraction).
  *
+ * Initial exploratory probe. Established the 5-CB-load architecture but had
+ * ordering issues in the extraction phase. See cbuf0_probe2.c for the clean
+ * version that produced the final results in docs/cbuf0_fields.md.
+ *
+ * Original description:
+ * Find register_count and other fields in cbuf0 (constant buffer 0).
  * The QMD probe (docs/qmd_fields.md) confirmed register_count is NOT in the
  * 528-byte QMD body on sm_90. The CUDA driver stores it in cbuf0.
  *

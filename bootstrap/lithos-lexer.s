@@ -71,6 +71,7 @@
 .equ TOK_LABEL,     33
 .equ TOK_EXIT_KW,   34
 .equ TOK_HOST,      35
+.equ TOK_TRAP,      89      // trap (syscall)
 
 // Memory / register arrows (UTF-8 multi-byte)
 .equ TOK_LOAD,      36      // → E2 86 92
@@ -174,6 +175,8 @@ lex_kw_table:
     .ascii "exit"
     .byte 4, TOK_HOST
     .ascii "host"
+    .byte 4, TOK_TRAP
+    .ascii "trap"
     // 5-char
     .byte 5, TOK_PARAM
     .ascii "param"

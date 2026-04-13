@@ -127,6 +127,12 @@
 \\ TOK_HASH       = 90   # (index modifier)
 \\ TOK_STARSTAR   = 91   ** (elementwise)
 \\ TOK_STARSTARSTAR = 92 *** (matrix)
+\\
+\\ TOK_GOTO       = 93   goto (unconditional branch to label)
+\\ TOK_SYSCALL    = 94   syscall (ARM64 SVC #0 with register setup)
+\\ TOK_CONTINUE   = 95   continue (loop continuation)
+\\ TOK_CONSTANT   = 96   constant (Forth-style: VALUE constant NAME)
+\\ TOK_DOLLAR     = 97   $ (register sigil: $0, $8, $TID_X)
 
 \\ ============================================================================
 \\ Lexer token output buffer (shared by lexer and parser)
@@ -950,7 +956,7 @@ emit_stxr rs rt rn :
 \\ CODE BUFFER
 \\ ============================================================
 
-buf gpu_buf 65536
+buf gpu_buf 524288
 var gpu_pos 0
 var max_reg 0
 
@@ -1669,7 +1675,8 @@ total_kparams n_data_params :
 \\ CUBIN BUILDER STATE
 \\ ============================================================
 
-buf cubin_buf 524288
+\\ TODO: bump to 335544320 (320MB) for full 64-layer megakernel
+buf cubin_buf 4194304
 var cubin_pos 0
 var gpu_shmem_size 0
 var gpu_n_kparams 0
@@ -1810,7 +1817,8 @@ scan_ident src pos end :
         angle_l = c == 60
         angle_r = c == 62
         eq    = c == 61
-        ok = alpha | dot | angle_l | angle_r | eq
+        bang  = c == 33
+        ok = alpha | dot | angle_l | angle_r | eq | bang
         if ok == 0
             return
         new_pos = new_pos + 1
@@ -1919,6 +1927,10 @@ match_keyword src offset length :
         if b0 == 104 & b1 == 111 & b2 == 115 & b3 == 116
             tok_type = 35
             return
+        \\ 'goto' -> 93
+        if b0 == 103 & b1 == 111 & b2 == 116 & b3 == 111
+            tok_type = 93
+            return
 
     if length == 5
         b0 = src [ offset ]
@@ -1998,6 +2010,16 @@ match_keyword src offset length :
             if b2 == 111 & b3 == 106 & b4 == 101 & b5 == 99 & b6 == 116
                 tok_type = 30
                 return
+        \\ 'syscall' -> 94
+        if b0 == 115 & b1 == 121
+            b2 = src [ offset + 2 ]
+            b3 = src [ offset + 3 ]
+            b4 = src [ offset + 4 ]
+            b5 = src [ offset + 5 ]
+            b6 = src [ offset + 6 ]
+            if b2 == 115 & b3 == 99 & b4 == 97 & b5 == 108 & b6 == 108
+                tok_type = 94
+                return
 
     if length == 8
         b0 = src [ offset ]
@@ -2011,6 +2033,28 @@ match_keyword src offset length :
             b7 = src [ offset + 7 ]
             if b2 == 109 & b3 == 112 & b4 == 108 & b5 == 97 & b6 == 116 & b7 == 101
                 tok_type = 29
+                return
+        \\ 'constant' -> 96
+        if b0 == 99 & b1 == 111
+            b2 = src [ offset + 2 ]
+            b3 = src [ offset + 3 ]
+            b4 = src [ offset + 4 ]
+            b5 = src [ offset + 5 ]
+            b6 = src [ offset + 6 ]
+            b7 = src [ offset + 7 ]
+            if b2 == 110 & b3 == 115 & b4 == 116 & b5 == 97 & b6 == 110 & b7 == 116
+                tok_type = 96
+                return
+        \\ 'continue' -> 95
+        if b0 == 99 & b1 == 111
+            b2 = src [ offset + 2 ]
+            b3 = src [ offset + 3 ]
+            b4 = src [ offset + 4 ]
+            b5 = src [ offset + 5 ]
+            b6 = src [ offset + 6 ]
+            b7 = src [ offset + 7 ]
+            if b2 == 110 & b3 == 116 & b4 == 105 & b5 == 110 & b6 == 117 & b7 == 101
+                tok_type = 95
                 return
 
 \\ ============================================================================
@@ -2274,6 +2318,11 @@ lex src src_len :
             emit_token 74 pos 1
             pos = pos + 1
             continue
+        \\ $ -> TOK_DOLLAR (97)
+        if c == 36
+            emit_token 97 pos 1
+            pos = pos + 1
+            continue
 
         pos = pos + 1
 
@@ -2308,10 +2357,10 @@ var error_count 0
 \\ Symbol table
 \\ ============================================================================
 
-buf sym_names 2048
-buf sym_lens 256
-buf sym_kinds 256
-buf sym_regs 256
+buf sym_names 16384
+buf sym_lens 1024
+buf sym_kinds 1024
+buf sym_regs 1024
 var n_syms 0
 
 \\ ============================================================================
@@ -2328,7 +2377,7 @@ var next_host_reg 9
 \\ Shared memory tracking
 \\ ============================================================================
 
-buf shm_names 256
+buf shm_names 2048
 buf shm_sizes 32
 var n_shared 0
 var shmem_total 0
@@ -2337,17 +2386,17 @@ var shmem_total 0
 \\ Loop / branch tracking
 \\ ============================================================================
 
-buf branch_stack 512
+buf branch_stack 2048
 var branch_depth 0
 
 \\ ============================================================================
 \\ Composition table
 \\ ============================================================================
 
-buf comp_names 2048
-buf comp_lens 256
-buf comp_tok_starts 256
-buf comp_arg_counts 256
+buf comp_names 16384
+buf comp_lens 1024
+buf comp_tok_starts 1024
+buf comp_arg_counts 1024
 var n_comps 0
 
 \\ ============================================================================
@@ -2931,6 +2980,31 @@ parse_ident_expr :
 
 parse_regread :
     t peek_type
+    \\ Handle $N or $NAME (dollar-prefixed register)
+    if== t 97
+        consume
+        t2 peek_type
+        if== t2 3
+            regnum parse_int_token
+            rd alloc_rreg
+            if== emit_target 1
+                emit_mov rd regnum
+            if== emit_target 0
+                emit_p_s2r rd regnum
+            rd
+        if== t2 5
+            ptr tok_text_ptr
+            len peek_length
+            consume
+            rd alloc_rreg
+            did dict_lookup ptr len
+            if>= did 0
+                sr_id → 32 dict_reg_ids did * 4
+                if== emit_target 0
+                    emit_p_s2r rd sr_id
+                rd
+            rd
+        -1
     if== t 3
         regnum parse_int_token
         rd alloc_rreg
@@ -2951,6 +3025,28 @@ parse_regread :
     -1
 
 parse_regwrite :
+    t peek_type
+    \\ Handle $N or $NAME
+    if== t 97
+        consume
+        t2 peek_type
+        if== t2 3
+            regnum parse_int_token
+            val_reg parse_expr
+            if== emit_target 1
+                emit_mov regnum val_reg
+            emit_p_mov_reg regnum val_reg
+        if== t2 5
+            ptr tok_text_ptr
+            len peek_length
+            consume
+            val_reg parse_expr
+            did dict_lookup ptr len
+            if>= did 0
+                sr_id → 32 dict_reg_ids did * 4
+                if== emit_target 1
+                    emit_mov sr_id val_reg
+                emit_p_mov_reg sr_id val_reg
     regnum parse_int_token
     val_reg parse_expr
     if== emit_target 1
@@ -3164,6 +3260,48 @@ parse_stmt :
             emit_p_exit_gpu
         emit_p_ret_host
 
+    \\ TOK_GOTO (93)
+    if== t 93
+        consume
+        parse_goto
+
+    \\ TOK_LABEL (33)
+    if== t 33
+        consume
+        parse_label_decl
+
+    \\ TOK_ENDFOR (17)
+    if== t 17
+        consume
+        parse_for_end
+
+    \\ TOK_RETURN (21)
+    if== t 21
+        consume
+        if== emit_target 0
+            emit_p_exit_gpu
+        emit_p_ret_host
+
+    \\ TOK_SYSCALL (94)
+    if== t 94
+        consume
+        parse_syscall_stmt
+
+    \\ TOK_CONTINUE (95)
+    if== t 95
+        consume
+        parse_continue_stmt
+
+    \\ TOK_CONSTANT (96)
+    if== t 96
+        consume
+        parse_constant_decl
+
+    \\ TOK_PARAM (12)
+    if== t 12
+        consume
+        parse_param
+
     if== t 5
         parse_ident_stmt
 
@@ -3175,6 +3313,301 @@ parse_store_stmt :
     addr parse_expr
     val parse_expr
     emit_p_store val addr 0 width
+
+\\ ============================================================================
+\\ goto / label / continue handlers
+\\ ============================================================================
+
+parse_goto :
+    ptr tok_text_ptr
+    len peek_length
+    consume
+    lidx label_find ptr len
+    if>= lidx 0
+        target → 32 label_offsets lidx * 4
+        if== emit_target 0
+            offset target - gpu_pos
+            emit_bra offset
+        offset target - arm64_pos
+            emit_b offset
+    if== emit_target 0
+        emit_bra 0
+    emit_b 0
+
+parse_label_decl :
+    ptr tok_text_ptr
+    len peek_length
+    consume
+    lidx n_labels
+    clen len
+    if>= clen 32
+        clen 32
+    for j 0 clen 1
+        b → 8 ptr j
+        ← 8 label_names lidx * 32 + j b
+    ← 32 label_lens lidx * 4 len
+    if== emit_target 0
+        ← 32 label_offsets lidx * 4 gpu_pos
+    ← 32 label_offsets lidx * 4 arm64_pos
+    n_labels n_labels + 1
+
+parse_inline_label ptr len :
+    lidx n_labels
+    clen len
+    if>= clen 32
+        clen 32
+    for j 0 clen 1
+        b → 8 ptr j
+        ← 8 label_names lidx * 32 + j b
+    ← 32 label_lens lidx * 4 len
+    if== emit_target 0
+        ← 32 label_offsets lidx * 4 gpu_pos
+    ← 32 label_offsets lidx * 4 arm64_pos
+    n_labels n_labels + 1
+
+label_find name_ptr name_len :
+    for i 0 n_labels 1
+        slen → 32 label_lens i * 4
+        if== slen name_len
+            match 1
+            for j 0 slen 1
+                a → 8 name_ptr j
+                b → 8 label_names i * 32 + j
+                if!= a b
+                    match 0
+            if== match 1
+                i
+    -1
+
+parse_continue_stmt :
+    if== branch_depth 0
+        0
+    if== emit_target 0
+        emit_p_bra 0
+    arm64_emit32 0x14000000
+
+\\ ============================================================================
+\\ syscall handler
+\\ ============================================================================
+
+parse_syscall_stmt :
+    result_ptr tok_text_ptr
+    result_len peek_length
+    consume
+    sysnum parse_expr
+    emit_mov64 X8 0
+    emit_p_mov_reg X8 sysnum
+    arg_idx 0
+    parse_syscall_args arg_idx
+    emit_svc 0
+    rd alloc_rreg
+    emit_mov rd X0
+    sym_add result_ptr result_len 2 rd
+
+parse_syscall_args idx :
+    t peek_type
+    if== t 1
+        idx
+    if== t 0
+        idx
+    if>= idx 6
+        idx
+    val parse_expr
+    emit_p_mov_reg idx val
+    parse_syscall_args idx + 1
+
+\\ ============================================================================
+\\ constant handler (Forth-style: VALUE constant NAME)
+\\ ============================================================================
+
+parse_constant_decl :
+    name_ptr tok_text_ptr
+    name_len peek_length
+    consume
+    rd alloc_rreg
+    emit_p_mov_imm rd 0
+    sym_add name_ptr name_len 1 rd
+
+\\ ============================================================================
+\\ param handler (param NAME TYPE)
+\\ ============================================================================
+
+parse_param :
+    name_ptr tok_text_ptr
+    name_len peek_length
+    consume
+    type_tok peek_type
+    consume
+    param_type 0
+    if== type_tok 41
+        param_type 1
+    if== type_tok 44
+        param_type 2
+    if== type_tok 40
+        param_type 3
+    pidx n_kparams
+    clen name_len
+    if>= clen 32
+        clen 32
+    for j 0 clen 1
+        b → 8 name_ptr j
+        ← 8 kparam_names pidx * 32 + j b
+    ← 32 kparam_lens pidx * 4 name_len
+    ← 32 kparam_types pidx * 4 param_type
+    rd alloc_rdreg
+    if== emit_target 0
+        param_offset 528 + pidx * 8
+        emit_uldc rd 0 param_offset
+    sym_add name_ptr name_len 6 rd
+    n_kparams n_kparams + 1
+    gpu_n_kparams n_kparams
+
+\\ ============================================================================
+\\ load_u / store_u magic identifier dispatch
+\\ ============================================================================
+
+parse_load_u width :
+    result_ptr tok_text_ptr
+    result_len peek_length
+    consume
+    addr parse_expr
+    rd alloc_rreg
+    emit_p_load rd addr 0 width
+    sym_add result_ptr result_len 2 rd
+
+parse_store_u width :
+    dest_ptr tok_text_ptr
+    dest_len peek_length
+    consume
+    idx_expr parse_expr
+    val_expr parse_expr
+    base_idx sym_find dest_ptr dest_len
+    if>= base_idx 0
+        base_reg sym_reg base_idx
+        offset_reg alloc_rreg
+        elem_bytes width / 8
+        scale alloc_rreg
+        emit_p_mov_imm scale elem_bytes
+        emit_p_mul offset_reg idx_expr scale
+        addr alloc_rreg
+        emit_p_add addr base_reg offset_reg
+        emit_p_store val_expr addr 0 width
+
+parse_load_u_idx width :
+    base parse_expr
+    idx_expr parse_expr
+    elem_bytes width / 8
+    offset alloc_rreg
+    scale alloc_rreg
+    emit_p_mov_imm scale elem_bytes
+    emit_p_mul offset idx_expr scale
+    addr alloc_rreg
+    emit_p_add addr base offset
+    rd alloc_rreg
+    emit_p_load rd addr 0 width
+    rd
+
+parse_store_u8_at :
+    buf_expr parse_expr
+    off_expr parse_expr
+    val_expr parse_expr
+    addr alloc_rreg
+    emit_p_add addr buf_expr off_expr
+    emit_p_store val_expr addr 0 8
+
+\\ ============================================================================
+\\ 3-operand integer statement ops
+\\ ============================================================================
+
+parse_3op_and :
+    dst_ptr tok_text_ptr
+    dst_len peek_length
+    consume
+    a parse_expr
+    b parse_expr
+    rd alloc_rreg
+    if== emit_target 0
+        emit_lop3_and rd a b
+    emit_and_reg rd a b
+    sym_add dst_ptr dst_len 2 rd
+
+parse_3op_or :
+    dst_ptr tok_text_ptr
+    dst_len peek_length
+    consume
+    a parse_expr
+    b parse_expr
+    rd alloc_rreg
+    if== emit_target 0
+        emit_lop3_or rd a b
+    emit_orr_reg rd a b
+    sym_add dst_ptr dst_len 2 rd
+
+parse_3op_xor :
+    dst_ptr tok_text_ptr
+    dst_len peek_length
+    consume
+    a parse_expr
+    b parse_expr
+    rd alloc_rreg
+    if== emit_target 0
+        emit_lop3_xor rd a b
+    emit_eor_reg rd a b
+    sym_add dst_ptr dst_len 2 rd
+
+parse_3op_shl :
+    dst_ptr tok_text_ptr
+    dst_len peek_length
+    consume
+    a parse_expr
+    b parse_expr
+    rd alloc_rreg
+    if== emit_target 0
+        emit_shf_r rd a b
+    emit_lsl_reg rd a b
+    sym_add dst_ptr dst_len 2 rd
+
+parse_3op_shr :
+    dst_ptr tok_text_ptr
+    dst_len peek_length
+    consume
+    a parse_expr
+    b parse_expr
+    rd alloc_rreg
+    if== emit_target 0
+        emit_shf_r rd a b
+    emit_lsr_reg rd a b
+    sym_add dst_ptr dst_len 2 rd
+
+parse_3op_mul :
+    dst_ptr tok_text_ptr
+    dst_len peek_length
+    consume
+    a parse_expr
+    b parse_expr
+    rd alloc_rreg
+    emit_p_mul rd a b
+    sym_add dst_ptr dst_len 2 rd
+
+parse_3op_add :
+    dst_ptr tok_text_ptr
+    dst_len peek_length
+    consume
+    a parse_expr
+    b parse_expr
+    rd alloc_rreg
+    emit_p_add rd a b
+    sym_add dst_ptr dst_len 2 rd
+
+parse_3op_sub :
+    dst_ptr tok_text_ptr
+    dst_len peek_length
+    consume
+    a parse_expr
+    b parse_expr
+    rd alloc_rreg
+    emit_p_sub rd a b
+    sym_add dst_ptr dst_len 2 rd
 
 parse_ident_stmt :
     ptr tok_text_ptr
@@ -3193,13 +3626,174 @@ parse_ident_stmt :
                         consume
                         emit_p_svc
 
-    \\ Check for conditional keywords: if==, if>=, if<
-    if== len 4
+    \\ Check for conditional keywords: if==, if>=, if<, if!=, if>, if<=
+    if>= len 3
         c0 → 8 ptr 0
         c1 → 8 ptr 1
         if== c0 105
             if== c1 102
                 parse_conditional
+
+    \\ Check for inline label (ident followed by TOK_COLON)
+    consume
+    nt_check peek_type
+    if== nt_check 72
+        consume
+        parse_inline_label ptr len
+        1
+    \\ Put token back
+    tok_pos tok_pos - 1
+
+    \\ Check for load_u8 (7 chars)
+    if== len 7
+        c0 → 8 ptr 0
+        if== c0 108
+            c4 → 8 ptr 4
+            if== c4 95
+                c6 → 8 ptr 6
+                if== c6 56
+                    consume
+                    parse_load_u 8
+                    1
+
+    \\ Check for load_u16/32/64 (8 chars)
+    if== len 8
+        c0 → 8 ptr 0
+        if== c0 108
+            c4 → 8 ptr 4
+            if== c4 95
+                c6 → 8 ptr 6
+                c7 → 8 ptr 7
+                consume
+                if== c6 49
+                    if== c7 54
+                        parse_load_u 16
+                        1
+                if== c6 51
+                    if== c7 50
+                        parse_load_u 32
+                        1
+                if== c6 54
+                    if== c7 52
+                        parse_load_u 64
+                        1
+
+    \\ Check for store_u8 (8 chars)
+    if== len 8
+        c0 → 8 ptr 0
+        if== c0 115
+            c5 → 8 ptr 5
+            if== c5 95
+                c7 → 8 ptr 7
+                if== c7 56
+                    consume
+                    parse_store_u 8
+                    1
+
+    \\ Check for store_u16/32/64 (9 chars)
+    if== len 9
+        c0 → 8 ptr 0
+        if== c0 115
+            c5 → 8 ptr 5
+            if== c5 95
+                c7 → 8 ptr 7
+                c8 → 8 ptr 8
+                consume
+                if== c7 49
+                    if== c8 54
+                        parse_store_u 16
+                        1
+                if== c7 51
+                    if== c8 50
+                        parse_store_u 32
+                        1
+                if== c7 54
+                    if== c8 52
+                        parse_store_u 64
+                        1
+
+    \\ Check for load_u64_idx / load_u32_idx (12 chars)
+    if== len 12
+        c0 → 8 ptr 0
+        if== c0 108
+            c5 → 8 ptr 5
+            if== c5 117
+                c7 → 8 ptr 7
+                c8 → 8 ptr 8
+                consume
+                if== c7 54
+                    if== c8 52
+                        parse_load_u_idx 64
+                if== c7 51
+                    if== c8 50
+                        parse_load_u_idx 32
+
+    \\ Check for store_u8_at (11 chars)
+    if== len 11
+        c0 → 8 ptr 0
+        if== c0 115
+            c8 → 8 ptr 8
+            if== c8 97
+                consume
+                parse_store_u8_at
+                1
+
+    \\ Check for 3-operand ops
+    if== len 3
+        c0 → 8 ptr 0
+        c1 → 8 ptr 1
+        c2 → 8 ptr 2
+        if== c0 97
+            if== c1 110
+                if== c2 100
+                    consume
+                    parse_3op_and
+                    1
+        if== c0 115
+            if== c1 104
+                if== c2 108
+                    consume
+                    parse_3op_shl
+                    1
+        if== c0 115
+            if== c1 104
+                if== c2 114
+                    consume
+                    parse_3op_shr
+                    1
+        if== c0 109
+            if== c1 117
+                if== c2 108
+                    consume
+                    parse_3op_mul
+                    1
+        if== c0 97
+            if== c1 100
+                if== c2 100
+                    consume
+                    parse_3op_add
+                    1
+        if== c0 115
+            if== c1 117
+                if== c2 98
+                    consume
+                    parse_3op_sub
+                    1
+        if== c0 120
+            if== c1 111
+                if== c2 114
+                    consume
+                    parse_3op_xor
+                    1
+
+    if== len 2
+        c0 → 8 ptr 0
+        c1 → 8 ptr 1
+        if== c0 111
+            if== c1 114
+                consume
+                parse_3op_or
+                1
 
     \\ Look up in symbol table
     idx sym_find ptr len
@@ -3431,7 +4025,15 @@ parse_conditional :
     len peek_length
     consume
 
+    \\ Decode comparison: 0=EQ 1=GE 2=LT 3=NE 4=GT 5=LE
     cmp_type 0
+
+    if== len 3
+        c2 → 8 ptr 2
+        if== c2 60
+            cmp_type 2
+        if== c2 62
+            cmp_type 4
 
     if>= len 4
         c2 → 8 ptr 2
@@ -3443,7 +4045,11 @@ parse_conditional :
             if== c3 61
                 cmp_type 1
         if== c2 60
-            cmp_type 2
+            if== c3 61
+                cmp_type 5
+        if== c2 33
+            if== c3 61
+                cmp_type 3
 
     a parse_expr
     b parse_expr
@@ -3456,6 +4062,12 @@ parse_conditional :
             emit_p_isetp p a b
         if== cmp_type 2
             emit_p_isetp p a b
+        if== cmp_type 3
+            emit_p_isetp p a b
+        if== cmp_type 4
+            emit_p_isetp p a b
+        if== cmp_type 5
+            emit_p_isetp p a b
     emit_cmp_reg a b
         if== cmp_type 0
             arm64_emit32 0x54000001
@@ -3463,6 +4075,12 @@ parse_conditional :
             arm64_emit32 0x5400000B
         if== cmp_type 2
             arm64_emit32 0x5400000A
+        if== cmp_type 3
+            arm64_emit32 0x54000000
+        if== cmp_type 4
+            arm64_emit32 0x5400000D
+        if== cmp_type 5
+            arm64_emit32 0x5400000C
 
     parse_body
 
@@ -3643,6 +4261,28 @@ parse_file :
         parse_composition
         parse_file
 
+    \\ Forth-style: VALUE constant NAME (at file scope)
+    if== t 3
+        val parse_int_token
+        t2 peek_type
+        if== t2 96
+            consume
+            name_ptr tok_text_ptr
+            name_len peek_length
+            consume
+            rd alloc_rreg
+            emit_p_mov_imm rd val
+            sym_add name_ptr name_len 1 rd
+            parse_file
+        \\ Not a constant decl, put token back
+        tok_pos tok_pos - 1
+
+    \\ TOK_CONSTANT at file scope
+    if== t 96
+        consume
+        parse_constant_decl
+        parse_file
+
     consume
     parse_file
 
@@ -3663,6 +4303,8 @@ parser_init tokens_ptr total source :
     n_shared 0
     shmem_total 0
     branch_depth 0
+    n_labels 0
+    n_kparams 0
     regs_reset
 
 \\ ============================================================================
@@ -4110,7 +4752,8 @@ st_load path :
 \\ ELF CONSTANTS
 \\ ============================================================
 
-524288 constant ELF_CUBIN_SIZE
+\\ TODO: bump for full megakernel
+4194304 constant ELF_CUBIN_SIZE
 64 constant EHDR_SIZE
 64 constant SHDR_SIZE
 24 constant SYM_SIZE
@@ -4590,6 +5233,87 @@ elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count 
     elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size 0 0 0
     elf_save out_path
 
+
+\\ ============================================================================
+\\ ARM64 ELF WRAPPER (elf_build_arm64)
+\\ ============================================================================
+\\ Builds an ELF64 executable wrapping ARM64 code in arm64_buf.
+\\ e_machine = 0xB7 (EM_AARCH64), entry at text start.
+\\ Uses cubin_buf/cubin_pos as output buffer (same as GPU ELF writer).
+
+elf_build_arm64 code_buf code_size :
+    cubin_pos = 0
+
+    \\ ELF header (64 bytes)
+    \\ e_ident: 7f 45 4c 46 02 01 01 00 (ELF64 LE SYSV)
+    cb_emit 127
+    cb_emit 69
+    cb_emit 76
+    cb_emit 70
+    cb_emit 2
+    cb_emit 1
+    cb_emit 1
+    cb_emit 0
+    cb_emit 0
+    cb_emit 0
+    cb_emit 0
+    cb_emit 0
+    cb_emit 0
+    cb_emit 0
+    cb_emit 0
+    cb_emit 0
+    \\ e_type = ET_EXEC (2)
+    cw_emit 2
+    \\ e_machine = EM_AARCH64 (0xB7 = 183)
+    cw_emit 183
+    \\ e_version = 1
+    cd_emit 1
+    \\ e_entry = 0x400078 (text start after ELF hdr + phdr)
+    cq_emit 0x400078
+    \\ e_phoff = 64 (right after ELF header)
+    cq_emit 64
+    \\ e_shoff = 0 (no section headers for minimal exec)
+    cq_emit 0
+    \\ e_flags = 0
+    cd_emit 0
+    \\ e_ehsize = 64
+    cw_emit 64
+    \\ e_phentsize = 56
+    cw_emit 56
+    \\ e_phnum = 1
+    cw_emit 1
+    \\ e_shentsize = 64
+    cw_emit 64
+    \\ e_shnum = 0
+    cw_emit 0
+    \\ e_shstrndx = 0
+    cw_emit 0
+
+    \\ Program header (56 bytes) — PT_LOAD
+    \\ p_type = PT_LOAD (1)
+    cd_emit 1
+    \\ p_flags = PF_R | PF_X (5)
+    cd_emit 5
+    \\ p_offset = 0
+    cq_emit 0
+    \\ p_vaddr = 0x400000
+    cq_emit 0x400000
+    \\ p_paddr = 0x400000
+    cq_emit 0x400000
+    \\ p_filesz = 120 + code_size (ehdr + phdr + code)
+    total_file = 120 + code_size
+    cq_emit total_file
+    \\ p_memsz = total_file
+    cq_emit total_file
+    \\ p_align = 0x1000
+    cq_emit 0x1000
+
+    \\ Code section starts at offset 120 (0x78)
+    for ci 0 code_size 1
+        byte = load_u8 (code_buf + ci)
+        cb_emit byte
+    endfor
+
 \\ ############################################################################
 \\ ##                                                                        ##
 \\ ##  SECTION 7 — MAIN ENTRY POINT                                         ##
@@ -4729,9 +5453,9 @@ host lithos_main argc argv :
         elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size gpu_cooperative gridsync_offsets gridsync_count
         elf_save out_path
     if> arm64_pos 0
-        \\ Host output — write raw ARM64 code for now
-        \\ (ARM64 ELF wrapping is a separate step via the bootstrap)
-        write_file out_path arm64_buf arm64_pos
+        \\ Host output — wrap in ARM64 ELF
+        elf_build_arm64 arm64_buf arm64_pos
+        elf_save out_path
 
     \\ Step 6: Exit successfully
     ↓ $8 93

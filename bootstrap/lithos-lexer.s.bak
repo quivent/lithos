@@ -1,15 +1,3 @@
-.global code_LEX_COUNT
-.global code_LEX_TOKENS
-.global code_LEX_TOKEN_FETCH
-.global code_LITHOS_LEX
-.global do_lithos_lex
-.global emit_tok
-.global entry_lex_count
-.global entry_lex_token_fetch
-.global entry_lex_tokens
-.global entry_lithos_lex
-.global lex_kw_table
-
 // lithos-lexer.s — ARM64 assembly lexer for Lithos .ls source files
 //
 // Tokenizes a source buffer into a flat array of (type, offset, length)
@@ -83,7 +71,6 @@
 .equ TOK_LABEL,     33
 .equ TOK_EXIT_KW,   34
 .equ TOK_HOST,      35
-.equ TOK_TRAP,      89      // trap (syscall)
 
 // Memory / register arrows (UTF-8 multi-byte)
 .equ TOK_LOAD,      36      // → E2 86 92
@@ -135,6 +122,8 @@
 .equ TOK_SQRT,      79      // √ E2 88 9A
 .equ TOK_SIN,       80      // ≅ E2 89 85
 .equ TOK_COS,       81      // ≡ E2 89 A1
+.equ TOK_STARSTAR,  83      // ** (elementwise multiply)
+.equ TOK_STARSTARSTAR, 84   // *** (matrix multiply)
 
 .equ LEX_MAX_TOKENS, 87381  // 262143 / 3
 
@@ -187,8 +176,6 @@ lex_kw_table:
     .ascii "exit"
     .byte 4, TOK_HOST
     .ascii "host"
-    .byte 4, TOK_TRAP
-    .ascii "trap"
     // 5-char
     .byte 5, TOK_PARAM
     .ascii "param"
@@ -724,11 +711,35 @@ do_lithos_lex:
     b       .Lml_top
 .Lml_not_ident:
 
-    // ---- Two-char operators ----
+    // ---- Multi-char operators ----
     add     w3, w27, #1
     cmp     w3, w28
     b.ge    .Lml_not_2ch
     ldrb    w4, [x19, x3]          // next char
+
+    // ** and ***
+    cmp     w15, #42                // '*'
+    b.ne    .Ltc_not_star
+    cmp     w4, #42                 // '*' again?
+    b.ne    .Lml_not_2ch            // single '*' falls to 1-char table
+    // We have "**", check for "***"
+    add     w5, w27, #2
+    cmp     w5, w28
+    b.ge    .Ltc_starstar           // no 3rd char, emit **
+    ldrb    w6, [x19, x5]
+    cmp     w6, #42                 // 3rd '*'?
+    b.ne    .Ltc_starstar
+    // ***
+    mov     w0, #TOK_STARSTARSTAR
+    mov     w1, w27
+    mov     w2, #3
+    bl      emit_tok
+    add     w27, w27, #3
+    b       .Lml_top
+.Ltc_starstar:
+    mov     w0, #TOK_STARSTAR
+    b       .Ltc_emit2
+.Ltc_not_star:
 
     // ==
     cmp     w15, #61

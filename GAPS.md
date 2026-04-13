@@ -2,9 +2,9 @@
 
 Last updated: 2026-04-13
 
-Target: Qwen3-30B-A3B (64 layers, 48 DeltaNet + 16 full-attention, GPTQ W4A16) running per-token decode on GH200 via Lithos-compiled SASS cubins, dispatched by a native (non-Python) launcher.
+Target: Qwen 3.5 27B (64 layers, 48 DeltaNet + 16 full-attention, GPTQ W4A16) running per-token decode on GH200 via Lithos-compiled SASS cubins, dispatched by a native (non-Python) launcher.
 
-Architecture (confirmed): **two cooperative megakernels.** One cubin for all 48 DeltaNet layers, one cubin for all 16 attention layers. Each cubin is a *cooperative grid-sync kernel* — the 48-layer (or 16-layer) iteration lives inside the kernel, with grid-wide sync between layers. Both emitted from `.li` source by the Lithos compiler straight to Hopper SASS. The launcher calls `cuLaunchKernel` a handful of times per token, not per-layer.
+Architecture (confirmed): **two cooperative megakernels.** One cubin for all 48 DeltaNet layers, one cubin for all 16 attention layers. Each cubin is a *cooperative grid-sync kernel* — the 48-layer (or 16-layer) iteration lives inside the kernel, with grid-wide sync between layers. Both emitted from `.ls` source by the Lithos compiler straight to Hopper SASS. The launcher calls `cuLaunchKernel` a handful of times per token, not per-layer.
 
 CUDA graphs aren't needed — when dispatch is measured in native code nanoseconds and there are only a handful of launches per token, there's nothing for graphs to amortize. The earlier PTX-based cooperative-megakernel attempts (`forward_pass_*`, `fused_*`) weren't wrong conceptually — they were implemented through PTX + ptxas, which removed the level of control needed to make grid-sync cheap. Direct SASS gives back control over stall counts, barrier slots, control-word reuse flags, and scheduling — the things that actually determine whether cooperative grid-sync is fast or slow.
 
@@ -40,17 +40,17 @@ CUDA graphs aren't needed — when dispatch is measured in native code nanosecon
   - Proper encoding for kernels launched via `cuLaunchCooperativeKernel` (cubin must advertise `EIATTR_COOPERATIVE_GROUP_INSTR_OFFSETS` in `.nv.info.<kernel>`).
   - Block-level `BAR.SYNC` patterns tuned for the grid-sync frequency (48 syncs per DeltaNet cubin invocation).
 - The PTX-based attempts (`forward_pass_carmack`, `_cray`, `_bellard`) hit ~24ms GPU time floor because ptxas was choosing barrier/sync patterns. With direct SASS control (stall counts, write/read barrier slots, reuse flags in control words) there's real headroom — that's the whole reason for the SASS pipeline.
-- Language-level support: a construct in `.li` to express "run this body N times with grid sync between iterations" so the layer loop compiles down to inline layer N, `grid_sync`, inline layer N+1, etc. — no function call, one code block, grid sync between them.
+- Language-level support: a construct in `.ls` to express "run this body N times with grid sync between iterations" so the layer loop compiles down to inline layer N, `grid_sync`, inline layer N+1, etc. — no function call, one code block, grid sync between them.
 
 ---
 
 ## 1b½. Kernel-building (the factory itself)
 
-The word "factory" has been loose. Today the compiler can turn a hand-written `.li` file into a SASS cubin. It cannot yet *synthesize* the `.li` for a specific model from that model's architecture metadata. That synthesis step is what makes this a factory rather than a one-off compiler.
+The word "factory" has been loose. Today the compiler can turn a hand-written `.ls` file into a SASS cubin. It cannot yet *synthesize* the `.ls` for a specific model from that model's architecture metadata. That synthesis step is what makes this a factory rather than a one-off compiler.
 
 ### Missing: compile-time parameterization
 
-The `.li` language needs compile-time parameters: values known at parse time, substituted into expressions before SASS emission. Something like:
+The `.ls` language needs compile-time parameters: values known at parse time, substituted into expressions before SASS emission. Something like:
 
 ```
 param hidden_dim : u32 = compile_time
@@ -62,7 +62,7 @@ fn deltanet_layer ...
     ...
 ```
 
-The compiler reads the safetensors JSON header (plain JSON, sub-ms) to get `hidden_dim=5120`, `n_heads=64`, etc., binds those to the compile-time parameters, then parses the `.li` template. The SASS emitter sees resolved constants and doesn't know the difference between a literal `5120` and a resolved `hidden_dim`. Frontend change only; backend untouched.
+The compiler reads the safetensors JSON header (plain JSON, sub-ms) to get `hidden_dim=5120`, `n_heads=64`, etc., binds those to the compile-time parameters, then parses the `.ls` template. The SASS emitter sees resolved constants and doesn't know the difference between a literal `5120` and a resolved `hidden_dim`. Frontend change only; backend untouched.
 
 ### Missing: template selection
 
@@ -78,58 +78,58 @@ This is frontend work — parse-time parameter resolution, a small metadata read
 
 ---
 
-## 2. Language frontend (`.li` gaps)
+## 2. Language frontend (`.ls` gaps)
 
 Covered today: 5 primitives (`+ − × ÷ √`), hardware intrinsics (`exp`, `rcp`, `rsqrt`, `sqrt`, `sin`, `cos`, `fma`, `neg`), bitwise ops (shift/and/or/xor), warp shuffles, shared memory decl, scalar params, predication, type conversions, bounds checks, barriers, `each` (parallel) and `for` (sequential).
 
 ### 2a. Computed-offset array indexing — **blocks Conv1D**
-- `inference/recur.li` has a stub comment: *"Hand-unrolled in PTX below; Lithos lacks computed-offset indexing"*.
+- `inference/recur.ls` has a stub comment: *"Hand-unrolled in PTX below; Lithos lacks computed-offset indexing"*.
 - Needed: `a[i + k]` or `a[expr]` where `expr` is not a literal. Parser-level change.
 
 ### 2b. Outer-product / rank-1 update syntax
-- `delta_update.li` and `recur.li` nest `for` loops to express `S += β·(V⊗K − S·(K⊗K))`.
+- `delta_update.ls` and `recur.ls` nest `for` loops to express `S += β·(V⊗K − S·(K⊗K))`.
 - Nice-to-have: native syntax for `x ⊗ y → M`. Not blocking — loops work.
 
 ### 2c. `max` intrinsic
-- Online softmax in `attend.li` uses `setp.ge` + predicated branch to get max. FMNMX opcode is already in the SASS emitter — just needs a language-level `max` that maps to it.
+- Online softmax in `attend.ls` uses `setp.ge` + predicated branch to get max. FMNMX opcode is already in the SASS emitter — just needs a language-level `max` that maps to it.
 
 ### 2d. Intrinsic philosophy
-- VOCABULARY.md describes `exp`/`sigmoid`/etc. as decomposable into primitives via Taylor / Newton iteration. Reality: `.li` files call `exp`, `rcp`, `rsqrt`, `sin`, `cos`, `fma` as hardware intrinsics and none of them are decomposed.
+- VOCABULARY.md describes `exp`/`sigmoid`/etc. as decomposable into primitives via Taylor / Newton iteration. Reality: `.ls` files call `exp`, `rcp`, `rsqrt`, `sin`, `cos`, `fma` as hardware intrinsics and none of them are decomposed.
 - This is fine and intentional — intrinsics map to Hopper `MUFU.EX2 / MUFU.RCP / MUFU.RSQ / MUFU.SIN / MUFU.COS` and `FFMA` which are already opcodes in the SASS emitter. The "5 primitive" story is conceptual; the real primitive set is `+ − × ÷ √ exp rcp rsqrt sin cos fma`. Document this and move on.
 
 ---
 
-## 3. Layer kernels (`.li` source)
+## 3. Layer kernels (`.ls` source)
 
-Status from audit of `inference/*.li` (833 lines across 12 files):
+Status from audit of `inference/*.ls` (833 lines across 12 files):
 
 ### 3a. Attention layer — **~95% complete**
-In one file, `inference/attend.li`:
+In one file, `inference/attend.ls`:
 - RoPE rotation (38 lines, uses `sin`/`cos`)
 - Attention scores with online softmax (116 lines, causal mask, GQA-aware, warp-reduce dot product, inline weighted sum)
-- Reuses `reduce.li` RMSNorm and `gemv.li` GPTQ GEMV for projections
+- Reuses `reduce.ls` RMSNorm and `gemv.ls` GPTQ GEMV for projections
 
 Missing: none critical. It composes into one kernel once the backend can emit it.
 
 ### 3b. DeltaNet layer — **~85% complete**
-- RMSNorm ✓ (`reduce.li`)
-- Q/K/V/gate/beta projections ✓ (`gemv.li` GPTQ W4A16)
+- RMSNorm ✓ (`reduce.ls`)
+- Q/K/V/gate/beta projections ✓ (`gemv.ls` GPTQ W4A16)
 - Conv1D 4-tap ✗ *stub* — blocked on 2a (computed-offset indexing)
-- Decay gate ✓ (`decay_gate.li`)
-- Gate sigmoid ✓ (`recur.li`)
-- Delta rule / state update ~partial (`delta_update.li` rank-1 update; `recur.li` has a simplified version) — outer product works via nested loops but is verbose
-- L2Norm on Q/K ✓ (`reduce.li`)
-- Residual add ✓ (`elementwise.li`)
-- Output projection ✓ (via `gemv.li`)
-- SiLU ✓ (`elementwise.li`)
+- Decay gate ✓ (`decay_gate.ls`)
+- Gate sigmoid ✓ (`recur.ls`)
+- Delta rule / state update ~partial (`delta_update.ls` rank-1 update; `recur.ls` has a simplified version) — outer product works via nested loops but is verbose
+- L2Norm on Q/K ✓ (`reduce.ls`)
+- Residual add ✓ (`elementwise.ls`)
+- Output projection ✓ (via `gemv.ls`)
+- SiLU ✓ (`elementwise.ls`)
 
 Missing: Conv1D (language-blocked). Delta rule cleanup is polish, not blocking.
 
 ### 3c. MLP / embed / lm_head / sampling
 - SiLU, residual add, GEMV individually present. No fused MLP kernel composed yet.
-- Embed (token ID → vector lookup): trivial, not yet written in `.li`.
-- lm_head (final GEMV to vocab): reuses `gemv.li` shape, may need FP16 variant.
-- Sampling (argmax / top-k): stub in `reduce.li:209-217`.
+- Embed (token ID → vector lookup): trivial, not yet written in `.ls`.
+- lm_head (final GEMV to vocab): reuses `gemv.ls` shape, may need FP16 variant.
+- Sampling (argmax / top-k): stub in `reduce.ls:209-217`.
 
 Decision point: these fold into the launcher (few lines of C/Lithos each) or into one of the two cubins. Probably cleanest in the launcher since they run once per token, not per-layer.
 
@@ -181,8 +181,8 @@ main:
   cuInit-equivalent: ~20 ioctls
   cuCtxCreate-equivalent: ~450 ioctls, mmap USERD + GPFIFO + BAR1 + semaphore pool
   mmap safetensors (weights, 18 GB, zero-copy on GH200)
-  lithos-compile deltanet_layer.li  → SASS bytes + metadata in memory
-  lithos-compile attention_layer.li → SASS bytes + metadata in memory
+  lithos-compile deltanet_layer.ls  → SASS bytes + metadata in memory
+  lithos-compile attention_layer.ls → SASS bytes + metadata in memory
   for each kernel:
     copy SASS into GPU instruction memory (direct write to mapped BAR region)
     record kernel metadata for QMD building
@@ -222,7 +222,7 @@ No libcuda, no driver userspace beyond the open kernel module. Pure Lithos → s
 
 ### 5a. Per-kernel correctness
 - Each compiled cubin must produce bit-identical output to a PyTorch reference for the same inputs. Same kernel, same weights, same inputs → same outputs.
-- Tests belong next to each `.li` — pattern: `compiler/examples/test_<name>_load.py` checks loadability, `compiler/examples/test_<name>_exec.py` compares to reference.
+- Tests belong next to each `.ls` — pattern: `compiler/examples/test_<name>_load.py` checks loadability, `compiler/examples/test_<name>_exec.py` compares to reference.
 
 ### 5b. End-to-end verification
 - The known-good target: "The capital of France is" → top-1 prediction `"Paris"` (logit 18.057, cosine 1.0 against PyTorch at every one of 64 layers). This is already proven with the current Python pipeline per STATUS.md:937.
@@ -239,7 +239,7 @@ Ordered by "blocks the most downstream work":
 
 1. Cubin ELF wrapping *(1a — in flight)*
 2. Register allocator *(1b)*
-3. Cooperative grid-sync primitives *(1e)* — both at SASS encoding level and as a `.li` language construct
+3. Cooperative grid-sync primitives *(1e)* — both at SASS encoding level and as a `.ls` language construct
 4. Backend dispatch closure *(1c)*
 5. Language frontend — computed-offset indexing *(2a)* *(unblocks Conv1D)*
 6. Compile the DeltaNet cubin (48-layer cooperative megakernel) and verify per-layer cosine vs PyTorch

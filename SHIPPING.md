@@ -27,7 +27,7 @@ That's it.
 
 ## What's NOT on disk
 
-- No `.li` source files. The compiler generates them from the model metadata on the fly.
+- No `.ls` source files. The compiler generates them from the model metadata on the fly.
 - No `.cubin` / kernel files. Compiler emits SASS in memory, hands it to the driver, done.
 - No configs, no YAMLs, no tokenizer wrapper scripts, no "model card" files.
 
@@ -56,7 +56,7 @@ The NVIDIA driver won't accept loose SASS — it wants a tiny metadata wrapper (
 **In memory.** The compiler produces them at runtime and hands them to the driver immediately. They don't touch the filesystem.
 
 ```
-.li source (disk)
+.ls source (disk)
     │
     ▼
 [lithos compiler]  ──►  kernel bytes (RAM)  ──►  driver  ──►  GPU

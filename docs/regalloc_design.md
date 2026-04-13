@@ -17,14 +17,14 @@ DeltaNet layers will blow this on the first compile. We need reuse.
 
 The source language is uniquely friendly to linear scan:
 
-- **No arbitrary CFG.** `.li` is straight-line + counted `for`/`stride` loops
+- **No arbitrary CFG.** `.ls` is straight-line + counted `for`/`stride` loops
   (parser.fs:723, 858) + predication + `if>= ... exit`. No `while`, no `goto`
   back-edges other than loop back-edges, no indirect branches.
 - **No runtime calls.** `fn` inlines (LANGUAGE.md). One flat body per kernel.
   No caller/callee-saved conventions.
 - **Single-pass today.** The parser walks tokens once and emits at the
   `li-backend @ if` dispatch (parser.fs:686). Linear scan matches this shape.
-- **Small programs.** Largest `.li` is `inference/reduce.li` at 216 lines.
+- **Small programs.** Largest `.ls` is `inference/reduce.ls` at 216 lines.
   Fully-inlined DeltaNet is under ~2000 IR instructions. Compile time is
   not a concern.
 
@@ -72,7 +72,7 @@ cell 7: flags      \ bits: [0]=dst-is-f32, [1]=dst-is-pred, [2]=is-loop-head,
 ```
 
 A virtual register is a small integer from a unified namespace (`next-vreg`)
-replacing the four monotone counters. Example from `delta_update.li`:
+replacing the four monotone counters. Example from `delta_update.ls`:
 
 ```
 kts = 0.0
@@ -172,9 +172,9 @@ the pool and the next def takes it.
 
 ## Spilling
 
-**Pressure estimate.** `attend.li` attention_score peaks at ~35 live floats
+**Pressure estimate.** `attend.ls` attention_score peaks at ~35 live floats
 (q_val, running_max, running_sum, acc, scale + online-softmax state +
-short-lived shuffle temps). `delta_update.li` Phase 3: ~12. A fully-inlined
+short-lived shuffle temps). `delta_update.ls` Phase 3: ~12. A fully-inlined
 DeltaNet layer (rope + attend + delta + norm + ffn) lands around 80-110 live
 32-bit values. Headroom under 128 with reuse alone.
 
@@ -198,7 +198,7 @@ For a loop spanning IR indices `[H, T]`:
 
 - **Pre-loop def, in-loop use only.** Live range `[def, T]`. Slot occupied
   through the loop, freed at first `expire-old` past T. Example: `d` in
-  `delta_update.li` Phase 1 loop.
+  `delta_update.ls` Phase 1 loop.
 - **Pre-loop def, post-loop use.** `[def, last-use]` with `last-use > T`.
   Example: `kts` in Phase 1.
 - **In-loop def, in-loop use (same iter).** Both endpoints inside `[H, T]`.
@@ -223,7 +223,7 @@ else the old value persists. Two consequences:
 
 For plain FFMA, vdst is def-only. For `@p FFMA`, vdst is both use and def,
 which pins its slot correctly. Conditionally-updated accumulators like
-`running_max` in `attend.li` (line 129 onward) just fall out as loop-carried
+`running_max` in `attend.ls` (line 129 onward) just fall out as loop-carried
 values; no special case needed.
 
 `setp` defines a predicate vreg. `preg-alloc PRED` returns a P-number.
@@ -286,7 +286,7 @@ Three hooks, controlled by a `--dump-ra` CLI flag in `lithos.fs`:
 1. **v-to-p map.** `<output>.ra.txt`, one line per vreg:
    `v0042 class=F32 def=17 last=89 phys=R23 spilled=no`.
 2. **Live-range grid.** ASCII grid, rows = IR index, columns = physical reg,
-   `#` where live. Good for spotting pressure cliffs. `<output>.ra.live`.
+   `#` where live. Good for spotting pressure cliffs. `<output>.ra.lsve`.
 3. **Summary.** Max live 32-bit, max live predicates, spill count, IR count,
    printed to stdout.
 
@@ -316,7 +316,7 @@ separate from R-file; grid-sync resets `active`.
 8. Tests: `tests/test-regalloc.fs`. ~200 lines.
 9. Update `docs/compiler.html` with a short pointer to this doc.
 
-Total: ~850 new lines of Forth, ~30 lines edited in parser.fs. No `.li`
+Total: ~850 new lines of Forth, ~30 lines edited in parser.fs. No `.ls`
 syntax changes.
 
 ## Open questions
@@ -328,6 +328,6 @@ syntax changes.
   same phys reg. Not in v1.
 - **Immediate rematerialization.** Cheaper than spilling a MOV_IMM vreg.
   Add when spill triggers.
-- **R0..R3 reservation check.** Validate via a compile of `delta_update.li`
+- **R0..R3 reservation check.** Validate via a compile of `delta_update.ls`
   that nothing accidentally consumes R0..R3.
 - **ARM64 backend unaffected.** Own register model; out of scope.

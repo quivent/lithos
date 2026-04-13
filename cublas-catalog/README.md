@@ -258,7 +258,7 @@ hand-tuned Hopper SASS including descriptor-based loads and FP8 conversion.
 | O projection | 1 x 5120 x 5120 | gemmk1_kernel / gemmSN_NN_kernel | bf16 GEMV |
 | Gate+Up projection | 1 x 27648 x 5120 | gemmk1_kernel / gemmSN_NN_kernel | bf16 GEMV |
 | Down projection | 1 x 5120 x 13824 | gemmk1_kernel / gemmSN_NN_kernel | bf16 GEMV |
-| LM head | 1 x 151936 x 5120 | gemmk1_kernel | bf16 GEMV |
+| LM head | 1 x 248320 x 5120 | gemmk1_kernel | bf16 GEMV |
 
 At batch=1, cuBLAS dispatches to the **gemmk1_kernel** and **gemmSN** families,
 not the large tile WGMMA GEMM kernels. These are specialized GEMV kernels using

@@ -41,7 +41,6 @@
 .global parse_composition
 .global parse_composition_or_stmt
 .global parse_const_decl
-.global parse_dollar_reg
 .global parse_each
 .global parse_error
 .global parse_error_regspill
@@ -155,6 +154,7 @@
 .equ TOK_COS,       81
 
 .equ TOK_STRIDE_SZ, 12     // bytes per token triple
+.equ TOK_TRAP,      93     // trap (syscall)
 
 // Symbol table entry layout (fixed-size for simplicity):
 //   [+0]  u32 name_offset    — offset into source buffer
@@ -1192,7 +1192,7 @@ parse_composition_or_stmt:
 parse_composition:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
-    stp     x19, x20, [sp, #-16]!
+    stp     x20, xzr, [sp, #-16]!  // NOT x19: token cursor must stay advanced
 
     // Save ls_sym_count for scope cleanup
     adrp    x0, ls_sym_count
@@ -1213,7 +1213,7 @@ parse_composition:
     mov     x7, x0              // save composition code address
     mov     w1, #KIND_COMP
     mov     w2, #0              // will be patched with code addr
-    mov     w3, w6              // scope depth
+    mov     w3, w5              // outer scope depth (visible after pop)
     bl      sym_add
     // Store the code address into the symbol entry's reg field
     str     w7, [x0, #SYM_REG]
@@ -1291,7 +1291,7 @@ parse_composition:
     // Restore old ls_sym_count (actually sym_pop_scope handles this)
     add     sp, sp, #16         // drop saved old ls_sym_count
 
-    ldp     x19, x20, [sp], #16
+    ldp     x20, xzr, [sp], #16   // restore x20 only, NOT x19
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1303,7 +1303,19 @@ parse_composition:
 parse_body:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
-    str     w9, [sp, #-16]!    // save expected indent
+    sub     sp, sp, #16         // local frame: [sp]=indent, [sp+4]=watermark, [sp+8]=sym_snap
+    str     w9, [sp]            // save expected indent
+
+    // Save current next_reg as watermark and sym_count for tracking
+    adrp    x0, next_reg
+    add     x0, x0, :lo12:next_reg
+    ldr     w1, [x0]
+    str     w1, [sp, #4]       // watermark = next_reg at entry
+
+    adrp    x0, ls_sym_count
+    add     x0, x0, :lo12:ls_sym_count
+    ldr     w1, [x0]
+    str     w1, [sp, #8]       // sym_count snapshot
 
 .Lbody_loop:
     cmp     x19, x27
@@ -1321,7 +1333,7 @@ parse_body:
 
     // Check indent level
     ldr     w1, [x19, #8]      // indent count
-    ldr     w9, [sp, #-16]     // expected indent
+    ldr     w9, [sp]           // expected indent
     cmp     w1, w9
     b.lt    .Lbody_done         // dedent — end of body
 
@@ -1334,11 +1346,34 @@ parse_body:
 
 .Lbody_stmt:
     bl      parse_statement
-    bl      reset_regs          // reset scratch regs between statements
+
+    // If new symbols were bound, update watermark to current next_reg.
+    // This ensures bound-variable registers survive the reset.
+    adrp    x0, ls_sym_count
+    add     x0, x0, :lo12:ls_sym_count
+    ldr     w1, [x0]
+    ldr     w2, [sp, #8]       // sym_count snapshot
+    cmp     w1, w2
+    b.le    .Lbody_no_new_syms
+
+    // New symbols added — raise watermark and update snapshot
+    str     w1, [sp, #8]
+    adrp    x0, next_reg
+    add     x0, x0, :lo12:next_reg
+    ldr     w1, [x0]
+    str     w1, [sp, #4]       // watermark = current next_reg
+    b       .Lbody_loop
+
+.Lbody_no_new_syms:
+    // No new symbols — reset next_reg to watermark (free temporaries only)
+    ldr     w0, [sp, #4]       // watermark
+    adrp    x1, next_reg
+    add     x1, x1, :lo12:next_reg
+    str     w0, [x1]
     b       .Lbody_loop
 
 .Lbody_done:
-    add     sp, sp, #16         // drop saved indent
+    add     sp, sp, #16         // drop local frame
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1375,6 +1410,8 @@ parse_statement:
     b.eq    .Lstmt_reg_read
     cmp     w0, #TOK_REG_WRITE
     b.eq    .Lstmt_reg_write
+    cmp     w0, #TOK_TRAP
+    b.eq    .Lstmt_trap
     cmp     w0, #TOK_IDENT
     b.eq    .Lstmt_ident
 
@@ -1443,6 +1480,13 @@ parse_statement:
     ldp     x29, x30, [sp], #16
     ret
 
+.Lstmt_trap:
+    // trap — emit SVC #0
+    add     x19, x19, #TOK_STRIDE_SZ
+    bl      emit_svc
+    ldp     x29, x30, [sp], #16
+    ret
+
 .Lstmt_ident:
     bl      parse_ident_stmt
     ldp     x29, x30, [sp], #16
@@ -1471,30 +1515,6 @@ parse_ident_stmt:
     b.eq    .Lident_assign
 
 .Lident_call:
-    // Check if ident is "trap" — emit SVC #0
-    ldr     w1, [x19, #8]      // length
-    cmp     w1, #4
-    b.ne    .Lident_comp_call
-    ldr     w2, [x19, #4]      // offset
-    add     x2, x28, x2
-    ldrb    w3, [x2]
-    cmp     w3, #'t'
-    b.ne    .Lident_comp_call
-    ldrb    w3, [x2, #1]
-    cmp     w3, #'r'
-    b.ne    .Lident_comp_call
-    ldrb    w3, [x2, #2]
-    cmp     w3, #'a'
-    b.ne    .Lident_comp_call
-    ldrb    w3, [x2, #3]
-    cmp     w3, #'p'
-    b.ne    .Lident_comp_call
-    add     x19, x19, #TOK_STRIDE_SZ
-    bl      emit_svc
-    ldp     x29, x30, [sp], #16
-    ret
-
-.Lident_comp_call:
     bl      parse_comp_call
     ldp     x29, x30, [sp], #16
     ret
@@ -1514,9 +1534,11 @@ parse_assignment:
 
     // Look up or create symbol
     bl      sym_lookup
-    // Save sym entry and name token ptr on stack across parse_expr
-    stp     x0, x19, [sp, #-16]!  // [sp]=sym_entry, [sp+8]=name_tokp
+    mov     x5, x0              // save sym entry (may be 0)
 
+    // Save name token info for potential new symbol creation
+    ldr     w6, [x19, #4]      // name offset
+    ldr     w7, [x19, #8]      // name length
     add     x19, x19, #TOK_STRIDE_SZ  // skip name
 
     // Expect '='
@@ -1525,30 +1547,29 @@ parse_assignment:
 
     // Parse the expression — result in some allocated register
     bl      parse_expr          // returns result reg in w0
-    mov     w8, w0              // stash result reg in w8
-
-    // Recover saved values
-    ldp     x5, x6, [sp], #16  // x5=sym_entry, x6=name_tokp
 
     // If symbol already exists, emit MOV from result to sym's reg
     cbnz    x5, .Lassign_existing
 
     // New symbol — create it with result register
-    mov     x7, x19             // save post-expr position
-    mov     x19, x6             // restore to name token
+    // Rewind to name token briefly (we need x19 on the name)
+    sub     x19, x19, #TOK_STRIDE_SZ
+    sub     x19, x19, #TOK_STRIDE_SZ
     mov     w1, #KIND_LOCAL_REG
-    mov     w2, w8              // reg holding result
+    mov     w2, w0              // reg holding result
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
-    mov     x19, x7             // restore to post-expr position
+    // Advance past name and = again
+    add     x19, x19, #TOK_STRIDE_SZ
+    add     x19, x19, #TOK_STRIDE_SZ
     b       .Lassign_done
 
 .Lassign_existing:
     // Emit: MOV Xsym, Xresult  (ORR Xd, XZR, Xm)
     ldr     w1, [x5, #SYM_REG] // destination register
-    lsl     w2, w8, #16        // Rm = result reg
+    lsl     w2, w0, #16        // Rm = result reg
     mov     w3, #31
     lsl     w3, w3, #5         // Rn = XZR
     orr     w4, w1, w3
@@ -2214,20 +2235,17 @@ parse_mem_load:
 
     add     x19, x19, #TOK_STRIDE_SZ  // skip '→'
 
-    // Parse width — save across next call
+    // Parse width
     bl      parse_expr          // width in w0
-    str     w0, [sp, #-16]!    // save width reg
+    mov     w4, w0              // width reg
 
     // Parse address
     bl      parse_expr          // addr in w0
-    mov     w5, w0              // w5 = addr reg
-    ldr     w4, [sp], #16      // w4 = width reg (restored)
+    mov     w5, w0              // addr reg
 
     // Allocate result register
-    stp     w4, w5, [sp, #-16]!
     bl      alloc_reg
     mov     w6, w0              // result reg
-    ldp     w4, w5, [sp], #16
 
     // Emit load based on width
     // For simplicity, emit LDR X (64-bit) — width selection
@@ -2251,19 +2269,17 @@ parse_mem_store:
 
     add     x19, x19, #TOK_STRIDE_SZ  // skip '←'
 
-    // Parse width — save across next calls
+    // Parse width
     bl      parse_expr
-    str     w0, [sp, #-16]!    // save width reg
+    mov     w4, w0
 
-    // Parse address — save across next call
+    // Parse address
     bl      parse_expr
-    str     w0, [sp, #-16]!    // save addr reg
+    mov     w5, w0
 
     // Parse value
     bl      parse_expr
-    mov     w6, w0              // val reg
-    ldr     w5, [sp], #16      // addr reg (restored)
-    ldr     w4, [sp], #16      // width reg (restored)
+    mov     w6, w0
 
     // Emit STR Xval, [Xaddr]
     mov     w0, w6
@@ -2271,52 +2287,6 @@ parse_mem_store:
     mov     w2, #0
     bl      emit_str_imm
 
-    ldp     x29, x30, [sp], #16
-    ret
-
-// ============================================================
-// parse_dollar_reg — parse "$N" identifier, return N in w0.
-//   Expects current token to be TOK_IDENT starting with '$'.
-//   Advances x19. Errors on malformed input.
-// ============================================================
-parse_dollar_reg:
-    stp     x29, x30, [sp, #-16]!
-    mov     x29, sp
-
-    ldr     w0, [x19]
-    cmp     w0, #TOK_IDENT
-    b.ne    parse_error
-
-    ldr     w1, [x19, #8]          // length
-    cmp     w1, #2
-    b.lt    parse_error
-
-    ldr     w2, [x19, #4]          // offset
-    add     x2, x28, x2            // text ptr
-
-    ldrb    w3, [x2]
-    cmp     w3, #'$'
-    b.ne    parse_error
-
-    mov     w0, #0                  // accumulator
-    mov     w4, #1                  // index (skip '$')
-.Ldollar_loop:
-    cmp     w4, w1
-    b.ge    .Ldollar_done
-    ldrb    w5, [x2, x4]
-    sub     w6, w5, #'0'
-    cmp     w6, #9
-    b.hi    parse_error
-    mov     w7, #10
-    mul     w0, w0, w7
-    add     w0, w0, w6
-    add     w4, w4, #1
-    b       .Ldollar_loop
-.Ldollar_done:
-    cmp     w0, #30
-    b.hi    parse_error
-
-    add     x19, x19, #TOK_STRIDE_SZ
     ldp     x29, x30, [sp], #16
     ret
 
@@ -2331,11 +2301,16 @@ parse_reg_read:
 
     add     x19, x19, #TOK_STRIDE_SZ  // skip '↑'
 
-    bl      parse_dollar_reg    // w0 = source register N
-    mov     w4, w0              // w4 = hardware reg number
+    // Expect register reference — could be $N (ident starting with $)
+    // or a bare number. Parse as expression for flexibility.
+    bl      parse_expr          // reg number in w0
+    // Result register already holds the value — this is a conceptual
+    // "read register N". In practice, for syscalls, the value is
+    // already in XN after SVC. We emit a MOV to capture it.
+    mov     w4, w0
 
     bl      alloc_reg
-    mov     w5, w0              // w5 = scratch destination reg
+    mov     w5, w0              // destination reg
 
     // Emit: MOV Xdest, X<regnum>
     // But regnum is dynamic — need indirect. For static $N:
@@ -2357,6 +2332,8 @@ parse_reg_read:
 
 // ============================================================
 // parse_reg_write — ↓ $N val
+//   For $N targets: extract N directly as the destination register.
+//   This emits MOV XN, Xval at the ARM64 level.
 // ============================================================
 parse_reg_write:
     stp     x29, x30, [sp, #-16]!
@@ -2364,18 +2341,51 @@ parse_reg_write:
 
     add     x19, x19, #TOK_STRIDE_SZ  // skip '↓'
 
-    // Parse register number ($N)
-    bl      parse_dollar_reg    // w0 = target hardware reg N
-    str     w0, [sp, #-16]!    // save target reg across parse_expr
+    // Check if target is $N (direct register reference)
+    ldr     w0, [x19]
+    cmp     w0, #TOK_IDENT
+    b.ne    .Lrw_expr_target
 
+    // Check for '$' prefix
+    ldr     w1, [x19, #4]      // offset
+    add     x2, x28, x1        // pointer to token text
+    ldrb    w3, [x2]
+    cmp     w3, #'$'
+    b.ne    .Lrw_expr_target
+
+    // Extract register number from $N directly
+    ldr     w1, [x19, #8]      // length
+    mov     x4, #0              // accumulator
+    mov     w6, #1              // index (skip '$')
+.Lrw_digit:
+    cmp     w6, w1
+    b.ge    .Lrw_digit_done
+    ldrb    w3, [x2, x6]
+    sub     w3, w3, #'0'
+    cmp     w3, #9
+    b.hi    .Lrw_digit_done
+    mov     x7, #10
+    mul     x4, x4, x7
+    add     x4, x4, x3
+    add     w6, w6, #1
+    b       .Lrw_digit
+.Lrw_digit_done:
+    mov     w4, w4              // w4 = target register number (literal)
+    add     x19, x19, #TOK_STRIDE_SZ  // skip $N token
+    b       .Lrw_have_target
+
+.Lrw_expr_target:
+    // Fallback: parse as expression (returns register holding the number)
+    bl      parse_expr
+    mov     w4, w0
+
+.Lrw_have_target:
     // Parse value expression
     bl      parse_expr
-    mov     w5, w0              // value register (from allocator)
-    ldr     w4, [sp], #16      // target hardware reg N (restored)
+    mov     w5, w0              // w5 = register holding the value
 
-    // Emit: MOV X<target>, Xvalue
-    // target reg is in w4 (may be literal or resolved)
-    lsl     w1, w5, #16        // Rm = value
+    // Emit: MOV X<target>, Xvalue  (ORR Xd, XZR, Xm)
+    lsl     w1, w5, #16        // Rm = value register
     mov     w2, #31
     lsl     w2, w2, #5         // Rn = XZR
     orr     w3, w4, w2
@@ -2779,6 +2789,41 @@ parse_atom:
     ret
 
 .Latom_ident:
+    // Check for $N register reference (ident starting with '$')
+    ldr     w2, [x19, #4]      // offset
+    add     x2, x28, x2
+    ldrb    w3, [x2]
+    cmp     w3, #'$'
+    b.ne    .Latom_ident_not_reg
+
+    // Parse decimal number after '$'
+    ldr     w1, [x19, #8]      // length
+    mov     x4, #0              // accumulator
+    mov     w6, #1              // index (skip '$')
+.Latom_reg_digit:
+    cmp     w6, w1
+    b.ge    .Latom_reg_done
+    ldrb    w3, [x2, x6]
+    sub     w3, w3, #'0'
+    cmp     w3, #9
+    b.hi    .Latom_reg_done
+    mov     x7, #10
+    mul     x4, x4, x7
+    add     x4, x4, x3
+    add     w6, w6, #1
+    b       .Latom_reg_digit
+.Latom_reg_done:
+    // x4 = register number; allocate scratch and emit MOV
+    bl      alloc_reg
+    mov     w5, w0
+    mov     x1, x4
+    bl      emit_mov_imm64
+    add     x19, x19, #TOK_STRIDE_SZ
+    mov     w0, w5
+    ldp     x29, x30, [sp], #16
+    ret
+
+.Latom_ident_not_reg:
     // Check for "trap" keyword
     ldr     w1, [x19, #8]      // length
     cmp     w1, #4
@@ -2859,15 +2904,12 @@ parse_atom:
     // → width addr  as expression (returns loaded value)
     add     x19, x19, #TOK_STRIDE_SZ
     bl      parse_atom          // width
-    str     w0, [sp, #-16]!    // save width reg
+    mov     w4, w0
     bl      parse_atom          // addr
     mov     w5, w0
-    ldr     w4, [sp], #16      // width reg (restored)
 
-    stp     w4, w5, [sp, #-16]!
     bl      alloc_reg
     mov     w6, w0
-    ldp     w4, w5, [sp], #16
 
     // Emit LDR Xresult, [Xaddr]
     mov     w0, w6
@@ -2883,13 +2925,11 @@ parse_atom:
     // ← width addr val as expression (returns val)
     add     x19, x19, #TOK_STRIDE_SZ
     bl      parse_atom          // width
-    str     w0, [sp, #-16]!    // save width reg
+    mov     w4, w0
     bl      parse_atom          // addr
-    str     w0, [sp, #-16]!    // save addr reg
+    mov     w5, w0
     bl      parse_atom          // val
     mov     w6, w0
-    ldr     w5, [sp], #16      // addr reg (restored)
-    ldr     w4, [sp], #16      // width reg (restored)
 
     // Emit STR Xval, [Xaddr]
     mov     w0, w6
@@ -2911,10 +2951,9 @@ parse_atom:
 .Latom_reg_write:
     add     x19, x19, #TOK_STRIDE_SZ
     bl      parse_atom          // register number
-    str     w0, [sp, #-16]!    // save reg number
+    mov     w4, w0
     bl      parse_atom          // value
     mov     w5, w0
-    ldr     w4, [sp], #16      // reg number (restored)
     // Emit MOV
     lsl     w1, w5, #16
     mov     w2, #31

@@ -14,7 +14,7 @@ The current engine (`src/engine.py`) orchestrates inference as a sequence of
 kernel launches: for each of the 64 layers, it launches separate kernels for
 RMSNorm, GEMV projection (Q/K/V/gate/up/down), attention or DeltaNet
 recurrence, SiLU activation, residual add, and so on. Each GEMV kernel
-(`inference/gemv.li`) receives a pointer to packed Q4 weights in HBM and
+(`inference/gemv.ls`) receives a pointer to packed Q4 weights in HBM and
 streams them through the LSU.
 
 The weights-as-code vision replaces this with:
@@ -41,11 +41,11 @@ The weights-as-code vision replaces this with:
 | Allocation | Size (Qwen 3.5-27B) | Notes |
 |---|---|---|
 | ELF .text (weight-instruction stream) | ~28-55 GB (see calculation below) | The "weights as code" |
-| Activation double-buffer | ~14 KB | 2 x 3584 x bf16 |
+| Activation double-buffer | ~20 KB | 2 x 5120 x bf16 |
 | KV cache (16 full-attn layers) | ~512 MB at 32K seq | 16 layers x 32K x 4 heads x 128 dim x 2 x 2B |
 | DeltaNet state matrices (48 layers) | ~2.4 GB | 48 x 28 heads x 128 x 128 x 2B |
-| Residual accumulator | ~7 KB | 3584 x bf16 |
-| Embedding table | ~1 GB | 152064 x 3584 x bf16 (not weight-as-code) |
+| Residual accumulator | ~10 KB | 5120 x bf16 |
+| Embedding table | ~2.4 GB | 248320 x 5120 x bf16 (not weight-as-code) |
 
 ### What disappears
 
@@ -176,7 +176,7 @@ instruction immediate.
 
 ## 5. Thread Mapping
 
-### Current GEMV (gemv.li)
+### Current GEMV (gemv.ls)
 
 The current kernel launches with `gridDim.x = N` (one block per output row),
 `blockDim.x = 256`. Each block of 256 threads cooperates on ONE output
@@ -460,7 +460,7 @@ Given this analysis, the weights-as-code architecture for Lithos means:
   LDG with hardcoded addresses instead of parameterized pointers)
 - The 71-step decomposition per DeltaNet layer (unchanged)
 - The DeltaNet state update loop (128x128 state matrix, FP32, same as
-  `deltanet_fused.li`)
+  `deltanet_fused.ls`)
 - KV cache management for the 16 full-attention layers
 
 ---

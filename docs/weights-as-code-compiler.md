@@ -20,7 +20,7 @@ activations. The GPU's instruction delivery system becomes the weight delivery s
 ### Current pipeline (memory-bound GEMV)
 
 ```
-.li template  -->  parser.fs  -->  emit-gemv.fs  -->  SASS binary
+.ls template  -->  parser.fs  -->  emit-gemv.fs  -->  SASS binary
                                        |
                                   emits LDG loop:
                                   load packed u32 from DRAM
@@ -36,7 +36,7 @@ memory hierarchy.
 ### New pipeline (weights-as-code)
 
 ```
-.li template  ----+
+.ls template  ----+
                   |
 safetensors   ----+--> lithos-compile  -->  per-layer ELF binaries
 (model file)      |
@@ -44,7 +44,7 @@ safetensors   ----+--> lithos-compile  -->  per-layer ELF binaries
                   v
            For each layer:
              1. Parse safetensors header (JSON) to locate tensors
-             2. For each `project` primitive in the .li template:
+             2. For each `project` primitive in the .ls template:
                 a. Read the weight tensor (Q4 packed u32s + scales)
                 b. For each output row:
                    - For each packed u32 in that row:
@@ -59,7 +59,7 @@ safetensors   ----+--> lithos-compile  -->  per-layer ELF binaries
 
 ### Input artifacts
 
-- **Template:** `.li` file defining the layer structure (project, normalise, silu,
+- **Template:** `.ls` file defining the layer structure (project, normalise, silu,
   etc.). One template covers all layers of the same type (e.g., all DeltaNet layers
   share one template; the LM head has its own).
 

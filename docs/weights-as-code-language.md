@@ -25,7 +25,7 @@ source.
 
 In v2, `project` becomes a **compile-time expansion directive**. It tells the
 compiler: "emit the weight-immediate instruction stream for this projection here."
-The .li source does not contain the weight data. The .li source is a template.
+The .ls source does not contain the weight data. The .ls source is a template.
 The compiler fills it in.
 
 ### Stays the same: `matvec`
@@ -50,9 +50,9 @@ The shuffle-tree reduction primitive stays identical.
 
 ## The Template Model
 
-### .li files become templates
+### .ls files become templates
 
-A .li file no longer describes a complete, standalone kernel. It describes a
+A .ls file no longer describes a complete, standalone kernel. It describes a
 **template** -- a parameterized instruction pattern that the compiler instantiates
 once per layer by binding concrete weight tensors to the template's weight
 declarations.
@@ -64,7 +64,7 @@ is identical; only the immediates differ.
 ### Compilation pipeline
 
 ```
-  .li template
+  .ls template
        |
        v
   lithos compiler  <---  model.safetensors
@@ -125,7 +125,7 @@ correct weight tensors from safetensors (e.g., `model.layers.{L}.self_attn.q_pro
 
 ### 3. Binding syntax
 
-The compiler needs to map .li weight names to safetensors tensor paths. This is
+The compiler needs to map .ls weight names to safetensors tensor paths. This is
 declared in a `bind` block:
 
 ```
@@ -178,7 +178,7 @@ The compiler decides:
 - How to use register file capacity (the input vector x stays in registers)
 - How to reduce partial sums (warp shuffle tree -- same as before)
 
-The .li author specifies WHAT (project this weight matrix against this vector)
+The .ls author specifies WHAT (project this weight matrix against this vector)
 and the compiler decides HOW (instruction scheduling, thread mapping, reduction
 strategy). This is a higher level of abstraction than v1, but only for weight
 projections -- everything else stays low-level.
@@ -262,7 +262,7 @@ No weight indexing syntax exists in v2. Weights are not addressable at runtime.
 ### Gone: runtime dequantization
 
 The entire nibble-extraction, zero-point-subtract, scale-multiply pipeline in
-the old `gptq_gemv` kernel is gone from the .li source. The compiler performs
+the old `gptq_gemv` kernel is gone from the .ls source. The compiler performs
 dequantization once at compile time. The kernel source never mentions packed
 formats, nibbles, scales, or zero points.
 
@@ -324,7 +324,7 @@ results as immediates.
 ## Full Example: DeltaNet Layer in the New Language
 
 ```
-\ deltanet_layer.li -- one DeltaNet decode layer, weights-as-code
+\ deltanet_layer.ls -- one DeltaNet decode layer, weights-as-code
 \
 \ This is a TEMPLATE. The compiler instantiates it once per layer,
 \ binding weight tensors from safetensors.
@@ -654,7 +654,7 @@ fn deltanet_layer x X state -> X state
 
 ### 1. Templates, not kernels
 
-The .li file specifies the computation graph. The compiler instantiates it per
+The .ls file specifies the computation graph. The compiler instantiates it per
 layer. The same template with different weight bindings produces different SASS
 but identical structure.
 
