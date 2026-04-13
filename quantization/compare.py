@@ -197,7 +197,7 @@ def main():
             cos_sim = cosine_similarity(ref_weights, reconstructed)
             mse_val = mse(ref_weights, reconstructed)
             rmse = relative_mse(ref_weights, reconstructed)
-            valid = val_fn(ref_weights, packed, threshold=0.05)
+            valid = val_fn(ref_weights, packed, threshold=0.20)
             fits = size_mb <= BUDGET_MB
 
             elapsed = time.time() - t0

@@ -195,9 +195,8 @@ class GPTQDequantizer:
         return w_dequant.T
 
     def close(self):
-        for s in self._shard_cache.values():
-            pass  # safe_open handles cleanup
-        self._shard_cache.clear()
+        self._shard_cache_np.clear()
+        self._shard_cache_pt.clear()
 
 
 # ============================================================================
@@ -693,17 +692,26 @@ class LithosEngine:
 
     def run_full_attention(self, layer_idx: int, d_normed, position: int):
         prefix = f"model.language_model.layers.{layer_idx}.self_attn"
-        self.gpu_gptq_matvec(f"{prefix}.q_proj", d_normed, self.d_attn_scratch1, HIDDEN_DIM, 6144)
+
+        # Q+gate projection: 5120 -> 12288 (24 heads * 512)
+        self.gpu_gptq_matvec(f"{prefix}.q_proj", d_normed, self.d_attn_scratch1, HIDDEN_DIM, 12288)
         self.gpu.synchronize()
-        q_raw = download_f32(self.gpu, self.d_attn_scratch1, 6144)
+        q_gate_raw = download_f32(self.gpu, self.d_attn_scratch1, 12288)
+
         self.gpu_gptq_matvec(f"{prefix}.k_proj", d_normed, self.d_attn_scratch1, HIDDEN_DIM, 1024)
         self.gpu.synchronize()
         k_raw = download_f32(self.gpu, self.d_attn_scratch1, 1024)
+
         self.gpu_gptq_matvec(f"{prefix}.v_proj", d_normed, self.d_attn_scratch1, HIDDEN_DIM, 1024)
         self.gpu.synchronize()
         v_raw = download_f32(self.gpu, self.d_attn_scratch1, 1024)
 
-        q_heads = q_raw.reshape(NUM_Q_HEADS, HEAD_DIM)
+        # Split Q and gate
+        q_gate_heads = q_gate_raw.reshape(NUM_Q_HEADS, HEAD_DIM * 2)  # [24, 512]
+        q_heads = q_gate_heads[:, :HEAD_DIM].copy()    # [24, 256]
+        gate_heads = q_gate_heads[:, HEAD_DIM:].copy()  # [24, 256]
+        gate_flat = gate_heads.flatten()
+
         k_heads = k_raw.reshape(NUM_KV_HEADS, HEAD_DIM)
         q_norm_w = self.q_norm_weights[layer_idx]
         k_norm_w = self.k_norm_weights[layer_idx]
@@ -722,6 +730,10 @@ class LithosEngine:
         self.kv_cache.store(layer_idx, position, k_rope, v_2d)
         k_cache, v_cache = self.kv_cache.get(layer_idx, position)
         attended = attention_prefill(q_rope, k_cache, v_cache, position)
+
+        # Output gate
+        gate_sigmoid = 1.0 / (1.0 + np.exp(-gate_flat.clip(-80, 80)))
+        attended = attended * gate_sigmoid
 
         self.gpu.memcpy_htod(self.d_attn_scratch2,
                              attended.ctypes.data_as(ctypes.c_void_p), 6144 * 4)

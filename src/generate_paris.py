@@ -136,13 +136,16 @@ class PrefillEngine:
         norm_mod = gpu.load_cubin(f"{CACHE_DIR}/norm.cubin")
         self.norm_func = gpu.get_function(norm_mod, "norm")
 
-        proj_mod = gpu.load_cubin(f"{KERNEL_DIR}/gptq_matvec.cubin")
-        self.proj_func = gpu.get_function(proj_mod, "gptq_matvec")
+        proj_mod = gpu.load_cubin(f"{KERNEL_DIR}/gptq_matvec_tc.cubin")
+        self.proj_func = gpu.get_function(proj_mod, "gptq_matvec_tc")
+
+        proj_mod_old = gpu.load_cubin(f"{KERNEL_DIR}/gptq_matvec.cubin")
+        self.proj_func_old = gpu.get_function(proj_mod_old, "gptq_matvec")
 
         activate_mod = gpu.load_cubin(f"{CACHE_DIR}/activate.cubin")
         self.activate_func = gpu.get_function(activate_mod, "activate")
 
-        print("    embed_f16, norm, gptq_matvec, activate: loaded")
+        print("    embed_f16, norm, gptq_matvec_tc (+ fallback), activate: loaded")
 
     def _alloc_buffers(self):
         gpu = self.gpu
@@ -292,20 +295,39 @@ class PrefillEngine:
         self.gpu.memcpy_htod(d_output,
                              np.zeros(N, dtype=np.float32).ctypes.data_as(ctypes.c_void_p),
                              N * 4)
-        self.gpu.launch(
-            self.proj_func,
-            grid=(N, 1, 1),
-            block=(256, 1, 1),
-            args=[
-                ctypes.c_uint64(qw_ptr),
-                ctypes.c_uint64(sc_ptr),
-                ctypes.c_uint64(d_input.value),
-                ctypes.c_uint64(d_output.value),
-                ctypes.c_uint32(N),
-                ctypes.c_uint32(K),
-            ],
-            shared_mem=32,
-        )
+        if K <= 5120:
+            # Use optimized tiled kernel (128 cols/block, smem input)
+            self.gpu.launch(
+                self.proj_func,
+                grid=(math.ceil(N / 128), 1, 1),
+                block=(256, 1, 1),
+                args=[
+                    ctypes.c_uint64(qw_ptr),
+                    ctypes.c_uint64(sc_ptr),
+                    ctypes.c_uint64(d_input.value),
+                    ctypes.c_uint64(d_output.value),
+                    ctypes.c_uint32(N),
+                    ctypes.c_uint32(K),
+                ],
+                shared_mem=0,
+            )
+        else:
+            # Fallback to old kernel for K > 5120 (smem buffer limited to 5120)
+            self.gpu.launch(
+                self.proj_func_old,
+                grid=(N, 1, 1),
+                block=(256, 1, 1),
+                args=[
+                    ctypes.c_uint64(qw_ptr),
+                    ctypes.c_uint64(sc_ptr),
+                    ctypes.c_uint64(d_input.value),
+                    ctypes.c_uint64(d_output.value),
+                    ctypes.c_uint32(N),
+                    ctypes.c_uint32(K),
+                ],
+                shared_mem=32,
+            )
+
 
     def gpu_activate(self, d_gate, d_up, d_output, size):
         GRID_ACT = max(1, math.ceil(size / 256))

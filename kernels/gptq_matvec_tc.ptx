@@ -277,173 +277,173 @@ SKIP_SCALE:
     ld.global.v4.b32 {%qw0, %qw1, %qw2, %qw3}, [%rd42];
 
     // Process qw0 (col 0) -- 8 nibbles
-    and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x0, %f0;
-    shr.b32 %nib, %qw0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x1, %f0;
-    shr.b32 %nib, %qw0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x2, %f0;
-    shr.b32 %nib, %qw0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x3, %f0;
-    shr.b32 %nib, %qw0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x4, %f0;
-    shr.b32 %nib, %qw0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x5, %f0;
-    shr.b32 %nib, %qw0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x6, %f0;
-    shr.b32 %nib, %qw0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x7, %f0;
+    and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x0, %f0;
+    shr.b32 %nib, %qw0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x1, %f0;
+    shr.b32 %nib, %qw0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x2, %f0;
+    shr.b32 %nib, %qw0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x3, %f0;
+    shr.b32 %nib, %qw0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x4, %f0;
+    shr.b32 %nib, %qw0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x5, %f0;
+    shr.b32 %nib, %qw0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x6, %f0;
+    shr.b32 %nib, %qw0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x7, %f0;
 
     // Process qw1 (col 1)
-    and.b32 %nib, %qw1, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x0, %f1;
-    shr.b32 %nib, %qw1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x1, %f1;
-    shr.b32 %nib, %qw1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x2, %f1;
-    shr.b32 %nib, %qw1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x3, %f1;
-    shr.b32 %nib, %qw1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x4, %f1;
-    shr.b32 %nib, %qw1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x5, %f1;
-    shr.b32 %nib, %qw1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x6, %f1;
-    shr.b32 %nib, %qw1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x7, %f1;
+    and.b32 %nib, %qw1, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x0, %f1;
+    shr.b32 %nib, %qw1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x1, %f1;
+    shr.b32 %nib, %qw1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x2, %f1;
+    shr.b32 %nib, %qw1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x3, %f1;
+    shr.b32 %nib, %qw1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x4, %f1;
+    shr.b32 %nib, %qw1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x5, %f1;
+    shr.b32 %nib, %qw1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x6, %f1;
+    shr.b32 %nib, %qw1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc1; fma.rn.f32 %f1, %dq, %x7, %f1;
 
     // Process qw2 (col 2)
-    and.b32 %nib, %qw2, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x0, %f2;
-    shr.b32 %nib, %qw2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x1, %f2;
-    shr.b32 %nib, %qw2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x2, %f2;
-    shr.b32 %nib, %qw2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x3, %f2;
-    shr.b32 %nib, %qw2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x4, %f2;
-    shr.b32 %nib, %qw2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x5, %f2;
-    shr.b32 %nib, %qw2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x6, %f2;
-    shr.b32 %nib, %qw2, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x7, %f2;
+    and.b32 %nib, %qw2, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x0, %f2;
+    shr.b32 %nib, %qw2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x1, %f2;
+    shr.b32 %nib, %qw2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x2, %f2;
+    shr.b32 %nib, %qw2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x3, %f2;
+    shr.b32 %nib, %qw2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x4, %f2;
+    shr.b32 %nib, %qw2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x5, %f2;
+    shr.b32 %nib, %qw2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x6, %f2;
+    shr.b32 %nib, %qw2, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc2; fma.rn.f32 %f2, %dq, %x7, %f2;
 
     // Process qw3 (col 3)
-    and.b32 %nib, %qw3, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x0, %f3;
-    shr.b32 %nib, %qw3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x1, %f3;
-    shr.b32 %nib, %qw3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x2, %f3;
-    shr.b32 %nib, %qw3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x3, %f3;
-    shr.b32 %nib, %qw3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x4, %f3;
-    shr.b32 %nib, %qw3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x5, %f3;
-    shr.b32 %nib, %qw3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x6, %f3;
-    shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x7, %f3;
+    and.b32 %nib, %qw3, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x0, %f3;
+    shr.b32 %nib, %qw3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x1, %f3;
+    shr.b32 %nib, %qw3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x2, %f3;
+    shr.b32 %nib, %qw3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x3, %f3;
+    shr.b32 %nib, %qw3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x4, %f3;
+    shr.b32 %nib, %qw3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x5, %f3;
+    shr.b32 %nib, %qw3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x6, %f3;
+    shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x7, %f3;
 
     // Load next 4 cols (4..7)
     ld.global.v4.b32 {%qw0, %qw1, %qw2, %qw3}, [%rd42 + 16];
 
     // col 4
-    and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x0, %f4;
-    shr.b32 %nib, %qw0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x1, %f4;
-    shr.b32 %nib, %qw0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x2, %f4;
-    shr.b32 %nib, %qw0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x3, %f4;
-    shr.b32 %nib, %qw0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x4, %f4;
-    shr.b32 %nib, %qw0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x5, %f4;
-    shr.b32 %nib, %qw0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x6, %f4;
-    shr.b32 %nib, %qw0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x7, %f4;
+    and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x0, %f4;
+    shr.b32 %nib, %qw0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x1, %f4;
+    shr.b32 %nib, %qw0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x2, %f4;
+    shr.b32 %nib, %qw0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x3, %f4;
+    shr.b32 %nib, %qw0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x4, %f4;
+    shr.b32 %nib, %qw0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x5, %f4;
+    shr.b32 %nib, %qw0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x6, %f4;
+    shr.b32 %nib, %qw0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x7, %f4;
 
     // col 5
-    and.b32 %nib, %qw1, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x0, %f5;
-    shr.b32 %nib, %qw1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x1, %f5;
-    shr.b32 %nib, %qw1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x2, %f5;
-    shr.b32 %nib, %qw1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x3, %f5;
-    shr.b32 %nib, %qw1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x4, %f5;
-    shr.b32 %nib, %qw1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x5, %f5;
-    shr.b32 %nib, %qw1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x6, %f5;
-    shr.b32 %nib, %qw1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x7, %f5;
+    and.b32 %nib, %qw1, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x0, %f5;
+    shr.b32 %nib, %qw1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x1, %f5;
+    shr.b32 %nib, %qw1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x2, %f5;
+    shr.b32 %nib, %qw1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x3, %f5;
+    shr.b32 %nib, %qw1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x4, %f5;
+    shr.b32 %nib, %qw1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x5, %f5;
+    shr.b32 %nib, %qw1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x6, %f5;
+    shr.b32 %nib, %qw1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc5; fma.rn.f32 %f5, %dq, %x7, %f5;
 
     // col 6
-    and.b32 %nib, %qw2, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x0, %f6;
-    shr.b32 %nib, %qw2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x1, %f6;
-    shr.b32 %nib, %qw2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x2, %f6;
-    shr.b32 %nib, %qw2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x3, %f6;
-    shr.b32 %nib, %qw2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x4, %f6;
-    shr.b32 %nib, %qw2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x5, %f6;
-    shr.b32 %nib, %qw2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x6, %f6;
-    shr.b32 %nib, %qw2, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x7, %f6;
+    and.b32 %nib, %qw2, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x0, %f6;
+    shr.b32 %nib, %qw2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x1, %f6;
+    shr.b32 %nib, %qw2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x2, %f6;
+    shr.b32 %nib, %qw2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x3, %f6;
+    shr.b32 %nib, %qw2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x4, %f6;
+    shr.b32 %nib, %qw2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x5, %f6;
+    shr.b32 %nib, %qw2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x6, %f6;
+    shr.b32 %nib, %qw2, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc6; fma.rn.f32 %f6, %dq, %x7, %f6;
 
     // col 7
-    and.b32 %nib, %qw3, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x0, %f7;
-    shr.b32 %nib, %qw3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x1, %f7;
-    shr.b32 %nib, %qw3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x2, %f7;
-    shr.b32 %nib, %qw3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x3, %f7;
-    shr.b32 %nib, %qw3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x4, %f7;
-    shr.b32 %nib, %qw3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x5, %f7;
-    shr.b32 %nib, %qw3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x6, %f7;
-    shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x7, %f7;
+    and.b32 %nib, %qw3, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x0, %f7;
+    shr.b32 %nib, %qw3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x1, %f7;
+    shr.b32 %nib, %qw3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x2, %f7;
+    shr.b32 %nib, %qw3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x3, %f7;
+    shr.b32 %nib, %qw3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x4, %f7;
+    shr.b32 %nib, %qw3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x5, %f7;
+    shr.b32 %nib, %qw3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x6, %f7;
+    shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x7, %f7;
 
     // Load cols 8..11
     ld.global.v4.b32 {%qw0, %qw1, %qw2, %qw3}, [%rd42 + 32];
 
     // col 8
-    and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x0, %f8;
-    shr.b32 %nib, %qw0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x1, %f8;
-    shr.b32 %nib, %qw0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x2, %f8;
-    shr.b32 %nib, %qw0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x3, %f8;
-    shr.b32 %nib, %qw0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x4, %f8;
-    shr.b32 %nib, %qw0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x5, %f8;
-    shr.b32 %nib, %qw0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x6, %f8;
-    shr.b32 %nib, %qw0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x7, %f8;
+    and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x0, %f8;
+    shr.b32 %nib, %qw0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x1, %f8;
+    shr.b32 %nib, %qw0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x2, %f8;
+    shr.b32 %nib, %qw0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x3, %f8;
+    shr.b32 %nib, %qw0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x4, %f8;
+    shr.b32 %nib, %qw0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x5, %f8;
+    shr.b32 %nib, %qw0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x6, %f8;
+    shr.b32 %nib, %qw0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x7, %f8;
 
     // col 9
-    and.b32 %nib, %qw1, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x0, %f9;
-    shr.b32 %nib, %qw1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x1, %f9;
-    shr.b32 %nib, %qw1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x2, %f9;
-    shr.b32 %nib, %qw1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x3, %f9;
-    shr.b32 %nib, %qw1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x4, %f9;
-    shr.b32 %nib, %qw1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x5, %f9;
-    shr.b32 %nib, %qw1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x6, %f9;
-    shr.b32 %nib, %qw1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x7, %f9;
+    and.b32 %nib, %qw1, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x0, %f9;
+    shr.b32 %nib, %qw1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x1, %f9;
+    shr.b32 %nib, %qw1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x2, %f9;
+    shr.b32 %nib, %qw1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x3, %f9;
+    shr.b32 %nib, %qw1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x4, %f9;
+    shr.b32 %nib, %qw1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x5, %f9;
+    shr.b32 %nib, %qw1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x6, %f9;
+    shr.b32 %nib, %qw1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc9; fma.rn.f32 %f9, %dq, %x7, %f9;
 
     // col 10
-    and.b32 %nib, %qw2, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x0, %f10;
-    shr.b32 %nib, %qw2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x1, %f10;
-    shr.b32 %nib, %qw2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x2, %f10;
-    shr.b32 %nib, %qw2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x3, %f10;
-    shr.b32 %nib, %qw2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x4, %f10;
-    shr.b32 %nib, %qw2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x5, %f10;
-    shr.b32 %nib, %qw2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x6, %f10;
-    shr.b32 %nib, %qw2, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x7, %f10;
+    and.b32 %nib, %qw2, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x0, %f10;
+    shr.b32 %nib, %qw2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x1, %f10;
+    shr.b32 %nib, %qw2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x2, %f10;
+    shr.b32 %nib, %qw2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x3, %f10;
+    shr.b32 %nib, %qw2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x4, %f10;
+    shr.b32 %nib, %qw2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x5, %f10;
+    shr.b32 %nib, %qw2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x6, %f10;
+    shr.b32 %nib, %qw2, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc10; fma.rn.f32 %f10, %dq, %x7, %f10;
 
     // col 11
-    and.b32 %nib, %qw3, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x0, %f11;
-    shr.b32 %nib, %qw3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x1, %f11;
-    shr.b32 %nib, %qw3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x2, %f11;
-    shr.b32 %nib, %qw3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x3, %f11;
-    shr.b32 %nib, %qw3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x4, %f11;
-    shr.b32 %nib, %qw3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x5, %f11;
-    shr.b32 %nib, %qw3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x6, %f11;
-    shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x7, %f11;
+    and.b32 %nib, %qw3, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x0, %f11;
+    shr.b32 %nib, %qw3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x1, %f11;
+    shr.b32 %nib, %qw3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x2, %f11;
+    shr.b32 %nib, %qw3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x3, %f11;
+    shr.b32 %nib, %qw3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x4, %f11;
+    shr.b32 %nib, %qw3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x5, %f11;
+    shr.b32 %nib, %qw3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x6, %f11;
+    shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x7, %f11;
 
     // Load cols 12..15
     ld.global.v4.b32 {%qw0, %qw1, %qw2, %qw3}, [%rd42 + 48];
 
     // col 12
-    and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x0, %f12;
-    shr.b32 %nib, %qw0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x1, %f12;
-    shr.b32 %nib, %qw0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x2, %f12;
-    shr.b32 %nib, %qw0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x3, %f12;
-    shr.b32 %nib, %qw0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x4, %f12;
-    shr.b32 %nib, %qw0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x5, %f12;
-    shr.b32 %nib, %qw0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x6, %f12;
-    shr.b32 %nib, %qw0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x7, %f12;
+    and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x0, %f12;
+    shr.b32 %nib, %qw0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x1, %f12;
+    shr.b32 %nib, %qw0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x2, %f12;
+    shr.b32 %nib, %qw0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x3, %f12;
+    shr.b32 %nib, %qw0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x4, %f12;
+    shr.b32 %nib, %qw0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x5, %f12;
+    shr.b32 %nib, %qw0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x6, %f12;
+    shr.b32 %nib, %qw0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x7, %f12;
 
     // col 13
-    and.b32 %nib, %qw1, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x0, %f13;
-    shr.b32 %nib, %qw1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x1, %f13;
-    shr.b32 %nib, %qw1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x2, %f13;
-    shr.b32 %nib, %qw1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x3, %f13;
-    shr.b32 %nib, %qw1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x4, %f13;
-    shr.b32 %nib, %qw1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x5, %f13;
-    shr.b32 %nib, %qw1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x6, %f13;
-    shr.b32 %nib, %qw1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x7, %f13;
+    and.b32 %nib, %qw1, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x0, %f13;
+    shr.b32 %nib, %qw1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x1, %f13;
+    shr.b32 %nib, %qw1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x2, %f13;
+    shr.b32 %nib, %qw1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x3, %f13;
+    shr.b32 %nib, %qw1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x4, %f13;
+    shr.b32 %nib, %qw1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x5, %f13;
+    shr.b32 %nib, %qw1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x6, %f13;
+    shr.b32 %nib, %qw1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc13; fma.rn.f32 %f13, %dq, %x7, %f13;
 
     // col 14
-    and.b32 %nib, %qw2, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x0, %f14;
-    shr.b32 %nib, %qw2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x1, %f14;
-    shr.b32 %nib, %qw2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x2, %f14;
-    shr.b32 %nib, %qw2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x3, %f14;
-    shr.b32 %nib, %qw2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x4, %f14;
-    shr.b32 %nib, %qw2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x5, %f14;
-    shr.b32 %nib, %qw2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x6, %f14;
-    shr.b32 %nib, %qw2, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x7, %f14;
+    and.b32 %nib, %qw2, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x0, %f14;
+    shr.b32 %nib, %qw2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x1, %f14;
+    shr.b32 %nib, %qw2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x2, %f14;
+    shr.b32 %nib, %qw2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x3, %f14;
+    shr.b32 %nib, %qw2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x4, %f14;
+    shr.b32 %nib, %qw2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x5, %f14;
+    shr.b32 %nib, %qw2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x6, %f14;
+    shr.b32 %nib, %qw2, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc14; fma.rn.f32 %f14, %dq, %x7, %f14;
 
     // col 15
-    and.b32 %nib, %qw3, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x0, %f15;
-    shr.b32 %nib, %qw3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x1, %f15;
-    shr.b32 %nib, %qw3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x2, %f15;
-    shr.b32 %nib, %qw3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x3, %f15;
-    shr.b32 %nib, %qw3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x4, %f15;
-    shr.b32 %nib, %qw3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x5, %f15;
-    shr.b32 %nib, %qw3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x6, %f15;
-    shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f40E00000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x7, %f15;
+    and.b32 %nib, %qw3, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x0, %f15;
+    shr.b32 %nib, %qw3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x1, %f15;
+    shr.b32 %nib, %qw3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x2, %f15;
+    shr.b32 %nib, %qw3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x3, %f15;
+    shr.b32 %nib, %qw3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x4, %f15;
+    shr.b32 %nib, %qw3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x5, %f15;
+    shr.b32 %nib, %qw3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x6, %f15;
+    shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc15; fma.rn.f32 %f15, %dq, %x7, %f15;
 
     // Next k_packed
     add.u32         %r50, %r50, 32;
