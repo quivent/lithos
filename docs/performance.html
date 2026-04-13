@@ -328,9 +328,9 @@ footer {
 
 <p>Each SM has <span class="mono" style="color: var(--cyan);">128</span> FP32 CUDA cores and <span class="mono" style="color: var(--cyan);">4</span> tensor cores. <code>mma.sync.m16n8k16</code> at FP16 delivers <span class="mono" style="color: var(--cyan);">1,024 FLOPs/clock/SM</span>.</p>
 
-<p>At batch=1, the kernel is memory-bound: arithmetic completes before the next weight tile arrives from HBM. Throughput is set by HBM read rate.</p>
+<p>At batch=1 in conventional engines, the kernel is memory-bound: arithmetic completes before the next weight tile arrives from HBM. Throughput is set by HBM data read rate. In the Lithos weights-as-code model, weight values are instruction immediates &mdash; they flow through the instruction fetch path (L1I cache) rather than the data path. The bandwidth constraint shifts from HBM data loads to instruction fetch throughput. Activations and state remain on the data path.</p>
 
-<p>At batch=8 and above, multiple requests share each weight read, raising arithmetic intensity. Tensor core utilization becomes the constraint; stalls between <code>mma</code> instructions reduce throughput proportionally.</p>
+<p>At batch=8 and above, multiple requests share each weight-immediate instruction stream, raising arithmetic intensity. Tensor core utilization becomes the constraint; stalls between <code>mma</code> instructions reduce throughput proportionally.</p>
 
 </section>
 

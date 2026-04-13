@@ -350,7 +350,7 @@ footer {
   <span class="kernel-num">01</span>
   <span class="kernel-name">PROJECTION</span>
 </div>
-<p>Matrix multiply. Weight matrix times activation vector. <span class="numbers">448</span> per forward pass across all layers. Every QKV projection, every gate/up/down in the MLP, every output projection. cuBLAS handles this operation; the Lithos variant specializes tile sizes for Qwen's dimensions, inlines constants, and removes dispatch overhead.</p>
+<p>Weight-immediate instruction stream. Activation vector times weight matrix, with weights compiled as instruction immediates. <span class="numbers">448</span> per forward pass across all layers. Every QKV projection, every gate/up/down in the MLP, every output projection. In the weights-as-code model, each projection is a compiled stream of <code>FMUL-IMM</code> instructions &mdash; no GEMV loop, no weight pointer, no <code>LDG</code> for weights. The instruction cache serves the weights. cuBLAS has no equivalent; the Lithos compiler generates the instruction stream from the safetensors file at compile time, specialized for Qwen's exact dimensions.</p>
 </div>
 
 <div class="kernel-card">
@@ -413,7 +413,7 @@ footer {
 
 <h3>DeltaNet-Specific &mdash; 48 of 64 Layers</h3>
 
-<p>No production library provides recurrence kernels at this specialization level. Existing engines fall back to generic matmul sequences. Lithos compiles them directly to SASS.</p>
+<p>No production library provides recurrence kernels at this specialization level. Existing engines fall back to generic matmul sequences. Lithos compiles them directly to sm90 GPU machine code, emitting 64-bit instruction words into ELF files.</p>
 
 <div class="kernel-card">
 <div class="kernel-header">
@@ -468,7 +468,7 @@ footer {
 <h3>Kernel Fusion Specific to DeltaNet</h3>
 
 <h4>FUSED-DELTANET-LAYER</h4>
-<p>The entire DeltaNet layer as one kernel: NORM + CONV1D + PROJECTION(Q,K,V,gate,beta) + RECURRENCE + DELTANET-OUTPUT + RESIDUAL. One kernel launch. No intermediate writes to HBM. No kernel boundary gaps.</p>
+<p>The entire DeltaNet layer as one kernel: NORM + CONV1D + weight-immediate PROJECTION streams (Q,K,V,gate,beta) + RECURRENCE + DELTANET-OUTPUT + RESIDUAL. One kernel launch. No intermediate writes to HBM. No kernel boundary gaps. Projection weights are instruction immediates compiled from safetensors &mdash; no weight loading from HBM during execution.</p>
 
 <p>This is simpler than fused attention because there is no KV cache to manage. The only persistent state is the state matrix. At <span class="mono" style="color: var(--cyan);">256 KB</span> per layer, the state matrix almost fits in shared memory (<span class="mono" style="color: var(--cyan);">228 KB</span> available per SM on Hopper). With careful tiling &mdash; partitioning across heads, keeping one or two heads resident at a time &mdash; it fits. The entire recurrence stays in shared memory. No HBM round-trips for the state.</p>
 
@@ -620,11 +620,11 @@ footer {
 
 <h3>The Fused Kernel Target</h3>
 
-<p>In production, the 12 kernel types collapse into <span class="mono" style="color: var(--cyan);">5</span> fused kernels:</p>
+<p>In production, the 12 kernel types collapse into <span class="mono" style="color: var(--cyan);">5</span> fused kernels. All Lithos kernel output is in ELF format (<code>.elf</code>) containing sm90 GPU machine code &mdash; 64-bit instruction words emitted directly, no text-format assembly intermediate. With weights-as-code, the ELF <code>.text</code> section IS the model weights (Q4 values as instruction immediates). The primary fused kernel is <code>deltanet_fused.li</code>.</p>
 
 <table>
 <tr><th>Fused Kernel</th><th>Covers</th><th>Layers</th></tr>
-<tr><td><code>FUSED-DELTANET-LAYER</code></td><td>NORM + CONV1D + PROJECTION + RECURRENCE + DELTANET-OUTPUT + RESIDUAL</td><td>0,1,2,4,5,6,...(48 DeltaNet layers)</td></tr>
+<tr><td><code>FUSED-DELTANET-LAYER</code> (<code>deltanet_fused.li</code>)</td><td>NORM + CONV1D + PROJECTION + RECURRENCE + DELTANET-OUTPUT + RESIDUAL</td><td>0,1,2,4,5,6,...(48 DeltaNet layers)</td></tr>
 <tr><td><code>FUSED-ATTENTION-LAYER</code></td><td>NORM + PROJECTION + ROTATE + ATTENTION-SCORE + RESIDUAL</td><td>3,7,11,...(16 attention layers)</td></tr>
 <tr><td><code>SAMPLE</code></td><td>Logits to token</td><td>Once per forward pass</td></tr>
 <tr><td><code>DRAFT-FORWARD</code></td><td>DeltaNet-only path for speculative decoding &mdash; skip all 16 attention layers</td><td>48 DeltaNet layers only</td></tr>
@@ -634,6 +634,13 @@ footer {
 <p class="mt-1"><span class="mono" style="color: var(--cyan);">5</span> kernel types in production.</p>
 
 <p>Every remaining kernel boundary sits between operations with a hard data dependency: DeltaNet layers must write state before the attention layer can correct drift; the attention layer must write the KV cache before it can score; the sample step runs after all 64 layers. Everything else is fused.</p>
+
+<h3>Kernels Still Missing</h3>
+<ul class="kernel-list">
+  <li><strong>Token embedding (EMBED).</strong> Table lookup from token ID to embedding vector. Not yet a compiled Lithos kernel.</li>
+  <li><strong>Conv1D / recurrent state init.</strong> The causal 1D convolution and DeltaNet state initialization at context start are not yet fully fused.</li>
+  <li><strong>Sin/cos for RoPE.</strong> Rotary position embedding requires sin and cos of position &times; frequency. Currently uses SFU <code>ex2.approx</code> approximations; the full fused RoPE kernel is not yet written.</li>
+</ul>
 
 </section>
 

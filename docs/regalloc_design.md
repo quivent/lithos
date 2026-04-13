@@ -9,7 +9,7 @@ Design (this document) -> Implementation (pending sign-off). K, 2026-04-13.
 Today's allocator: four monotone counters in `parser.fs:78-81` (`freg+`,
 `rreg+`, `rdreg+`, `preg+`). IDs are minted and never reclaimed. Fine for
 PTX (ptxas re-allocates) but on SASS the IDs are physical registers --
-`sass/emit-sass.fs` encodes them straight into instruction bytes. Hopper
+`gpu/emit.fs` encodes them straight into instruction bytes. Hopper
 caps threads at 255 regs and occupancy collapses above ~128. Fully inlined
 DeltaNet layers will blow this on the first compile. We need reuse.
 

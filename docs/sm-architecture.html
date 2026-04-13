@@ -1020,10 +1020,10 @@ footer {
 <p class="small" style="margin-top: 0.5rem;">A <em>cycle</em> here is one GPU clock tick. The 400-cycle <span class="term" data-term="HBM">HBM</span> latency is end-to-end: from the <span class="term" data-term="SM">SM</span> issuing <code>ld.global.f32</code> to the data arriving in a register. During that ~220 ns, each of the <span class="term" data-term="SM">SM</span>'s four sub-partitions could have issued ~400 other instructions &mdash; that budget is the opportunity <span class="term" data-term="Latency Hiding">latency hiding</span> exploits.</p>
 
 <div class="annotation">
-  <code>Lithos controls stall counts in SASS</code> &mdash; every memory access that misses a fast level adds hundreds of stall cycles. <span class="term" data-term="Lithos">Lithos</span> patterns guarantee data is staged to the right level before compute needs it.
+  <code>Lithos controls stall counts in the control word</code> &mdash; every memory access that misses a fast level adds hundreds of stall cycles. Lithos patterns guarantee data is staged to the right level before compute needs it. Stall counts are embedded in the 8-byte control word of each 16-byte instruction.
 </div>
 <div class="annotation">
-  <code>Lithos patterns guarantee coalesced access</code> &mdash; a <span class="term" data-term="Warp">warp</span> reading 32 contiguous 4-byte values hits one 128-byte cache line. Scattered access can waste <span class="speedup">32x</span> bandwidth. <span class="term" data-term="Lithos">Lithos</span> vocabulary words enforce <span class="term" data-term="Coalescing">coalescing</span> by construction.
+  <code>Lithos patterns guarantee coalesced access</code> &mdash; a <span class="term" data-term="Warp">warp</span> reading 32 contiguous 4-byte values hits one 128-byte cache line. Scattered access can waste <span class="speedup">32x</span> bandwidth. Lithos vocabulary words enforce coalescing by construction.
 </div>
 </section>
 
@@ -1145,7 +1145,7 @@ footer {
 </table>
 
 <div class="annotation">
-  <code>Lithos launches one kernel across all 132 SMs</code> &mdash; no framework overhead, no inter-<span class="term" data-term="Kernel">kernel</span> gaps. A single <code>cuLaunchKernel</code> call saturates the entire die.
+  <code>Lithos launches cooperative megakernels across all 132 SMs</code> &mdash; no framework overhead, no inter-kernel gaps. A single cooperative launch saturates the entire die and loops over all N layers via grid-sync, never returning to host between layers.
 </div>
 </section>
 
@@ -1311,10 +1311,28 @@ footer {
   <code>Lithos controls register allocation</code> &mdash; determines how many warps can be resident. At 128 regs/thread: 16,384 / (128 x 32) = 4 warps per sub-partition. At 64 regs/thread: 8 warps. More warps = more <span class="term" data-term="Latency Hiding">latency hiding</span>.
 </div>
 <div class="annotation">
-  <code>Lithos controls stall counts in SASS</code> &mdash; the <span class="term" data-term="Warp">warp</span> scheduler uses stall counts in the control word of each <span class="term" data-term="SASS">SASS</span> instruction to know the minimum wait before the next instruction from that <span class="term" data-term="Warp">warp</span> can issue. <span class="term" data-term="Lithos">Lithos</span> will emit these directly.
+  <code>Lithos controls stall counts in the binary control word</code> &mdash; the warp scheduler reads the stall count from the control word of each 16-byte instruction to know the minimum wait before the next instruction from that warp can issue. Lithos emits these fields directly into the instruction binary.
 </div>
 <div class="annotation">
   <code>Lithos controls shared memory usage</code> &mdash; <code>cp.async</code> and TMA bypass the <span class="term" data-term="Register File">register file</span>, flowing data directly from global memory to <span class="term" data-term="Shared Memory">shared memory</span>. This preserves the scarce <span class="term" data-term="Register File">register file</span> for compute, not data staging.
+</div>
+</section>
+
+<!-- Hopper-Specific Features -->
+<section id="hopper-specifics">
+<h2>Hopper-Specific: GSP, NVLink-C2C, Cooperative Launch</h2>
+
+<h4>GSP &mdash; GPU System Processor (RISC-V)</h4>
+<p>Hopper embeds a RISC-V microcontroller on-die called the GSP (GPU System Processor). It handles initialization, power management, and firmware tasks. The GSP must boot and confirm readiness before the GPFIFO submission channel becomes active &mdash; any attempt to launch kernels before GSP initialization will hang. The standard NVIDIA driver (nvidia.ko) handles this; lithos.ko replicates the initialization sequence. GSP runs independently of the SM array and is not used for kernel compute.</p>
+
+<h4>NVLink-C2C and Address Translation Services (ATS)</h4>
+<p>GH200 connects the Hopper GPU and Grace CPU via NVLink-C2C at 900 GB/s. With ATS enabled, the CPU physical address equals the GPU virtual address &mdash; hardware performs address translation transparently. This means any memory the CPU allocates (via <code>malloc</code>, <code>mmap</code>, or the stack) is GPU-visible at the same address without any explicit mapping step. The BAR4 aperture exposes 128 GB of coherent HBM to the CPU. No <code>cuMemAlloc</code> is needed for weight tensors &mdash; CPU allocations are GPU-visible by construction.</p>
+
+<h4>Cooperative Launch and Grid-Sync Megakernels</h4>
+<p>Hopper supports cooperative kernel launch: all CTAs in a grid can reach a grid-level barrier (<code>cooperative_groups::this_grid().sync()</code>), allowing a single kernel to persist across an N-layer loop without returning to the host. Lithos targets 2 cooperative megakernels per model (one per forward pass phase). The grid-sync barrier requires all CTAs to be simultaneously resident, constraining the grid size to at most the number of active SMs (132 on GH200). This trades launch flexibility for zero inter-layer kernel overhead.</p>
+
+<div class="annotation">
+  <code>Grid-sync failure mode</code> &mdash; if the grid is too large to fit all CTAs simultaneously, the barrier deadlocks. Lithos sizes grids to exactly 132 blocks (one per SM) to guarantee full residency. PTX-based grid-sync failures reported earlier were a grid-sizing issue, not a conceptual failure of cooperative launch.
 </div>
 </section>
 
@@ -1342,7 +1360,7 @@ footer {
   </tr>
   <tr>
     <td>Instruction scheduling</td>
-    <td><span class="term" data-term="SASS">SASS</span> stall counts tell scheduler when to re-issue <span class="term" data-term="Warp">warp</span></td>
+    <td>Control word stall counts tell scheduler when to re-issue warp</td>
     <td>Wrong stalls = pipeline bubbles</td>
   </tr>
   <tr>

@@ -1,66 +1,89 @@
-\ elf-wrap.fs — Wrap ARM64 machine code into a minimal Linux executable.
+\ elf-wrap.fs — Build a complete sm_90 GPU ELF and write it to disk.
 \
-\ Produces an ET_EXEC ELF64 ARM64 binary with a single PT_LOAD segment
-\ covering the .text payload. Loaded at 0x400000; entry is the start of
-\ the payload. This mirrors the layout used by sixth/eighth for its
-\ standalone binaries.
+\ The heavy lifting lives in /home/ubuntu/lithos/gpu/emit.fs which
+\ provides build-elf ( -- addr u ). This file only glues parser state
+\ (kernel name, param count) into the builder and handles file I/O.
+\
+\ ELF layout produced by build-elf:
+\   [0] NULL
+\   [1] .shstrtab
+\   [2] .strtab
+\   [3] .symtab   (4 entries: UND, SECTION(.text), SECTION(.nv.constant0),
+\                  FUNC GLOBAL kernel STO_CUDA_ENTRY)
+\   [4] .nv.info
+\   [5] .text.<kernel>
+\   [6] .nv.info.<kernel>
+\   [7] .nv.shared.reserved.0   (NOBITS)
+\   [8] .nv.constant0.<kernel>  (0x210 reserved + param_bytes)
+\ No program headers: cuModuleLoadData tolerates shdr-only ELFs for a
+\ single kernel without shared-mem dependencies.
+\
+\ Cooperative kernels:
+\   Set  1 cooperative? !  (or call build-elf-coop) before write-elf.
+\   emit-grid-sync (written separately) calls record-gridsync-offset before
+\   emitting each grid-sync instruction so offsets are tracked automatically.
+\   The driver requires EIATTR_COOP_GROUP_INSTR_OFFSETS and
+\   EIATTR_COOP_GROUP_MASK_REGIDS in .nv.info.<kernel> to accept
+\   cuLaunchCooperativeKernel.  build-elf emits them when cooperative?=1.
+\
+\ ---- Megakernel n-kparams values (from compiler/megakernel-params.fs) ----
+\
+\ For megakernel ELFs, bypass count-all-params and set n-kparams directly:
+\
+\   DeltaNet megakernel (48 layers, cooperative):
+\     n-kparams = DN-NKPARAMS = 1280
+\     cbuf0 param region = 10240 bytes  (0x2800)
+\     Layout: 48 × 208-byte layer blocks + 72 bytes global + 184 bytes pad
+\     To build: DN-NKPARAMS n-kparams !  1 cooperative? !
+\               s" deltanet_mega" li-set-name  write-elf
+\
+\   Full-attention megakernel (16 layers, cooperative):
+\     n-kparams = FA-NKPARAMS = 448
+\     cbuf0 param region = 3584 bytes  (0xE00)
+\     Layout: 16 × 208-byte layer blocks + 56 bytes global + 200 bytes pad
+\     To build: FA-NKPARAMS n-kparams !  1 cooperative? !
+\               s" attention_mega" li-set-name  write-elf
+\
+\ EIATTR_PARAM_CBANK in .nv.info.<kernel> encodes the param-region byte count
+\ in bits [31:16] of the second u32 (see gpu/emit.fs line ~850):
+\   DeltaNet: ( 10240 << 16 ) | 0x210  = 0x28000210
+\   FA:       (  3584 << 16 ) | 0x210  = 0x0E000210
+\
+\ Grid-sync counter and flag GPU addresses are written into the global-params
+\ struct by launcher.s at each token step (cuMemAlloc once at startup, then
+\ their device VAs are stored at fixed offsets in the global-ptrs array that
+\ build-deltanet-params / build-attention-params reads).  No cbuf0 patching
+\ is needed at launch time; the entire param buffer is rebuilt each step via
+\ build-deltanet-params / build-attention-params.
 
-variable elf-fd
-variable elf-text-size
+variable cw-fd
 
-: ef,  ( byte -- )
-  elf-fd @ >r
-  pad over c!  pad 1 r> write-file drop drop ;
+\ write-cubin ( outpath outlen -- )
+\ Builds the GPU ELF from the current sass-buf + parser state and writes it.
+: write-cubin  ( outpath outlen -- )
+  \ Propagate parser's param count (ptr + scalar) to the ELF builder.
+  count-all-params  n-kparams !
 
-: ef-w32,  ( u32 -- )
-  dup 255 and ef, 8 rshift
-  dup 255 and ef, 8 rshift
-  dup 255 and ef, 8 rshift
-  255 and ef, ;
+  \ Open output file from the two TOS items (outpath outlen), then build ELF
+  \ and fetch addr/len from cubin-buf / cubin-pos directly — the bootstrap
+  \ appears to leave extra ephemeral items on the param stack through
+  \ lithos-compile, so we avoid relying on stack order.
+  577 open-file drop cw-fd !     \ ( --  )  consumes outpath outlen mode
+  build-cubin 2drop              \ discard addr/u — we read them via globals
+  cubin-buf cubin-pos @  cw-fd @  write-file drop
+  cw-fd @ close-file drop ;
 
-: ef-w64,  ( u64 -- )  dup ef-w32,  32 rshift ef-w32, ;
+\ write-elf ( outpath outlen -- )
+\ Alias for write-cubin — preferred name going forward.
+: write-elf  ( outpath outlen -- )  write-cubin ;
 
-$400000 constant BASE-ADDR
-64      constant EHDR-SIZE
-56      constant PHDR-SIZE
+\ write-elf-coop ( outpath outlen -- )
+\ Like write-elf but marks the kernel cooperative before building.
+\ Assumes emit-grid-sync has called record-gridsync-offset for each sync site.
+: write-elf-coop  ( outpath outlen -- )
+  1 cooperative? !
+  write-cubin ;
 
-: elf-header  ( text-len -- )
-  elf-text-size !
-  \ e_ident
-  $7f ef,  [char] E ef,  [char] L ef,  [char] F ef,
-  2 ef, 1 ef, 1 ef, 0 ef,
-  0 ef, 0 ef, 0 ef, 0 ef, 0 ef, 0 ef, 0 ef, 0 ef,
-  \ e_type = ET_EXEC(2)
-  2 ef, 0 ef,
-  \ e_machine = EM_AARCH64(183)
-  183 ef, 0 ef,
-  \ e_version
-  1 ef-w32,
-  \ e_entry = BASE + EHDR + PHDR
-  BASE-ADDR EHDR-SIZE + PHDR-SIZE + ef-w64,
-  \ e_phoff = EHDR-SIZE
-  EHDR-SIZE ef-w64,
-  \ e_shoff = 0 (no section headers)
-  0 ef-w64,
-  \ e_flags, e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx
-  0 ef-w32,
-  EHDR-SIZE ef, 0 ef,  PHDR-SIZE ef, 0 ef,  1 ef, 0 ef,
-  0 ef, 0 ef,  0 ef, 0 ef,  0 ef, 0 ef, ;
-
-: elf-phdr  ( -- )
-  1 ef-w32,                     \ PT_LOAD
-  5 ef-w32,                     \ R|X
-  0 ef-w64,                     \ p_offset
-  BASE-ADDR ef-w64,             \ p_vaddr
-  BASE-ADDR ef-w64,             \ p_paddr
-  elf-text-size @ EHDR-SIZE PHDR-SIZE + + ef-w64,   \ p_filesz
-  elf-text-size @ EHDR-SIZE PHDR-SIZE + + ef-w64,   \ p_memsz
-  $10000 ef-w64, ;              \ align
-
-: write-elf  ( code-addr code-u out-addr out-u -- )
-  577 open-file drop elf-fd !
-  over elf-header
-  elf-phdr
-  \ Now write the code payload
-  elf-fd @ write-file drop
-  elf-fd @ close-file drop ;
+\ write-cubin-coop ( outpath outlen -- )
+\ Legacy alias — use write-elf-coop instead.
+: write-cubin-coop  ( outpath outlen -- )  write-elf-coop ;

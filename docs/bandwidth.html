@@ -277,7 +277,7 @@ footer {
 <section id="thesis">
 <h2>Claim</h2>
 
-<p>At batch=1 decode, a transformer reads every weight in the model to produce one token. Compute is not the bottleneck; tensor cores are underutilized. Throughput is set by <span class="term" data-term="HBM">HBM</span> bandwidth &mdash; the fraction of the <span class="numbers">4 TB/s</span> peak consumed by useful weight traffic.</p>
+<p>At batch=1 decode, a transformer must process every weight in the model to produce one token. In conventional engines, throughput is set by <span class="term" data-term="HBM">HBM</span> data bandwidth &mdash; the fraction of the <span class="numbers">4 TB/s</span> peak consumed by weight loads via <code>LDG</code>. In the Lithos weights-as-code architecture, weight values are encoded as instruction immediates and flow through the instruction fetch path (L1I cache hierarchy) instead of the data path. The bandwidth constraint shifts from HBM data bandwidth to instruction fetch bandwidth.</p>
 
 <p><span class="engine engine-vllm">vLLM</span> on this <span class="term" data-term="GH200">GH200</span> at batch=1 sustains <span class="numbers">13% of peak</span> (effective <span class="numbers">~520 GB/s</span>). <span class="engine engine-lithos">Lithos</span> targets <span class="speedup">&gt;70%</span> (<span class="numbers">&gt;2.8 TB/s</span>). A device-to-device copy benchmark on the same hardware measured <span class="numbers">3.59 TB/s</span>, <span class="speedup">90%</span> of the <span class="numbers">4 TB/s</span> theoretical peak &mdash; establishing the hardware ceiling.</p>
 
@@ -311,7 +311,7 @@ footer {
 
 <h3>Bytes read per token</h3>
 
-<p>Each token requires one sweep over every weight. No reuse across tokens. Bytes per token equals total weight bytes traversed through <span class="term" data-term="HBM">HBM</span> per forward pass.</p>
+<p>Each token requires one sweep over every weight. No reuse across tokens (at batch=1). In conventional engines, bytes per token equals total weight bytes loaded from <span class="term" data-term="HBM">HBM</span> via <code>LDG</code>. In the Lithos weights-as-code model, the same bytes flow through the instruction fetch path &mdash; weight immediates are fetched as part of the instruction stream via L1I &rarr; L2 &rarr; HBM.</p>
 
 <table>
 <tr><th>Source</th><th>Shape / note</th><th class="num">Bytes</th></tr>
@@ -400,8 +400,10 @@ footer {
 <div style="margin-top: 0.5rem;"><span class="tl-label"><span class="engine engine-lithos">Lithos</span></span>
   <span class="tl-bar tl-active" style="width: 540px;"></span><span class="tl-bar tl-idle" style="width: 42px;"></span>
   &nbsp;<span style="color: var(--text-dim);">~2.4 ms</span></div>
-<div style="color: var(--text-faint); margin-top: 0.5rem; font-size: 0.72rem;">Purple/orange = HBM actively delivering weights. Red = idle between kernels.</div>
+<div style="color: var(--text-faint); margin-top: 0.5rem; font-size: 0.72rem;">Purple/orange = HBM actively delivering weights via data path (vLLM) or instruction fetch (Lithos). Red = idle between kernels.</div>
 </div>
+
+<p class="small mt-1"><strong>Weights-as-code note:</strong> In the Lithos weights-as-code model, weight bytes still traverse HBM physically &mdash; but they travel the instruction fetch path (L1I &rarr; L2 &rarr; HBM) rather than the data load path (<code>LDG</code> &rarr; L1D &rarr; L2 &rarr; HBM). The total bytes per token remain ~8 GB; the delivery mechanism changes. The memory bandwidth that was dominated by weight <code>LDG</code> loads is now dominated by instruction fetch for weight-immediate streams, with the data path freed for activations, state matrices, and KV cache.</p>
 </section>
 
 <!-- How Lithos closes the gap -->

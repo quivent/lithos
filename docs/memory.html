@@ -327,13 +327,13 @@ footer {
 <section id="gh200-reality">
 <h2>The GH200 Reality</h2>
 
-<p>Hardware-coherent unified memory via NVLink-C2C at <span class="numbers">900 GB/s</span>.</p>
+<p>Hardware-coherent unified memory via NVLink-C2C at <span class="numbers">900 GB/s</span>. BAR4 exposes <span class="numbers">128 GB</span> of coherent HBM to the CPU physical address space.</p>
 
-<p>CPU and GPU share the same physical address space. Any pointer that the CPU can read, the GPU can read. The hardware handles coherence &mdash; no software intervention, no explicit transfers, no synchronization primitives for memory consistency.</p>
+<p>On GH200, the CPU physical address equals the GPU virtual address (NVLink-C2C ATS &mdash; Address Translation Services). Any pointer that the CPU can dereference, the GPU can dereference at the same address. The hardware handles coherence &mdash; no software intervention, no explicit transfers, no synchronization primitives for memory consistency. CPU allocations (from <code>malloc</code> or <code>mmap</code>) are GPU-visible with no additional mapping step.</p>
 
-<p><code>cudaMalloc</code> still works. But it is unnecessary overhead. It maintains separate page tables for a separation that doesn't physically exist. It issues kernel driver ioctls for an allocation that <code>mmap</code> can do in userspace.</p>
+<p><code>cudaMalloc</code> still works. But it is unnecessary overhead. It maintains separate page tables for a separation that doesn't physically exist. It issues kernel driver ioctls for an allocation that <code>mmap</code> can do in userspace. The lithos.ko VRAM allocator is a simple bump allocator over the BAR4 region &mdash; no fragmentation, no pools.</p>
 
-<p><code>mmap</code> returns a pointer usable by both CPU and GPU. No additional memory management is required on GH200.</p>
+<p><code>mmap</code> returns a pointer usable by both CPU and GPU. No additional memory management is required on GH200. No <code>cuMemAlloc</code> needed for weight tensors.</p>
 
 <div class="mem-models">
   <div class="mem-model old">
@@ -363,15 +363,17 @@ footer {
 <section id="strategy">
 <h2>Lithos Memory Strategy</h2>
 
-<h3>Weights: mmap (lazy)</h3>
-<pre>fd = open("model.safetensors")
+<h3>Weights: Compiled into Instructions (weights-as-code)</h3>
+<pre>// At COMPILE time:
+fd = open("model.safetensors")
 base = mmap(fd, size, PROT_READ, MAP_PRIVATE)
-<span style="color: var(--text-dim)">// No data loaded yet. Just a virtual mapping.</span>
-<span style="color: var(--text-dim)">// First GPU access faults in pages from SSD on demand.</span>
-<span style="color: var(--text-dim)">// After first forward pass: all pages resident.</span>
-<span style="color: var(--text-dim)">// Pointer arithmetic gives direct access to any tensor.</span></pre>
+<span style="color: var(--text-dim)">// Compiler reads weight values from safetensors</span>
+<span style="color: var(--text-dim)">// Q4 weights packed into FMUL-IMM instruction immediates</span>
+<span style="color: var(--text-dim)">// Per-layer instruction streams emitted to ELF .text</span>
+<span style="color: var(--text-dim)">// The ELF .text section IS the weights</span>
+<span style="color: var(--text-dim)">// At runtime: no weight loading. L1I cache serves weights.</span></pre>
 
-<p>Why mmap for weights: <span class="numbers">18 GB</span> from SSD. Don't wait for all of it. Let the first inference request start immediately. Pages load as the GPU touches them. After warmup, everything is resident at full speed.</p>
+<p>With weights-as-code, the safetensors file is read once at compile time. The compiler encodes Q4 weight values into the immediate fields of GPU instructions. At inference time, weight data flows through the instruction cache hierarchy (L1I &rarr; L2 &rarr; HBM) &mdash; not the data path. HBM no longer stores weight tensors as data. Only activations, state matrices, and KV cache occupy HBM as runtime data.</p>
 
 <h3>KV Cache: Pre-allocate (eager)</h3>
 <pre>kv_size = layers &times; kv_heads &times; head_dim &times; 2 &times; max_tokens &times; sizeof(f16)
@@ -395,10 +397,10 @@ memset(ptr, 0, act_size)</pre>
 
 <div class="problem">
   <div class="problem-header">
-    <span class="problem-num">LAZY</span>
-    <span class="problem-title">mmap for things loaded from disk (weights)</span>
+    <span class="problem-num">COMPILE</span>
+    <span class="problem-title">Weights compiled into instruction immediates at compile time</span>
   </div>
-  <p>Large and loaded from SSD. Lazy is fine &mdash; startup is fast. Pages fault in on first access. After one forward pass, fully resident.</p>
+  <p>The compiler reads the safetensors file and encodes Q4 weight values as instruction immediates. The resulting ELF .text section IS the weights. No runtime weight loading, no mmap of safetensors during inference. The instruction cache hierarchy becomes the weight cache.</p>
 </div>
 
 <div class="problem">
@@ -409,7 +411,7 @@ memset(ptr, 0, act_size)</pre>
   <p>Cannot tolerate page faults during token generation. Touch every page at allocation time. First inference access is full speed.</p>
 </div>
 
-<p>Both use <code>mmap</code> as the underlying mechanism. One maps a file. The other maps anonymous memory. No <code>cudaMalloc</code> anywhere. No <code>CUDACachingAllocator</code>. No memory pools. No fragmentation management. No garbage collection.</p>
+<p>With weights-as-code, the safetensors file is only accessed at compile time. At inference time, weight data lives in the ELF instruction stream (fetched via L1I cache), KV cache and activations use pre-allocated anonymous <code>mmap</code>. No <code>cudaMalloc</code> anywhere. No <code>CUDACachingAllocator</code>. No memory pools. No fragmentation management. No garbage collection. No runtime weight loading.</p>
 </section>
 
 <!-- Section 5: Why No One Else Does This -->
@@ -443,7 +445,7 @@ memset(ptr, 0, act_size)</pre>
     <tr>
       <td>Load 18 GB weights</td>
       <td><code>torch.load</code> &rarr; <code>cudaMalloc</code> &rarr; <code>cudaMemcpy</code> (3&ndash;5s)</td>
-      <td>mmap file, first pass faults in pages (~5s lazy, 0s startup)</td>
+      <td>Weights compiled into ELF instruction immediates at compile time. No runtime weight loading. The ELF .text IS the weights.</td>
     </tr>
     <tr>
       <td>Allocate KV cache</td>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Language Design &mdash; Lithos Syntax Proposal</title>
+<title>Language Design &mdash; Lithos Primitives and Dimensional Notation</title>
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -223,7 +223,7 @@ footer {
 <header class="hero">
 <div class="container">
   <h1>Language Design</h1>
-  <p>Draft syntax under review. Assembly-flavored. Literal PTX mnemonics.</p>
+  <p>Dimensional notation. Primitive families. Composition over configuration.</p>
 </div>
 </header>
 
@@ -231,13 +231,13 @@ footer {
 
 <section id="status">
 <div class="draft-banner">
-  <strong>Draft Syntax Under Review</strong>
-  This page shows a preliminary proposal for Lithos surface syntax. It is <em>not</em> the way the language will be &mdash; it is the current shape on the table, awaiting review. Details will change. The examples below compile in your head, not yet in a compiler.
+  <strong>Language Design Notes</strong>
+  This page documents Lithos language design: the current primitive-based system (12 families with dimensional notation, used in working <code>.li</code> files) and an earlier proposal for an assembly-flavored surface syntax (PTX-mnemonic style). The examples below show the earlier proposal, which has not been implemented. The working language uses primitive families described in the DeltaNet section.
 </div>
 
-<p>The shape: assembly-flavored, space-separated, one instruction per line. Every mnemonic is a literal <a href="/glossary#PTX">PTX</a> mnemonic. No parentheses, no commas, no expression trees. The compiler assigns physical registers; the programmer writes meaningful names.</p>
+<p>The Lithos language centers on <strong>dimensional notation</strong> and <strong>primitive families</strong>. Primitives compose directly: <code>silu</code> = <code>* -1, exp, ++, //, **</code> (five primitives in sequence). No optimizer, no fusion pass &mdash; composition is the default.</p>
 
-<p>Three worked examples follow, then twelve design decisions that fix the shape.</p>
+<p>An earlier proposal for a PTX-mnemonic surface syntax is preserved below for reference. Three worked examples follow, then twelve design decisions that fix the shape of that proposal.</p>
 </section>
 
 <section id="examples">
@@ -317,8 +317,8 @@ footer {
 </section>
 
 <section id="decisions">
-<h2>Design Decisions</h2>
-<p>Twelve choices fix the shape. Each one is defensible in isolation; together they commit the language to staying within a hand's reach of PTX.</p>
+<h2>Design Decisions (PTX-Flavored Proposal)</h2>
+<p>These twelve decisions describe the earlier PTX-mnemonic surface syntax proposal. They are preserved here as design reference, not as a description of the current working language.</p>
 
 <div class="decisions-grid">
 
@@ -386,16 +386,19 @@ footer {
 </section>
 
 <section id="vocabulary">
-<h2>Vocabulary</h2>
-<p>Total surface size: <span class="vocab-count">~90 words</span>.</p>
-<p>That includes:</p>
+<h2>Primitive Families</h2>
+<p>The actual Lithos language uses <strong>12 primitive families</strong> with dimensional notation:</p>
 <ul class="clean">
-  <li><strong>Structure keywords</strong> &mdash; <code>kernel</code>, <code>const</code>, <code>shared</code>, <code>register</code>, <code>for</code>, <code>in</code>, <code>step</code></li>
-  <li><strong>PTX mnemonics</strong> &mdash; the subset needed for transformer inference (loads, stores, arithmetic, comparison, branch, cp.async, mma.sync, barrier, exit)</li>
-  <li><strong>Built-in identifiers</strong> &mdash; <code>thread.x</code>, <code>block.x</code>, <code>block.dim.x</code>, <code>warp.id</code>, <code>lane.id</code>, and a handful more</li>
-  <li><strong>Types</strong> &mdash; <code>f16</code>, <code>f32</code>, <code>u32</code>, <code>i32</code>, pointer forms (<code>*f32</code>), array shapes (<code>f16[64, 16]</code>)</li>
+  <li><strong>Dimensional arithmetic</strong> &mdash; <code>*</code> scalar O(1), <code>**</code> vector loop O(N), <code>***</code> matrix O(N&sup2;), <code>****</code> tensor O(N&sup3;)</li>
+  <li><strong>Addition family</strong> &mdash; <code>+</code>, <code>++</code>, <code>+++</code> &mdash; same notation across dimensions</li>
+  <li><strong>Subtraction family</strong> &mdash; <code>-</code>, <code>--</code></li>
+  <li><strong>Division family</strong> &mdash; <code>//</code></li>
+  <li><strong>Reduction</strong> &mdash; <code>&Sigma;</code> (shuffle tree, O(log N), <em>not</em> a loop)</li>
+  <li><strong>Scalar math</strong> &mdash; exp, log, rcp, rsqrt</li>
+  <li><strong>Specialized</strong> &mdash; <code>project</code> (W4A16 GEMV), <code>matvec</code> (FP32 state GEMV)</li>
 </ul>
-<p>A human can learn the whole surface in an afternoon. An <a href="/glossary#LLM">LLM</a> can hold the whole surface in a system prompt.</p>
+<p>Composition example: <code>silu</code> = <code>* -1, exp, ++, //, **</code> (five primitives in sequence). The compiler determines how many GPU launches this becomes. No separate fusion pass needed.</p>
+<p>The PTX-mnemonic proposal below (vocabulary section from the earlier draft) described approximately 90 words. The current primitive system is smaller and more regular.</p>
 </section>
 
 <section id="functions-not-kernels">
@@ -527,16 +530,9 @@ footer {
 <section id="status-footer">
 <h2>Status</h2>
 <div class="decision">
-<h3>Draft, not finalized</h3>
-<p>This syntax is a proposal. It has not been ratified by running code through a compiler and discovering which parts hurt. Expect movement in:</p>
-<ul class="clean">
-  <li>How <code>-&gt;</code> abstractions are defined and composed</li>
-  <li>Array shape syntax inside <code>shared</code> and <code>register</code> declarations</li>
-  <li>Whether <code>for</code> loops are the right control-flow primitive or whether everything should be labels-and-branches like PTX itself</li>
-  <li>The exact spelling of built-in globals (<code>thread.x</code> vs <code>tid.x</code> vs <code>%tid.x</code>)</li>
-  <li>How immediate constants participate in address arithmetic vs operand lists</li>
-</ul>
-<p>Review comments welcome. The goal at this stage is to find the parts that read wrong before they are set in a parser.</p>
+<h3>Current working language: primitive families</h3>
+<p>The 12 primitive families with dimensional notation are implemented and in use. Working <code>.li</code> kernel files compile to sm90a GPU machine code via the bootstrap Forth compiler. GEMV compiles correctly. The DeltaNet operation set (50 primitives, verified) is the primary target.</p>
+<p>The PTX-mnemonic surface syntax shown in the examples above remains a proposal. It was not ratified by running code through a compiler. The dimensional primitive notation proved more regular and suited the stack-based IR better.</p>
 </div>
 </section>
 

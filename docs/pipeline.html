@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos Inference Stack &mdash; Complete Pipeline Diagram</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Layer palette */
+  --layer-source:   #1a2a3a;
+  --layer-source-b: #2a4a6a;
+  --layer-source-t: #6ec8d0;
+  --layer-compiler: #0f2010;
+  --layer-compiler-b: #2a5a2a;
+  --layer-compiler-t: #7ec87e;
+  --layer-binary:   #2a2010;
+  --layer-binary-b: #5a4a10;
+  --layer-binary-t: #d4a053;
+  --layer-kmod:     #2a1a08;
+  --layer-kmod-b:   #6a3a10;
+  --layer-kmod-t:   #e09050;
+  --layer-hw:       #1a0a1a;
+  --layer-hw-b:     #5a1a5a;
+  --layer-hw-t:     #d06ed0;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav a.active { color: var(--accent); }
+.nav-search { margin-left: auto; color: var(--text-faint); display: flex; align-items: center; }
+.nav-search:hover { color: var(--accent); }
+
+/* Hero */
+.hero {
+  padding: 5rem 0 3.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 2.8rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+/* ===== PIPELINE DIAGRAM ===== */
+
+.pipeline-wrap {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 2rem;
+  align-items: start;
+  margin: 1.5rem 0;
+}
+@media (max-width: 720px) {
+  .pipeline-wrap { grid-template-columns: 1fr; }
+  .callout-col { display: none; }
+}
+
+/* Vertical pipeline on the left */
+.pipeline {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* One stage */
+.stage {
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  position: relative;
+}
+.stage-inner {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 1rem;
+  align-items: start;
+}
+.stage-icon {
+  font-size: 1.35rem;
+  line-height: 1;
+  padding-top: 0.1rem;
+  user-select: none;
+}
+.stage-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 0.2rem;
+}
+.stage-name {
+  font-size: 1rem;
+  font-weight: 400;
+  margin-bottom: 0.3rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.stage-desc {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+.stage-detail {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--text-faint);
+  line-height: 1.6;
+  padding: 0.4rem 0.6rem;
+  background: rgba(0,0,0,0.3);
+  border-left: 2px solid var(--border);
+}
+
+/* Layer color variants */
+.stage.source   { background: var(--layer-source);   border-color: var(--layer-source-b);   }
+.stage.source   .stage-label { color: var(--layer-source-t); }
+.stage.source   .stage-name  { color: var(--layer-source-t); }
+.stage.source   .stage-detail { border-color: var(--layer-source-b); }
+
+.stage.compiler { background: var(--layer-compiler); border-color: var(--layer-compiler-b); }
+.stage.compiler .stage-label { color: var(--layer-compiler-t); }
+.stage.compiler .stage-name  { color: var(--layer-compiler-t); }
+.stage.compiler .stage-detail { border-color: var(--layer-compiler-b); }
+
+.stage.binary   { background: var(--layer-binary);   border-color: var(--layer-binary-b);   }
+.stage.binary   .stage-label { color: var(--layer-binary-t); }
+.stage.binary   .stage-name  { color: var(--layer-binary-t); }
+.stage.binary   .stage-detail { border-color: var(--layer-binary-b); }
+
+.stage.kmod     { background: var(--layer-kmod);     border-color: var(--layer-kmod-b);     }
+.stage.kmod     .stage-label { color: var(--layer-kmod-t); }
+.stage.kmod     .stage-name  { color: var(--layer-kmod-t); }
+.stage.kmod     .stage-detail { border-color: var(--layer-kmod-b); }
+
+.stage.hw       { background: var(--layer-hw);       border-color: var(--layer-hw-b);       }
+.stage.hw       .stage-label { color: var(--layer-hw-t); }
+.stage.hw       .stage-name  { color: var(--layer-hw-t); }
+.stage.hw       .stage-detail { border-color: var(--layer-hw-b); }
+
+/* Arrow between stages */
+.pipe-arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+  position: relative;
+  z-index: 1;
+}
+.pipe-arrow-line {
+  width: 2px;
+  height: 28px;
+  background: var(--border);
+}
+.pipe-arrow-head {
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 9px solid var(--border);
+}
+.pipe-arrow-label {
+  position: absolute;
+  left: calc(50% + 14px);
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.68rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--text-faint);
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+
+/* Callout boxes on the right */
+.callout-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  position: sticky;
+  top: 4rem;
+}
+.callout {
+  border-radius: 3px;
+  padding: 0.9rem 1rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.callout-title {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 0.4rem;
+}
+.callout-body {
+  color: var(--text-dim);
+}
+.callout-body code {
+  font-size: 0.78rem;
+}
+.callout.no-cuda {
+  background: #1a0a0a;
+  border: 1px solid #5a1a1a;
+}
+.callout.no-cuda .callout-title { color: #d06e6e; }
+.callout.bar4 {
+  background: #0a1a2a;
+  border: 1px solid #1a3a5a;
+}
+.callout.bar4 .callout-title { color: var(--cyan); }
+.callout.gsp {
+  background: #101a10;
+  border: 1px solid #2a4a2a;
+}
+.callout.gsp .callout-title { color: #7ec87e; }
+.callout.instr {
+  background: #1a1a08;
+  border: 1px solid #3a3a18;
+}
+.callout.instr .callout-title { color: var(--accent); }
+
+/* Instruction format byte map */
+.byte-map {
+  display: grid;
+  grid-template-columns: repeat(16, 1fr);
+  gap: 1px;
+  margin: 1rem 0;
+}
+.byte-map .cell {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  text-align: center;
+  padding: 0.3rem 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.byte-map .cell.inst { border-color: var(--accent-dim); color: var(--accent); }
+.byte-map .cell.ctrl { border-color: var(--blue); color: var(--blue); }
+.byte-map .header { font-size: 0.68rem; color: var(--text-faint); }
+
+/* Primitive table notation chips */
+.notation {
+  display: inline-block;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.9rem;
+  color: var(--accent);
+  background: rgba(212, 160, 83, 0.1);
+  border: 1px solid rgba(212, 160, 83, 0.25);
+  border-radius: 2px;
+  padding: 0.1rem 0.45rem;
+  letter-spacing: 0.06em;
+}
+.layer-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+.layer-badge.source   { background: var(--layer-source-b);   color: var(--layer-source-t); }
+.layer-badge.compiler { background: var(--layer-compiler-b); color: var(--layer-compiler-t); }
+.layer-badge.hw       { background: var(--layer-hw-b);       color: var(--layer-hw-t); }
+
+/* Megakernel diagram */
+.mk-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.2rem;
+  margin: 1rem 0;
+}
+@media (max-width: 640px) { .mk-grid { grid-template-columns: 1fr; } }
+.mk-box {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1rem 1.2rem;
+  background: var(--bg-raised);
+}
+.mk-box h4 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.mk-box ul {
+  list-style: none;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  line-height: 1.8;
+}
+.mk-box ul li::before {
+  content: "— ";
+  color: var(--text-faint);
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/quantization">Quantization</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/pipeline" class="active">Inference Stack</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/token-journey">Token Journey</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+  <a href="#" class="nav-search" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Inference Stack</h1>
+  <p>Source to silicon. Every layer of the Lithos pipeline, with no abstraction layers hidden.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- PIPELINE DIAGRAM SECTION -->
+<section id="pipeline">
+<h2>The Complete Pipeline</h2>
+
+<p>Lithos is a direct path: source files and safetensors compile to GPU machine code, packaged in ELF, loaded by a minimal kernel module, and launched by an ARM64 process via a single memory write to the GPFIFO ring. No CUDA. No Python. No intermediate runtimes. <strong>Weights are code</strong> &mdash; Q4 weight values are encoded as instruction immediates in the ELF <code>.text</code> section at compile time. There is no runtime weight loading from HBM.</p>
+
+<div class="pipeline-wrap">
+
+  <!-- LEFT: Vertical pipeline -->
+  <div class="pipeline">
+
+    <!-- Stage 1: Source -->
+    <div class="stage source">
+      <div class="stage-inner">
+        <div class="stage-icon">&#9998;</div>
+        <div>
+          <div class="stage-label">Source Layer</div>
+          <div class="stage-name">.li &nbsp;/&nbsp; .ls</div>
+          <div class="stage-desc">Lithos kernel source (<code>.li</code>) and composed layer source (<code>.ls</code>). Written in a Forth-like stack language. Primitives are expressed with dimensional notation: <code>*</code>&nbsp;scalar, <code>**</code>&nbsp;vector, <code>***</code>&nbsp;matrix, <code>&Sigma;</code>&nbsp;shuffle-tree reduction.</div>
+          <div class="stage-detail">inference/gemv.li
+inference/attend.li
+inference/reduce.li
+inference/recur.li
+inference/elementwise.li</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pipe-arrow" style="position:relative">
+      <div class="pipe-arrow-line"></div>
+      <div class="pipe-arrow-head"></div>
+      <span class="pipe-arrow-label">bootstrap Forth interpreter</span>
+    </div>
+
+    <!-- Stage 2: Compiler -->
+    <div class="stage compiler">
+      <div class="stage-inner">
+        <div class="stage-icon">&#9881;</div>
+        <div>
+          <div class="stage-label">Compiler Layer</div>
+          <div class="stage-name">gpu/emit.fs</div>
+          <div class="stage-desc">Macro assembler, not an optimizing compiler. Each Lithos primitive maps to a fixed binary pattern. No analysis, no optimization passes, no intermediate representations. The programmer controls register allocation, instruction interleaving, and memory access patterns via the primitive vocabulary.</div>
+          <div class="stage-detail">compiler/lithos.fs  &mdash;  bootstrap Forth + outer interpreter
+compiler/parser.fs  &mdash;  tokenizer and word dispatch
+gpu/emit.fs         &mdash;  SASS emitter: opcode tables, encoding logic
+gpu/elf-wrap.fs     &mdash;  ELF section layout and symbol table</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pipe-arrow" style="position:relative">
+      <div class="pipe-arrow-line"></div>
+      <div class="pipe-arrow-head"></div>
+      <span class="pipe-arrow-label">gpu/emit.fs encodes 64-bit words</span>
+    </div>
+
+    <!-- Stage 3: Machine code / ELF -->
+    <div class="stage binary">
+      <div class="stage-inner">
+        <div class="stage-icon">&#9632;</div>
+        <div>
+          <div class="stage-label">Binary Layer</div>
+          <div class="stage-name">ELF binary &mdash; sm90a Hopper</div>
+          <div class="stage-desc">Standard ELF binary containing sm90a GPU machine code. No NVIDIA-specific sections required. Each instruction is <strong>16 bytes</strong>: 8 bytes of 64-bit instruction word followed by 8 bytes of control word encoding scheduling, stall counts, and dependency bits. In the weights-as-code model, the ELF <code>.text</code> section IS the model weights &mdash; Q4 values are encoded as instruction immediates. Packed into <code>kernels/</code> and loaded at startup.</div>
+          <div class="stage-detail">Instruction format (16 bytes / instruction):
+  [63:0]   instruction word   &mdash; opcode + operands
+  [127:64] control word       &mdash; stall, yield, read/write barriers
+
+kernels/forward_pass_full.ptx  (compiled artifact)
+inference/*.cubin               (ELF packages)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pipe-arrow" style="position:relative">
+      <div class="pipe-arrow-line"></div>
+      <div class="pipe-arrow-head"></div>
+      <span class="pipe-arrow-label">gpu/elf-wrap.fs &rarr; lithos.ko loads</span>
+    </div>
+
+    <!-- Stage 4: Kernel module -->
+    <div class="stage kmod">
+      <div class="stage-inner">
+        <div class="stage-icon">&#9670;</div>
+        <div>
+          <div class="stage-label">Kernel Module Layer</div>
+          <div class="stage-name">lithos.ko &nbsp;&mdash;&nbsp; /dev/lithos0</div>
+          <div class="stage-desc">Replaces <code>nvidia.ko</code>. Owns the GPU hardware. Boots the GSP (RISC-V coprocessor on die) via firmware before any GPFIFO channel can be created. Exposes exactly <strong>4 ioctls</strong> to userspace. Maps USERD (User Space Engine RegiDo) so the ARM64 launcher can ring the GPU doorbell without a syscall.</div>
+          <div class="stage-detail">ALLOC_VRAM   &mdash;  allocate BAR4 HBM region (CPU PA == GPU VA)
+CREATE_CHANNEL&mdash;  create GPFIFO ring + engine context
+MAP_USERD    &mdash;  map USERD page into userspace for doorbell writes
+FREE_VRAM    &mdash;  release HBM allocation
+
+GSP firmware: /lib/firmware/nvidia/580.105.08/gsp_ga10x.bin
+GSP must boot before any channel is usable.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pipe-arrow" style="position:relative">
+      <div class="pipe-arrow-line"></div>
+      <div class="pipe-arrow-head"></div>
+      <span class="pipe-arrow-label">ARM64 direct memory write to GPFIFO ring</span>
+    </div>
+
+    <!-- Stage 4b: USERD doorbell -->
+    <div class="stage kmod" style="border-style: dashed; margin-top: 0;">
+      <div class="stage-inner">
+        <div class="stage-icon">&#9993;</div>
+        <div>
+          <div class="stage-label">Dispatch Layer</div>
+          <div class="stage-name">GPFIFO ring + USERD doorbell</div>
+          <div class="stage-desc">ARM64 launcher writes GPU commands directly into the GPFIFO ring via memory-mapped I/O. Zero syscalls at inference time. After writing, it rings the doorbell by writing the new <code>GPPut</code> pointer to the USERD register page.</div>
+          <div class="stage-detail">Write GPPut &rarr; USERD + 0x8c   (new tail pointer)
+Ring doorbell &rarr; USERD + 0x90  (kick GPU to fetch new work)
+
+For the fused megakernel: one GPFIFO entry per forward pass.
+No kernel re-launch, no synchronization barriers between layers.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pipe-arrow" style="position:relative">
+      <div class="pipe-arrow-line"></div>
+      <div class="pipe-arrow-head"></div>
+      <span class="pipe-arrow-label">hardware schedules warps</span>
+    </div>
+
+    <!-- Stage 5: GPU hardware -->
+    <div class="stage hw">
+      <div class="stage-inner">
+        <div class="stage-icon">&#9651;</div>
+        <div>
+          <div class="stage-label">Hardware Layer</div>
+          <div class="stage-name">GH200 SM array &mdash; 132 SMs</div>
+          <div class="stage-desc">NVIDIA GH200 Hopper GPU. 132 streaming multiprocessors, each with 4 warp schedulers. Runs the two cooperative-grid megakernels: forward pass and recurrence state update. BAR4 gives 128&nbsp;GB coherent HBM via NVLink-C2C &mdash; CPU physical address equals GPU virtual address. No DMA mapping, no copies, no page faults.</div>
+          <div class="stage-detail">Per SM:  4 warp schedulers, 256 KB register file, 228 KB shared mem
+GPU:     132 active SMs, ~1830 MHz boost
+Memory:  128 GB HBM3, BAR4 coherent (CPU PA == GPU VA)
+Target:  two cooperative-grid megakernels per model</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /pipeline -->
+
+  <!-- RIGHT: Callout boxes -->
+  <div class="callout-col">
+
+    <div class="callout no-cuda">
+      <div class="callout-title">No CUDA anywhere</div>
+      <div class="callout-body">
+        No <code>libcuda.so</code>. No PTX. No nvcc. No ptxas. No CUDA Runtime. No cuBLAS. No cuDNN. No framework. The pipeline goes: Lithos source + safetensors &rarr; SASS machine code &rarr; ELF &rarr; <code>lithos.ko</code> &rarr; GPU. Every layer is owned by Lithos. <strong>No weight loading</strong> &mdash; weights are instruction immediates compiled into the ELF <code>.text</code> section.
+      </div>
+    </div>
+
+    <div class="callout bar4">
+      <div class="callout-title">BAR4 coherent memory</div>
+      <div class="callout-body">
+        GH200 NVLink-C2C: 128&nbsp;GB HBM is coherent between ARM64 Grace CPU and Hopper GPU. <strong>CPU physical address&nbsp;==&nbsp;GPU virtual address.</strong> No <code>cudaMemcpy</code>, no DMA mapping, no transfer scheduling. Pass a pointer; the hardware handles coherence.
+      </div>
+    </div>
+
+    <div class="callout gsp">
+      <div class="callout-title">GSP requirement</div>
+      <div class="callout-body">
+        The RISC-V GSP coprocessor on-die must boot via firmware before any GPFIFO channel is functional. <code>lithos.ko</code> handles GSP boot during module init.<br><br>
+        Firmware: <code style="font-size:0.72rem">nvidia/580.105.08/<br>gsp_ga10x.bin</code>
+      </div>
+    </div>
+
+    <div class="callout instr">
+      <div class="callout-title">16 bytes / instruction</div>
+      <div class="callout-body">
+        Every sm90a instruction is exactly 16&nbsp;bytes: an 8-byte 64-bit instruction word (opcode + operands) paired with an 8-byte control word (stall counts, yield bit, read/write barrier flags). Lithos emits both words directly &mdash; no assembler pass.
+      </div>
+    </div>
+
+  </div><!-- /callout-col -->
+
+</div><!-- /pipeline-wrap -->
+
+</section>
+
+<!-- MEGAKERNELS SECTION -->
+<section id="megakernels">
+<h2>Two Cooperative-Grid Megakernels</h2>
+
+<p>Lithos compiles entire transformer forward passes into exactly two cooperative-grid kernels per model. No inter-kernel synchronization barriers. No kernel re-launch between layers. One GPFIFO entry per token at inference time.</p>
+
+<div class="mk-grid">
+  <div class="mk-box">
+    <h4>Forward Pass Kernel</h4>
+    <ul>
+      <li>RMSNorm + residual add (fused)</li>
+      <li>Weight-immediate projection streams (Q, K, V)</li>
+      <li>Attention + softmax (fused)</li>
+      <li>Weight-immediate output projection</li>
+      <li>RMSNorm (FFN) + residual</li>
+      <li>Weight-immediate gate + up projection</li>
+      <li>SiLU activation</li>
+      <li>Weight-immediate down projection</li>
+      <li>Sampling (argmax / temperature)</li>
+    </ul>
+  </div>
+  <div class="mk-box">
+    <h4>Recurrence Update Kernel</h4>
+    <ul>
+      <li>DeltaNet state update (delta rule)</li>
+      <li>KV cache write (attend.li)</li>
+      <li>Recurrent hidden state (recur.li)</li>
+      <li>Elementwise gating (elementwise.li)</li>
+      <li>Cross-layer state threading</li>
+      <li>Cooperative grid sync between SMs</li>
+    </ul>
+  </div>
+</div>
+
+<p>Cooperative grid launch means all SMs in both kernels can synchronize via a device-wide barrier (<code>bar.sync</code> / <code>cooperative_groups::sync</code>) without returning to the CPU. The GPU itself orchestrates the inter-SM handoff between attention and FFN, and between layers.</p>
+
+</section>
+
+<!-- 16-BYTE INSTRUCTION FORMAT -->
+<section id="instruction-format">
+<h2>Instruction Format &mdash; 16 Bytes</h2>
+
+<p>Every sm90a Hopper instruction occupies exactly 16 bytes in the instruction stream. The Lithos compiler (<code>gpu/emit.fs</code>) emits both words directly from the primitive vocabulary &mdash; there is no assembler, no intermediate text format.</p>
+
+<div class="byte-map">
+  <div class="cell header">B0</div>
+  <div class="cell header">B1</div>
+  <div class="cell header">B2</div>
+  <div class="cell header">B3</div>
+  <div class="cell header">B4</div>
+  <div class="cell header">B5</div>
+  <div class="cell header">B6</div>
+  <div class="cell header">B7</div>
+  <div class="cell header">B8</div>
+  <div class="cell header">B9</div>
+  <div class="cell header">B10</div>
+  <div class="cell header">B11</div>
+  <div class="cell header">B12</div>
+  <div class="cell header">B13</div>
+  <div class="cell header">B14</div>
+  <div class="cell header">B15</div>
+
+  <div class="cell inst">opc</div>
+  <div class="cell inst">opc</div>
+  <div class="cell inst">opc</div>
+  <div class="cell inst">dst</div>
+  <div class="cell inst">src0</div>
+  <div class="cell inst">src1</div>
+  <div class="cell inst">src2</div>
+  <div class="cell inst">mod</div>
+  <div class="cell ctrl">stall</div>
+  <div class="cell ctrl">yld</div>
+  <div class="cell ctrl">rdbar</div>
+  <div class="cell ctrl">wrbar</div>
+  <div class="cell ctrl">dep</div>
+  <div class="cell ctrl">reuse</div>
+  <div class="cell ctrl">&mdash;</div>
+  <div class="cell ctrl">&mdash;</div>
+</div>
+
+<div style="display:flex;gap:2rem;margin-top:0.4rem;font-size:0.78rem;">
+  <span style="color:var(--accent);">&#9632; Bytes 0&ndash;7: instruction word (64-bit opcode, registers, modifiers)</span>
+  <span style="color:var(--blue);">&#9632; Bytes 8&ndash;15: control word (stall counts, barriers, reuse flags)</span>
+</div>
+
+<h3>Encoding Properties</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th>Bits</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>Opcode</td><td class="num">63:48</td><td>Major opcode identifies instruction family (FFMA, HMMA, LDG, STG, BAR, &hellip;)</td></tr>
+    <tr><td>Destination</td><td class="num">7:0</td><td>Destination register index (R0&ndash;R255)</td></tr>
+    <tr><td>Source A/B/C</td><td class="num">variable</td><td>Source register indices; immediate fields for constants</td></tr>
+    <tr><td>Modifiers</td><td class="num">variable</td><td>Rounding mode, saturation, cache hints, predicate</td></tr>
+    <tr><td>Stall count</td><td class="num">3:0 (ctrl)</td><td>Cycles to wait before issuing next instruction (0&ndash;15)</td></tr>
+    <tr><td>Yield</td><td class="num">4 (ctrl)</td><td>Hint scheduler to switch warp</td></tr>
+    <tr><td>R/W barriers</td><td class="num">7:5 (ctrl)</td><td>Memory dependency tracking across scoreboard slots</td></tr>
+    <tr><td>Dep wait mask</td><td class="num">14:8 (ctrl)</td><td>Which scoreboard slots must clear before issue</td></tr>
+  </tbody>
+</table>
+
+</section>
+
+<!-- PRIMITIVE FAMILIES TABLE -->
+<section id="primitives">
+<h2>12 Primitive Families</h2>
+
+<p>The entire Lithos vocabulary is 12 primitive families. Each family maps to a known-good binary pattern that the compiler (<code>gpu/emit.fs</code>) emits directly. The dimensional notation encodes the shape of the data flowing through each operation.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Family</th>
+      <th>Notation</th>
+      <th>Description</th>
+      <th>GPU instruction(s) emitted</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Scalar multiply</td>
+      <td><span class="notation">*</span></td>
+      <td>FP16/BF16 scalar&times;scalar product</td>
+      <td><code>FFMA</code> / <code>HFMA2</code> with constant register</td>
+    </tr>
+    <tr>
+      <td>Vector dot</td>
+      <td><span class="notation">**</span></td>
+      <td>FP16 vector&middot;vector inner product</td>
+      <td><code>HMMA</code> (Tensor Core MMA) or loop of <code>HFMA2</code></td>
+    </tr>
+    <tr>
+      <td>Matrix&times;vector</td>
+      <td><span class="notation">***</span></td>
+      <td>Outer matrix&times;vector (GEMV core)</td>
+      <td><code>HMMA.16816</code> Tensor Core warp tile, fused accumulate</td>
+    </tr>
+    <tr>
+      <td>Shuffle-tree reduction</td>
+      <td><span class="notation">&Sigma;</span></td>
+      <td>Warp-level parallel sum/max reduction</td>
+      <td><code>SHFL.SYNC</code> butterfly tree (5 rounds for 32 lanes)</td>
+    </tr>
+    <tr>
+      <td>Scalar add</td>
+      <td><span class="notation">+*</span></td>
+      <td>Elementwise scalar addition</td>
+      <td><code>FFMA</code> with one operand = 1.0 (fused multiply-add)</td>
+    </tr>
+    <tr>
+      <td>Scalar subtract</td>
+      <td><span class="notation">-*</span></td>
+      <td>Elementwise scalar subtraction</td>
+      <td><code>FFMA</code> with negated operand modifier bit</td>
+    </tr>
+    <tr>
+      <td>Scalar divide / reciprocal</td>
+      <td><span class="notation">/*</span></td>
+      <td>FP32 reciprocal (Newton&ndash;Raphson)</td>
+      <td><code>MUFU.RCP</code> + <code>FFMA</code> refinement step</td>
+    </tr>
+    <tr>
+      <td>Global load</td>
+      <td><span class="notation">ld.g</span></td>
+      <td>128-bit coalesced global memory load</td>
+      <td><code>LDG.E.128</code> with async pipeline (<code>ldgdepbar</code>)</td>
+    </tr>
+    <tr>
+      <td>Global store</td>
+      <td><span class="notation">st.g</span></td>
+      <td>128-bit coalesced global memory store</td>
+      <td><code>STG.E.128</code> with write-back cache hint</td>
+    </tr>
+    <tr>
+      <td>Shared load/store</td>
+      <td><span class="notation">ld.s / st.s</span></td>
+      <td>Shared memory access with bank-conflict avoidance</td>
+      <td><code>LDS.128</code> / <code>STS.128</code> with swizzle offset</td>
+    </tr>
+    <tr>
+      <td>Project (normalize)</td>
+      <td><span class="notation">proj</span></td>
+      <td>RMSNorm: compute RMS, multiply, apply weight. In weights-as-code mode, emits weight-immediate <code>FMUL</code> instruction streams &mdash; no weight pointer, no HBM load.</td>
+      <td><code>HMMA</code> accumulate &rarr; <code>MUFU.RSQRT</code> &rarr; <code>FFMA</code> scale (or <code>FMUL-IMM</code> stream with weights as immediates)</td>
+    </tr>
+    <tr>
+      <td>Activation</td>
+      <td><span class="notation">act</span></td>
+      <td>SiLU / GeLU / softmax gate</td>
+      <td><code>MUFU.EX2</code> + <code>FFMA</code> for sigmoid; <code>HMMA</code> for softmax</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="small mt-1">Each primitive emits a <em>fixed</em> binary pattern: the same inputs always produce the same bytes. The compiler is a lookup table, not an analysis engine. This is a deliberate design choice &mdash; predictability over generality.</p>
+
+</section>
+
+<!-- WEIGHTS AS CODE -->
+<section id="weights-as-code">
+<h2>Weights as Code</h2>
+
+<p>In the weights-as-code architecture, the compiler reads <code>model.safetensors</code> at compile time. Each Q4 weight value is packed into the immediate field of an <code>FMUL-IMM</code> instruction. The resulting ELF <code>.text</code> section <em>is</em> the model weights &mdash; there is no separate weight tensor in HBM.</p>
+
+<h3>How it works</h3>
+
+<p>At compile time, the Lithos compiler opens the safetensors file, reads each layer's weight matrix, quantizes to Q4 if not already quantized, and emits a stream of 64-bit instructions where the immediate fields encode the packed 4-bit weight values. Each row of the weight matrix becomes a sequence of <code>FMUL-IMM</code> instructions that multiply the activation register by the weight immediate. There is no GEMV loop, no weight pointer parameter, no <code>LDG</code> instruction fetching weights from HBM.</p>
+
+<h3>Memory hierarchy inversion</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Conventional</th>
+      <th>Weights-as-Code</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Weights are data in HBM, fetched via <code>LDG</code></td>
+      <td>Weights are instruction immediates in <code>.text</code>, fetched via L1I cache</td>
+    </tr>
+    <tr>
+      <td>Weight bandwidth limited by HBM (4 TB/s)</td>
+      <td>Weight bandwidth limited by instruction fetch (L1I cache hierarchy)</td>
+    </tr>
+    <tr>
+      <td>HBM stores weights + activations + KV cache</td>
+      <td>HBM stores only activations + state matrices + KV cache</td>
+    </tr>
+    <tr>
+      <td>Kernel takes weight pointer as parameter</td>
+      <td>No weight parameter &mdash; weights are compiled into the instruction stream</td>
+    </tr>
+    <tr>
+      <td>cubin/ELF loads weights at runtime</td>
+      <td>The ELF <code>.text</code> section IS the weights</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>The instruction cache becomes the weight cache</h3>
+
+<p>The L1 instruction cache (L1I) on each SM fetches instruction words from L2 cache, which fetches from HBM. Weights flow through this path instead of the data path. The instruction cache hierarchy (L1I &rarr; L2 &rarr; HBM) replaces the data cache hierarchy for weight access. Activations remain runtime data in registers and shared memory.</p>
+
+<h3>Compile-time input</h3>
+
+<pre>safetensors file  +  model config  +  Lithos source (.li)
+         |                 |                    |
+         v                 v                    v
+    weight values    dimensions/shapes    primitive families
+         |                 |                    |
+         +--------+--------+--------------------+
+                  |
+                  v
+       per-layer instruction streams
+       (weight immediates in .text)
+                  |
+                  v
+            GPU ELF binary</pre>
+
+</section>
+
+<!-- COMPARISON: Lithos vs conventional path -->
+<section id="comparison">
+<h2>Lithos vs Conventional Inference Stack</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Layer</th>
+      <th>Conventional (CUDA)</th>
+      <th>Lithos</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Source language</td>
+      <td>Python &rarr; C++ &rarr; CUDA C</td>
+      <td>Lithos <code>.li</code> / <code>.ls</code> (Forth stack language)</td>
+    </tr>
+    <tr>
+      <td>Compilation</td>
+      <td>nvcc &rarr; PTX &rarr; ptxas &rarr; SASS (6&ndash;7 IRs)</td>
+      <td>Lithos primitives &rarr; SASS direct (1 pass, no IRs)</td>
+    </tr>
+    <tr>
+      <td>Kernel granularity</td>
+      <td>20&ndash;50 kernels per transformer layer</td>
+      <td>2 cooperative-grid megakernels per model</td>
+    </tr>
+    <tr>
+      <td>Dispatch path</td>
+      <td>Python &rarr; PyTorch &rarr; ATen &rarr; cuBLAS &rarr; CUDA Runtime &rarr; Driver &rarr; GPU</td>
+      <td>ARM64 launcher &rarr; GPFIFO write + doorbell &rarr; GPU</td>
+    </tr>
+    <tr>
+      <td>Syscalls at inference time</td>
+      <td>Multiple per operation (ioctl, mmap, &hellip;)</td>
+      <td>Zero</td>
+    </tr>
+    <tr>
+      <td>Memory management</td>
+      <td><code>cudaMalloc</code> / <code>cudaMemcpy</code> / memory pools</td>
+      <td><code>mmap</code> &rarr; pointer (BAR4 coherent, no copy needed)</td>
+    </tr>
+    <tr>
+      <td>GPU driver</td>
+      <td><code>nvidia.ko</code> (~6&nbsp;MB, hundreds of ioctls)</td>
+      <td><code>lithos.ko</code> (minimal, 4 ioctls)</td>
+    </tr>
+    <tr>
+      <td>GSP firmware</td>
+      <td>Managed by <code>nvidia.ko</code> transparently</td>
+      <td>Managed by <code>lithos.ko</code> at module init (required)</td>
+    </tr>
+  </tbody>
+</table>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+  Lithos &mdash; Writing on Silicon &mdash; sm90a / GH200 &mdash; No CUDA
+</div>
+</footer>
+
+</body>
+</html>

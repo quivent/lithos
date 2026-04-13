@@ -262,7 +262,7 @@ footer {
 <section id="on-chip">
 <h2>Part 1: Fitting a Layer On-Chip</h2>
 
-<p>At batch=1, inference is bandwidth-bound. The GPU reads <span class="measure">~92 MB</span> of weights per layer from <span class="term" data-term="HBM">HBM</span> at <span class="measure">400 cycles</span> per access. But the <span class="term" data-term="SM">SM</span> has on-chip memory that is drastically faster:</p>
+<p>At batch=1 in conventional engines, inference is bandwidth-bound because the GPU reads weights from HBM via <code>LDG</code>. In the Lithos weights-as-code model, Q4 weight values are compiled into instruction immediates at compile time &mdash; they flow through the instruction cache (L1I) rather than the data path. The SM still has on-chip memory that is drastically faster than HBM:</p>
 
 <table>
 <tr>
@@ -358,7 +358,7 @@ footer {
 
 <h3>What changes</h3>
 
-<p>Instead of streaming weights from <span class="term" data-term="HBM">HBM</span> for every matmul, you load one layer's weights into distributed <span class="term" data-term="Shared Memory">shared memory</span> across <span class="measure">132</span> SMs. All operations within that layer &mdash; norm, projections, attention, MLP &mdash; read from on-chip. Only between layers does the memory bus activate to swap in the next layer's weights.</p>
+<p>With weights-as-code, Q4 values are encoded as instruction immediates at compile time. The instruction cache hierarchy (L1I &rarr; L2 &rarr; HBM) serves as the weight cache. At sub-3-bit quantization, if an entire layer's weight-immediate instruction stream fits in on-chip caches, all operations within that layer execute from cached instructions. Only between layers does the instruction fetch path need to pull the next layer's instruction stream from HBM.</p>
 
 <h3>The result</h3>
 
@@ -439,6 +439,17 @@ footer {
   <li>Tensor cores consume the result as FP16 tiles.</li>
   <li>FP64 cores accumulate the tile result for numerical precision (or unused if not needed).</li>
 </ul>
+</section>
+
+<!-- Weights as Code and Quantization -->
+<section id="weights-as-code">
+<h2>Weights as Code: Q4 as Instruction Immediates</h2>
+
+<p>In the Lithos weights-as-code architecture, quantization takes on a new meaning. Q4 no longer means "4-bit values packed in HBM tensors fetched via <code>LDG</code>." It means <strong>4-bit values packed into the immediate fields of GPU instructions</strong>. The compiler reads the safetensors file at compile time, dequantizes or re-packs Q4 weight values, and encodes them as immediates in <code>FMUL-IMM</code> instruction words.</p>
+
+<p>There is no runtime dequantization kernel. There is no weight pointer passed as a kernel parameter. The ELF <code>.text</code> section IS the model weights. Weight bandwidth comes from instruction fetch (L1I cache), not data load (<code>LDG</code>). The instruction cache hierarchy becomes the weight cache.</p>
+
+<p>This changes the quantization design space: the packing format must be optimized not just for storage efficiency and quality preservation, but also for instruction encoding efficiency &mdash; how many weight bits can be packed into the immediate field of each instruction word, and how the instruction scheduler handles the resulting stream.</p>
 </section>
 
 <!-- What nobody has done -->

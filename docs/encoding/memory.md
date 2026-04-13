@@ -489,9 +489,9 @@ w1 = 0x000e220000000a00   # bit 9 set for 64-bit
 
 ---
 
-## Relationship to cubin-wrap.fs
+## Relationship to elf-wrap.fs
 
-The Lithos cubin emitter (`compiler/cubin-wrap.fs`) places the parameter buffer at
+The Lithos ELF emitter (`compiler/elf-wrap.fs`) places the parameter buffer at
 `cbuf0`. Based on this reverse-engineering:
 
 1. **Parameters start at cbuf0 byte 0x208** (word index 0x82)

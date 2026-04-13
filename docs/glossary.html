@@ -362,7 +362,7 @@ footer {
 
 <div class="glossary-entry" id="term-cublas">
 <div class="glossary-term">cuBLAS &mdash; CUDA Basic Linear Algebra Subroutines</div>
-<div class="glossary-def">NVIDIA's GPU-accelerated matrix math library. Provides optimized GEMM (General Matrix Multiply) kernels selected from a pre-compiled atlas. The atlas is <em>~800 MB</em> because it contains kernels for every possible matrix shape. <span class="term" data-term="Lithos">Lithos</span> replaces <span class="term" data-term="cuBLAS">cuBLAS</span> with 7 purpose-built cubins totaling <em>32 KB</em>, specialized for the exact model dimensions.</div>
+<div class="glossary-def">NVIDIA's GPU-accelerated matrix math library. Provides optimized GEMM (General Matrix Multiply) kernels selected from a pre-compiled atlas. The atlas is <em>~800 MB</em> because it contains kernels for every possible matrix shape. Lithos replaces cuBLAS with 7 purpose-built ELF binaries totaling <em>~32 KB</em>, specialized for the exact model dimensions.</div>
 </div>
 
 <div class="glossary-entry" id="term-cuda-graph">
@@ -376,13 +376,13 @@ footer {
 </div>
 
 <div class="glossary-entry" id="term-cubin">
-<div class="glossary-term">cubin &mdash; Compiled GPU Binary</div>
-<div class="glossary-def">A GPU executable in ELF format containing <span class="term" data-term="SASS">SASS</span> machine code, constant data, and metadata in NVIDIA-specific ELF sections (<code>.text.&lt;kernel&gt;</code>, <code>.nv.info</code>, <code>.nv.constant0</code>). <span class="term" data-term="Lithos">Lithos</span> generates cubins by emitting <span class="term" data-term="SASS">SASS</span> directly into the ELF structure &mdash; no <span class="term" data-term="ptxas">ptxas</span> in the pipeline. A <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="cubin">cubin</span> is ~4 KB; the entire set is ~32 KB.</div>
+<div class="glossary-term">cubin &mdash; Compiled GPU Binary (now called ELF in Lithos)</div>
+<div class="glossary-def">NVIDIA's term for a GPU executable: an ELF container holding sm90 GPU machine code, constant data, and metadata in NVIDIA-specific ELF sections (<code>.text.&lt;kernel&gt;</code>, <code>.nv.info</code>, <code>.nv.constant0</code>). <span class="term" data-term="Lithos">Lithos</span> emits 64-bit instruction words directly into the ELF structure &mdash; no text-format assembly, no <span class="term" data-term="ptxas">ptxas</span> in the pipeline. In the <em>weights-as-code</em> model, the ELF <code>.text</code> section IS the model weights &mdash; Q4 values are encoded as instruction immediates. The ELF does not load weights at runtime; the instruction stream contains them.</div>
 </div>
 
 <div class="glossary-entry" id="term-cudnn">
 <div class="glossary-term">cuDNN &mdash; CUDA Deep Neural Network Library</div>
-<div class="glossary-def">NVIDIA's library of optimized primitives for convolutions, normalization, attention, and activations. Hundreds of MB of pre-compiled kernels covering many architectures and configurations. <span class="term" data-term="Lithos">Lithos</span> replaces <span class="term" data-term="cuDNN">cuDNN</span> entirely with fused SASS kernels &mdash; purpose-built for the target model's exact dimensions and operations.</div>
+<div class="glossary-def">NVIDIA's library of optimized primitives for convolutions, normalization, attention, and activations. Hundreds of MB of pre-compiled kernels covering many architectures and configurations. Lithos replaces cuDNN entirely with fused ELF kernels containing sm90 machine code &mdash; purpose-built for the target model's exact dimensions and operations.</div>
 </div>
 
 <div class="glossary-entry" id="term-culaunchkernel">
@@ -410,6 +410,11 @@ footer {
 <!-- ===== D ===== -->
 <div class="letter-section" id="letter-D">
 <div class="letter-heading">D</div>
+
+<div class="glossary-entry" id="term-dimensional-notation">
+<div class="glossary-term">Dimensional Notation</div>
+<div class="glossary-def">Lithos type-level notation for tensor rank. <code>*</code> = scalar, <code>**</code> = vector (1-D tensor), <code>***</code> = matrix (2-D tensor). <code>&Sigma;</code> denotes a reduction dimension. These sigils appear in Forth word signatures to make data shapes visible in the source without runtime type checks. A word taking <code>*** **</code> and returning <code>**</code> performs matrix-vector multiply (GEMV).</div>
+</div>
 
 <div class="glossary-entry" id="term-deltanet">
 <div class="glossary-term">DeltaNet &mdash; Linear Attention with Recurrent State</div>
@@ -444,7 +449,7 @@ footer {
 
 <div class="glossary-entry" id="term-forth">
 <div class="glossary-term">Forth</div>
-<div class="glossary-def">A stack-based programming language invented by Charles Moore in 1970. Programs are sequences of <em>words</em> that manipulate a data stack. <span class="term" data-term="Lithos">Lithos</span> is <span class="term" data-term="Forth">Forth</span>-derived: each word takes register IDs from the stack, emits <span class="term" data-term="SASS">SASS</span> instructions, and returns result register IDs. Compilation is direct binary emission &mdash; a full inference <span class="term" data-term="Kernel">kernel</span> compiles in <em>microseconds</em>.</div>
+<div class="glossary-def">A stack-based programming language invented by Charles Moore in 1970. Programs are sequences of <em>words</em> that manipulate a data stack. <span class="term" data-term="Lithos">Lithos</span> is <span class="term" data-term="Forth">Forth</span>-derived: each word takes register IDs from the stack, emits GPU machine code (64-bit instruction words), and returns result register IDs. Compilation is direct binary emission &mdash; a full inference <span class="term" data-term="Kernel">kernel</span> compiles in <em>microseconds</em>.</div>
 </div>
 
 <div class="glossary-entry" id="term-fp8">
@@ -475,7 +480,7 @@ footer {
 
 <div class="glossary-entry" id="term-gptq">
 <div class="glossary-term">GPTQ &mdash; Post-Training Quantization</div>
-<div class="glossary-def">A quantization method that uses approximate second-order information (Hessian) to minimize quantization error. Compresses model weights to lower precision (e.g., 4-bit) with calibration data. Enables running larger models in less GPU memory &mdash; Qwen 27B at W4 fits in <em>~18 GB</em> instead of ~54 GB at <span class="term" data-term="FP16">FP16</span>.</div>
+<div class="glossary-def">A quantization method that uses approximate second-order information (Hessian) to minimize quantization error. Compresses model weights to lower precision (e.g., 4-bit) with calibration data. In the Lithos <em>weights-as-code</em> model, GPTQ-quantized 4-bit values are read from safetensors at compile time and encoded as instruction immediates &mdash; the quantized values become part of the instruction stream rather than data tensors in <span class="term" data-term="HBM3e">HBM</span>.</div>
 </div>
 
 <div class="glossary-entry" id="term-gqa">
@@ -491,6 +496,16 @@ footer {
 <div class="glossary-entry" id="term-grid">
 <div class="glossary-term">Grid</div>
 <div class="glossary-def">The complete set of thread blocks launched for a single <span class="term" data-term="Kernel">kernel</span> invocation. <span class="term" data-term="Grid">Grid</span> dimensions (gridDim.x, .y, .z) determine how many thread blocks execute in total. For <span class="term" data-term="Lithos">Lithos</span>, <span class="term" data-term="Grid">grid</span> size is calculated from model dimensions at compile time &mdash; no runtime <span class="term" data-term="Grid">grid</span> size decisions. The <span class="term" data-term="Grid">grid</span> for a full forward pass maps directly to the model's layer and head structure.</div>
+</div>
+
+<div class="glossary-entry" id="term-gpfifo">
+<div class="glossary-term">GPFIFO &mdash; GPU Command FIFO</div>
+<div class="glossary-def">The hardware ring buffer through which the CPU submits work to the GPU. Each entry points to a pushbuffer segment containing GPU commands (kernel launches, memory copies, semaphore operations). The CPU writes to the GPFIFO tail and rings the doorbell (via USERD); the GPU reads from the head. Lithos's <code>CREATE_CHANNEL</code> ioctl sets up a GPFIFO channel. The GSP firmware must be booted before GPFIFO becomes active.</div>
+</div>
+
+<div class="glossary-entry" id="term-gsp">
+<div class="glossary-term">GSP &mdash; GPU System Processor</div>
+<div class="glossary-def">A RISC-V microcontroller embedded on the Hopper die that handles GPU initialization, power management, and firmware tasks. Must be booted (firmware loaded and running) before the GPFIFO submission channel becomes active. nvidia.ko normally handles GSP boot; lithos.ko replicates this initialization sequence. GSP firmware runs independently of the SM array and is not programmable for kernel code &mdash; it is a control-plane processor, not a compute processor.</div>
 </div>
 
 </div>
@@ -522,7 +537,7 @@ footer {
 
 <div class="glossary-entry" id="term-kernel">
 <div class="glossary-term">Kernel</div>
-<div class="glossary-def">A function that runs on the GPU, executed by thousands of threads organized into thread blocks. In <span class="term" data-term="Lithos">Lithos</span>, kernels are compiled from <span class="term" data-term="Forth">Forth</span> words directly into <span class="term" data-term="SASS">SASS</span>. A <em>fused <span class="term" data-term="Kernel">kernel</span></em> combines multiple operations (e.g., norm + projection + activation + residual) into a single launch, eliminating inter-<span class="term" data-term="Kernel">kernel</span> <span class="term" data-term="HBM">HBM</span> round-trips. <span class="term" data-term="Lithos">Lithos</span> targets <em>5 fused <span class="term" data-term="Kernel">kernel</span> types</em> for production inference.</div>
+<div class="glossary-def">A function that runs on the GPU, executed by thousands of threads organized into thread blocks. In <span class="term" data-term="Lithos">Lithos</span>, kernels are compiled from <span class="term" data-term="Forth">Forth</span> words directly into sm90 GPU machine code and stored in ELF files (<code>.elf</code>). A <em>fused kernel</em> combines multiple operations (e.g., norm + projection + activation + residual) into a single launch, eliminating inter-kernel <span class="term" data-term="HBM">HBM</span> round-trips. The primary fused kernel is <code>deltanet_fused.li</code>. <span class="term" data-term="Lithos">Lithos</span> targets 2 cooperative megakernels per model (one per phase), with all layer iterations inside each megakernel via grid-sync.</div>
 </div>
 
 <div class="glossary-entry" id="term-kv-cache">
@@ -553,7 +568,12 @@ footer {
 
 <div class="glossary-entry" id="term-lithos">
 <div class="glossary-term">Lithos</div>
-<div class="glossary-def">A <span class="term" data-term="Forth">Forth</span>-derived GPU compute language that emits <span class="term" data-term="SASS">SASS</span> directly into cubins for NVIDIA GPUs. Built for inference on <span class="term" data-term="GH200">GH200</span>. Replaces PyTorch, <span class="term" data-term="cuBLAS">cuBLAS</span>, <span class="term" data-term="cuDNN">cuDNN</span>, and the <span class="term" data-term="CUDA">CUDA</span> runtime with <em>direct <span class="term" data-term="Kernel">kernel</span> compilation in microseconds</em>. Framework size: ~30 MB (just libcuda.so). <span class="term" data-term="Kernel">Kernel</span> binaries: 32 KB total. Named from <em>lithography</em> &mdash; writing on stone, the process that puts circuits on silicon.</div>
+<div class="glossary-def">A <span class="term" data-term="Forth">Forth</span>-derived GPU compute language that emits sm90 GPU machine code directly into ELF files for NVIDIA Hopper GPUs. Built for inference on <span class="term" data-term="GH200">GH200</span>. Replaces PyTorch, <span class="term" data-term="cuBLAS">cuBLAS</span>, <span class="term" data-term="cuDNN">cuDNN</span>, and the <span class="term" data-term="CUDA">CUDA</span> runtime with <em>direct kernel compilation in microseconds</em>. Framework size: ~30 MB (just libcuda.so). Kernel binaries: 32 KB total. Targets 2 cooperative grid-sync megakernels per model. Named from <em>lithography</em> &mdash; writing on stone, the process that puts circuits on silicon.</div>
+</div>
+
+<div class="glossary-entry" id="term-lithos-ko">
+<div class="glossary-term">lithos.ko &mdash; Lithos Linux Kernel Module</div>
+<div class="glossary-def">A minimal Linux kernel module that replaces nvidia.ko for inference. Provides 4 ioctls: <code>ALLOC_VRAM</code> (bump allocator over the BAR4 region), <code>CREATE_CHANNEL</code> (sets up a GPFIFO submission channel), <code>MAP_USERD</code> (maps the doorbell page into userspace), and <code>FREE_VRAM</code>. By replacing nvidia.ko, Lithos removes the NVIDIA driver stack overhead and talks directly to the GPU hardware. The VRAM allocator is a simple bump allocator over the 128 GB BAR4 coherent HBM region &mdash; no fragmentation management needed.</div>
 </div>
 
 <div class="glossary-entry" id="term-lpddr5x">
@@ -590,7 +610,7 @@ footer {
 
 <div class="glossary-entry" id="term-nn-module">
 <div class="glossary-term"><code>nn.Module</code></div>
-<div class="glossary-def">PyTorch's base class for neural network layers. Holds parameters (weights), sub-modules, and forward logic. Used for model definitions &mdash; every custom layer, every transformer block subclasses <span class="term" data-term="nn.Module">nn.Module</span>. The stateful counterpart to <span class="term" data-term="torch.nn.functional">torch.nn.functional</span>'s stateless API. <span class="term" data-term="Lithos">Lithos</span> has no equivalent &mdash; models are compiled from <span class="term" data-term="Forth">Forth</span> words directly to <span class="term" data-term="SASS">SASS</span>.</div>
+<div class="glossary-def">PyTorch's base class for neural network layers. Holds parameters (weights), sub-modules, and forward logic. Used for model definitions &mdash; every custom layer, every transformer block subclasses <span class="term" data-term="nn.Module">nn.Module</span>. The stateful counterpart to <span class="term" data-term="torch.nn.functional">torch.nn.functional</span>'s stateless API. Lithos has no equivalent &mdash; models are compiled from Forth words directly to sm90 binary in ELF files.</div>
 </div>
 
 <div class="glossary-entry" id="term-nvlink-c2c">
@@ -622,12 +642,12 @@ footer {
 
 <div class="glossary-entry" id="term-ptx">
 <div class="glossary-term">PTX &mdash; Parallel Thread Execution</div>
-<div class="glossary-def">NVIDIA's virtual instruction set architecture &mdash; an intermediate representation between high-level code and GPU machine code (<span class="term" data-term="SASS">SASS</span>). A stable text ISA, compiled to <span class="term" data-term="SASS">SASS</span> by the driver (<code>ptxas</code>) at load time. <span class="term" data-term="Lithos">Lithos</span> bypasses PTX entirely, emitting <span class="term" data-term="SASS">SASS</span> directly into <span class="term" data-term="cubin">cubin</span> files.</div>
+<div class="glossary-def">NVIDIA's virtual instruction set architecture &mdash; a text-format intermediate representation between high-level code and GPU machine code. A stable ISA compiled to binary by <code>ptxas</code> at load time. Lithos bypasses PTX entirely, emitting 64-bit instruction words directly into ELF files with no text-format intermediate. ptxas is used only as an oracle for opcode verification: Lithos writes a PTX snippet, runs ptxas, then disassembles with nvdisasm to confirm the binary encoding.</div>
 </div>
 
 <div class="glossary-entry" id="term-ptxas">
 <div class="glossary-term">ptxas &mdash; PTX Assembler</div>
-<div class="glossary-def">NVIDIA's <span class="term" data-term="PTX">PTX</span> assembler. Compiles <span class="term" data-term="PTX">PTX</span> to <span class="term" data-term="SASS">SASS</span>. Runs inside the driver when you call <code>cuModuleLoadData</code> with <span class="term" data-term="PTX">PTX</span>. Typical compile time: <em>100ms&ndash;2s per <span class="term" data-term="Kernel">kernel</span></em>. <span class="term" data-term="Lithos">Lithos</span> eliminates this step by emitting <span class="term" data-term="SASS">SASS</span> directly into <span class="term" data-term="cubin">cubin</span> ELF files &mdash; <span class="term" data-term="ptxas">ptxas</span> is not in the pipeline.</div>
+<div class="glossary-def">NVIDIA's PTX assembler. Compiles PTX text to sm90 binary. Runs inside the driver when you call <code>cuModuleLoadData</code> with PTX. Typical compile time: <em>100ms&ndash;2s per kernel</em>. Lithos eliminates this step by emitting binary directly into ELF files &mdash; ptxas is not in the Lithos pipeline. However, ptxas + nvdisasm are used as a verification tool: write PTX, compile, disassemble, compare binary against Lithos's emitted opcodes. All 47+ confirmed Hopper opcodes were verified this way.</div>
 </div>
 
 <div class="glossary-entry" id="term-pytorch-dispatcher">
@@ -647,8 +667,8 @@ footer {
 </div>
 
 <div class="glossary-entry" id="term-register-reuse-flags-sass">
-<div class="glossary-term">Register reuse flags (SASS)</div>
-<div class="glossary-def">Fields in the <span class="term" data-term="SASS">SASS</span> control word (<em>bits [63:58]</em>) that hint which source registers will be reused by the next instruction. Helps the hardware avoid register bank conflicts by caching the operand in a small reuse cache near the datapath. Set automatically by <span class="term" data-term="ptxas">ptxas</span> based on its scheduling decisions; can be set manually in direct <span class="term" data-term="SASS">SASS</span> emission for fine-grained control.</div>
+<div class="glossary-term">Register reuse flags (control word)</div>
+<div class="glossary-def">Fields in the instruction control word (bits [63:58]) that hint which source registers will be reused by the next instruction. Helps the hardware avoid register bank conflicts by caching the operand in a small reuse cache near the datapath. Set automatically by ptxas based on its scheduling decisions; Lithos sets them directly in the emitted binary for fine-grained control.</div>
 </div>
 
 <div class="glossary-entry" id="term-rmsnorm">
@@ -673,8 +693,13 @@ footer {
 </div>
 
 <div class="glossary-entry" id="term-sass">
-<div class="glossary-term">SASS &mdash; Shader Assembly</div>
-<div class="glossary-def">The actual GPU machine code that runs on NVIDIA hardware. Each instruction is <em>16 bytes</em>: an 8-byte instruction word (opcode in bits [15:0], operands, modifiers) and an 8-byte control word (stall counts, yield hints, read/write barriers, <span class="term" data-term="Register reuse flags">register reuse flags</span>). <span class="term" data-term="Lithos">Lithos</span> has reverse-engineered 47+ <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SASS">SASS</span> opcodes and emits <span class="term" data-term="SASS">SASS</span> directly into cubins, bypassing <span class="term" data-term="ptxas">ptxas</span> for full scheduling control.</div>
+<div class="glossary-term">SASS &mdash; Shader Assembly (NVIDIA mnemonic notation)</div>
+<div class="glossary-def">NVIDIA's mnemonic name for GPU machine code. SASS is the human-readable notation; the actual hardware runs 64-bit binary instruction words. Each instruction is <em>16 bytes</em>: an 8-byte instruction word (opcode in bits [15:0], uniform register fields: dst=[23:16], src1=[31:24], src2=[39:32]) and an 8-byte control word (stall counts, yield hints, read/write barriers, register reuse flags). Lithos goes below SASS notation and emits binary instruction words directly into ELF files. All opcodes are empirically verified from live GH200 hardware via ptxas + nvdisasm and documented in <code>docs/encoding/</code>. See also: <em>GPU machine code</em>, <em>sm90 binary</em>.</div>
+</div>
+
+<div class="glossary-entry" id="term-gpu-machine-code">
+<div class="glossary-term">GPU machine code &mdash; sm90 binary</div>
+<div class="glossary-def">What Lithos actually emits. 64-bit instruction words packed into ELF files, executed directly by Hopper SM hardware. No SASS text notation, no PTX text, no intermediate representation. Each instruction word is 8 bytes followed by an 8-byte control word; together they form the 16-byte instruction slot. Opcodes verified empirically on GH200 and documented in <code>docs/encoding/</code>. Contrast with <em>SASS</em> (the human-readable mnemonic form that nvdisasm produces from the binary) and <em>PTX</em> (the virtual ISA text format that ptxas compiles to produce SASS).</div>
 </div>
 
 <div class="glossary-entry" id="term-scaled-dot-product-attention">
@@ -688,8 +713,8 @@ footer {
 </div>
 
 <div class="glossary-entry" id="term-stall-count-sass">
-<div class="glossary-term">Stall count (SASS)</div>
-<div class="glossary-def">A field in the <span class="term" data-term="SASS">SASS</span> control word (<em>bits [57:53]</em>) that specifies the minimum number of cycles the scheduler must wait before issuing the next instruction from the same <span class="term" data-term="Warp">warp</span>. Normally set by <span class="term" data-term="ptxas">ptxas</span> based on dependency analysis. The <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="SASS">SASS</span> emitter can set these directly for fine-grained scheduling control, potentially outperforming <span class="term" data-term="ptxas">ptxas</span>'s generic scheduling.</div>
+<div class="glossary-term">Stall count (control word)</div>
+<div class="glossary-def">A field in the 8-byte instruction control word that specifies the minimum number of cycles the scheduler must wait before issuing the next instruction from the same warp. Normally set by ptxas based on dependency analysis. Lithos sets these directly in the emitted binary for fine-grained scheduling control, tuned to each kernel's specific memory access pattern rather than relying on ptxas's generic heuristics.</div>
 </div>
 
 <div class="glossary-entry" id="term-sfu">
@@ -704,7 +729,7 @@ footer {
 
 <div class="glossary-entry" id="term-silu">
 <div class="glossary-term">SiLU &mdash; Sigmoid Linear Unit</div>
-<div class="glossary-def">The activation function <code>x * sigmoid(x)</code>, computed as <code>x / (1 + exp(-x))</code>. Used in every MLP layer of Qwen 3.5 (64 layers). <span class="term" data-term="Lithos">Lithos</span> computes <span class="term" data-term="SiLU">SiLU</span> in <em>6 SASS instructions</em> entirely in registers using <code>ex2.approx</code> and <code>rcp.approx</code>, with no intermediate memory access. Always fused into the MLP <span class="term" data-term="Kernel">kernel</span>.</div>
+<div class="glossary-def">The activation function <code>x * sigmoid(x)</code>, computed as <code>x / (1 + exp(-x))</code>. Used in every MLP layer of Qwen 3.5 (64 layers). Lithos computes SiLU in 6 binary instruction words entirely in registers using <code>ex2.approx</code> (MUFU subop, ctrl bits [13:8]) and <code>rcp.approx</code> (SFU), with no intermediate memory access. Always fused into the MLP kernel.</div>
 </div>
 
 <div class="glossary-entry" id="term-sm">
@@ -745,7 +770,7 @@ footer {
 
 <div class="glossary-entry" id="term-triton">
 <div class="glossary-term">Triton</div>
-<div class="glossary-def">OpenAI's GPU <span class="term" data-term="Kernel">kernel</span> compiler. A Python-embedded DSL for writing GPU kernels. Used by <code>torch.compile</code>/Inductor to generate fused kernels. Simpler than <span class="term" data-term="CUDA">CUDA</span> C++ but still requires compilation (<span class="term" data-term="Triton">Triton</span> IR &rarr; <span class="term" data-term="PTX">PTX</span> &rarr; <span class="term" data-term="ptxas">ptxas</span> &rarr; <span class="term" data-term="SASS">SASS</span>). Not an inference engine &mdash; a compiler for writing individual kernels.</div>
+<div class="glossary-def">OpenAI's GPU kernel compiler. A Python-embedded DSL for writing GPU kernels. Used by <code>torch.compile</code>/Inductor to generate fused kernels. Simpler than CUDA C++ but still requires compilation (Triton IR &rarr; PTX text &rarr; ptxas &rarr; sm90 binary). Not an inference engine &mdash; a compiler for writing individual kernels.</div>
 </div>
 
 </div>
@@ -756,7 +781,17 @@ footer {
 
 <div class="glossary-entry" id="term-unified-memory">
 <div class="glossary-term">Unified Memory</div>
-<div class="glossary-def">A memory model where CPU and GPU share the same virtual address space. On <span class="term" data-term="GH200">GH200</span>, this is <em>hardware-native</em> via <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> &mdash; not the software-managed <span class="term" data-term="CUDA">CUDA</span> <span class="term" data-term="Unified Memory">Unified Memory</span> that requires driver hints and page migration. <code>mmap</code> returns a pointer that both processors can use. The hardware maintains coherence at page granularity. No cudaMalloc, no cudaMemcpy, no staging buffers.</div>
+<div class="glossary-def">A memory model where CPU and GPU share the same virtual address space. On <span class="term" data-term="GH200">GH200</span>, this is <em>hardware-native</em> via <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> with Address Translation Services (ATS) &mdash; the CPU physical address equals the GPU virtual address. No software-managed page migration, no driver hints. <code>mmap</code> returns a pointer that both processors can use. The hardware maintains coherence. No cudaMalloc, no cudaMemcpy, no staging buffers. BAR4 exposes 128 GB of coherent HBM to the CPU address space.</div>
+</div>
+
+<div class="glossary-entry" id="term-userd">
+<div class="glossary-term">USERD &mdash; User Engine Return Data / Doorbell Page</div>
+<div class="glossary-def">A page of GPU control registers mapped into userspace that allows the CPU to ring the GPU doorbell without a kernel call. After writing commands into the GPFIFO, the CPU writes to the USERD PUT register to notify the GPU that new work is available. Lithos's <code>MAP_USERD</code> ioctl exposes this page. Avoids the overhead of an ioctl per submission &mdash; the doorbell write is a single store instruction to a memory-mapped register.</div>
+</div>
+
+<div class="glossary-entry" id="term-qmd">
+<div class="glossary-term">QMD &mdash; Queue Metadata Descriptor</div>
+<div class="glossary-def">The 528-byte descriptor that configures a kernel launch on Hopper hardware. Specifies grid dimensions, block dimensions, shared memory size, register count, kernel entry point, and parameter pointers. Written to the pushbuffer before the kernel launch command. The QMD format is architecture-specific &mdash; Hopper QMDs are 528 bytes (not the 256 bytes of earlier architectures). Lithos constructs QMDs directly when submitting kernel launches via GPFIFO.</div>
 </div>
 
 </div>
@@ -767,7 +802,12 @@ footer {
 
 <div class="glossary-entry" id="term-w4a16">
 <div class="glossary-term">W4A16 &mdash; 4-bit Weights, 16-bit Activations</div>
-<div class="glossary-def">A quantization scheme that stores model weights at 4-bit precision while keeping activations at 16-bit for accurate computation. Reduces Qwen 27B from <em>~54 GB</em> (<span class="term" data-term="FP16">FP16</span>) to <em>~18 GB</em>, fitting comfortably in <span class="term" data-term="GH200">GH200</span>'s 96 GB <span class="term" data-term="HBM3e">HBM3e</span> with ample room for <span class="term" data-term="KV Cache">KV cache</span> and activations. The standard quantization target for <span class="term" data-term="Lithos">Lithos</span> inference.</div>
+<div class="glossary-def">A quantization scheme that stores model weights at 4-bit precision while keeping activations at 16-bit for accurate computation. Reduces Qwen 27B from <em>~54 GB</em> (<span class="term" data-term="FP16">FP16</span>) to <em>~18 GB</em>. In the Lithos <em>weights-as-code</em> model, W4 values are compiled into instruction immediates at compile time &mdash; the 4-bit weight values are packed into the immediate fields of <code>FMUL-IMM</code> instructions, so the ELF <code>.text</code> section IS the weights. No runtime weight loading from <span class="term" data-term="HBM3e">HBM3e</span>; activations remain at 16-bit in registers.</div>
+</div>
+
+<div class="glossary-entry" id="term-weights-as-code">
+<div class="glossary-term">Weights as Code</div>
+<div class="glossary-def">The Lithos architecture where model weights are encoded as instruction immediates at compile time, rather than stored as data tensors loaded from <span class="term" data-term="HBM3e">HBM</span> at runtime. The compiler reads <code>model.safetensors</code>, extracts Q4 weight values, and packs them into the immediate fields of <code>FMUL-IMM</code> GPU instructions. The ELF <code>.text</code> section IS the model weights. Weight bandwidth comes from the instruction fetch path (L1I cache &rarr; L2 &rarr; HBM) instead of the data load path (<code>LDG</code>). Activations, state matrices, and KV cache remain as runtime data. The model becomes the program.</div>
 </div>
 
 <div class="glossary-entry" id="term-warp">

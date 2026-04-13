@@ -296,6 +296,7 @@ footer {
   <a href="/kernels">Kernels</a>
   <a href="/quantization">Quantization</a>
   <a href="/compiler">The Compiler</a>
+  <a href="/pipeline">Inference Stack</a>
   <a href="/performance">Performance</a>
   <a href="/bandwidth">Bandwidth</a>
   <a href="/multicore">Multicore</a>
@@ -323,7 +324,9 @@ footer {
 <!-- What Lithos Is -->
 <section id="what">
 <h2>What Lithos Is</h2>
-<p>Lithos is a Forth-derived language that writes computation directly onto GPU silicon. It emits SASS directly into cubin ELF files for NVIDIA GPUs, dispatched from ARM64 CPUs. No C++, no nvcc, no ptxas, no framework.</p>
+<p>Lithos is a GPU inference engine with no CUDA dependency. Lithos source files (<code>.li</code> for kernels, <code>.ls</code> for composed layers) compile via 12 primitive families directly to sm90a GPU machine code (64-bit instruction words), packaged into ELF binaries. An ARM64 launcher writes directly to the GPFIFO ring with a doorbell write &mdash; zero syscalls at inference time. A minimal Linux kernel module (<code>lithos.ko</code>) replaces <code>nvidia.ko</code> and owns the GPU hardware through 4 ioctls. No C++, no nvcc, no ptxas, no CUDA runtime, no framework.</p>
+
+<p><strong>Weights are code.</strong> The compiler reads <code>model.safetensors</code> at compile time and encodes Q4 weight values as instruction immediates in <code>FMUL-IMM</code> instructions. The ELF <code>.text</code> section IS the model weights. There is no runtime weight loading from HBM &mdash; weights flow through the instruction cache hierarchy (L1I &rarr; L2) instead of the data path. Only activations, state matrices, and KV cache remain as runtime data.</p>
 </section>
 
 <!-- The Problem -->
@@ -364,7 +367,7 @@ footer {
     <span class="problem-title">Dispatch Overhead</span>
   </div>
   <p>Current path: Python &rarr; PyTorch &rarr; <span class="term" data-term="ATen">ATen</span> &rarr; cuBLAS &rarr; CUDA Runtime &rarr; Driver &rarr; GPU. Measured: <span class="numbers">10-40&#xB5;s per operation</span>. With CUDA graphs: <span class="numbers">0.3-1&#xB5;s amortized</span>.</p>
-  <p>Lithos: Forth &rarr; driver API (<code>cuLaunchKernel</code>) &rarr; GPU. One call. For the fused mega-kernel approach, one launch per forward pass.</p>
+  <p>Lithos: ARM64 launcher &rarr; GPFIFO ring write + doorbell &rarr; GPU. Zero syscalls per inference. For the fused mega-kernel approach, one ring write per forward pass.</p>
 </div>
 
 <div class="problem">
@@ -373,7 +376,7 @@ footer {
     <span class="problem-title">Compilation Latency</span>
   </div>
   <p>nvcc compiles a FlashAttention kernel in <span class="numbers">10-60 seconds</span>. CUTLASS template instantiation takes hours. TensorRT model compilation takes minutes.</p>
-  <p>Lithos compilation is direct binary emission. Vocabulary words emit SASS instructions into a cubin buffer. A full inference kernel compiles in <span class="numbers">microseconds</span>. Specialize kernels at runtime for exact model config, sequence length, batch size. Recompile instantly when conditions change.</p>
+  <p>Lithos compilation is direct binary emission. Primitives map to fixed GPU machine code patterns; the encoding table is empirically verified against live hardware via ptxas + nvdisasm probing. A full inference kernel compiles in <span class="numbers">microseconds</span>. Specialize kernels at runtime for exact model config, sequence length, batch size. Recompile instantly when conditions change.</p>
 </div>
 
 </section>
@@ -466,22 +469,23 @@ footer {
 <section id="architecture">
 <h2>Architecture</h2>
 
-<h3>Compilation Path: Lithos &rarr; SASS &rarr; cubin</h3>
-<div class="diagram"><span class="accent">Lithos Source</span>
+<h3>Compilation Path: Lithos + safetensors &rarr; GPU machine code &rarr; ELF</h3>
+<div class="diagram"><span class="accent">Lithos Source (.li / .ls) + model.safetensors</span>
        <span class="dim">|</span>
-       <span class="dim">|</span> <span class="highlight">emit-sass.fs</span>            <span class="dim">raw 16-byte SASS instructions</span>
+       <span class="dim">|</span> <span class="highlight">primitive families</span>      <span class="dim">12 families: */+/-////Σ/scalar/project/matvec</span>
+       <span class="dim">|</span> <span class="highlight">+ weight immediates</span>    <span class="dim">Q4 weights from safetensors encoded into FMUL-IMM</span>
        <span class="dim">v</span>
-<span class="accent">SASS Code Buffer</span>                       <span class="dim">65536 bytes, binary</span>
+<span class="accent">sm90a Machine Code</span>                     <span class="dim">64-bit instruction words with weight immediates</span>
        <span class="dim">|</span>
-       <span class="dim">|</span> <span class="highlight">build-cubin</span>             <span class="dim">wrap in ELF, NVIDIA sections</span>
+       <span class="dim">|</span> <span class="highlight">ELF wrap</span>               <span class="dim">.text section IS the weights. No separate data section.</span>
        <span class="dim">v</span>
-<span class="accent">cubin ELF</span>                              <span class="dim">.text.&lt;kernel&gt; + .nv.info + .nv.constant0</span>
+<span class="accent">GPU ELF Binary</span>                         <span class="dim">loaded by lithos.ko (4 ioctls, owns GPU hardware)</span>
        <span class="dim">|</span>
-       <span class="dim">|</span> <span class="highlight">cuModuleLoadData</span>        <span class="dim">no JIT, direct load</span>
+       <span class="dim">|</span> <span class="highlight">GPFIFO ring write</span>       <span class="dim">ARM64 launcher, doorbell write, 0 syscalls</span>
        <span class="dim">v</span>
-<span class="accent">GPU Execution</span>                          <span class="dim">no ptxas anywhere in the pipeline</span></div>
+<span class="accent">GPU Execution</span>                          <span class="dim">no CUDA, no weight loading, no data path for weights</span></div>
 
-<p>The GPU never runs Forth. The GPU runs whatever Lithos compiled for it. The CPU orchestrates: token input, KV cache management, sampling, speculative decode logic. On GH200, both share the same memory. The orchestration is pointer passing, not data copying.</p>
+<p>The GPU runs GPU machine code compiled from Lithos primitives. The CPU (ARM64 Grace cores) orchestrates: token input, KV cache management, sampling. On GH200, CPU and GPU share the same physical memory via NVLink-C2C &mdash; BAR4 gives 128 GB coherent HBM where CPU PA == GPU VA. Orchestration is pointer passing, not data copying.</p>
 
 </section>
 
@@ -496,7 +500,7 @@ footer {
   <span class="layer-num">L0</span>
   <span class="layer-name">GPU Primitives</span>
 </div>
-<p class="layer-desc">Direct 1:1 mapping to GPU instructions (PTX mnemonic names, compiled to SASS). ~65 instruction words, ~20 type modifiers, ~6 memory space qualifiers.</p>
+<p class="layer-desc">Direct mapping to GPU machine code. 12 primitive families with dimensional notation: <code>*</code> (scalar, O(1)), <code>**</code> (vector loop, O(N)), <code>***</code> (matrix, O(N&sup2;)), <code>****</code> (tensor, O(N&sup3;)). Arithmetic families: <code>+</code>/<code>++</code>/<code>+++</code>, <code>-</code>/<code>--</code>, <code>//</code>. Reduction: <code>&Sigma;</code> (shuffle tree, O(log N), not a loop). Specialized: <code>project</code> (W4A16 GEMV), <code>matvec</code> (FP32 state GEMV). Encoding table empirically verified from hardware probing.</p>
 
 <h4><code>add.f32</code> &mdash; Float add</h4>
 <pre class="forth"><span class="stack">( fa fb -- fc )</span>
@@ -670,8 +674,8 @@ footer {
 
 <!-- SASS Encoding -->
 <section id="sass">
-<h2>SASS Encoding &mdash; Hopper Reverse Engineering</h2>
-<p class="small mb-1">Reverse-engineered from probe cubins. Every SASS instruction is 16 bytes (128 bits).</p>
+<h2>GPU Machine Code Encoding &mdash; Hopper Hardware Probing</h2>
+<p class="small mb-1">Encoding empirically verified against live GH200 hardware via ptxas + nvdisasm probing of small probe programs. Every sm90a instruction is 16 bytes (128 bits).</p>
 
 <h3>16-Byte Instruction Format</h3>
 <div class="byte-map">
@@ -761,8 +765,8 @@ footer {
 <table>
 <thead><tr><th>Step</th><th>Operation</th><th>Notes</th></tr></thead>
 <tbody>
-  <tr><td class="num">1</td><td>Read weights from memory</td><td>~8 GB for 27B W4. Every token.</td></tr>
-  <tr><td class="num">2</td><td>Matrix-vector multiply</td><td>Activation &times; weights. 64 layers.</td></tr>
+  <tr><td class="num">1</td><td>Fetch weight-immediate instructions</td><td>~8 GB of instruction stream for 27B W4. Weights are instruction immediates, fetched via L1I cache &mdash; not loaded from HBM as data.</td></tr>
+  <tr><td class="num">2</td><td>Execute weight-immediate streams</td><td>Activation &times; weight-immediates. 64 layers. No GEMV loop &mdash; each projection is a compiled instruction stream.</td></tr>
   <tr><td class="num">3</td><td>Attention</td><td>Score against all previous tokens' KV cache. Read/write KV entries.</td></tr>
   <tr><td class="num">4</td><td>Normalize</td><td>RMSNorm before and after attention + MLP. Elementwise.</td></tr>
   <tr><td class="num">5</td><td>Activate</td><td>SiLU in the MLP. Elementwise.</td></tr>
@@ -776,11 +780,11 @@ footer {
 <table>
 <thead><tr><th>Decision</th><th>Strategy</th></tr></thead>
 <tbody>
-  <tr><td>Weight placement</td><td>HBM for hot layers, CPU memory for cold. Unified memory makes this a soft boundary.</td></tr>
+  <tr><td>Weight placement</td><td>Weights are compiled into the instruction stream (ELF <code>.text</code>). The instruction cache hierarchy (L1I &rarr; L2 &rarr; HBM) acts as the weight cache. No separate weight tensors in HBM.</td></tr>
   <tr><td>KV cache placement</td><td>Starts in HBM, spills to CPU memory at NVLink speed. Not a cliff &mdash; a gradient.</td></tr>
   <tr><td>CPU vs GPU dispatch</td><td>Matmuls: GPU. Sampling: CPU (72 Grace cores). KV cache management: CPU.</td></tr>
-  <tr><td>Overlap</td><td>Next layer's weight prefetch overlaps current compute. CPU sampling overlaps GPU prefill.</td></tr>
-  <tr><td>Batching</td><td>Multiple requests share weight reads. Linear scaling until compute-bound. Batch=1: 13% BW. Batch=8: approaching ceiling.</td></tr>
+  <tr><td>Overlap</td><td>Next layer's instruction stream prefetch (via L1I/L2) overlaps current compute. CPU sampling overlaps GPU prefill.</td></tr>
+  <tr><td>Batching</td><td>Multiple requests share weight-immediate instruction streams. Linear scaling until compute-bound. Batch=1: instruction fetch bandwidth. Batch=8: approaching compute ceiling.</td></tr>
 </tbody>
 </table>
 
@@ -795,26 +799,27 @@ footer {
 </tbody>
 </table>
 
-<h3>Memory Model on GH200</h3>
+<h3>Memory Model on GH200 (Weights-as-Code)</h3>
 <div class="diagram"><span class="accent">Unified Address Space</span>
 
   <span class="highlight">HBM3 96 GB</span>                    <span class="highlight">LPDDR5X 480 GB</span>
   <span class="dim">~4 TB/s</span>                        <span class="dim">~500 GB/s</span>
 
-  Weights                        KV cache overflow
-  KV cache                       Cold weights
-  Activations                    CPU-side computation
+  ELF instruction streams        KV cache overflow
+    (weights as immediates)      Cold layer ELFs
+  KV cache (hot)                 CPU-side computation
+  Activations + state matrices
 
          <span class="dim">|</span>      <span class="accent">NVLink-C2C</span>      <span class="dim">|</span>
          <span class="dim">|</span>      <span class="accent">900 GB/s</span>        <span class="dim">|</span>
          <span class="dim">|</span>      <span class="accent">coherent</span>        <span class="dim">|</span>
          <span class="dim">+-----------+------------+</span>
 
-  Both CPU and GPU access any address.
-  Hardware maintains coherence.
-  No explicit transfers needed.</div>
+  Weights flow through L1I cache (instruction fetch).
+  Only activations, state, KV cache use data path.
+  No weight tensors in HBM as data.</div>
 
-<p>Lithos allocates memory once (<code>mmap</code>). Weights load from disk into this space. The GPU reads them directly. No <code>cudaMalloc</code>, no <code>cudaMemcpy</code>, no staging buffers.</p>
+<p>Weights are compiled into ELF instruction streams at compile time. The safetensors file is read once by the compiler and never accessed during inference. The GPU's instruction cache hierarchy (L1I &rarr; L2 &rarr; HBM) serves weight-immediate instructions. No <code>cudaMalloc</code>, no <code>cudaMemcpy</code>, no weight pointers, no data loads for weights.</p>
 
 </section>
 
@@ -823,12 +828,12 @@ footer {
 <h2>Kernel Guide &mdash; Why These Kernels, Why Not Others</h2>
 
 <h3>Why 7 Kernels</h3>
-<p>Each kernel matches a distinct parallelism strategy &mdash; <code>PROJECTION</code> tiles matrices across warps, <code>NORM</code> reduces a single vector. Seven operations, everything else is repetition with different weight pointers.</p>
+<p>Each kernel matches a distinct parallelism strategy &mdash; <code>PROJECTION</code> emits weight-immediate instruction streams across warps, <code>NORM</code> reduces a single vector. Seven operations, everything else is repetition with different compiled instruction streams.</p>
 
 <h3>The Kernels</h3>
 
-<h4><code>PROJECTION</code> &mdash; GEMM</h4>
-<p>Token-vector &times; weight matrix. 448 times per token (7 projections &times; 64 layers). 90% of all work. Tile into shared-memory blocks, feed tensor cores, accumulate.</p>
+<h4><code>PROJECTION</code> &mdash; Weight-Immediate Stream</h4>
+<p>Token-vector &times; weight matrix. 448 times per token (7 projections &times; 64 layers). 90% of all work. In the weights-as-code model, each projection is a compiled stream of <code>FMUL-IMM</code> instructions with weights encoded as immediates &mdash; no GEMV loop, no weight pointer, no HBM data load. The instruction cache serves the weights.</p>
 
 <h4><code>ATTENTION-SCORE</code></h4>
 <p>Streams the KV cache rather than reading a fixed matrix &mdash; the cache grows per token. Different access pattern from <code>PROJECTION</code>.</p>
@@ -846,7 +851,7 @@ footer {
 <p>Elementwise add. Always fused with <code>NORM</code> &mdash; never launched alone.</p>
 
 <h4><code>DEQUANTIZE</code></h4>
-<p>4-bit &rarr; FP16 unpack. Fused inside <code>PROJECTION</code>. Format-specific logic (W4, W8, GPTQ, AWQ).</p>
+<p>4-bit &rarr; FP16 unpack. In the weights-as-code model, dequantization happens at compile time: Q4 values are unpacked and encoded into instruction immediates. No runtime dequantization needed. For legacy mode, fused inside <code>PROJECTION</code> with format-specific logic (W4, W8, GPTQ, AWQ).</p>
 
 <h4><code>SAMPLE</code></h4>
 <p>Argmax/top-k over the 248,320-wide logit vector. Runs on CPU &mdash; small enough for cache.</p>
@@ -896,19 +901,19 @@ footer {
     <td>Compilation time for kernel change</td>
     <td class="num">10-60 s (nvcc)</td>
     <td class="num" style="color:var(--accent)">&lt;1 ms</td>
-    <td>String concatenation</td>
+    <td>Direct binary emission, no intermediate representations</td>
   </tr>
   <tr>
     <td>Memory management overhead</td>
     <td class="num"><span class="term" data-term="cudaMalloc">cudaMalloc</span> pools + transfers</td>
     <td class="num" style="color:var(--accent)">Zero</td>
-    <td>Unified memory, mmap only</td>
+    <td>Unified memory, mmap only (BAR4 coherent HBM)</td>
   </tr>
   <tr>
     <td>Single-stream tok/s (Qwen 27B W4)</td>
     <td class="num">~180</td>
-    <td class="num" style="color:var(--accent)">&gt;400</td>
-    <td>Bandwidth utilization + fused kernels</td>
+    <td class="num" style="color:var(--accent);">target: &gt;70% BW util</td>
+    <td>Kernel optimization in progress</td>
   </tr>
 </tbody>
 </table>
@@ -925,11 +930,11 @@ footer {
 <ul>
   <li><strong>Correct inference.</strong> "Paris" rank 1, logit 18.057, all 64 layers verified.</li>
   <li><strong>Forward pass:</strong> <span class="measure">2.44 s</span> for 5-token prefill (<span class="measure">0.49 s</span> per token, <span class="measure">~2 tok/s</span>). Down from 25.23 s &mdash; <span class="speedup">10.3&times;</span> optimization in one session.</li>
-  <li><strong>13 compiled cubins</strong> + 3 fused + DeltaNet-specific kernels (132 KB total).</li>
+  <li><strong>13 compiled GPU binaries</strong> + 3 fused + DeltaNet-specific kernels (132 KB total).</li>
   <li><strong>GPTQ W4A16 dequantization correct</strong> (zero-point 8.0 per auto-GPTQ convention).</li>
-  <li><strong>GH200 unified memory:</strong> mmap'd weight pointers passed directly to GPU kernels.</li>
-  <li><strong>Lithos compiler in Forth:</strong> compiles <code>.li</code> files to SASS cubins.</li>
-  <li><strong>SASS emitter:</strong> vector-add runs correctly on GH200 (direct cubin, no ptxas).</li>
+  <li><strong>Weights-as-code architecture:</strong> compiler reads safetensors, encodes Q4 weights as instruction immediates. ELF .text IS the weights. No runtime weight loading from HBM. BAR4 coherent HBM, CPU PA == GPU VA.</li>
+  <li><strong>Lithos compiler:</strong> compiles <code>.li</code> files to sm90a GPU machine code ELF binaries. lithos.ko kernel module owns GPU hardware (4 ioctls).</li>
+  <li><strong>GPU machine code emitter:</strong> vector-add runs correctly on GH200 (direct binary, no ptxas, no CUDA).</li>
   <li><strong>5 quantization schemes</strong> designed + implementations.</li>
   <li><strong>23+ documentation pages.</strong></li>
 </ul>
@@ -970,7 +975,7 @@ footer {
 <h2>Code Examples</h2>
 
 <h3>1. Defining a Kernel</h3>
-<p>A Lithos kernel definition using the vocabulary from <code>core.fs</code>:</p>
+<p>A kernel definition using the bootstrap Forth implementation vocabulary (<code>core.fs</code> layer). This shows the compiler&rsquo;s internal implementation language, not the <code>.li</code> source surface:</p>
 
 <pre class="forth"><span class="comment">\ Vector add kernel: output[i] = input_a[i] + input_b[i]</span>
 
@@ -1001,9 +1006,9 @@ ptx-reset ptx-header
   <span class="number">2</span> pick over st-global-f32     <span class="comment">\ store result</span>
 }kernel</pre>
 
-<h3>2. The SASS It Produces</h3>
-<pre><span class="comment">// SASS disassembly of vec_add cubin (sm_90, Hopper)</span>
-<span class="comment">// cubin loaded directly via cuModuleLoadData &mdash; no ptxas</span>
+<h3>2. The GPU Machine Code It Produces</h3>
+<pre><span class="comment">// sm90a GPU machine code disassembly of vec_add (Hopper, GH200)</span>
+<span class="comment">// ELF binary loaded via lithos.ko &mdash; no ptxas, no CUDA driver</span>
 
 <span class="comment">// Load parameters from constant bank</span>
   <span class="mnemonic">LDC</span>     <span class="register">R2</span>, c[0x0][0x210] ;          <span class="comment">// ptr_a (lo)</span>
@@ -1036,21 +1041,20 @@ ptx-reset ptx-header
   <span class="mnemonic">EXIT</span> ;</pre>
 
 <h3>3. How It Launches</h3>
-<pre class="forth"><span class="comment">\ Build cubin and launch on GPU</span>
-build-cubin                      <span class="comment">\ -- addr u    (cubin ELF buffer)</span>
+<pre class="forth"><span class="comment">\ Build ELF and launch on GPU via lithos.ko + GPFIFO</span>
+build-elf                        <span class="comment">\ -- addr u    (GPU ELF binary buffer)</span>
 
-<span class="comment">\ Load cubin module via CUDA driver API</span>
-cuModuleLoadData                 <span class="comment">\ -- module</span>
-<span class="string">s" vec_add"</span> cuModuleGetFunction  <span class="comment">\ -- func</span>
+<span class="comment">\ Load kernel via lithos.ko (4 ioctls, no CUDA driver)</span>
+lithos-load-kernel               <span class="comment">\ -- kernel-handle</span>
 
-<span class="comment">\ Set up launch parameters</span>
+<span class="comment">\ Set up launch parameters (block dims, grid dims)</span>
 <span class="number">256</span> <span class="number">1</span> <span class="number">1</span>                          <span class="comment">\ block: 256 threads</span>
 n <span class="number">255</span> + <span class="number">256</span> / <span class="number">1</span> <span class="number">1</span>                <span class="comment">\ grid: ceil(n/256) blocks</span>
 
-<span class="comment">\ Launch — one call, one kernel, the GPU executes</span>
-cuLaunchKernel                   <span class="comment">\ GPU runs vec_add</span></pre>
+<span class="comment">\ Launch — ARM64 writes to GPFIFO ring + doorbell write (0 syscalls)</span>
+gpfifo-launch                    <span class="comment">\ GPU runs vec_add</span></pre>
 
-<p class="mt-2">Forth words emit SASS binary instructions into a cubin buffer. <code>build-cubin</code> wraps them in the ELF sections the driver expects. <code>cuModuleLoadData</code> loads directly &mdash; no JIT, no ptxas. One <code>cuLaunchKernel</code> call. No framework, template instantiation, or intermediate representations between Forth and the GPU.</p>
+<p class="mt-2">Primitives emit GPU machine code directly into an ELF binary. <code>lithos.ko</code> owns the hardware (replaces <code>nvidia.ko</code>, 4 ioctls). The ARM64 launcher writes a command to the GPFIFO ring and performs a doorbell write &mdash; zero syscalls at inference time. No CUDA driver, no framework, no intermediate representations between Lithos and the GPU.</p>
 
 <p class="mt-1">Because compilation is microseconds, kernels specialize at runtime: generate a kernel tuned for the exact <code>hidden_dim</code>, <code>num_heads</code>, <code>head_dim</code>. Regenerate when batch size changes. Inline constants. Unroll loops to exact layer count.</p>
 

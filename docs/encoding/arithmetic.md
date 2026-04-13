@@ -164,9 +164,9 @@ ABS on src1 (ctrl extra41 bit 9 = 1):
   extra41 = 0x400000 (reuse cache bits for R2, R5)
 ```
 
-### emit-sass.fs constant
+### gpu/emit.fs constant
 
-`$7220` — defined in `sass/emit-sass-auto.fs` as `OP-FMUL`.
+`$7220` — `OP-FMUL` defined in `gpu/emit.fs`.
 Lithos uses `fmul, ( rd rs1 rs2 -- )` which calls `255 ffma,` (FFMA with Rs3=RZ).
 
 ---
@@ -211,9 +211,9 @@ abs.f32 → FADD Rd, |Rs|, -RZ
   0x800000ff05137221  (bit 63=1 + ctrl extra41 bit 9)
 ```
 
-### emit-sass.fs constant
+### gpu/emit.fs constant
 
-`$7221` — defined in `sass/emit-sass.fs` as `OP-FADD`.
+`$7221` — defined in `gpu/emit.fs` as `OP-FADD`.
 Builder: `fadd, ( rd ra rb -- )`.
 
 ---
@@ -263,9 +263,9 @@ This matches the `ctrl-ffma ( rs3 -- ctrl64 )` implementation in emit-sass.fs.
   extra41 = 0x09 = R9
 ```
 
-### emit-sass.fs constant
+### gpu/emit.fs constant
 
-`$7223` — defined in `sass/emit-sass.fs` as `OP-FFMA`.
+`$7223` — defined in `gpu/emit.fs` as `OP-FFMA`.
 Builder: `ffma, ( rd rs1 rs2 rs3 -- )`.
 
 ---
@@ -610,11 +610,11 @@ All encodings verified against nvdisasm on sm_90a.
 | `max.f32`        | FMNMX (!PT) | `0x7209`      | same; !PT = ctrl bit 26 set     |
 | `setp.*.f32`     | FSETP       | `0x720b`      | cond+pred in ctrl extra41       |
 
-### Existing emit-sass.fs constants (verified correct)
+### Existing gpu/emit.fs constants (verified correct)
 
 ```
-$7220 constant OP-FMUL   ← in emit-sass-auto.fs ✓
-$7221 constant OP-FADD   ← in emit-sass.fs ✓
+$7220 constant OP-FMUL   ← in gpu/emit.fs ✓
+$7221 constant OP-FADD   ← in gpu/emit.fs ✓
 $7223 constant OP-FFMA   ← in emit-sass.fs ✓
 ```
 
