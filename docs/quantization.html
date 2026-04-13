@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hardware-Matched Quantization &mdash; Lithos</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+}
+
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+
+.engine { font-weight: 500; }
+.engine-lithos    { color: var(--engine-lithos); }
+.engine-tensorrt  { color: var(--engine-tensorrt); }
+.engine-vllm      { color: var(--engine-vllm); }
+.engine-pytorch   { color: var(--engine-pytorch); }
+
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+.target { color: var(--accent); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+.pitfall { color: var(--red); }
+.numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.92em; }
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3.2rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+  line-height: 1.1;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Callout block */
+.callout {
+  background: var(--bg-raised);
+  border-left: 3px solid var(--accent);
+  padding: 1rem 1.2rem;
+  margin: 1.2rem 0;
+}
+.callout.warn { border-left-color: var(--red); }
+.callout.note { border-left-color: var(--blue); }
+.callout.research { border-left-color: var(--green); }
+
+/* Pipeline diagram */
+.pipeline {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.2rem 1.5rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.pipeline .unit { color: var(--accent); }
+.pipeline .work { color: var(--text); }
+.pipeline .tile { color: var(--cyan); }
+
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="index.html">Home</a>
+  <a href="bandwidth.html">Bandwidth</a>
+  <a href="memory.html">Memory</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+  <a href="quantization.html" class="active">Quantization</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Hardware-Matched Quantization</h1>
+  <p>Designing the quantization scheme from the silicon up: fit one layer on-chip, utilize every compute unit.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Research direction callout -->
+<section id="overview">
+<div class="callout research">
+  This page describes a research direction, not an implementation. The approach outlined here is a design space that <span class="term" data-term="Lithos">Lithos</span> is uniquely positioned to explore, because Lithos compiles kernels on the fly. Existing engines cannot try new quantization formats without months of kernel engineering. Lithos generates the dequantization kernel from a format specification &mdash; change the spec, recompile in microseconds, measure quality and speed.
+</div>
+
+<h2>The Premise</h2>
+<p>Every existing quantization method &mdash; GPTQ, <span class="term" data-term="AWQ">AWQ</span>, AQLM, QuIP#, EXL2, GGUF &mdash; is designed for quality preservation and storage efficiency. Some also target compatibility with existing CUDA kernels. None are designed for two properties that matter at the hardware level:</p>
+<ol style="margin-left: 1.4rem; margin-bottom: 1rem; color: var(--text-dim); line-height: 2;">
+  <li>Fitting exactly in the on-chip memory of a specific GPU.</li>
+  <li>Balancing dequantization work across all compute unit types on the <span class="term" data-term="SM">SM</span>.</li>
+</ol>
+<p>The Lithos approach: the quantization format is a function of the target silicon, not a property of the model alone.</p>
+</section>
+
+<!-- Part 1: Fitting a Layer On-Chip -->
+<section id="on-chip">
+<h2>Part 1: Fitting a Layer On-Chip</h2>
+
+<p>At batch=1, inference is bandwidth-bound. The GPU reads <span class="measure">~92 MB</span> of weights per layer from <span class="term" data-term="HBM">HBM</span> at <span class="measure">400 cycles</span> per access. But the <span class="term" data-term="SM">SM</span> has on-chip memory that is drastically faster:</p>
+
+<table>
+<tr>
+  <th>On-chip resource</th>
+  <th>Per SM</th>
+  <th>132 SMs total</th>
+</tr>
+<tr>
+  <td><span class="term" data-term="Register File">Register file</span></td>
+  <td class="num">256 KB</td>
+  <td class="num">33 MB</td>
+</tr>
+<tr>
+  <td><span class="term" data-term="Shared Memory">L1 / shared memory</span></td>
+  <td class="num">256 KB</td>
+  <td class="num">33 MB</td>
+</tr>
+<tr>
+  <td>Total on-chip</td>
+  <td></td>
+  <td class="num">66 MB</td>
+</tr>
+</table>
+
+<p>If one layer's quantized weights fit in <span class="target">66 MB</span>, they load from HBM once, sit on-chip, and every operation within that layer reads from on-chip memory (<span class="measure">1&ndash;23 cycles</span> instead of <span class="measure">400 cycles</span>). Inference flips from bandwidth-bound to compute-bound.</p>
+
+<h3>The math</h3>
+
+<p>Qwen 3.5-27B per layer (approximate):</p>
+<ul style="margin-left: 1.4rem; margin-bottom: 1rem; color: var(--text-dim); line-height: 2;">
+  <li><span class="term" data-term="MLP">MLP</span>: 3 &times; hidden_dim &times; intermediate = 3 &times; 5120 &times; 17408 = <span class="measure">267M</span> weights</li>
+  <li><span class="term" data-term="Attention">Attention</span> / <span class="term" data-term="DeltaNet">DeltaNet</span> projections: ~4 &times; 5120 &times; 5120 = <span class="measure">105M</span> weights (varies by layer type)</li>
+  <li>Total per layer: <span class="measure">~180M</span> weight values</li>
+</ul>
+
+<p>At different quantization levels:</p>
+
+<table>
+<tr>
+  <th>Bits/weight</th>
+  <th>Bytes/weight</th>
+  <th>Layer size</th>
+  <th>Fits in 66 MB?</th>
+</tr>
+<tr>
+  <td>16 (<span class="term" data-term="FP16">FP16</span>)</td>
+  <td class="num">2.0</td>
+  <td class="num">360 MB</td>
+  <td class="pitfall">No</td>
+</tr>
+<tr>
+  <td>8 (<span class="term" data-term="FP8">FP8</span>/INT8)</td>
+  <td class="num">1.0</td>
+  <td class="num">180 MB</td>
+  <td class="pitfall">No</td>
+</tr>
+<tr>
+  <td>4 (W4)</td>
+  <td class="num">0.5</td>
+  <td class="num">90 MB</td>
+  <td class="pitfall">No</td>
+</tr>
+<tr>
+  <td>3 (W3)</td>
+  <td class="num">0.375</td>
+  <td class="num">67.5 MB</td>
+  <td style="color: var(--text-dim);">Nearly</td>
+</tr>
+<tr>
+  <td>2.93</td>
+  <td class="num">0.366</td>
+  <td class="num">66 MB</td>
+  <td style="color: var(--green);">Exact fit</td>
+</tr>
+<tr>
+  <td>2 (W2)</td>
+  <td class="num">0.25</td>
+  <td class="num">45 MB</td>
+  <td style="color: var(--green);">Yes, room to spare</td>
+</tr>
+</table>
+
+<p>Target: <span class="target">~2.93 bits per weight</span> average across a layer. This is achievable with existing research:</p>
+<ul style="margin-left: 1.4rem; margin-bottom: 1rem; color: var(--text-dim); line-height: 2;">
+  <li>AQLM achieves 2-bit quantization with learned codebooks.</li>
+  <li>QuIP# achieves 2-bit with lattice quantization.</li>
+  <li>EXL2 does mixed precision per layer, targeting any average.</li>
+</ul>
+
+<h3>Per-layer adaptive precision</h3>
+
+<p>Not all layers need the same number of bits. Early layers (more important for output quality) get 3&ndash;4 bits. Late layers (more redundant) get 2 bits. The average hits <span class="target">2.93</span>. Each layer's total fits in <span class="target">66 MB</span>. Quality is preserved where it matters most.</p>
+
+<h3>What changes</h3>
+
+<p>Instead of streaming weights from <span class="term" data-term="HBM">HBM</span> for every matmul, you load one layer's weights into distributed <span class="term" data-term="Shared Memory">shared memory</span> across <span class="measure">132</span> SMs. All operations within that layer &mdash; norm, projections, attention, MLP &mdash; read from on-chip. Only between layers does the memory bus activate to swap in the next layer's weights.</p>
+
+<h3>The result</h3>
+
+<p>The memory bus is used <span class="target">64 times</span> per token (once per layer swap) instead of <span class="measure">~448 times</span> (once per operation). Each use transfers <span class="target">66 MB</span>. Total memory traffic per token: <span class="target">64 &times; 66 = ~4.2 GB</span>. Compare to current: <span class="measure">~8 GB</span> at W4. Half the traffic and no latency stalls within a layer.</p>
+</section>
+
+<!-- Part 2: Utilizing Every Compute Unit -->
+<section id="compute-units">
+<h2>Part 2: Utilizing Every Compute Unit</h2>
+
+<p>The <span class="term" data-term="SM">SM</span> has four types of compute units. Current inference kernels use almost exclusively <span class="term" data-term="Tensor Core">tensor cores</span> (for matmul) and a few <span class="term" data-term="CUDA Core">FP32 cores</span> (for elementwise ops). Three-quarters of the silicon sits idle during most operations.</p>
+
+<h3>Hopper SM compute units (per SM)</h3>
+
+<table>
+<tr>
+  <th>Unit type</th>
+  <th>Count per SM</th>
+  <th>Peak ops/clock</th>
+</tr>
+<tr>
+  <td>FP32 cores</td>
+  <td class="num">128</td>
+  <td class="num">128 FLOPs</td>
+</tr>
+<tr>
+  <td>FP64 cores</td>
+  <td class="num">64</td>
+  <td class="num">64 FLOPs</td>
+</tr>
+<tr>
+  <td>INT32 cores</td>
+  <td class="num">64</td>
+  <td class="num">64 ops</td>
+</tr>
+<tr>
+  <td><span class="term" data-term="Tensor Core">Tensor cores</span></td>
+  <td class="num">4</td>
+  <td class="num">1,024 FP16 FLOPs / 2,048 FP8 ops</td>
+</tr>
+</table>
+
+<h3>The insight</h3>
+
+<p>Design the quantization format so that dequantization work maps to the idle units, pipelined with <span class="term" data-term="Tensor Core">tensor core</span> computation. INT32 cores extract packed integers. FP32 cores apply scale factors. Tensor cores consume the dequantized tiles. FP64 cores optionally accumulate results at high precision.</p>
+
+<h3>Pipelined execution within one SM</h3>
+
+<div class="pipeline"><span class="work">Clock N:</span>
+  <span class="unit">INT32 cores:</span>   <span class="work">extract 4-bit nibbles from packed weights for</span> <span class="tile">tile T+2</span>
+  <span class="unit">FP32 cores:</span>    <span class="work">multiply extracted values by scale factors for</span> <span class="tile">tile T+1</span>
+  <span class="unit">Tensor cores:</span>  <span class="work">matrix-multiply dequantized</span> <span class="tile">tile T</span> <span class="work">against activations</span>
+  <span class="unit">FP64 cores:</span>    <span class="work">high-precision accumulation for</span> <span class="tile">tile T-1</span> <span class="work">(reduces rounding error)</span></div>
+
+<p>Four pipeline stages, four unit types, all running simultaneously on different tiles. The output of INT32 feeds FP32, which feeds tensor cores, which feeds FP64 accumulation.</p>
+
+<h3>Designing the format for pipeline balance</h3>
+
+<p>The quantization format should produce work that balances across unit types according to their throughput ratios.</p>
+
+<p>For one tile (64&times;16 weights = <span class="measure">1,024</span> values at <span class="target">2.93 bits</span>):</p>
+<ul style="margin-left: 1.4rem; margin-bottom: 1rem; color: var(--text-dim); line-height: 2;">
+  <li><strong style="color: var(--text);">INT32 work:</strong> Extract <span class="measure">~3,000 bits</span> of packed data into integer values. 64 INT32 cores at 1 op/clock: <span class="target">~47 cycles</span> of extraction work.</li>
+  <li><strong style="color: var(--text);">FP32 work:</strong> Apply scale factors to <span class="measure">1,024</span> values. 128 FP32 cores at 1 op/clock: <span class="target">~8 cycles</span> of scaling work.</li>
+  <li><strong style="color: var(--text);">Tensor core work:</strong> 64&times;16 &times; input_dim matmul. 4 tensor cores at <span class="measure">1,024 FLOPs/clock</span>: depends on tile shape.</li>
+</ul>
+
+<p>The format design goal: INT32 extraction time approximately equals FP32 scaling time approximately equals tensor core consumption time. If INT32 takes too long, simplify the packing. If FP32 is too fast, add more scale factors (finer granularity). Tune the format until the pipeline is balanced.</p>
+
+<h3>A possible format</h3>
+
+<p>A hardware-matched quantization format might look like:</p>
+<ul style="margin-left: 1.4rem; margin-bottom: 1rem; color: var(--text-dim); line-height: 2;">
+  <li>Weights packed as 3-bit values with a 1-bit residual in a separate stream.</li>
+  <li>Per-16-element scale factors (finer than typical per-128 grouping &mdash; gives FP32 cores more work).</li>
+  <li>INT32 extraction uses shift+mask (native INT32 ops).</li>
+  <li>FP32 converts and scales (native FP32 ops).</li>
+  <li>Tensor cores consume the result as FP16 tiles.</li>
+  <li>FP64 cores accumulate the tile result for numerical precision (or unused if not needed).</li>
+</ul>
+</section>
+
+<!-- What nobody has done -->
+<section id="novelty">
+<h2>What Has Not Been Tried</h2>
+
+<p>Every existing quantization method (<span class="term" data-term="GPTQ">GPTQ</span>, <span class="term" data-term="AWQ">AWQ</span>, AQLM, QuIP#, EXL2, GGUF) is designed for:</p>
+<ol style="margin-left: 1.4rem; margin-bottom: 1rem; color: var(--text-dim); line-height: 2;">
+  <li>Quality preservation (minimize perplexity loss).</li>
+  <li>Storage efficiency (fewer bits).</li>
+  <li>Possibly: compatibility with existing CUDA kernels.</li>
+</ol>
+
+<p>No existing method is designed for:</p>
+<ul style="margin-left: 1.4rem; margin-bottom: 1rem; color: var(--text-dim); line-height: 2;">
+  <li>Fitting exactly in on-chip memory of a specific GPU.</li>
+  <li>Balancing work across all compute unit types.</li>
+  <li>Pipeline-stage alignment between INT32/FP32/TC/FP64.</li>
+</ul>
+</section>
+
+<!-- Feasibility -->
+<section id="feasibility">
+<h2>Feasibility</h2>
+
+<p>Sub-3-bit quantization is proven feasible. AQLM and QuIP# achieve 2-bit quantization with acceptable quality for many tasks. The question is whether the specific bit layout &mdash; the way values are packed and scales are arranged &mdash; can be tuned for pipeline balance without sacrificing quality.</p>
+
+<p>The quality comes from the calibration method (how you choose which values to round up vs. down). The layout is independent of quality &mdash; it determines how quantized values are arranged in memory, not what those values are.</p>
+
+<p>The approach separates these concerns:</p>
+<ul style="margin-left: 1.4rem; margin-bottom: 1rem; color: var(--text-dim); line-height: 2;">
+  <li>Calibrate with AQLM/QuIP# methods for quality.</li>
+  <li>Pack the calibrated values in a layout designed for INT32/FP32/TC pipeline balance.</li>
+</ul>
+
+<p>Same quality, different bytes-on-disk arrangement. The model does not change. The bits-per-weight does not change. Only the packing order and scale granularity change.</p>
+
+<div class="callout research">
+  <strong>Why Lithos can explore this.</strong> Existing inference engines (vLLM, TensorRT-LLM, llama.cpp) cannot try new quantization formats without months of kernel engineering. Each format requires hand-written CUDA kernels for dequantization, tiling, and matmul integration. Lithos generates the dequantization kernel from a format specification &mdash; change the spec, recompile in microseconds, measure quality and speed. The search over format parameters (group size, bit split, packing order) becomes an empirical optimization loop rather than an engineering project.
+</div>
+</section>
+
+<!-- See also -->
+<section id="see-also">
+<h2>See Also</h2>
+<ul style="margin-left: 1.4rem; color: var(--text-dim); line-height: 2;">
+  <li><a href="bandwidth.html">Bandwidth</a> &mdash; why batch=1 inference is bandwidth-bound in the first place.</li>
+  <li><a href="memory.html">Memory</a> &mdash; the <span class="term" data-term="HBM">HBM</span> / <span class="term" data-term="LPDDR5X">LPDDR5X</span> hierarchy on <span class="term" data-term="GH200">GH200</span>.</li>
+  <li><a href="kernels.html">Kernels</a> &mdash; how Lithos compiles and fuses kernels from Forth words.</li>
+  <li><a href="sm-architecture.html">SM Architecture</a> &mdash; the compute units this approach targets.</li>
+</ul>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>
