@@ -210,7 +210,8 @@ scan_ident src pos end :
         angle_l = c == 60            \\ '<'  (for u32>f32 style)
         angle_r = c == 62            \\ '>'  (for u32>f32 style)
         eq    = c == 61              \\ '='  (for if>=, if==)
-        ok = alpha | dot | angle_l | angle_r | eq
+        bang  = c == 33              \\ '!'  (for if!=)
+        ok = alpha | dot | angle_l | angle_r | eq | bang
         if ok == 0
             return
         new_pos = new_pos + 1
@@ -358,6 +359,18 @@ match_keyword src offset length :
         if b0 == 101 & b1 == 120 & b2 == 105 & b3 == 116
             tok_type = 34
             return
+        \\ host
+        if b0 == 104 & b1 == 111 & b2 == 115 & b3 == 116
+            tok_type = 35
+            return
+        \\ goto
+        if b0 == 103 & b1 == 111 & b2 == 116 & b3 == 111
+            tok_type = 93
+            return
+        \\ trap
+        if b0 == 116 & b1 == 114 & b2 == 97 & b3 == 112
+            tok_type = 94
+            return
 
     \\ --- Length 5 keywords ---
     if length == 5
@@ -474,6 +487,28 @@ match_keyword src offset length :
             if b2 == 109 & b3 == 112 & b4 == 108 & b5 == 97 & b6 == 116 & b7 == 101
                 tok_type = 29
                 return
+        \\ constant (99 111 110 115 116 97 110 116)
+        if b0 == 99 & b1 == 111
+            b2 = src [ offset + 2 ]
+            b3 = src [ offset + 3 ]
+            b4 = src [ offset + 4 ]
+            b5 = src [ offset + 5 ]
+            b6 = src [ offset + 6 ]
+            b7 = src [ offset + 7 ]
+            if b2 == 110 & b3 == 115 & b4 == 116 & b5 == 97 & b6 == 110 & b7 == 116
+                tok_type = 96
+                return
+        \\ continue (99 111 110 116 105 110 117 101)
+        if b0 == 99 & b1 == 111
+            b2 = src [ offset + 2 ]
+            b3 = src [ offset + 3 ]
+            b4 = src [ offset + 4 ]
+            b5 = src [ offset + 5 ]
+            b6 = src [ offset + 6 ]
+            b7 = src [ offset + 7 ]
+            if b2 == 110 & b3 == 116 & b4 == 105 & b5 == 110 & b6 == 117 & b7 == 101
+                tok_type = 95
+                return
 
     \\ No keyword matched — tok_type remains TOK_IDENT (5)
 
@@ -568,6 +603,12 @@ lex src src_len :
         \\ ---- # is TOK_INDEX (reduction index operator) ----
         if c == 35                   \\ '#'
             emit_token 78 pos 1      \\ TOK_INDEX
+            pos = pos + 1
+            continue
+
+        \\ ---- $ is TOK_DOLLAR (register sigil) ----
+        if c == 36                   \\ '$'
+            emit_token 97 pos 1      \\ TOK_DOLLAR
             pos = pos + 1
             continue
 

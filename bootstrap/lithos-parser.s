@@ -424,7 +424,7 @@ sym_pop_scope:
 //   next_reg tracks the next available register (9..15).
 // ============================================================
 .equ REG_FIRST, 9
-.equ REG_LAST,  15
+.equ REG_LAST,  28
 
 alloc_reg:
     adrp    x0, next_reg
@@ -1527,6 +1527,11 @@ parse_assignment:
     ORRIMM    w4, 0xAA000000, w16 // ORR X
     mov     w0, w4
     bl      emit32
+    // Free the expression temporary
+    cmp     w8, #REG_FIRST
+    b.lt    .Lassign_done
+    mov     w0, w8
+    bl      free_reg
 
 .Lassign_done:
     ldp     x29, x30, [sp], #16
@@ -1564,14 +1569,15 @@ parse_comp_call:
     stp     x8, x5, [sp, #-16]!
     bl      parse_expr          // result in w0 = register number
     ldp     x8, x5, [sp], #16
+    mov     w6, w0              // save result reg
 
     // Move result into arg register (X0 + arg_index)
     // If result is already in the right register, skip
-    cmp     w0, w8
-    b.eq    .Lcall_arg_next
+    cmp     w6, w8
+    b.eq    .Lcall_arg_reclaim
 
     // Emit MOV Xarg, Xresult
-    lsl     w1, w0, #16        // Rm = result
+    lsl     w1, w6, #16        // Rm = result
     mov     w2, #31
     lsl     w2, w2, #5         // Rn = XZR
     orr     w3, w8, w2
@@ -1579,6 +1585,13 @@ parse_comp_call:
     ORRIMM    w3, 0xAA000000, w16
     mov     w0, w3
     bl      emit32
+
+.Lcall_arg_reclaim:
+    // Free expression temp so next arg can reuse registers
+    cmp     w6, #REG_FIRST
+    b.lt    .Lcall_arg_next
+    mov     w0, w6
+    bl      free_reg
 
 .Lcall_arg_next:
     add     w8, w8, #1
@@ -1671,11 +1684,12 @@ parse_var_decl:
     stp     x4, xzr, [sp, #-16]!
     bl      parse_expr          // result reg in w0
     ldp     x4, xzr, [sp], #16
+    mov     w5, w0              // save result reg
     // Move result to var's register if different
-    cmp     w0, w4
-    b.eq    .Lvar_done
+    cmp     w5, w4
+    b.eq    .Lvar_expr_reclaim
     // MOV Xvar, Xresult
-    lsl     w1, w0, #16
+    lsl     w1, w5, #16
     mov     w2, #31
     lsl     w2, w2, #5
     orr     w3, w4, w2
@@ -1683,6 +1697,15 @@ parse_var_decl:
     ORRIMM    w3, 0xAA000000, w16
     mov     w0, w3
     bl      emit32
+.Lvar_expr_reclaim:
+    // Free the expression temp if it's a scratch reg above the var reg
+    cmp     w5, #REG_FIRST
+    b.lt    .Lvar_done
+    cmp     w5, w4
+    b.eq    .Lvar_done         // result IS the var reg — don't free
+    // Reclaim: next_reg = var_reg + 1 (var_reg was allocated first)
+    add     w0, w4, #1
+    bl      free_reg
     b       .Lvar_done
 
 .Lvar_no_init:
@@ -2007,6 +2030,18 @@ parse_for:
     mov     w0, w4
     bl      emit32
 
+    // Free start reg if it's a scratch temp (consumed by MOV above)
+    ldr     w11, [sp, #4]
+    cmp     w11, #REG_FIRST
+    b.lt    .Lfor_start_kept
+    // Only free if different from loop var, end, step
+    ldr     w10, [sp, #0]
+    cmp     w11, w10
+    b.eq    .Lfor_start_kept
+    // Start reg is consumed — but end/step may be above it.
+    // Don't individually free; the per-statement reset_regs handles this.
+.Lfor_start_kept:
+
     // loop_top:
     bl      emit_cur
     str     x0, [sp, #16]      // save loop_top address
@@ -2121,11 +2156,12 @@ parse_return:
 
     // Parse expression, move result to X0
     bl      parse_expr
-    cmp     w0, #0              // already in X0?
-    b.eq    .Lret_emit
+    mov     w4, w0              // save result reg
+    cmp     w4, #0              // already in X0?
+    b.eq    .Lret_reclaim
 
     // MOV X0, Xresult
-    lsl     w1, w0, #16
+    lsl     w1, w4, #16
     mov     w2, #31
     lsl     w2, w2, #5
     orr     w3, wzr, w2
@@ -2133,6 +2169,13 @@ parse_return:
     ORRIMM    w3, 0xAA000000, w16
     mov     w0, w3
     bl      emit32
+
+.Lret_reclaim:
+    // Free expression temp
+    cmp     w4, #REG_FIRST
+    b.lt    .Lret_emit
+    mov     w0, w4
+    bl      free_reg
 
 .Lret_emit:
     // Emit epilogue + RET
@@ -2197,20 +2240,28 @@ parse_mem_load:
     bl      parse_expr          // addr in w0
     mov     w5, w0              // addr reg
 
-    // Allocate result register
+    // Reuse lowest scratch temp for result, reclaim the rest
+    cmp     w4, #REG_FIRST
+    b.lt    .Lmld_alloc
+    mov     w6, w4              // reuse width reg
+    b       .Lmld_emit
+.Lmld_alloc:
     bl      alloc_reg
     mov     w6, w0              // result reg
-
-    // Emit load based on width
-    // For simplicity, emit LDR X (64-bit) — width selection
-    // would require runtime dispatch or const folding.
-    // If width is a known literal, we could specialize.
-    // Default: LDR Xresult, [Xaddr]
+.Lmld_emit:
+    // Emit LDR Xresult, [Xaddr]
     mov     w0, w6
     mov     w1, w5
     mov     w2, #0
     bl      emit_ldr_imm
 
+    // Reclaim all scratch temps above result
+    cmp     w6, #REG_FIRST
+    b.lt    1f
+    add     w0, w6, #1
+    bl      free_reg
+1:
+    mov     w0, w6
     ldp     x29, x30, [sp], #16
     ret
 
@@ -2240,6 +2291,9 @@ parse_mem_store:
     mov     w1, w5
     mov     w2, #0
     bl      emit_str_imm
+
+    // Reclaim all expression temps — statement is complete
+    bl      reset_regs
 
     ldp     x29, x30, [sp], #16
     ret
@@ -2359,6 +2413,12 @@ parse_reg_write:
     ORRIMM  w3, 0xAA000000, w16
     mov     w0, w3
     bl      emit32
+
+    // Free expression temp
+    cmp     w5, #REG_FIRST
+    b.lt    .Lregwr_done
+    mov     w0, w5
+    bl      free_reg
 
 .Lregwr_done:
     add     sp, sp, #16            // pop saved target reg
@@ -2903,13 +2963,26 @@ parse_atom:
     add     x19, x19, #TOK_STRIDE_SZ   // consume '-'
     bl      parse_atom                  // parse operand
     mov     w4, w0                      // operand register
+    // Reuse operand reg if scratch, else allocate fresh
+    cmp     w4, #REG_FIRST
+    b.lt    .Lneg_alloc
+    mov     w5, w4                      // reuse scratch operand as dest
+    b       .Lneg_emit
+.Lneg_alloc:
     bl      alloc_reg                   // w0 = dest register
     mov     w5, w0
+.Lneg_emit:
     // Emit SUB Xd, XZR, Xoperand (NEG)
     mov     w0, w5                      // rd
     mov     w1, #31                     // rn = XZR
     mov     w2, w4                      // rm = operand
     bl      emit_sub_reg
+    // Reclaim temps above result
+    cmp     w5, #REG_FIRST
+    b.lt    .Lneg_done
+    add     w0, w5, #1
+    bl      free_reg
+.Lneg_done:
     mov     w0, w5                      // return dest register
     ldp     x29, x30, [sp], #16
     ret
@@ -2952,15 +3025,32 @@ parse_atom:
     bl      parse_atom          // addr
     mov     w5, w0
 
+    // Reuse lowest scratch temp for result (reclaim width + addr)
+    cmp     w4, #REG_FIRST
+    b.lt    .Llda_alloc
+    mov     w6, w4              // reuse width reg as result
+    b       .Llda_emit
+.Llda_alloc:
+    cmp     w5, #REG_FIRST
+    b.lt    .Llda_fresh
+    mov     w6, w5
+    b       .Llda_emit
+.Llda_fresh:
     bl      alloc_reg
     mov     w6, w0
-
+.Llda_emit:
     // Emit LDR Xresult, [Xaddr]
     mov     w0, w6
     mov     w1, w5
     mov     w2, #0
     bl      emit_ldr_imm
 
+    // Reclaim all scratch temps above result
+    cmp     w6, #REG_FIRST
+    b.lt    1f
+    add     w0, w6, #1
+    bl      free_reg
+1:
     mov     w0, w6
     ldp     x29, x30, [sp], #16
     ret
@@ -2981,7 +3071,33 @@ parse_atom:
     mov     w2, #0
     bl      emit_str_imm
 
-    mov     w0, w6              // return val
+    // Reuse lowest scratch temp and reclaim the rest
+    cmp     w4, #REG_FIRST
+    b.lt    .Lsta_use_val
+    mov     w7, w4              // reuse width reg
+    b       .Lsta_emit_mov
+.Lsta_use_val:
+    mov     w7, w6              // keep val reg as result
+    b       .Lsta_reclaim
+.Lsta_emit_mov:
+    // MOV Xresult, Xval if different
+    cmp     w7, w6
+    b.eq    .Lsta_reclaim
+    lsl     w1, w6, #16
+    mov     w2, #31
+    lsl     w2, w2, #5
+    orr     w3, w7, w2
+    orr     w3, w3, w1
+    ORRIMM  w3, 0xAA000000, w16
+    mov     w0, w3
+    bl      emit32
+.Lsta_reclaim:
+    cmp     w7, #REG_FIRST
+    b.lt    1f
+    add     w0, w7, #1
+    bl      free_reg
+1:
+    mov     w0, w7
     ldp     x29, x30, [sp], #16
     ret
 

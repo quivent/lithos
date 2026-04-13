@@ -306,11 +306,12 @@ parse_hex ptr len :
     val 0
     for i 0 len 1
         c → 8 ptr i
+        d 0
         if>= c 97              \\ 'a'-'f'
             d c - 87
-        if>= c 65              \\ 'A'-'F'
+        elif>= c 65             \\ 'A'-'F'
             d c - 55
-        \\ else digit
+        else
             d c - 48
         val val * 16 + d
     val
@@ -1209,6 +1210,41 @@ parse_stmt :
         consume
         parse_for
 
+    \\ endfor — close a for loop
+    if== t 17               \\ TOK_ENDFOR
+        consume
+        parse_for_end
+
+    \\ var — variable declaration: var name value
+    if== t 23               \\ TOK_VAR
+        consume
+        parse_var_decl
+
+    \\ buf — buffer declaration: buf name size
+    if== t 24               \\ TOK_BUF
+        consume
+        parse_buf_decl
+
+    \\ const — constant declaration: const name value
+    if== t 22               \\ TOK_CONST
+        consume
+        parse_const_decl
+
+    \\ label — branch target: label name
+    if== t 33               \\ TOK_LABEL
+        consume
+        parse_label
+
+    \\ goto — unconditional branch: goto name
+    if== t 93               \\ TOK_GOTO
+        consume
+        parse_goto
+
+    \\ continue — loop continuation
+    if== t 95               \\ TOK_CONTINUE
+        consume
+        parse_continue
+
     \\ each — thread-parallel iteration (GPU)
     if== t 18               \\ TOK_EACH
         consume
@@ -1511,19 +1547,100 @@ parse_for_end :
     loop_reg pop_branch_reg
     end_reg pop_branch_end
     step_reg pop_branch_step
+    loop_start pop_branch_start
 
     \\ Emit: loop_var = loop_var + step
     emit_add loop_reg loop_reg step_reg
 
     \\ Emit back-edge branch to loop start
-    \\ TODO: compute offset from current position to loop start
     if== emit_target 0
-        emit_bra 0              \\ placeholder offset
-    \\ ARM64: B back
-        arm64_emit32 0x14000000 \\ placeholder
+        \\ GPU: BRA back to loop_start
+        offset loop_start - arm64_pos
+        emit_bra offset
+    \\ ARM64: B back to loop_start
+        offset loop_start - arm64_pos
+        word_offset offset / 4
+        arm64_emit32 0x14000000 | (word_offset & 0x3FFFFFF)
 
-    \\ Patch the forward branch at loop start
-    \\ TODO: patch_branch_forward
+\\ parse_var_decl : var name value
+\\ Declare a variable with initial value
+parse_var_decl :
+    var_ptr tok_text_ptr
+    var_len peek_length
+    consume
+    \\ Parse initial value
+    val parse_int_token
+    \\ Allocate register and initialize
+    rd alloc_rreg
+    emit_mov_imm rd val
+    sym_add var_ptr var_len 6 rd
+
+\\ parse_buf_decl : buf name size
+\\ Declare a buffer with given size
+parse_buf_decl :
+    name_ptr tok_text_ptr
+    name_len peek_length
+    consume
+    \\ Parse size
+    size parse_int_token
+    \\ Allocate register for buffer base pointer
+    rd alloc_rreg
+    \\ Buffer allocation is handled at link time; register holds pointer
+    sym_add name_ptr name_len 5 rd
+
+\\ parse_const_decl : const name value
+\\ Declare a named constant
+parse_const_decl :
+    name_ptr tok_text_ptr
+    name_len peek_length
+    consume
+    \\ Parse constant value
+    val parse_int_token
+    \\ Treat as a variable initialized to the constant value
+    rd alloc_rreg
+    emit_mov_imm rd val
+    sym_add name_ptr name_len 6 rd
+
+\\ parse_label : label name
+\\ Mark a branch target at the current emit position
+parse_label :
+    \\ Read label name (for later reference by goto)
+    name_ptr tok_text_ptr
+    name_len peek_length
+    consume
+    \\ Store current position as label target
+    \\ For now: register the label in the symbol table with the current
+    \\ emit position encoded as the register field
+    sym_add name_ptr name_len 10 arm64_pos
+
+\\ parse_goto : goto label_name
+\\ Emit unconditional branch to a named label
+parse_goto :
+    name_ptr tok_text_ptr
+    name_len peek_length
+    consume
+    \\ Look up label in symbol table
+    idx sym_find name_ptr name_len
+    if>= idx 0
+        target sym_reg idx
+        \\ Emit branch (ARM64: B offset)
+        offset target - arm64_pos
+        word_offset offset / 4
+        arm64_emit32 0x14000000 | (word_offset & 0x3FFFFFF)
+    \\ Forward reference: emit placeholder, will need patching
+        arm64_emit32 0x14000000
+
+\\ parse_continue : continue — branch back to loop start
+parse_continue :
+    \\ Branch back to the current loop's start
+    \\ The loop start is stored in the branch stack
+    if branch_depth > 0
+        \\ Peek at the loop start from the branch stack
+        idx (branch_depth - 1) * 16
+        loop_start → 32 branch_stack idx + 12
+        offset loop_start - arm64_pos
+        word_offset offset / 4
+        arm64_emit32 0x14000000 | (word_offset & 0x3FFFFFF)
 
 \\ parse_each : each i — thread-parallel iteration (GPU)
 \\ Emits: S2R tid.x; S2R ctaid.x; IMAD global_idx = ctaid*blockDim + tid
@@ -1693,8 +1810,8 @@ push_branch loop_reg end_reg step_reg :
     ← 32 branch_stack idx loop_reg
     ← 32 branch_stack idx + 4 end_reg
     ← 32 branch_stack idx + 8 step_reg
-    \\ Store current emit position for patching
-    \\ ← 32 branch_stack idx + 12 current_pos
+    \\ Store current emit position as loop start (for back-edge)
+    ← 32 branch_stack idx + 12 arm64_pos
     branch_depth branch_depth + 1
 
 pop_branch_reg :
@@ -1703,12 +1820,20 @@ pop_branch_reg :
     → 32 branch_stack idx
 
 pop_branch_end :
+    \\ NOTE: must be called after pop_branch_reg (branch_depth already decremented)
     idx branch_depth * 16
     → 32 branch_stack idx + 4
 
 pop_branch_step :
+    \\ NOTE: must be called after pop_branch_reg (branch_depth already decremented)
     idx branch_depth * 16
     → 32 branch_stack idx + 8
+
+pop_branch_start :
+    \\ Return the loop-start emit position (stored in slot +12)
+    \\ NOTE: must be called after pop_branch_reg (branch_depth already decremented)
+    idx branch_depth * 16
+    → 32 branch_stack idx + 12
 
 \\ ============================================================================
 \\ Body parser — indented block
