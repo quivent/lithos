@@ -270,7 +270,7 @@ SKIP_LOAD_PARTIAL:
     setp.eq.u32     %p6, %r1, 0;
     @!%p6 bra       SKIP_CROSS_WARP;
     // rms_inv = rsqrt(sum_sq / 5120 + 1e-6)
-    mul.f32         %f6, %f4, 0f39A00000;  // 1/5120 = 0.000195... ? 0x39A00000
+    mul.f32         %f6, %f4, 0f394CCCCD;  // 1.0/5120 = 0.0001953125
     add.f32         %f6, %f6, 0f358637BD;  // 1e-6
     rsqrt.approx.f32 %f6, %f6;
     mov.u32         %r16, smem_rms_inv;
@@ -856,8 +856,8 @@ FINAL_SKIP_LOAD:
 
     setp.eq.u32     %p6, %r1, 0;
     @!%p6 bra       FINAL_SKIP_CROSS;
-    mul.f32         %f6, %f4, 0f39A00000;
-    add.f32         %f6, %f6, 0f358637BD;
+    mul.f32         %f6, %f4, 0f394CCCCD;  // 1.0/5120
+    add.f32         %f6, %f6, 0f358637BD;  // 1e-6
     rsqrt.approx.f32 %f6, %f6;
     mov.u32         %r16, smem_rms_inv;
     st.shared.f32   [%r16], %f6;

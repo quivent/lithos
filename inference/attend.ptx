@@ -1,36 +1,406 @@
+// attend.ptx — Generated from attend.li
+// Attention scoring with KV cache, RoPE, GQA
+// Replaces: attention_score.ptx, rotate.ptx, fused_attention.ptx
+// Target: sm_90, PTX 8.0
+//
+// COMPILER GAPS:
+//   - sin/cos intrinsics (sin.approx.f32, cos.approx.f32)
+//   - for loop construct
+//   - shared memory
+//   - warp shuffles for softmax reduction
+//   - scalar params (d_head, seq_len, n_heads, pos)
+//   - integer modulo/division for GQA mapping
+//   - literal float constants (sqrt(d_head), 10000.0, etc.)
+
 .version 8.0
 .target sm_90
 .address_size 64
 
-.visible .entry attention_stub(
+// ============================================================
+// 1. rope: Apply Rotary Position Embedding to Q and K
+//    Replaces: rotate.ptx
+//    Launch: gridDim.x = n_heads, blockDim.x = d_head/2
+//    Each thread rotates one pair of (even, odd) elements.
+// ============================================================
+.visible .entry rope(
     .param .u64 q,
     .param .u64 k,
-    .param .u64 v,
-    .param .u64 output
+    .param .u64 q_out,
+    .param .u64 k_out,
+    .param .u32 d_head,
+    .param .u32 pos,
+    .param .f32 theta_base
 )
 {
-    .reg .pred %p<8>;
-    .reg .b32  %r<64>;
-    .reg .b64  %rd<32>;
-    .reg .f32  %f<64>;
+    .reg .pred %p<4>;
+    .reg .b32  %r<24>;
+    .reg .b64  %rd<16>;
+    .reg .f32  %f<24>;
 
     ld.param.u64 %rd0, [q];
     ld.param.u64 %rd1, [k];
-    ld.param.u64 %rd2, [v];
-    ld.param.u64 %rd3, [output];
+    ld.param.u64 %rd2, [q_out];
+    ld.param.u64 %rd3, [k_out];
+    ld.param.u32 %r10, [d_head];
+    ld.param.u32 %r11, [pos];
+    ld.param.f32 %f10, [theta_base];   // 10000.0
 
+    // head = blockIdx.x
     mov.u32 %r0, %ctaid.x;
-    mov.u32 %r1, %ntid.x;
-    mov.u32 %r2, %tid.x;
-    mad.lo.s32 %r3, %r0, %r1, %r2;
+    // dim_pair = threadIdx.x  (handles elements 2*dim_pair, 2*dim_pair+1)
+    mov.u32 %r1, %tid.x;
 
-    mul.wide.u32 %rd22, %r3, 4;
-    add.u64 %rd23, %rd0, %rd22;
-    ld.global.f32 %f0, [%rd23];
-    mul.wide.u32 %rd22, %r3, 4;
-    add.u64 %rd23, %rd3, %rd22;
-    st.global.f32 [%rd23], %f0;
+    // half_d = d_head / 2
+    shr.u32 %r12, %r10, 1;
+    setp.ge.u32 %p0, %r1, %r12;
+    @%p0 bra $L_rope_exit;
 
-$L_exit:
+    // freq_exp = 2 * dim_pair / d_head (as float)
+    shl.b32 %r13, %r1, 1;              // 2 * dim_pair
+    cvt.rn.f32.u32 %f11, %r13;
+    cvt.rn.f32.u32 %f12, %r10;
+    div.approx.f32 %f13, %f11, %f12;   // 2*dim/d_head
+
+    // freq = 1.0 / (theta_base ^ freq_exp)
+    // theta_base^exp = exp(exp * ln(theta_base))
+    // ln(10000) = 9.21034... = 0x41137854
+    mul.f32 %f14, %f13, 0f41137854;    // freq_exp * ln(theta_base)
+    neg.f32 %f14, %f14;
+    mul.f32 %f14, %f14, 0f3FB8AA3B;    // * log2(e) for ex2
+    ex2.approx.f32 %f15, %f14;         // freq = theta_base^(-exp)
+
+    // angle = pos * freq
+    cvt.rn.f32.u32 %f16, %r11;
+    mul.f32 %f17, %f16, %f15;          // angle
+
+    // cos(angle), sin(angle)
+    cos.approx.f32 %f18, %f17;         // cs
+    sin.approx.f32 %f19, %f17;         // sn
+
+    // element offset = head * d_head + 2 * dim_pair
+    mul.lo.u32 %r14, %r0, %r10;
+    add.u32 %r15, %r14, %r13;          // base element idx
+
+    // Load q[even], q[odd]
+    mul.wide.u32 %rd4, %r15, 4;
+    add.u64 %rd5, %rd0, %rd4;
+    ld.global.f32 %f0, [%rd5];         // q_even
+    ld.global.f32 %f1, [%rd5+4];       // q_odd
+
+    // Rotate: q_out_even = q_even * cs - q_odd * sn
+    //         q_out_odd  = q_even * sn + q_odd * cs
+    mul.f32 %f2, %f0, %f18;
+    mul.f32 %f3, %f1, %f19;
+    sub.f32 %f4, %f2, %f3;             // q_rot_even
+    mul.f32 %f5, %f0, %f19;
+    fma.rn.f32 %f6, %f1, %f18, %f5;   // q_rot_odd
+
+    add.u64 %rd6, %rd2, %rd4;
+    st.global.f32 [%rd6], %f4;
+    st.global.f32 [%rd6+4], %f6;
+
+    // Same for K
+    add.u64 %rd7, %rd1, %rd4;
+    ld.global.f32 %f0, [%rd7];
+    ld.global.f32 %f1, [%rd7+4];
+
+    mul.f32 %f2, %f0, %f18;
+    mul.f32 %f3, %f1, %f19;
+    sub.f32 %f4, %f2, %f3;
+    mul.f32 %f5, %f0, %f19;
+    fma.rn.f32 %f6, %f1, %f18, %f5;
+
+    add.u64 %rd8, %rd3, %rd4;
+    st.global.f32 [%rd8], %f4;
+    st.global.f32 [%rd8+4], %f6;
+
+$L_rope_exit:
+    ret;
+}
+
+// ============================================================
+// 2. attention_score: Q * K^T / sqrt(d) with softmax, then * V
+//    Replaces: attention_score.ptx, fused_attention.ptx
+//    With GQA support (n_kv_heads <= n_q_heads).
+//    Launch: gridDim.x = n_q_heads, blockDim.x = 256
+//    Each block computes one query head's output (d_head elements).
+// ============================================================
+.visible .entry attention_score(
+    .param .u64 q,
+    .param .u64 k_cache,
+    .param .u64 v_cache,
+    .param .u64 output,
+    .param .u32 d_head,
+    .param .u32 seq_len,
+    .param .u32 n_q_heads,
+    .param .u32 n_kv_heads,
+    .param .f32 scale
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32  %r<40>;
+    .reg .b64  %rd<24>;
+    .reg .f32  %f<32>;
+
+    .shared .align 4 .f32 smem_scores[4096];
+    .shared .align 4 .f32 smem_reduce[256];
+
+    ld.param.u64 %rd0, [q];
+    ld.param.u64 %rd1, [k_cache];
+    ld.param.u64 %rd2, [v_cache];
+    ld.param.u64 %rd3, [output];
+    ld.param.u32 %r10, [d_head];
+    ld.param.u32 %r11, [seq_len];
+    ld.param.u32 %r12, [n_q_heads];
+    ld.param.u32 %r13, [n_kv_heads];
+    ld.param.f32 %f20, [scale];
+
+    // q_head = blockIdx.x
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %tid.x;
+    mov.u32 %r2, %ntid.x;
+
+    // GQA mapping: kv_head = q_head / (n_q_heads / n_kv_heads)
+    div.u32 %r14, %r12, %r13;          // group_size
+    div.u32 %r15, %r0, %r14;           // kv_head
+
+    // q_ptr = q + q_head * d_head * 4
+    mul.lo.u32 %r16, %r0, %r10;
+    mul.wide.u32 %rd4, %r16, 4;
+    add.u64 %rd5, %rd0, %rd4;          // q_head_ptr
+
+    // k_base = k_cache + kv_head * seq_len * d_head * 4
+    mul.lo.u32 %r17, %r15, %r11;
+    mul.lo.u32 %r17, %r17, %r10;
+    mul.wide.u32 %rd6, %r17, 4;
+    add.u64 %rd7, %rd1, %rd6;          // k_head_base
+
+    // --- Phase 1: compute attention scores for each position ---
+    mov.u32 %r3, %r1;
+
+$L_score_loop:
+    setp.ge.u32 %p0, %r3, %r11;
+    @%p0 bra $L_score_done;
+
+    // dot = sum over d: q[d] * k_cache[kv_head, pos, d]
+    mov.f32 %f0, 0f00000000;
+
+    mul.lo.u32 %r18, %r3, %r10;
+    mul.wide.u32 %rd8, %r18, 4;
+    add.u64 %rd9, %rd7, %rd8;          // k_pos_ptr
+
+    mov.u32 %r4, 0;
+$L_dot_loop:
+    setp.ge.u32 %p1, %r4, %r10;
+    @%p1 bra $L_dot_done;
+
+    mul.wide.u32 %rd10, %r4, 4;
+    add.u64 %rd11, %rd5, %rd10;
+    ld.global.f32 %f1, [%rd11];
+
+    add.u64 %rd12, %rd9, %rd10;
+    ld.global.f32 %f2, [%rd12];
+
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+
+    add.u32 %r4, %r4, 1;
+    bra $L_dot_loop;
+
+$L_dot_done:
+    mul.f32 %f0, %f0, %f20;
+
+    mul.wide.u32 %rd13, %r3, 4;
+    mov.u64 %rd14, smem_scores;
+    add.u64 %rd15, %rd14, %rd13;
+    st.shared.f32 [%rd15], %f0;
+
+    add.u32 %r3, %r3, %r2;
+    bra $L_score_loop;
+
+$L_score_done:
+    bar.sync 0;
+
+    // --- Phase 2: softmax over scores ---
+    // Find max
+    mov.f32 %f3, 0fFF800000;
+    mov.u32 %r3, %r1;
+
+$L_max_loop:
+    setp.ge.u32 %p2, %r3, %r11;
+    @%p2 bra $L_max_done;
+
+    mul.wide.u32 %rd13, %r3, 4;
+    add.u64 %rd15, %rd14, %rd13;
+    ld.shared.f32 %f4, [%rd15];
+    max.f32 %f3, %f3, %f4;
+    add.u32 %r3, %r3, %r2;
+    bra $L_max_loop;
+
+$L_max_done:
+    // Warp reduce max
+    shfl.sync.bfly.b32 %f4, %f3, 16, 31, 0xFFFFFFFF;
+    max.f32 %f3, %f3, %f4;
+    shfl.sync.bfly.b32 %f4, %f3, 8, 31, 0xFFFFFFFF;
+    max.f32 %f3, %f3, %f4;
+    shfl.sync.bfly.b32 %f4, %f3, 4, 31, 0xFFFFFFFF;
+    max.f32 %f3, %f3, %f4;
+    shfl.sync.bfly.b32 %f4, %f3, 2, 31, 0xFFFFFFFF;
+    max.f32 %f3, %f3, %f4;
+    shfl.sync.bfly.b32 %f4, %f3, 1, 31, 0xFFFFFFFF;
+    max.f32 %f3, %f3, %f4;
+
+    // Cross-warp reduce max
+    shr.u32 %r5, %r1, 5;
+    and.b32 %r6, %r1, 31;
+    setp.eq.u32 %p3, %r6, 0;
+    mov.u64 %rd16, smem_reduce;
+    mul.wide.u32 %rd17, %r5, 4;
+    add.u64 %rd18, %rd16, %rd17;
+    @%p3 st.shared.f32 [%rd18], %f3;
+    bar.sync 0;
+
+    setp.lt.u32 %p4, %r1, 8;
+    @!%p4 bra $L_softmax_exp;
+
+    mul.wide.u32 %rd17, %r1, 4;
+    add.u64 %rd18, %rd16, %rd17;
+    ld.shared.f32 %f3, [%rd18];
+
+    shfl.sync.bfly.b32 %f4, %f3, 4, 31, 0x000000FF;
+    max.f32 %f3, %f3, %f4;
+    shfl.sync.bfly.b32 %f4, %f3, 2, 31, 0x000000FF;
+    max.f32 %f3, %f3, %f4;
+    shfl.sync.bfly.b32 %f4, %f3, 1, 31, 0x000000FF;
+    max.f32 %f3, %f3, %f4;
+
+    setp.eq.u32 %p5, %r1, 0;
+    @%p5 st.shared.f32 [smem_reduce], %f3;
+
+$L_softmax_exp:
+    bar.sync 0;
+    ld.shared.f32 %f3, [smem_reduce];
+
+    // exp(score - max) and sum
+    mov.f32 %f5, 0f00000000;
+    mov.u32 %r3, %r1;
+
+$L_exp_loop:
+    setp.ge.u32 %p6, %r3, %r11;
+    @%p6 bra $L_exp_done;
+
+    mul.wide.u32 %rd13, %r3, 4;
+    add.u64 %rd15, %rd14, %rd13;
+    ld.shared.f32 %f4, [%rd15];
+
+    sub.f32 %f6, %f4, %f3;
+    mul.f32 %f6, %f6, 0f3FB8AA3B;      // * log2(e)
+    ex2.approx.f32 %f7, %f6;
+    add.f32 %f5, %f5, %f7;
+    st.shared.f32 [%rd15], %f7;
+
+    add.u32 %r3, %r3, %r2;
+    bra $L_exp_loop;
+
+$L_exp_done:
+    // Reduce exp_sum
+    shfl.sync.bfly.b32 %f4, %f5, 16, 31, 0xFFFFFFFF;
+    add.f32 %f5, %f5, %f4;
+    shfl.sync.bfly.b32 %f4, %f5, 8, 31, 0xFFFFFFFF;
+    add.f32 %f5, %f5, %f4;
+    shfl.sync.bfly.b32 %f4, %f5, 4, 31, 0xFFFFFFFF;
+    add.f32 %f5, %f5, %f4;
+    shfl.sync.bfly.b32 %f4, %f5, 2, 31, 0xFFFFFFFF;
+    add.f32 %f5, %f5, %f4;
+    shfl.sync.bfly.b32 %f4, %f5, 1, 31, 0xFFFFFFFF;
+    add.f32 %f5, %f5, %f4;
+
+    setp.eq.u32 %p3, %r6, 0;
+    @%p3 st.shared.f32 [%rd18], %f5;
+    bar.sync 0;
+
+    setp.lt.u32 %p4, %r1, 8;
+    @!%p4 bra $L_attn_output;
+
+    mul.wide.u32 %rd17, %r1, 4;
+    add.u64 %rd18, %rd16, %rd17;
+    ld.shared.f32 %f5, [%rd18];
+    shfl.sync.bfly.b32 %f4, %f5, 4, 31, 0x000000FF;
+    add.f32 %f5, %f5, %f4;
+    shfl.sync.bfly.b32 %f4, %f5, 2, 31, 0x000000FF;
+    add.f32 %f5, %f5, %f4;
+    shfl.sync.bfly.b32 %f4, %f5, 1, 31, 0x000000FF;
+    add.f32 %f5, %f5, %f4;
+    setp.eq.u32 %p5, %r1, 0;
+    @%p5 st.shared.f32 [smem_reduce], %f5;
+
+$L_attn_output:
+    bar.sync 0;
+    ld.shared.f32 %f5, [smem_reduce];
+    rcp.approx.f32 %f8, %f5;
+
+    // Normalize scores
+    mov.u32 %r3, %r1;
+$L_normalize:
+    setp.ge.u32 %p6, %r3, %r11;
+    @%p6 bra $L_norm_done2;
+
+    mul.wide.u32 %rd13, %r3, 4;
+    add.u64 %rd15, %rd14, %rd13;
+    ld.shared.f32 %f4, [%rd15];
+    mul.f32 %f4, %f4, %f8;
+    st.shared.f32 [%rd15], %f4;
+
+    add.u32 %r3, %r3, %r2;
+    bra $L_normalize;
+
+$L_norm_done2:
+    bar.sync 0;
+
+    // --- Phase 3: weighted sum of V ---
+    mul.lo.u32 %r20, %r15, %r11;
+    mul.lo.u32 %r20, %r20, %r10;
+    mul.wide.u32 %rd19, %r20, 4;
+    add.u64 %rd20, %rd2, %rd19;
+
+    mul.wide.u32 %rd21, %r16, 4;
+    add.u64 %rd22, %rd3, %rd21;
+
+    mov.u32 %r3, %r1;
+
+$L_output_loop:
+    setp.ge.u32 %p0, %r3, %r10;
+    @%p0 bra $L_attn_exit;
+
+    mov.f32 %f0, 0f00000000;
+
+    mov.u32 %r4, 0;
+$L_vsum_loop:
+    setp.ge.u32 %p1, %r4, %r11;
+    @%p1 bra $L_vsum_done;
+
+    mul.wide.u32 %rd13, %r4, 4;
+    add.u64 %rd15, %rd14, %rd13;
+    ld.shared.f32 %f1, [%rd15];
+
+    mul.lo.u32 %r21, %r4, %r10;
+    add.u32 %r21, %r21, %r3;
+    mul.wide.u32 %rd23, %r21, 4;
+    add.u64 %rd10, %rd20, %rd23;
+    ld.global.f32 %f2, [%rd10];
+
+    fma.rn.f32 %f0, %f1, %f2, %f0;
+
+    add.u32 %r4, %r4, 1;
+    bra $L_vsum_loop;
+
+$L_vsum_done:
+    mul.wide.u32 %rd10, %r3, 4;
+    add.u64 %rd11, %rd22, %rd10;
+    st.global.f32 [%rd11], %f0;
+
+    add.u32 %r3, %r3, %r2;
+    bra $L_output_loop;
+
+$L_attn_exit:
     ret;
 }
