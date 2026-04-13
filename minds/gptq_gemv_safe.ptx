@@ -1,0 +1,313 @@
+// gptq_gemv_ultra.ptx -- Maximum bandwidth GPTQ W4A16 GEMV
+//
+// 4 columns per thread with ld.global.v4.u32 vectorized weight loads.
+// 64 threads/block for maximum occupancy with deep K-splits.
+//
+// Tile: TILE_K=4 consecutive packed rows * 256 columns = 4096 bytes
+// With 256 threads: each thread cp.async's 4 bytes per row (its own column),
+// 4 rows = 16 bytes total per tile load = 1 cp.async.ca.shared.global.b128
+//
+// Actually, the cp.async approach has overhead for small copies. Let me instead
+// use a DIFFERENT strategy entirely:
+//
+// STRATEGY: Cooperative warp-level tiling with register-file data reuse
+// - Each WARP loads 32 consecutive columns (already coalesced)
+// - For each K iteration, ALL 8 warps (256 threads) read the same row
+//   but different columns -> 8 cache lines per row (1024 bytes)
+// - Warp 0: cols [base..base+31], Warp 1: cols [base+32..base+63], etc.
+//
+// The insight: instead of loading weights via ld.global.u32 one-at-a-time,
+// use ld.global.v4.u32 to load 4 CONSECUTIVE COLUMNS' weights (16 bytes)
+// for the same K row. But then each thread has data for 4 columns and
+// needs to process them all. Since input[k] is shared across columns,
+// this quadruples compute per load.
+//
+// Design:
+// - 64 threads per block (2 warps)
+// - Each thread handles 4 columns: col = blockIdx.x*256 + tid*4 + {0,1,2,3}
+// - 256 columns per block (64 threads * 4 cols/thread)
+// - Each thread does ld.global.v4.u32 to load 4 consecutive column weights
+// - 4 independent accumulators, shared input from smem
+// - Split-K via grid.y
+//
+// This QUADRUPLES the memory-level parallelism per thread (4 independent
+// load streams) while maintaining perfect coalescing (adjacent threads
+// read adjacent v4 blocks = 64 * 16 = 1024 bytes = 8 cache lines,
+// perfect 128-byte cache line utilization).
+//
+// Launch: grid=(ceil(N/256), K_SPLITS, 1), block=(64, 1, 1)
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.extern .shared .align 16 .b8 smem_base[];
+
+.visible .entry gptq_gemv_safe(
+    .param .u64 qweight_ptr,
+    .param .u64 scales_ptr,
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u32 param_N,
+    .param .u32 param_K,
+    .param .u32 param_K_SPLITS,
+    .param .u32 param_k_packed_per_split
+)
+{
+    .reg .u64   %rd<80>;
+    .reg .u32   %r<120>;
+    .reg .f32   %f<30>;
+    .reg .pred  %p<20>;
+    .reg .b16   %htmp;
+    .reg .u32   %nib;
+    .reg .f32   %dq;
+    .reg .f32   %sc0, %sc1, %sc2, %sc3;
+    .reg .f32   %bi0, %bi1, %bi2, %bi3;
+    .reg .f32   %acc0, %acc1, %acc2, %acc3;
+    .reg .u32   %pk0, %pk1, %pk2, %pk3;
+    .reg .f32   %x0, %x1, %x2, %x3, %x4, %x5, %x6, %x7;
+
+    ld.param.u64    %rd0, [qweight_ptr];
+    ld.param.u64    %rd1, [scales_ptr];
+    ld.param.u64    %rd2, [input_ptr];
+    ld.param.u64    %rd3, [output_ptr];
+    ld.param.u32    %r0,  [param_N];
+    ld.param.u32    %r1,  [param_K];
+    ld.param.u32    %r2,  [param_K_SPLITS];
+    ld.param.u32    %r8,  [param_k_packed_per_split];
+
+    mov.u32         %r3,  %tid.x;          // 0..63
+    mov.u32         %r4,  %ctaid.x;
+    mov.u32         %r5,  %ctaid.y;
+
+    // 4 columns per thread
+    shl.b32         %r10, %r4, 8;          // col_base = blockIdx.x * 256
+    shl.b32         %r13, %r3, 2;          // tid * 4
+    add.u32         %r11, %r10, %r13;      // col0 = col_base + tid*4
+    // col0, col0+1, col0+2, col0+3
+
+    // Check if col0 is in bounds (if col0 >= N, skip entirely)
+    setp.ge.u32     %p0, %r11, %r0;
+    @%p0 bra        DONE;
+
+    // Check which columns are valid
+    add.u32         %r14, %r11, 1;
+    add.u32         %r15, %r11, 2;
+    add.u32         %r16, %r11, 3;
+    setp.lt.u32     %p11, %r14, %r0;      // col1 valid?
+    setp.lt.u32     %p12, %r15, %r0;      // col2 valid?
+    setp.lt.u32     %p13, %r16, %r0;      // col3 valid?
+
+    // K range
+    shr.b32         %r30, %r1, 3;
+    mul.lo.u32      %r32, %r5, %r8;
+    add.u32         %r33, %r32, %r8;
+    min.u32         %r33, %r33, %r30;
+    min.u32         %r32, %r32, %r30;
+    sub.u32         %r34, %r33, %r32;
+    setp.eq.u32     %p1, %r34, 0;
+    @%p1 bra        DONE;
+
+    // Load input to smem (64 threads cooperate)
+    mov.u32         %r20, smem_base;
+    shl.b32         %r35, %r34, 3;
+    shl.b32         %r36, %r32, 3;
+
+    mov.u32         %r37, %r3;
+    shr.b32         %r69, %r35, 2;
+LOAD_X_V4:
+    setp.ge.u32     %p2, %r37, %r69;
+    @%p2 bra        LOAD_X_V4_DONE;
+    shl.b32         %r38, %r37, 2;
+    add.u32         %r39, %r38, %r36;
+    cvt.u64.u32     %rd10, %r39;
+    shl.b64         %rd11, %rd10, 2;
+    add.u64         %rd12, %rd2, %rd11;
+    ld.global.ca.v4.f32 {%f0, %f1, %f2, %f3}, [%rd12];
+    shl.b32         %r40, %r38, 2;
+    add.u32         %r41, %r20, %r40;
+    st.shared.v4.f32 [%r41], {%f0, %f1, %f2, %f3};
+    add.u32         %r37, %r37, 64;
+    bra             LOAD_X_V4;
+LOAD_X_V4_DONE:
+    shl.b32         %r37, %r37, 2;
+LOAD_X_TAIL:
+    setp.ge.u32     %p2, %r37, %r35;
+    @%p2 bra        LOAD_X_DONE;
+    add.u32         %r38, %r37, %r36;
+    cvt.u64.u32     %rd10, %r38;
+    shl.b64         %rd11, %rd10, 2;
+    add.u64         %rd12, %rd2, %rd11;
+    ld.global.ca.f32 %f0, [%rd12];
+    shl.b32         %r39, %r37, 2;
+    add.u32         %r40, %r20, %r39;
+    st.shared.f32   [%r40], %f0;
+    add.u32         %r37, %r37, 1;
+    bra             LOAD_X_TAIL;
+LOAD_X_DONE:
+    bar.sync        0;
+
+    // Setup pointers
+    shl.b32         %r41, %r0, 2;
+    cvt.u64.u32     %rd20, %r41;           // qw_row_stride = N*4
+    shl.b32         %r42, %r0, 1;
+    cvt.u64.u32     %rd21, %r42;           // sc_row_stride = N*2
+
+    // qweight pointer for (k_start, col0): qweight + k_start * N * 4 + col0 * 4
+    shl.b32         %r43, %r11, 2;         // col0 * 4
+    cvt.u64.u32     %rd22, %r43;
+    cvt.u64.u32     %rd26, %r32;
+    mul.lo.u64      %rd27, %rd26, %rd20;
+    add.u64         %rd28, %rd0, %rd27;
+    add.u64         %rd28, %rd28, %rd22;   // qw -> qweight[k_start, col0]
+    // Since col0..col3 are contiguous, we can use ld.global.v4.u32
+    // which loads [col0, col1, col2, col3] in one instruction!
+
+    // scales base for col0
+    shl.b32         %r44, %r11, 1;         // col0 * 2
+    cvt.u64.u32     %rd23, %r44;
+    add.u64         %rd25, %rd1, %rd23;
+
+    // Accumulators
+    mov.f32         %acc0, 0f00000000;
+    mov.f32         %acc1, 0f00000000;
+    mov.f32         %acc2, 0f00000000;
+    mov.f32         %acc3, 0f00000000;
+
+    mov.u32         %r45, 0xFFFFFFFF;
+    mov.f32         %sc0, 0f00000000;
+    mov.f32         %bi0, 0f00000000;
+    mov.f32         %sc1, 0f00000000;
+    mov.f32         %bi1, 0f00000000;
+    mov.f32         %sc2, 0f00000000;
+    mov.f32         %bi2, 0f00000000;
+    mov.f32         %sc3, 0f00000000;
+    mov.f32         %bi3, 0f00000000;
+
+    mov.u32         %r50, %r32;
+    mov.u32         %r51, 0;
+    mov.u32         %r61, 0;
+
+K_LOOP:
+    setp.ge.u32     %p3, %r61, %r34;
+    @%p3 bra        K_DONE;
+
+    // Scale load (all 4 columns share same group index)
+    shr.b32         %r53, %r50, 4;
+    setp.eq.u32     %p4, %r53, %r45;
+    @%p4 bra        SKIP_SC;
+    mov.u32         %r45, %r53;
+    cvt.u64.u32     %rd29, %r53;
+    mul.lo.u64      %rd30, %rd29, %rd21;
+    // Load 4 consecutive f16 scales using a single ld.global.v2.b32
+    // (which loads 8 bytes = 4 f16 values for col0..col3)
+    add.u64         %rd31, %rd25, %rd30;
+    // Load as 2 x b32 = 4 x f16 (scalar loads for alignment safety)
+    .reg .b32       %spk0, %spk1;
+    ld.global.ca.b32 %spk0, [%rd31];
+    ld.global.ca.b32 %spk1, [%rd31 + 4];
+    // Extract individual f16 scales
+    // spk0 = {scale_col0, scale_col1} as packed f16x2
+    // spk1 = {scale_col2, scale_col3}
+    .reg .b16       %sh0, %sh1, %sh2, %sh3;
+    mov.b32         {%sh0, %sh1}, %spk0;
+    mov.b32         {%sh2, %sh3}, %spk1;
+    cvt.f32.f16     %sc0, %sh0;
+    mul.f32         %bi0, %sc0, 0fC1000000;
+    @!%p11 bra      SKIP_SC;
+    cvt.f32.f16     %sc1, %sh1;
+    mul.f32         %bi1, %sc1, 0fC1000000;
+    @!%p12 bra      SKIP_SC;
+    cvt.f32.f16     %sc2, %sh2;
+    mul.f32         %bi2, %sc2, 0fC1000000;
+    @!%p13 bra      SKIP_SC;
+    cvt.f32.f16     %sc3, %sh3;
+    mul.f32         %bi3, %sc3, 0fC1000000;
+SKIP_SC:
+
+    // Load 4 packed weights for 4 consecutive columns (scalar for alignment safety)
+    ld.global.cg.u32 %pk0, [%rd28];
+    ld.global.cg.u32 %pk1, [%rd28 + 4];
+    ld.global.cg.u32 %pk2, [%rd28 + 8];
+    ld.global.cg.u32 %pk3, [%rd28 + 12];
+
+    // Input from smem
+    shl.b32         %r54, %r51, 5;
+    add.u32         %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55];
+    ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+
+    // Process col0 (pk0)
+    and.b32 %nib, %pk0, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc0, %bi0; fma.rn.f32 %acc0, %dq, %x0, %acc0;
+    shr.b32 %nib, %pk0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc0, %bi0; fma.rn.f32 %acc0, %dq, %x1, %acc0;
+    shr.b32 %nib, %pk0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc0, %bi0; fma.rn.f32 %acc0, %dq, %x2, %acc0;
+    shr.b32 %nib, %pk0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc0, %bi0; fma.rn.f32 %acc0, %dq, %x3, %acc0;
+    shr.b32 %nib, %pk0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc0, %bi0; fma.rn.f32 %acc0, %dq, %x4, %acc0;
+    shr.b32 %nib, %pk0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc0, %bi0; fma.rn.f32 %acc0, %dq, %x5, %acc0;
+    shr.b32 %nib, %pk0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc0, %bi0; fma.rn.f32 %acc0, %dq, %x6, %acc0;
+    shr.b32 %nib, %pk0, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc0, %bi0; fma.rn.f32 %acc0, %dq, %x7, %acc0;
+
+    // Process col1 (pk1)
+    @!%p11 bra      SKIP_C1;
+    and.b32 %nib, %pk1, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc1, %bi1; fma.rn.f32 %acc1, %dq, %x0, %acc1;
+    shr.b32 %nib, %pk1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc1, %bi1; fma.rn.f32 %acc1, %dq, %x1, %acc1;
+    shr.b32 %nib, %pk1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc1, %bi1; fma.rn.f32 %acc1, %dq, %x2, %acc1;
+    shr.b32 %nib, %pk1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc1, %bi1; fma.rn.f32 %acc1, %dq, %x3, %acc1;
+    shr.b32 %nib, %pk1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc1, %bi1; fma.rn.f32 %acc1, %dq, %x4, %acc1;
+    shr.b32 %nib, %pk1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc1, %bi1; fma.rn.f32 %acc1, %dq, %x5, %acc1;
+    shr.b32 %nib, %pk1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc1, %bi1; fma.rn.f32 %acc1, %dq, %x6, %acc1;
+    shr.b32 %nib, %pk1, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc1, %bi1; fma.rn.f32 %acc1, %dq, %x7, %acc1;
+SKIP_C1:
+
+    // Process col2 (pk2)
+    @!%p12 bra      SKIP_C2;
+    and.b32 %nib, %pk2, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc2, %bi2; fma.rn.f32 %acc2, %dq, %x0, %acc2;
+    shr.b32 %nib, %pk2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc2, %bi2; fma.rn.f32 %acc2, %dq, %x1, %acc2;
+    shr.b32 %nib, %pk2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc2, %bi2; fma.rn.f32 %acc2, %dq, %x2, %acc2;
+    shr.b32 %nib, %pk2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc2, %bi2; fma.rn.f32 %acc2, %dq, %x3, %acc2;
+    shr.b32 %nib, %pk2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc2, %bi2; fma.rn.f32 %acc2, %dq, %x4, %acc2;
+    shr.b32 %nib, %pk2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc2, %bi2; fma.rn.f32 %acc2, %dq, %x5, %acc2;
+    shr.b32 %nib, %pk2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc2, %bi2; fma.rn.f32 %acc2, %dq, %x6, %acc2;
+    shr.b32 %nib, %pk2, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc2, %bi2; fma.rn.f32 %acc2, %dq, %x7, %acc2;
+SKIP_C2:
+
+    // Process col3 (pk3)
+    @!%p13 bra      SKIP_C3;
+    and.b32 %nib, %pk3, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc3, %bi3; fma.rn.f32 %acc3, %dq, %x0, %acc3;
+    shr.b32 %nib, %pk3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc3, %bi3; fma.rn.f32 %acc3, %dq, %x1, %acc3;
+    shr.b32 %nib, %pk3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc3, %bi3; fma.rn.f32 %acc3, %dq, %x2, %acc3;
+    shr.b32 %nib, %pk3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc3, %bi3; fma.rn.f32 %acc3, %dq, %x3, %acc3;
+    shr.b32 %nib, %pk3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc3, %bi3; fma.rn.f32 %acc3, %dq, %x4, %acc3;
+    shr.b32 %nib, %pk3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc3, %bi3; fma.rn.f32 %acc3, %dq, %x5, %acc3;
+    shr.b32 %nib, %pk3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc3, %bi3; fma.rn.f32 %acc3, %dq, %x6, %acc3;
+    shr.b32 %nib, %pk3, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %sc3, %bi3; fma.rn.f32 %acc3, %dq, %x7, %acc3;
+SKIP_C3:
+
+    add.u64         %rd28, %rd28, %rd20;
+    add.u32         %r50, %r50, 1;
+    add.u32         %r51, %r51, 1;
+    add.u32         %r61, %r61, 1;
+    bra             K_LOOP;
+
+K_DONE:
+    // Atomic add results for each column
+    cvt.u64.u32     %rd35, %r11;
+    shl.b64         %rd36, %rd35, 2;
+    add.u64         %rd37, %rd3, %rd36;
+    atom.global.add.f32 %f0, [%rd37], %acc0;
+
+    @!%p11 bra      DONE;
+    add.u64         %rd38, %rd37, 4;
+    atom.global.add.f32 %f1, [%rd38], %acc1;
+
+    @!%p12 bra      DONE;
+    add.u64         %rd39, %rd37, 8;
+    atom.global.add.f32 %f2, [%rd39], %acc2;
+
+    @!%p13 bra      DONE;
+    add.u64         %rd40, %rd37, 12;
+    atom.global.add.f32 %f3, [%rd40], %acc3;
+
+DONE:
+    ret;
+}

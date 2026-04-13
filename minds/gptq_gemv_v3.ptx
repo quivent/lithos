@@ -1,0 +1,369 @@
+// gptq_gemv_v3.ptx -- Maximum bandwidth GPTQ W4A16 GEMV
+//
+// Design philosophy: maximize memory-level parallelism (MLP) by:
+// 1. 128 threads/block -> higher occupancy (more blocks per SM)
+// 2. Each thread processes 2 output columns -> 2 independent load streams
+//    from weight matrix, doubling MLP per thread
+// 3. 4x loop unroll with pipelined loads (issue loads early, consume late)
+// 4. Vectorized v4.f32 loads from shared memory for input
+// 5. Split-K with atomicAdd for output reduction
+// 6. Block covers 256 columns (128 threads * 2 cols/thread)
+//
+// Why 2 cols/thread helps bandwidth:
+//   - Weight loads for col0 and col1 go to different cache lines
+//   - While waiting for col0's data, col1's load can be in flight
+//   - This doubles the number of outstanding memory requests per thread
+//   - SM can sustain higher bandwidth utilization
+//
+// Weight layout: [K/8, N] row-major, u32 packed (8 nibbles per u32)
+// Scales layout: [K/128, N] f16 row-major
+// Input layout:  [K] f32
+// Output layout: [N] f32
+//
+// Launch: grid=(ceil(N/256), K_SPLITS, 1), block=(128, 1, 1)
+//   smem = k_packed_per_split * 32 bytes
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.extern .shared .align 16 .b8 smem_base[];
+
+.visible .entry gptq_gemv_v3(
+    .param .u64 qweight_ptr,
+    .param .u64 scales_ptr,
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u32 param_N,
+    .param .u32 param_K,
+    .param .u32 param_K_SPLITS,
+    .param .u32 param_k_packed_per_split
+)
+{
+    .reg .u64   %rd<70>;
+    .reg .u32   %r<110>;
+    .reg .f32   %f<40>;
+    .reg .pred  %p<20>;
+    .reg .b16   %htmp, %htmp2;
+    .reg .u32   %nib;
+    .reg .f32   %dq;
+    .reg .f32   %scA, %biasA, %scB, %biasB;
+    .reg .f32   %accA, %accB;
+    .reg .u32   %pkA, %pkB;
+    .reg .f32   %x0, %x1, %x2, %x3, %x4, %x5, %x6, %x7;
+
+    ld.param.u64    %rd0, [qweight_ptr];
+    ld.param.u64    %rd1, [scales_ptr];
+    ld.param.u64    %rd2, [input_ptr];
+    ld.param.u64    %rd3, [output_ptr];
+    ld.param.u32    %r0,  [param_N];
+    ld.param.u32    %r1,  [param_K];
+    ld.param.u32    %r2,  [param_K_SPLITS];
+    ld.param.u32    %r8,  [param_k_packed_per_split];
+
+    mov.u32         %r3,  %tid.x;          // 0..127
+    mov.u32         %r4,  %ctaid.x;
+    mov.u32         %r5,  %ctaid.y;
+
+    // Two columns per thread: colA = blockIdx.x*256 + tid, colB = colA + 128
+    shl.b32         %r10, %r4, 8;
+    add.u32         %r11, %r10, %r3;       // colA
+    add.u32         %r12, %r11, 128;       // colB
+
+    // Both cols must be in bounds for the 2-col path
+    setp.ge.u32     %p0, %r11, %r0;
+    @%p0 bra        DONE;
+
+    // Check if colB is valid
+    setp.ge.u32     %p10, %r12, %r0;
+
+    // K range
+    shr.b32         %r30, %r1, 3;
+    mul.lo.u32      %r32, %r5, %r8;
+    add.u32         %r33, %r32, %r8;
+    min.u32         %r33, %r33, %r30;
+    min.u32         %r32, %r32, %r30;
+    sub.u32         %r34, %r33, %r32;
+    setp.eq.u32     %p1, %r34, 0;
+    @%p1 bra        DONE;
+
+    // ---- Load input into shared memory ----
+    mov.u32         %r20, smem_base;
+    shl.b32         %r35, %r34, 3;
+    shl.b32         %r36, %r32, 3;
+
+    // V4 cooperative load (128 threads, each loads 4 floats per iter)
+    mov.u32         %r37, %r3;
+    shr.b32         %r69, %r35, 2;
+LOAD_X_V4:
+    setp.ge.u32     %p2, %r37, %r69;
+    @%p2 bra        LOAD_X_V4_DONE;
+    shl.b32         %r38, %r37, 2;
+    add.u32         %r39, %r38, %r36;
+    cvt.u64.u32     %rd10, %r39;
+    shl.b64         %rd11, %rd10, 2;
+    add.u64         %rd12, %rd2, %rd11;
+    ld.global.ca.v4.f32 {%f0, %f1, %f2, %f3}, [%rd12];
+    shl.b32         %r40, %r38, 2;
+    add.u32         %r41, %r20, %r40;
+    st.shared.v4.f32 [%r41], {%f0, %f1, %f2, %f3};
+    add.u32         %r37, %r37, 128;
+    bra             LOAD_X_V4;
+LOAD_X_V4_DONE:
+    shl.b32         %r37, %r37, 2;
+LOAD_X_TAIL:
+    setp.ge.u32     %p2, %r37, %r35;
+    @%p2 bra        LOAD_X_DONE;
+    add.u32         %r38, %r37, %r36;
+    cvt.u64.u32     %rd10, %r38;
+    shl.b64         %rd11, %rd10, 2;
+    add.u64         %rd12, %rd2, %rd11;
+    ld.global.ca.f32 %f0, [%rd12];
+    shl.b32         %r39, %r37, 2;
+    add.u32         %r40, %r20, %r39;
+    st.shared.f32   [%r40], %f0;
+    add.u32         %r37, %r37, 1;
+    bra             LOAD_X_TAIL;
+LOAD_X_DONE:
+    bar.sync        0;
+
+    // ---- Setup ----
+    shl.b32         %r41, %r0, 2;
+    cvt.u64.u32     %rd20, %r41;           // qw_row_stride
+    shl.b32         %r42, %r0, 1;
+    cvt.u64.u32     %rd21, %r42;           // sc_row_stride
+
+    // ColA pointers
+    shl.b32         %r43, %r11, 2;
+    cvt.u64.u32     %rd22, %r43;           // colA byte offset in qweight row
+    shl.b32         %r44, %r11, 1;
+    cvt.u64.u32     %rd23, %r44;           // colA byte offset in scale row
+
+    cvt.u64.u32     %rd26, %r32;
+    mul.lo.u64      %rd27, %rd26, %rd20;
+    add.u64         %rd28, %rd0, %rd27;
+    add.u64         %rd28, %rd28, %rd22;   // qwA -> qweight[k_start, colA]
+    add.u64         %rd25, %rd1, %rd23;    // scA_base -> scales[0, colA]
+
+    // ColB pointers
+    shl.b32         %r46, %r12, 2;
+    cvt.u64.u32     %rd44, %r46;
+    shl.b32         %r47, %r12, 1;
+    cvt.u64.u32     %rd45, %r47;
+
+    add.u64         %rd48, %rd0, %rd27;
+    add.u64         %rd48, %rd48, %rd44;   // qwB -> qweight[k_start, colB]
+    add.u64         %rd49, %rd1, %rd45;    // scB_base -> scales[0, colB]
+
+    // Accumulators
+    mov.f32         %accA, 0f00000000;
+    mov.f32         %accB, 0f00000000;
+
+    // Scale tracking
+    mov.u32         %r45, 0xFFFFFFFF;      // prev_group
+    mov.f32         %scA, 0f00000000;
+    mov.f32         %biasA, 0f00000000;
+    mov.f32         %scB, 0f00000000;
+    mov.f32         %biasB, 0f00000000;
+
+    mov.u32         %r50, %r32;            // k_packed (absolute)
+    mov.u32         %r51, 0;               // k_local
+
+    // Main loop: 2 packed rows per iteration (to keep register pressure manageable)
+    shr.b32         %r60, %r34, 1;
+    mov.u32         %r61, 0;
+
+    setp.eq.u32     %p11, %r60, 0;
+    @%p11 bra       PAIR_DONE;
+
+PAIR_LOOP:
+    // ---- Iteration 0 ----
+    // Scale for this k_packed
+    shr.b32         %r53, %r50, 4;
+    setp.eq.u32     %p4, %r53, %r45;
+    @%p4 bra        SKIP_SC_0;
+    mov.u32         %r45, %r53;
+    cvt.u64.u32     %rd29, %r53;
+    mul.lo.u64      %rd30, %rd29, %rd21;
+    // Load scaleA
+    add.u64         %rd31, %rd25, %rd30;
+    ld.global.ca.b16 %htmp, [%rd31];
+    cvt.f32.f16     %scA, %htmp;
+    mul.f32         %biasA, %scA, 0fC1000000;
+    // Load scaleB (only if colB valid)
+    @%p10 bra       SKIP_SCB_0;
+    add.u64         %rd32, %rd49, %rd30;
+    ld.global.ca.b16 %htmp2, [%rd32];
+    cvt.f32.f16     %scB, %htmp2;
+    mul.f32         %biasB, %scB, 0fC1000000;
+SKIP_SCB_0:
+SKIP_SC_0:
+
+    // Load weights for both columns -- interleaved for MLP
+    ld.global.cg.u32 %pkA, [%rd28];
+    @%p10 bra       SKIP_LDB_0;
+    ld.global.cg.u32 %pkB, [%rd48];
+SKIP_LDB_0:
+
+    // Input from shared memory
+    shl.b32         %r54, %r51, 5;
+    add.u32         %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55];
+    ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+
+    // Dequant+FMA for colA
+    and.b32 %nib, %pkA, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x0, %accA;
+    shr.b32 %nib, %pkA, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x1, %accA;
+    shr.b32 %nib, %pkA, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x2, %accA;
+    shr.b32 %nib, %pkA, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x3, %accA;
+    shr.b32 %nib, %pkA, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x4, %accA;
+    shr.b32 %nib, %pkA, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x5, %accA;
+    shr.b32 %nib, %pkA, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x6, %accA;
+    shr.b32 %nib, %pkA, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x7, %accA;
+
+    // Dequant+FMA for colB (skip if out of bounds)
+    @%p10 bra       SKIP_COMPUTEB_0;
+    and.b32 %nib, %pkB, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x0, %accB;
+    shr.b32 %nib, %pkB, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x1, %accB;
+    shr.b32 %nib, %pkB, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x2, %accB;
+    shr.b32 %nib, %pkB, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x3, %accB;
+    shr.b32 %nib, %pkB, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x4, %accB;
+    shr.b32 %nib, %pkB, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x5, %accB;
+    shr.b32 %nib, %pkB, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x6, %accB;
+    shr.b32 %nib, %pkB, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x7, %accB;
+SKIP_COMPUTEB_0:
+
+    add.u64         %rd28, %rd28, %rd20;
+    add.u64         %rd48, %rd48, %rd20;
+    add.u32         %r50, %r50, 1;
+    add.u32         %r51, %r51, 1;
+
+    // ---- Iteration 1 ----
+    shr.b32         %r53, %r50, 4;
+    setp.eq.u32     %p4, %r53, %r45;
+    @%p4 bra        SKIP_SC_1;
+    mov.u32         %r45, %r53;
+    cvt.u64.u32     %rd29, %r53;
+    mul.lo.u64      %rd30, %rd29, %rd21;
+    add.u64         %rd31, %rd25, %rd30;
+    ld.global.ca.b16 %htmp, [%rd31];
+    cvt.f32.f16     %scA, %htmp;
+    mul.f32         %biasA, %scA, 0fC1000000;
+    @%p10 bra       SKIP_SCB_1;
+    add.u64         %rd32, %rd49, %rd30;
+    ld.global.ca.b16 %htmp2, [%rd32];
+    cvt.f32.f16     %scB, %htmp2;
+    mul.f32         %biasB, %scB, 0fC1000000;
+SKIP_SCB_1:
+SKIP_SC_1:
+
+    ld.global.cg.u32 %pkA, [%rd28];
+    @%p10 bra       SKIP_LDB_1;
+    ld.global.cg.u32 %pkB, [%rd48];
+SKIP_LDB_1:
+
+    shl.b32         %r54, %r51, 5;
+    add.u32         %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55];
+    ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+
+    and.b32 %nib, %pkA, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x0, %accA;
+    shr.b32 %nib, %pkA, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x1, %accA;
+    shr.b32 %nib, %pkA, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x2, %accA;
+    shr.b32 %nib, %pkA, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x3, %accA;
+    shr.b32 %nib, %pkA, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x4, %accA;
+    shr.b32 %nib, %pkA, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x5, %accA;
+    shr.b32 %nib, %pkA, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x6, %accA;
+    shr.b32 %nib, %pkA, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x7, %accA;
+
+    @%p10 bra       SKIP_COMPUTEB_1;
+    and.b32 %nib, %pkB, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x0, %accB;
+    shr.b32 %nib, %pkB, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x1, %accB;
+    shr.b32 %nib, %pkB, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x2, %accB;
+    shr.b32 %nib, %pkB, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x3, %accB;
+    shr.b32 %nib, %pkB, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x4, %accB;
+    shr.b32 %nib, %pkB, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x5, %accB;
+    shr.b32 %nib, %pkB, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x6, %accB;
+    shr.b32 %nib, %pkB, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x7, %accB;
+SKIP_COMPUTEB_1:
+
+    add.u64         %rd28, %rd28, %rd20;
+    add.u64         %rd48, %rd48, %rd20;
+    add.u32         %r50, %r50, 1;
+    add.u32         %r51, %r51, 1;
+
+    add.u32         %r61, %r61, 1;
+    setp.lt.u32     %p3, %r61, %r60;
+    @%p3 bra        PAIR_LOOP;
+
+PAIR_DONE:
+    // Handle odd remainder
+    and.b32         %r62, %r34, 1;
+    setp.eq.u32     %p5, %r62, 0;
+    @%p5 bra        K_DONE;
+
+    shr.b32         %r53, %r50, 4;
+    setp.eq.u32     %p4, %r53, %r45;
+    @%p4 bra        SKIP_SC_T;
+    mov.u32         %r45, %r53;
+    cvt.u64.u32     %rd29, %r53;
+    mul.lo.u64      %rd30, %rd29, %rd21;
+    add.u64         %rd31, %rd25, %rd30;
+    ld.global.ca.b16 %htmp, [%rd31];
+    cvt.f32.f16     %scA, %htmp;
+    mul.f32         %biasA, %scA, 0fC1000000;
+    @%p10 bra       SKIP_SCB_T;
+    add.u64         %rd32, %rd49, %rd30;
+    ld.global.ca.b16 %htmp2, [%rd32];
+    cvt.f32.f16     %scB, %htmp2;
+    mul.f32         %biasB, %scB, 0fC1000000;
+SKIP_SCB_T:
+SKIP_SC_T:
+
+    ld.global.cg.u32 %pkA, [%rd28];
+    @%p10 bra       SKIP_LDB_T;
+    ld.global.cg.u32 %pkB, [%rd48];
+SKIP_LDB_T:
+
+    shl.b32         %r54, %r51, 5;
+    add.u32         %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55];
+    ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+
+    and.b32 %nib, %pkA, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x0, %accA;
+    shr.b32 %nib, %pkA, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x1, %accA;
+    shr.b32 %nib, %pkA, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x2, %accA;
+    shr.b32 %nib, %pkA, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x3, %accA;
+    shr.b32 %nib, %pkA, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x4, %accA;
+    shr.b32 %nib, %pkA, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x5, %accA;
+    shr.b32 %nib, %pkA, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x6, %accA;
+    shr.b32 %nib, %pkA, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scA, %biasA; fma.rn.f32 %accA, %dq, %x7, %accA;
+
+    @%p10 bra       SKIP_COMPUTEB_T;
+    and.b32 %nib, %pkB, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x0, %accB;
+    shr.b32 %nib, %pkB, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x1, %accB;
+    shr.b32 %nib, %pkB, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x2, %accB;
+    shr.b32 %nib, %pkB, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x3, %accB;
+    shr.b32 %nib, %pkB, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x4, %accB;
+    shr.b32 %nib, %pkB, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x5, %accB;
+    shr.b32 %nib, %pkB, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x6, %accB;
+    shr.b32 %nib, %pkB, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scB, %biasB; fma.rn.f32 %accB, %dq, %x7, %accB;
+SKIP_COMPUTEB_T:
+
+K_DONE:
+    // Store colA result
+    cvt.u64.u32     %rd35, %r11;
+    shl.b64         %rd36, %rd35, 2;
+    add.u64         %rd37, %rd3, %rd36;
+    atom.global.add.f32 %f0, [%rd37], %accA;
+
+    // Store colB result (if valid)
+    @%p10 bra       DONE;
+    cvt.u64.u32     %rd50, %r12;
+    shl.b64         %rd51, %rd50, 2;
+    add.u64         %rd52, %rd3, %rd51;
+    atom.global.add.f32 %f0, [%rd52], %accB;
+
+DONE:
+    ret;
+}

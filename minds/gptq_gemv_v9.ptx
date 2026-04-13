@@ -1,0 +1,311 @@
+// gptq_gemv_v9.ptx -- Deep pipeline + v4 loads GPTQ W4A16 GEMV
+//
+// Combines the best ideas:
+// 1. ld.global.v4.u32 for 4 columns per thread (from v8)
+//    -> Single 16-byte load gets 4 packed words
+// 2. 128 threads/block for 4 warps, better occupancy
+//    -> 128 threads * 4 cols = 512 cols per block
+// 3. No branching on col validity (N=12288 divisible by 512)
+//
+// Wait -- 12288 / 512 = 24 blocks. With K_SPLITS=40, that's 960 blocks.
+// On 132 SMs = 7.3 blocks/SM. Each block = 4 warps. Total = 29 warps/SM.
+// Not enough. Let's keep 256 cols/block.
+//
+// Actually: 64 threads * 4 cols = 256 cols/block. That's what v8 does.
+// Let's try 128 threads * 2 cols = 256 cols/block, with ld.global.v2.u32.
+// This gives more warps per SM while still benefiting from vectorized loads.
+//
+// Actually the REAL win is: more WARPS with loads in flight.
+// Let's go with: 256 threads/block, 1 col/thread, but use MULTIPLE
+// outstanding ld.global loads per thread via deep software pipelining.
+//
+// Design: 256 threads, each handles 1 column.
+// Issue 4 loads ahead (depth-4 pipeline):
+//   Load k, k+1, k+2, k+3 at the START
+//   Main loop: process k, load k+4, advance
+//
+// The compiler/HW might reorder these anyway but explicit ordering in PTX
+// gives the assembler a hint.
+//
+// Launch: grid=(ceil(N/256), K_SPLITS, 1), block=(256, 1, 1)
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.extern .shared .align 16 .b8 smem_base[];
+
+.visible .entry gptq_gemv_v9(
+    .param .u64 qweight_ptr,
+    .param .u64 scales_ptr,
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u32 param_N,
+    .param .u32 param_K,
+    .param .u32 param_K_SPLITS,
+    .param .u32 param_k_packed_per_split
+)
+{
+    .reg .u64   %rd<60>;
+    .reg .u32   %r<100>;
+    .reg .f32   %f<20>;
+    .reg .pred  %p<20>;
+    .reg .b16   %htmp;
+    .reg .u32   %nib;
+    .reg .f32   %dq, %scale, %bias, %acc;
+    .reg .u32   %pk0, %pk1, %pk2, %pk3;   // pipeline: 4 loads in flight
+    .reg .f32   %x0, %x1, %x2, %x3, %x4, %x5, %x6, %x7;
+
+    ld.param.u64    %rd0, [qweight_ptr];
+    ld.param.u64    %rd1, [scales_ptr];
+    ld.param.u64    %rd2, [input_ptr];
+    ld.param.u64    %rd3, [output_ptr];
+    ld.param.u32    %r0,  [param_N];
+    ld.param.u32    %r1,  [param_K];
+    ld.param.u32    %r2,  [param_K_SPLITS];
+    ld.param.u32    %r8,  [param_k_packed_per_split];
+
+    mov.u32         %r3,  %tid.x;
+    mov.u32         %r4,  %ctaid.x;
+    mov.u32         %r5,  %ctaid.y;
+
+    shl.b32         %r10, %r4, 8;
+    add.u32         %r11, %r10, %r3;
+
+    setp.ge.u32     %p0, %r11, %r0;
+    @%p0 bra        DONE;
+
+    shr.b32         %r30, %r1, 3;
+    mul.lo.u32      %r32, %r5, %r8;
+    add.u32         %r33, %r32, %r8;
+    min.u32         %r33, %r33, %r30;
+    min.u32         %r32, %r32, %r30;
+    sub.u32         %r34, %r33, %r32;
+    setp.eq.u32     %p1, %r34, 0;
+    @%p1 bra        DONE;
+
+    // Load input to smem
+    mov.u32         %r20, smem_base;
+    shl.b32         %r35, %r34, 3;
+    shl.b32         %r36, %r32, 3;
+
+    mov.u32         %r37, %r3;
+    shr.b32         %r69, %r35, 2;
+LOAD_X_V4:
+    setp.ge.u32     %p2, %r37, %r69;
+    @%p2 bra        LOAD_X_V4_DONE;
+    shl.b32         %r38, %r37, 2;
+    add.u32         %r39, %r38, %r36;
+    cvt.u64.u32     %rd10, %r39;
+    shl.b64         %rd11, %rd10, 2;
+    add.u64         %rd12, %rd2, %rd11;
+    ld.global.ca.v4.f32 {%f0, %f1, %f2, %f3}, [%rd12];
+    shl.b32         %r40, %r38, 2;
+    add.u32         %r41, %r20, %r40;
+    st.shared.v4.f32 [%r41], {%f0, %f1, %f2, %f3};
+    add.u32         %r37, %r37, 256;
+    bra             LOAD_X_V4;
+LOAD_X_V4_DONE:
+    shl.b32         %r37, %r37, 2;
+LOAD_X_TAIL:
+    setp.ge.u32     %p2, %r37, %r35;
+    @%p2 bra        LOAD_X_DONE;
+    add.u32         %r38, %r37, %r36;
+    cvt.u64.u32     %rd10, %r38;
+    shl.b64         %rd11, %rd10, 2;
+    add.u64         %rd12, %rd2, %rd11;
+    ld.global.ca.f32 %f0, [%rd12];
+    shl.b32         %r39, %r37, 2;
+    add.u32         %r40, %r20, %r39;
+    st.shared.f32   [%r40], %f0;
+    add.u32         %r37, %r37, 1;
+    bra             LOAD_X_TAIL;
+LOAD_X_DONE:
+    bar.sync        0;
+
+    // Setup
+    shl.b32         %r41, %r0, 2;
+    cvt.u64.u32     %rd20, %r41;
+    shl.b32         %r42, %r0, 1;
+    cvt.u64.u32     %rd21, %r42;
+    shl.b32         %r43, %r11, 2;
+    cvt.u64.u32     %rd22, %r43;
+    shl.b32         %r44, %r11, 1;
+    cvt.u64.u32     %rd23, %r44;
+
+    cvt.u64.u32     %rd26, %r32;
+    mul.lo.u64      %rd27, %rd26, %rd20;
+    add.u64         %rd28, %rd0, %rd27;
+    add.u64         %rd28, %rd28, %rd22;
+    add.u64         %rd25, %rd1, %rd23;
+
+    mov.f32         %acc, 0f00000000;
+    mov.u32         %r45, 0xFFFFFFFF;
+    mov.f32         %scale, 0f00000000;
+    mov.f32         %bias, 0f00000000;
+
+    mov.u32         %r50, %r32;
+    mov.u32         %r51, 0;
+
+    // ---- Deep pipeline: issue 4 loads ahead ----
+    // Calculate how many full groups of 4 we can process
+    setp.lt.u32     %p11, 3, %r34;        // k_count >= 4?
+    @!%p11 bra      SHALLOW;
+
+    // Issue loads 0..3
+    .reg .u64       %rd_a0, %rd_a1, %rd_a2, %rd_a3;
+    mov.u64         %rd_a0, %rd28;
+    add.u64         %rd_a1, %rd_a0, %rd20;
+    add.u64         %rd_a2, %rd_a1, %rd20;
+    add.u64         %rd_a3, %rd_a2, %rd20;
+
+    ld.global.cg.u32 %pk0, [%rd_a0];
+    ld.global.cg.u32 %pk1, [%rd_a1];
+    ld.global.cg.u32 %pk2, [%rd_a2];
+    ld.global.cg.u32 %pk3, [%rd_a3];
+
+    // Number of groups of 4
+    shr.b32         %r60, %r34, 2;
+    // Remaining after groups of 4
+    and.b32         %r62, %r34, 3;
+
+    // Process first 3 from pipeline, then main loop for groups of 4
+    // Actually let's simplify: just unroll by 4 with pipeline
+
+    // Process iteration 0 (pk0 already loaded)
+    shr.b32         %r53, %r50, 4;
+    setp.eq.u32     %p4, %r53, %r45;
+    @%p4 bra        SKIP_SC_P0;
+    mov.u32         %r45, %r53;
+    cvt.u64.u32     %rd29, %r53;
+    mul.lo.u64      %rd30, %rd29, %rd21;
+    add.u64         %rd31, %rd25, %rd30;
+    ld.global.ca.b16 %htmp, [%rd31];
+    cvt.f32.f16     %scale, %htmp;
+    mul.f32         %bias, %scale, 0fC1000000;
+SKIP_SC_P0:
+    shl.b32         %r54, %r51, 5;
+    add.u32         %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55];
+    ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+    and.b32 %nib, %pk0, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x0, %acc;
+    shr.b32 %nib, %pk0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x1, %acc;
+    shr.b32 %nib, %pk0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x2, %acc;
+    shr.b32 %nib, %pk0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x3, %acc;
+    shr.b32 %nib, %pk0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x4, %acc;
+    shr.b32 %nib, %pk0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x5, %acc;
+    shr.b32 %nib, %pk0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x6, %acc;
+    shr.b32 %nib, %pk0, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x7, %acc;
+    add.u32 %r50, %r50, 1; add.u32 %r51, %r51, 1;
+
+    // Process iteration 1 (pk1)
+    shr.b32 %r53, %r50, 4; setp.eq.u32 %p4, %r53, %r45; @%p4 bra SKIP_SC_P1;
+    mov.u32 %r45, %r53; cvt.u64.u32 %rd29, %r53; mul.lo.u64 %rd30, %rd29, %rd21; add.u64 %rd31, %rd25, %rd30; ld.global.ca.b16 %htmp, [%rd31]; cvt.f32.f16 %scale, %htmp; mul.f32 %bias, %scale, 0fC1000000;
+SKIP_SC_P1:
+    shl.b32 %r54, %r51, 5; add.u32 %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55]; ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+    and.b32 %nib, %pk1, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x0, %acc;
+    shr.b32 %nib, %pk1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x1, %acc;
+    shr.b32 %nib, %pk1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x2, %acc;
+    shr.b32 %nib, %pk1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x3, %acc;
+    shr.b32 %nib, %pk1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x4, %acc;
+    shr.b32 %nib, %pk1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x5, %acc;
+    shr.b32 %nib, %pk1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x6, %acc;
+    shr.b32 %nib, %pk1, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x7, %acc;
+    add.u32 %r50, %r50, 1; add.u32 %r51, %r51, 1;
+
+    // Process iteration 2 (pk2)
+    shr.b32 %r53, %r50, 4; setp.eq.u32 %p4, %r53, %r45; @%p4 bra SKIP_SC_P2;
+    mov.u32 %r45, %r53; cvt.u64.u32 %rd29, %r53; mul.lo.u64 %rd30, %rd29, %rd21; add.u64 %rd31, %rd25, %rd30; ld.global.ca.b16 %htmp, [%rd31]; cvt.f32.f16 %scale, %htmp; mul.f32 %bias, %scale, 0fC1000000;
+SKIP_SC_P2:
+    shl.b32 %r54, %r51, 5; add.u32 %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55]; ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+    and.b32 %nib, %pk2, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x0, %acc;
+    shr.b32 %nib, %pk2, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x1, %acc;
+    shr.b32 %nib, %pk2, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x2, %acc;
+    shr.b32 %nib, %pk2, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x3, %acc;
+    shr.b32 %nib, %pk2, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x4, %acc;
+    shr.b32 %nib, %pk2, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x5, %acc;
+    shr.b32 %nib, %pk2, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x6, %acc;
+    shr.b32 %nib, %pk2, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x7, %acc;
+    add.u32 %r50, %r50, 1; add.u32 %r51, %r51, 1;
+
+    // Now main loop: process pk3, load next, shift pipeline
+    // Advance rd28 past the 3 we already loaded (we loaded 0..3, processed 0..2)
+    add.u64         %rd28, %rd_a3, %rd20;  // points to row k_start+4
+    mov.u32         %r61, 3;               // processed 3 so far
+
+DEEP_LOOP:
+    setp.ge.u32     %p3, %r61, %r34;
+    @%p3 bra        K_DONE;
+
+    // pk3 has current data. Issue next load
+    add.u32         %r70, %r61, 1;
+    setp.lt.u32     %p7, %r70, %r34;
+    @!%p7 bra       SKIP_NEXT_LOAD;
+    ld.global.cg.u32 %pk0, [%rd28];        // load next into pk0
+    add.u64         %rd28, %rd28, %rd20;
+    bra             LOAD_DONE;
+SKIP_NEXT_LOAD:
+    mov.u32         %pk0, 0;               // dummy
+LOAD_DONE:
+
+    // Scale
+    shr.b32 %r53, %r50, 4; setp.eq.u32 %p4, %r53, %r45; @%p4 bra SKIP_SC_DL;
+    mov.u32 %r45, %r53; cvt.u64.u32 %rd29, %r53; mul.lo.u64 %rd30, %rd29, %rd21; add.u64 %rd31, %rd25, %rd30; ld.global.ca.b16 %htmp, [%rd31]; cvt.f32.f16 %scale, %htmp; mul.f32 %bias, %scale, 0fC1000000;
+SKIP_SC_DL:
+
+    shl.b32 %r54, %r51, 5; add.u32 %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55]; ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+
+    // Process pk3
+    and.b32 %nib, %pk3, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x0, %acc;
+    shr.b32 %nib, %pk3, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x1, %acc;
+    shr.b32 %nib, %pk3, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x2, %acc;
+    shr.b32 %nib, %pk3, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x3, %acc;
+    shr.b32 %nib, %pk3, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x4, %acc;
+    shr.b32 %nib, %pk3, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x5, %acc;
+    shr.b32 %nib, %pk3, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x6, %acc;
+    shr.b32 %nib, %pk3, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x7, %acc;
+
+    // Rotate pipeline: pk3 = pk0 (which has the newly loaded data)
+    mov.u32         %pk3, %pk0;
+
+    add.u32 %r50, %r50, 1; add.u32 %r51, %r51, 1;
+    add.u32         %r61, %r61, 1;
+    bra             DEEP_LOOP;
+
+SHALLOW:
+    // For k_count < 4, just do simple loop
+    mov.u32         %r61, 0;
+SHALLOW_LOOP:
+    setp.ge.u32     %p3, %r61, %r34;
+    @%p3 bra        K_DONE;
+    shr.b32 %r53, %r50, 4; setp.eq.u32 %p4, %r53, %r45; @%p4 bra SKIP_SC_SH;
+    mov.u32 %r45, %r53; cvt.u64.u32 %rd29, %r53; mul.lo.u64 %rd30, %rd29, %rd21; add.u64 %rd31, %rd25, %rd30; ld.global.ca.b16 %htmp, [%rd31]; cvt.f32.f16 %scale, %htmp; mul.f32 %bias, %scale, 0fC1000000;
+SKIP_SC_SH:
+    ld.global.cg.u32 %pk0, [%rd28];
+    shl.b32 %r54, %r51, 5; add.u32 %r55, %r20, %r54;
+    ld.shared.v4.f32 {%x0, %x1, %x2, %x3}, [%r55]; ld.shared.v4.f32 {%x4, %x5, %x6, %x7}, [%r55 + 16];
+    and.b32 %nib, %pk0, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x0, %acc;
+    shr.b32 %nib, %pk0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x1, %acc;
+    shr.b32 %nib, %pk0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x2, %acc;
+    shr.b32 %nib, %pk0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x3, %acc;
+    shr.b32 %nib, %pk0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x4, %acc;
+    shr.b32 %nib, %pk0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x5, %acc;
+    shr.b32 %nib, %pk0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x6, %acc;
+    shr.b32 %nib, %pk0, 28; cvt.rn.f32.u32 %dq, %nib; fma.rn.f32 %dq, %dq, %scale, %bias; fma.rn.f32 %acc, %dq, %x7, %acc;
+    add.u64 %rd28, %rd28, %rd20;
+    add.u32 %r50, %r50, 1; add.u32 %r51, %r51, 1;
+    add.u32 %r61, %r61, 1;
+    bra SHALLOW_LOOP;
+
+K_DONE:
+    cvt.u64.u32     %rd35, %r11;
+    shl.b64         %rd36, %rd35, 2;
+    add.u64         %rd37, %rd3, %rd36;
+    atom.global.add.f32 %f0, [%rd37], %acc;
+
+DONE:
+    ret;
+}

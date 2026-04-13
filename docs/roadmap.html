@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos Architecture Roadmap &mdash; 6 Work Items to Zero Abstraction</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  --orange: #e09050;
+  --track-compiler: #6e8ed0;
+  --track-compiler-bg: #0e1828;
+  --track-compiler-border: #1a3060;
+  --track-hw: #e09050;
+  --track-hw-bg: #1a1208;
+  --track-hw-border: #4a3010;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav a.active { color: var(--accent); }
+.nav-search { margin-left: auto; color: var(--text-faint); display: flex; align-items: center; }
+.nav-search:hover { color: var(--accent); }
+
+/* Hero */
+.hero {
+  padding: 5rem 0 3.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 2.8rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* Track badges */
+.track-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.5rem;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-left: 0.6rem;
+}
+.track-badge.compiler {
+  background: var(--track-compiler-border);
+  color: var(--track-compiler);
+}
+.track-badge.hw {
+  background: var(--track-hw-border);
+  color: var(--track-hw);
+}
+
+/* Item cards */
+.item-card {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1.5rem;
+  margin: 1.2rem 0;
+}
+.item-card.compiler {
+  background: var(--track-compiler-bg);
+  border-color: var(--track-compiler-border);
+}
+.item-card.hw {
+  background: var(--track-hw-bg);
+  border-color: var(--track-hw-border);
+}
+.item-card h4 {
+  margin-top: 0;
+}
+
+/* Dependency graph */
+.dep-graph {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 1.5rem 0;
+  align-items: center;
+}
+.dep-row {
+  display: flex;
+  gap: 2rem;
+  justify-content: center;
+  align-items: center;
+}
+.dep-node {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.6rem 1.2rem;
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  text-align: center;
+  min-width: 180px;
+}
+.dep-node.compiler {
+  background: var(--track-compiler-bg);
+  border-color: var(--track-compiler-border);
+  color: var(--track-compiler);
+}
+.dep-node.hw {
+  background: var(--track-hw-bg);
+  border-color: var(--track-hw-border);
+  color: var(--track-hw);
+}
+.dep-arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+}
+.dep-arrow-line {
+  width: 2px;
+  height: 20px;
+  background: var(--border);
+}
+.dep-arrow-head {
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid var(--border);
+}
+
+/* Timeline */
+.timeline {
+  position: relative;
+  margin: 2rem 0;
+  padding-left: 2rem;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 0.5rem;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+.timeline-item {
+  position: relative;
+  margin-bottom: 1.5rem;
+  padding-left: 1.5rem;
+}
+.timeline-item::before {
+  content: '';
+  position: absolute;
+  left: -1.85rem;
+  top: 0.45rem;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--bg);
+}
+.timeline-item.compiler::before {
+  border-color: var(--track-compiler);
+  background: var(--track-compiler-bg);
+}
+.timeline-item.hw::before {
+  border-color: var(--track-hw);
+  background: var(--track-hw-bg);
+}
+.timeline-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.2rem;
+}
+.timeline-label.compiler { color: var(--track-compiler); }
+.timeline-label.hw { color: var(--track-hw); }
+.timeline-desc {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+/* Disappears/Remains lists */
+.outcome-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin: 1rem 0;
+}
+@media (max-width: 640px) { .outcome-grid { grid-template-columns: 1fr; } }
+.outcome-box {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1.2rem;
+}
+.outcome-box.disappears {
+  background: #1a0a0a;
+  border-color: #3a1a1a;
+}
+.outcome-box.disappears h4 { color: var(--red); margin-top: 0; }
+.outcome-box.remains {
+  background: #0a1a0a;
+  border-color: #1a3a1a;
+}
+.outcome-box.remains h4 { color: var(--green); margin-top: 0; }
+.outcome-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.85rem;
+}
+.outcome-list li {
+  padding: 0.25rem 0;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.outcome-list li:last-child { border-bottom: none; }
+.outcome-list li code {
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.05rem 0.25rem;
+}
+
+/* Detail sub-sections */
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 0.8rem 0 1.2rem 0;
+}
+@media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr; } }
+.detail-box {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.8rem 1rem;
+  font-size: 0.85rem;
+}
+.detail-box h4 { margin: 0 0 0.4rem 0; font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.detail-box ul { margin: 0; padding-left: 1.2rem; }
+.detail-box li { color: var(--text-dim); margin-bottom: 0.2rem; font-size: 0.82rem; }
+.detail-box.creates h4 { color: var(--green); }
+.detail-box.deletes h4 { color: var(--red); }
+.detail-box.deps h4 { color: var(--cyan); }
+.detail-box.key h4 { color: var(--accent); }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/quantization">Quantization</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/pipeline">Inference Stack</a>
+  <a href="/roadmap" class="active">Architecture Roadmap</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/token-journey">Token Journey</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+  <a href="#" class="nav-search" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Architecture Roadmap</h1>
+  <p>Six work items. Two parallel tracks. Zero abstraction layers when complete.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- ================================================================== -->
+<!-- OVERVIEW -->
+<!-- ================================================================== -->
+<section id="overview">
+<h2>Overview</h2>
+
+<p>Lithos reaches its endgame through six architecture work items on two independent tracks. The <span style="color: var(--track-compiler);">compiler track</span> (items 1&ndash;4) transforms a safetensors model file into two cooperative megakernel ELF binaries. The <span style="color: var(--track-hw);">hardware track</span> (items 5&ndash;6) eliminates C and libcuda.so by booting the GPU and submitting work directly from Forth.</p>
+
+<p>When both tracks complete, the entire system is: a Forth bootstrap that reads a safetensors file, compiles it into two megakernels, boots the GPU via BAR0/BAR4 register writes, and runs inference by writing GPFIFO entries and ringing a doorbell. No Python. No C. No CUDA. No kernel module. No runtime weight loading.</p>
+
+<h3>Dependency Graph</h3>
+
+<div class="dep-graph">
+  <div class="dep-row">
+    <div class="dep-node compiler">1. Safetensors Parser</div>
+    <div style="width: 80px;"></div>
+    <div class="dep-node hw">5. GSP Boot from Forth</div>
+  </div>
+  <div class="dep-arrow"><div class="dep-arrow-line"></div><div class="dep-arrow-head"></div></div>
+  <div class="dep-row">
+    <div class="dep-node compiler">2. Template Language (.li v2)</div>
+    <div style="width: 80px;"></div>
+    <div class="dep-node hw">6. GPFIFO + Doorbell</div>
+  </div>
+  <div class="dep-arrow" style="margin-right: 280px;"><div class="dep-arrow-line"></div><div class="dep-arrow-head"></div></div>
+  <div class="dep-row">
+    <div class="dep-node compiler">3. Model-to-Binary Compiler</div>
+  </div>
+  <div class="dep-arrow"><div class="dep-arrow-line"></div><div class="dep-arrow-head"></div></div>
+  <div class="dep-row">
+    <div class="dep-node compiler">4. Megakernel Linker</div>
+  </div>
+</div>
+
+<p class="small">Compiler track: 1 &rarr; 2 &rarr; 3 &rarr; 4 (strictly serial). Hardware track: 5 &rarr; 6 (serial within track, parallel with compiler track). The two tracks converge when the linker output (item 4) is launched via the doorbell (item 6).</p>
+
+</section>
+
+<!-- ================================================================== -->
+<!-- ITEM 1: SAFETENSORS PARSER -->
+<!-- ================================================================== -->
+<section id="safetensors-parser">
+<h2>1. Safetensors Parser in Forth <span class="track-badge compiler">Compiler Track</span></h2>
+
+<p>The compiler must read model weight files at compile time. The safetensors format is straightforward binary: an 8-byte little-endian header length, a JSON header mapping tensor names to metadata, and contiguous raw tensor data. The parser runs in the Forth bootstrap interpreter during compilation.</p>
+
+<h3>Format Structure</h3>
+<pre>
+Byte 0..7      8-byte LE integer: header_size
+Byte 8..8+N-1  JSON header (UTF-8, N = header_size)
+Byte 8+N..EOF  Raw tensor data (contiguous, no padding)
+
+JSON header entry:
+  "model.layers.0.self_attn.q_proj.qweight": {
+      "dtype": "I32",
+      "shape": [5120, 640],
+      "data_offsets": [0, 13107200]
+  }
+</pre>
+
+<h3>Implementation</h3>
+<p>The parser mmaps the safetensors file, reads the 8-byte header length, scans the JSON header to build a dictionary of tensor names to (offset, nbytes, dtype, shape), and exposes a lookup word. For any tensor name, it returns the base pointer plus offset into the mmap region.</p>
+
+<div class="detail-grid">
+  <div class="detail-box key">
+    <h4>Key Details</h4>
+    <ul>
+      <li>Binary format &mdash; no external dependencies</li>
+      <li>JSON header is simple key-value (no nesting beyond one level)</li>
+      <li>mmap via Forth file words or thin <code>SYS_mmap</code> syscall wrapper</li>
+      <li>Output: <code>( tensor-name -- base-addr offset nbytes dtype shape )</code></li>
+      <li>Q4 GPTQ tensors have <code>.qweight</code>, <code>.qzeros</code>, <code>.scales</code> sub-tensors</li>
+    </ul>
+  </div>
+  <div class="detail-box deps">
+    <h4>Dependencies</h4>
+    <ul>
+      <li>Forth interpreter with file I/O (exists)</li>
+      <li><code>SYS_mmap</code> word (syscall 222 on aarch64, trivial to add)</li>
+      <li>Minimal JSON tokenizer (parse <code>{</code> <code>}</code> <code>:</code> <code>,</code> <code>"string"</code> <code>number</code>)</li>
+    </ul>
+  </div>
+  <div class="detail-box creates">
+    <h4>Creates</h4>
+    <ul>
+      <li><code>compiler/safetensors.fs</code> &mdash; parser and tensor lookup words</li>
+      <li><code>compiler/json.fs</code> &mdash; minimal JSON tokenizer</li>
+      <li><code>mmap</code> Forth word wrapping the syscall</li>
+    </ul>
+  </div>
+  <div class="detail-box deletes">
+    <h4>Deletes</h4>
+    <ul>
+      <li>Runtime weight loading from <code>engine.py</code></li>
+      <li><code>LoadedModel.weight_offsets</code> dictionary</li>
+      <li>Any Python safetensors dependency</li>
+    </ul>
+  </div>
+</div>
+
+<pre>
+\ Forth usage at compile time:
+s" model.safetensors" open-safetensors
+s" model.layers.0.self_attn.q_proj.qweight" tensor-lookup
+\ ( -- base-addr offset nbytes dtype shape-addr )
+</pre>
+
+</section>
+
+<!-- ================================================================== -->
+<!-- ITEM 2: TEMPLATE LANGUAGE -->
+<!-- ================================================================== -->
+<section id="template-language">
+<h2>2. Template Language (.li v2) <span class="track-badge compiler">Compiler Track</span></h2>
+
+<p>The .li file format evolves from a standalone kernel description into a parameterized template. The compiler instantiates the template once per layer, binding concrete weight tensor addresses from safetensors. The same template with different weight bindings produces 48 different instruction streams &mdash; identical structure, different addresses and immediates.</p>
+
+<h3>New Syntax Elements</h3>
+
+<pre>
+\ Weight declarations (compile-time constants from safetensors)
+weight W_q     : [5120, 5120]  q4     \ Q projection, quantized 4-bit
+weight w_norm1 : [5120]        f32    \ RMSNorm weight (broadcast scalar)
+weight A_log   : [48]          f32    \ decay log-parameter (per-head)
+
+\ Layer parameterization
+layer L : 0..47                        \ stamp out 48 times
+
+\ Binding (safetensors tensor paths)
+bind L
+    W_q     &lt;- model.layers.{L}.self_attn.q_proj.qweight
+    w_norm1 &lt;- model.layers.{L}.input_layernorm.weight
+
+\ Projection directive (compiler emits weight-address-hardcoded LDG stream)
+project W_q x -> q
+
+\ Runtime data declaration (activations, not weights)
+runtime x : [5120] f32                 \ input hidden state
+</pre>
+
+<h3>The SIMT Constraint</h3>
+
+<p>All 32 threads in a warp execute the same instruction with the same immediate. This means matrix weights <strong>cannot</strong> be literal instruction immediates &mdash; they must be LDG-loaded from HBM, because different threads in the warp need different weight values for different output rows. However, all weight <strong>addresses</strong>, strides, dequantization scale factors, zero points, and broadcast scalars (norm weights, decay, beta) <strong>are</strong> compiled in. No runtime decisions, no pointer parameters, no cbuf0 parameter passing.</p>
+
+<h3>Compile-Time Constant Folding</h3>
+
+<p>When a computation involves only compile-time weights, the compiler evaluates it and emits the result as a single immediate. Examples:</p>
+
+<table>
+  <thead>
+    <tr><th>Expression</th><th>Runtime Instructions</th><th>Compiler Action</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>sigmoid(beta)</code> (steps 23&ndash;26)</td>
+      <td class="measure">0</td>
+      <td>Pre-computed at compile time, emitted as MOV-IMM per head</td>
+    </tr>
+    <tr>
+      <td><code>-exp(A_log)</code> (steps 31&ndash;32)</td>
+      <td class="measure">0</td>
+      <td>Pre-computed, becomes one FMUL-IMM immediate</td>
+    </tr>
+    <tr>
+      <td><code>a_proj + dt_bias</code> (step 27)</td>
+      <td class="measure">1 FADD-IMM</td>
+      <td>dt_bias is compile-time, a_proj is runtime (depends on input)</td>
+    </tr>
+    <tr>
+      <td><code>x * w_norm</code> (step 6)</td>
+      <td class="measure">1 FMUL-IMM per element</td>
+      <td>Broadcast scalar &mdash; same value for all 32 warp lanes</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="detail-grid">
+  <div class="detail-box key">
+    <h4>Key Insight</h4>
+    <ul>
+      <li>Matrix weights: LDG with hardcoded addresses (SIMT constraint)</li>
+      <li>Broadcast scalars: FMUL-IMM / FADD-IMM immediates</li>
+      <li>Weight-only expressions: constant-fold to zero runtime instructions</li>
+      <li>Every value is either <code>weight</code> (compile-time) or <code>runtime</code> (activation)</li>
+    </ul>
+  </div>
+  <div class="detail-box deps">
+    <h4>Dependencies</h4>
+    <ul>
+      <li>Item 1 (safetensors parser) &mdash; must be able to read tensors</li>
+      <li><code>parser.fs</code> &mdash; extended with new keywords</li>
+    </ul>
+  </div>
+  <div class="detail-box creates">
+    <h4>Creates</h4>
+    <ul>
+      <li>Extended <code>parser.fs</code> with <code>weight</code>, <code>layer</code>, <code>bind</code>, <code>project</code>, <code>runtime</code></li>
+      <li>Template instantiation loop in compiler</li>
+      <li>Compile-time constant folding for weight expressions</li>
+    </ul>
+  </div>
+  <div class="detail-box deletes">
+    <h4>Deletes</h4>
+    <ul>
+      <li><code>param W_packed ptr</code> syntax</li>
+      <li>Indexed weight loads (<code>W_packed [ idx ]</code>)</li>
+      <li>Runtime dequantization in .li source</li>
+      <li>The <code>for k_p ... endfor</code> weight reduction loop</li>
+    </ul>
+  </div>
+</div>
+
+</section>
+
+<!-- ================================================================== -->
+<!-- ITEM 3: MODEL-TO-BINARY COMPILER -->
+<!-- ================================================================== -->
+<section id="model-to-binary">
+<h2>3. Model-to-Binary Compiler <span class="track-badge compiler">Compiler Track</span></h2>
+
+<p>The <code>project</code> primitive's emit word changes completely. Instead of emitting a parameterized GEMV loop, it reads the Q4 weight tensor from safetensors at compile time and emits a straight-line instruction stream with all addresses hardcoded.</p>
+
+<h3>What the <code>project</code> Emit Word Does</h3>
+
+<pre>
+: emit-project  ( weight-tensor activation-reg output-reg -- )
+    \ 1. Read Q4 weight tensor from safetensors (at compile time)
+    \ 2. For each output row assigned to this thread block:
+    \    a. Emit LDG instructions with hardcoded .rodata addresses
+    \       for the packed Q4 weight words of that row
+    \    b. Emit dequant sequences with per-group scale factors
+    \       and zero points as FMUL-IMM / FADD-IMM immediates
+    \    c. Emit FFMA accumulation against activation registers
+    \    d. Emit shuffle-tree reduction (unchanged from current)
+    \ 3. No loops over weight groups at runtime
+    \    The compile-time loop is unrolled with concrete addresses
+;
+</pre>
+
+<h3>Compilation Model</h3>
+
+<p>The compiler becomes a model-to-binary translator. It reads safetensors once, instantiates the .li template once per layer (binding different weight tensors each time), and outputs per-layer instruction streams. Each stream is a self-contained ELF section.</p>
+
+<pre>
+safetensors + .li template
+      |
+      v
+  lithos-compile  (Forth bootstrap)
+      |
+      +-- layer_00.text  (all projections + elementwise + reduction for layer 0)
+      +-- layer_01.text
+      +-- ...
+      +-- layer_47.text
+      +-- layer_00.rodata  (Q4 packed weight data with known offsets)
+      +-- ...
+</pre>
+
+<p>The resulting binary can only run one specific model. The model IS the program. A different model requires a different compilation.</p>
+
+<div class="detail-grid">
+  <div class="detail-box key">
+    <h4>Key Details</h4>
+    <ul>
+      <li>Weight addresses hardcoded as LDG operands &mdash; no pointer parameters</li>
+      <li>Per-group scale factors embedded as FMUL-IMM immediates</li>
+      <li>Zero points embedded as FADD-IMM immediates</li>
+      <li>Dequantization happens at compile time for broadcast scalars, at runtime (with hardcoded constants) for matrix weights</li>
+      <li>The compile-time loop over weight groups is unrolled into a straight-line instruction stream</li>
+    </ul>
+  </div>
+  <div class="detail-box deps">
+    <h4>Dependencies</h4>
+    <ul>
+      <li>Item 1 (safetensors parser) &mdash; tensor data access</li>
+      <li>Item 2 (template language) &mdash; <code>project</code> directive parsing</li>
+      <li><code>gpu/emit.fs</code> &mdash; existing instruction emitter</li>
+      <li><code>gpu/opcodes-sm90.fs</code> &mdash; existing opcode definitions</li>
+    </ul>
+  </div>
+  <div class="detail-box creates">
+    <h4>Creates</h4>
+    <ul>
+      <li>New <code>emit-project</code> word in <code>gpu/emit.fs</code></li>
+      <li>Per-layer ELF .text and .rodata sections</li>
+      <li>Compile-time dequant pipeline for Q4/Q8 formats</li>
+    </ul>
+  </div>
+  <div class="detail-box deletes">
+    <h4>Deletes</h4>
+    <ul>
+      <li><code>emit-gemv.fs</code> parameterized GEMV loop emitter</li>
+      <li>cbuf0 parameter passing for weight pointers</li>
+      <li>Runtime scale/zero-point buffer setup</li>
+      <li><code>LoadedKernels</code> dispatch table</li>
+    </ul>
+  </div>
+</div>
+
+</section>
+
+<!-- ================================================================== -->
+<!-- ITEM 4: MEGAKERNEL LINKER -->
+<!-- ================================================================== -->
+<section id="megakernel-linker">
+<h2>4. Megakernel Linker <span class="track-badge compiler">Compiler Track</span></h2>
+
+<p>The per-layer instruction streams from item 3 must be linked into two cooperative megakernels. The megakernel IS the model. One QMD dispatch, one doorbell write per token.</p>
+
+<h3>Two Megakernels</h3>
+
+<table>
+  <thead>
+    <tr><th>Megakernel</th><th>Contents</th><th>Dispatch</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Forward pass</td>
+      <td>All 48 layers: projections + elementwise + reductions + attention + delta rule</td>
+      <td>One QMD per token</td>
+    </tr>
+    <tr>
+      <td>Recurrence update</td>
+      <td>State matrix updates across all 48 layers</td>
+      <td>One QMD per token</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Linking Process</h3>
+
+<pre>
+layer_00.text + layer_01.text + ... + layer_47.text
+      |
+      v
+  megakernel-link
+      |
+      +-- forward_megakernel.elf
+      |     .text = concatenation of all layer .text sections
+      |     .rodata = concatenation of all layer weight data
+      |     grid-sync (ATOMG + BAR) between each layer
+      |
+      +-- recurrence_megakernel.elf
+            .text = state update code for all layers
+            grid-sync between layers
+</pre>
+
+<p>Grid-sync instructions (<code>ATOMG</code> + <code>BAR</code>) are emitted between layers. The linker concatenates per-layer code sections, resolves cross-layer address references (next layer's activation buffer = this layer's output buffer), and produces two final ELF binaries.</p>
+
+<div class="detail-grid">
+  <div class="detail-box key">
+    <h4>Key Details</h4>
+    <ul>
+      <li>Concatenation, not compilation &mdash; per-layer code is already final SASS</li>
+      <li>Grid-sync barriers (<code>ATOMG</code> + <code>BAR</code>) inserted between layers</li>
+      <li>Cross-layer references: activation buffer addresses resolved at link time</li>
+      <li>528-byte QMD descriptor built for each megakernel</li>
+    </ul>
+  </div>
+  <div class="detail-box deps">
+    <h4>Dependencies</h4>
+    <ul>
+      <li>Item 3 (model-to-binary compiler) &mdash; per-layer ELF sections</li>
+      <li><code>compiler/elf-wrap.fs</code> &mdash; ELF packaging (exists)</li>
+    </ul>
+  </div>
+  <div class="detail-box creates">
+    <h4>Creates</h4>
+    <ul>
+      <li><code>compiler/linker.fs</code> &mdash; megakernel linker</li>
+      <li>Two final ELF binaries per model</li>
+      <li>Pre-built QMD descriptors embedded in the ELF</li>
+    </ul>
+  </div>
+  <div class="detail-box deletes">
+    <h4>Deletes</h4>
+    <ul>
+      <li>Per-kernel .cubin files (<code>inference/*.cubin</code>)</li>
+      <li>Per-kernel launch overhead (QMD construction per kernel)</li>
+      <li>Inter-kernel synchronization via CPU</li>
+      <li>The kernel dispatch table concept entirely</li>
+    </ul>
+  </div>
+</div>
+
+</section>
+
+<!-- ================================================================== -->
+<!-- ITEM 5: GSP BOOT FROM FORTH -->
+<!-- ================================================================== -->
+<section id="gsp-boot">
+<h2>5. GSP Boot from Forth <span class="track-badge hw">Hardware Track</span></h2>
+
+<p>The GH200's BAR0 (16 MB GPU registers) and BAR4 (128 GB coherent HBM) can both be mmap'd from userspace via <code>vfio-pci</code> &mdash; a stock Linux kernel module, zero custom code. The entire GSP boot sequence reduces to register writes via BAR0 and structure population in BAR4.</p>
+
+<h3>The BAR Mapping</h3>
+
+<table>
+  <thead>
+    <tr><th>BAR</th><th>Size</th><th>Contents</th><th>Access Method</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BAR0</td>
+      <td class="measure">16 MB</td>
+      <td>GPU MMIO registers (PMC, Falcon, FSP, USERD)</td>
+      <td><code>vfio-pci</code> mmap or sysfs <code>resource0</code></td>
+    </tr>
+    <tr>
+      <td>BAR4</td>
+      <td class="measure">128 GB</td>
+      <td>Coherent HBM (PA == GPU VA, hardware cache coherent via C2C/ATS)</td>
+      <td><code>vfio-pci</code> mmap or sysfs <code>resource4</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Boot Sequence (All Userspace)</h3>
+
+<pre>
+Phase 0:  mmap BAR0 + BAR4 via vfio-pci (3 syscalls)
+Phase 1:  Read PMC_BOOT_0 at BAR0+0x000000, verify Hopper (1 load)
+Phase 2:  Falcon reset: BAR0+0x1103C0 assert/deassert + poll (~4 stores)
+Phase 3:  Populate FMC params, WPR metadata in BAR4 (bump-allocate)
+Phase 4:  Load GSP firmware ELF from /lib/firmware/ into BAR4
+Phase 5:  Program RISC-V BCR registers (6 BAR0 register pairs + start)
+Phase 6:  FSP boot commands via BAR0+0x8F2000 EMEMC/EMEMD (~2000 lines)
+Phase 7:  Poll BAR0+0x1100F4 bit 13 until PRIV_LOCKDOWN releases
+</pre>
+
+<p>BAR4 replaces <code>dma_alloc_coherent()</code> entirely. On GH200, CPU physical addresses equal GPU virtual addresses for BAR4 mappings. CPU stores to BAR4 are GPU-visible without explicit cache flushes. The kernel module's DMA allocation was unnecessary overhead.</p>
+
+<div class="detail-grid">
+  <div class="detail-box key">
+    <h4>Key Details</h4>
+    <ul>
+      <li>BAR4 IS coherent memory: PA == GPU VA, no IOMMU needed</li>
+      <li>All DMA buffers bump-allocated from BAR4 (same as lithos_mem.c)</li>
+      <li>FSP communication (~2000 lines) is pure MMIO writes to BAR0</li>
+      <li>No interrupts needed: polling is optimal for single-tenant inference</li>
+      <li>Entire sequence is ~500 ARM64 instructions or ~800 lines of Forth</li>
+    </ul>
+  </div>
+  <div class="detail-box deps">
+    <h4>Dependencies</h4>
+    <ul>
+      <li><code>vfio-pci</code> kernel module (ships with Linux, zero custom code)</li>
+      <li>GPU unbound from <code>nvidia.ko</code> (already required)</li>
+      <li>Forth interpreter with <code>SYS_mmap</code> and file I/O</li>
+    </ul>
+  </div>
+  <div class="detail-box creates">
+    <h4>Creates</h4>
+    <ul>
+      <li><code>gpu/bar.fs</code> &mdash; BAR0/BAR4 mmap and register access words</li>
+      <li><code>gpu/gsp-boot.fs</code> &mdash; full GSP boot sequence in Forth</li>
+      <li><code>gpu/fsp.fs</code> &mdash; FSP communication protocol</li>
+      <li><code>gpu/hbm-alloc.fs</code> &mdash; bump allocator over BAR4</li>
+    </ul>
+  </div>
+  <div class="detail-box deletes">
+    <h4>Deletes</h4>
+    <ul>
+      <li><code>kernel/lithos_main.c</code> &mdash; PCI driver, char device, ioctl</li>
+      <li><code>kernel/lithos_gsp.c</code> &mdash; GSP boot (ported to Forth)</li>
+      <li><code>kernel/lithos_mem.c</code> &mdash; allocator (simplified to Forth)</li>
+      <li><code>kernel/lithos_init.c</code> &mdash; init wrapper</li>
+      <li>All kernel build artifacts (Makefile, .ko, .o, Module.symvers)</li>
+      <li>All <code>linux/</code> kernel headers</li>
+    </ul>
+  </div>
+</div>
+
+</section>
+
+<!-- ================================================================== -->
+<!-- ITEM 6: GPFIFO + DOORBELL -->
+<!-- ================================================================== -->
+<section id="gpfifo-doorbell">
+<h2>6. GPFIFO + Doorbell from Forth <span class="track-badge hw">Hardware Track</span></h2>
+
+<p>After GSP boots and the RISC-V coprocessor is running, the Forth bootstrap creates a GPFIFO channel via GSP RPC, builds the QMD pushbuffer, and runs inference with zero syscalls per token.</p>
+
+<h3>Channel Creation</h3>
+
+<pre>
+1. Send ALLOC_ROOT / ALLOC_DEVICE / ALLOC_CHANNEL RPCs via GSP message queue
+2. GSP allocates channel resources on the GPU side
+3. Bump-allocate GPFIFO ring buffer from BAR4 (8 KB)
+4. Map USERD page (BAR0 + 0xFC0000 + chid*0x200, already in BAR0 mmap)
+</pre>
+
+<h3>Work Submission (Per Token)</h3>
+
+<pre>
+1. Update activation buffer    CPU write to BAR4 (hidden state)
+2. Build 528-byte QMD          block/grid dims, entry_pc, register count, smem size
+3. Write QMD to GPFIFO ring    CPU store to BAR4
+4. Write GPPut                 store to USERD+0x8C (advance ring pointer)
+5. Ring doorbell               one 32-bit store to USERD+0x90 (GPU starts)
+6. Poll completion             read fence value from BAR4 (GPU writes when done)
+7. Read output token           read BAR4 (argmax result)
+</pre>
+
+<p>Zero syscalls at inference time. The token loop is three memory writes (activation + GPFIFO entry + doorbell) and two memory reads (fence + output). Total latency is dominated by GPU execution, not submission overhead.</p>
+
+<div class="detail-grid">
+  <div class="detail-box key">
+    <h4>Key Details</h4>
+    <ul>
+      <li>528-byte QMD: block dims, grid dims, entry_pc, register count, shared memory</li>
+      <li>GPFIFO ring: circular buffer of 8-byte entries pointing to QMD pushbuffers</li>
+      <li>Doorbell: single 32-bit store at USERD+0x90 triggers GPU fetch</li>
+      <li>Completion: poll a BAR4 fence value (GPU writes when megakernel finishes)</li>
+      <li>No context switching, no preemption, no multi-tenant scheduling</li>
+    </ul>
+  </div>
+  <div class="detail-box deps">
+    <h4>Dependencies</h4>
+    <ul>
+      <li>Item 5 (GSP boot) &mdash; GPU must be initialized</li>
+      <li>GSP RPC protocol for channel allocation</li>
+      <li>BAR0 mmap for USERD access</li>
+      <li>BAR4 mmap for GPFIFO ring and activation buffers</li>
+    </ul>
+  </div>
+  <div class="detail-box creates">
+    <h4>Creates</h4>
+    <ul>
+      <li><code>gpu/channel.fs</code> &mdash; channel creation via GSP RPC</li>
+      <li><code>gpu/gpfifo.fs</code> &mdash; ring buffer management + QMD construction</li>
+      <li><code>gpu/doorbell.fs</code> &mdash; submission and completion polling</li>
+    </ul>
+  </div>
+  <div class="detail-box deletes">
+    <h4>Deletes</h4>
+    <ul>
+      <li><code>kernel/lithos_channel.c</code> &mdash; kernel-mode channel creation</li>
+      <li><code>src/cuda_driver.py</code> &mdash; Python CUDA driver wrapper</li>
+      <li>All ioctl-based GPU communication</li>
+      <li><code>libcuda.so</code> dependency entirely</li>
+    </ul>
+  </div>
+</div>
+
+</section>
+
+<!-- ================================================================== -->
+<!-- TIMELINE -->
+<!-- ================================================================== -->
+<section id="timeline">
+<h2>Execution Timeline</h2>
+
+<p>Ordering by dependency, not calendar. The two tracks are independent and can proceed in parallel.</p>
+
+<div class="timeline">
+  <div class="timeline-item compiler">
+    <div class="timeline-label compiler">Phase 1: Safetensors Parser</div>
+    <div class="timeline-desc">Add <code>SYS_mmap</code> to Forth. Parse safetensors header. Look up any tensor by name. Prove: read a weight matrix from Forth.</div>
+  </div>
+  <div class="timeline-item hw">
+    <div class="timeline-label hw">Phase 1: BAR Access</div>
+    <div class="timeline-desc">Unbind nvidia.ko, bind vfio-pci. mmap BAR0 from Forth. Read PMC_BOOT_0. Prove: Forth can read GPU registers.</div>
+  </div>
+  <div class="timeline-item compiler">
+    <div class="timeline-label compiler">Phase 2: Template Language</div>
+    <div class="timeline-desc">Extend parser.fs with <code>weight</code>, <code>layer</code>, <code>bind</code>, <code>project</code>, <code>runtime</code> keywords. Parse a full DeltaNet .li v2 template.</div>
+  </div>
+  <div class="timeline-item hw">
+    <div class="timeline-label hw">Phase 2: GSP Boot</div>
+    <div class="timeline-desc">Map BAR4. Port Falcon reset, FMC bootstrap, FSP communication, message queues. Prove: GSP reaches ready state from Forth.</div>
+  </div>
+  <div class="timeline-item compiler">
+    <div class="timeline-label compiler">Phase 3: Model-to-Binary Compiler</div>
+    <div class="timeline-desc">Implement <code>emit-project</code>: read Q4 tensor, emit LDG with hardcoded addresses, embed scales as immediates. Compile one layer.</div>
+  </div>
+  <div class="timeline-item hw">
+    <div class="timeline-label hw">Phase 3: Channel + Doorbell</div>
+    <div class="timeline-desc">Create GPFIFO channel via GSP RPC. Build QMD. Write GPFIFO entry. Ring doorbell. Prove: launch a test kernel from Forth.</div>
+  </div>
+  <div class="timeline-item compiler">
+    <div class="timeline-label compiler">Phase 4: Megakernel Linker</div>
+    <div class="timeline-desc">Concatenate 48 layer .text sections. Insert grid-sync barriers. Resolve cross-layer addresses. Produce two final ELF binaries.</div>
+  </div>
+  <div class="timeline-item compiler" style="margin-bottom: 0;">
+    <div class="timeline-label" style="color: var(--accent);">Convergence: First Token</div>
+    <div class="timeline-desc">Megakernel ELF (compiler track) launched via doorbell (hardware track). First token generated with zero Python, zero C, zero CUDA.</div>
+  </div>
+</div>
+
+</section>
+
+<!-- ================================================================== -->
+<!-- WHAT DISAPPEARS / WHAT REMAINS -->
+<!-- ================================================================== -->
+<section id="outcome">
+<h2>Final State</h2>
+
+<div class="outcome-grid">
+  <div class="outcome-box disappears">
+    <h4>What Disappears</h4>
+    <ul class="outcome-list">
+      <li><code>engine.py</code> &mdash; Python inference orchestrator</li>
+      <li><code>src/cuda_driver.py</code> &mdash; Python CUDA driver wrapper</li>
+      <li><code>kernel/</code> directory &mdash; all C kernel module code</li>
+      <li><code>libcuda.so</code> &mdash; NVIDIA CUDA driver library</li>
+      <li>Per-kernel launches &mdash; replaced by megakernel dispatch</li>
+      <li>Runtime weight loading &mdash; weights compiled into ELF</li>
+      <li>cbuf0 parameter passing &mdash; all addresses hardcoded</li>
+      <li><code>LoadedModel</code> / <code>LoadedKernels</code> / <code>ActivationBuffers</code> classes</li>
+      <li>Runtime dequantization parameter setup</li>
+      <li>Inter-kernel CPU synchronization</li>
+    </ul>
+  </div>
+  <div class="outcome-box remains">
+    <h4>What Remains</h4>
+    <ul class="outcome-list">
+      <li>Forth/ARM64 bootstrap &mdash; the compiler and GPU driver</li>
+      <li><code>.li</code> templates &mdash; layer computation descriptions</li>
+      <li><code>gpu/emit.fs</code> &mdash; SASS instruction emitter</li>
+      <li><code>gpu/opcodes-sm90.fs</code> &mdash; opcode definitions</li>
+      <li>ELF wrapper (<code>compiler/elf-wrap.fs</code>)</li>
+      <li><code>vfio-pci</code> &mdash; stock Linux kernel module for BAR access</li>
+      <li>The GPU silicon itself (sm90a / GH200)</li>
+      <li>HBM bandwidth as the fundamental bottleneck</li>
+      <li>The 71-step DeltaNet layer decomposition (unchanged)</li>
+      <li>Safetensors model files (input to compilation)</li>
+    </ul>
+  </div>
+</div>
+
+<p>The final system is a Forth interpreter that reads a safetensors file, compiles it into two ELF megakernels, boots the GPU by writing registers through mmap'd BARs, loads the ELFs into HBM, and runs inference by writing three words to memory per token. The entire software stack above the hardware is Forth and the SASS it emits.</p>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+  Lithos &mdash; Writing on Silicon &mdash; sm90a / GH200 &mdash; No CUDA
+</div>
+</footer>
+
+</body>
+</html>
