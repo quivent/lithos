@@ -35,3 +35,4 @@ compiler/_transform.py
 bootstrap/build/
 bootstrap/lithos-bootstrap
 bootstrap/*.o
+a.out
