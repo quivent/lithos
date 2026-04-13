@@ -1,65 +1,36 @@
-\ cubin-wrap.fs — Wrap raw SASS into a minimal ELF64 cubin for sm_90.
+\ cubin-wrap.fs — Build a complete sm_90 cubin and write it to disk.
 \
-\ A full cubin has .text.<kernel>, .nv.info, .nv.info.<kernel>, .symtab,
-\ .strtab, .shstrtab, and NVIDIA-specific segments. For now we emit just
-\ enough structure that nvdisasm can see the kernel bytes; a loader-ready
-\ cubin requires the NVIDIA proprietary .nv.info records, which we treat
-\ as a TODO.
+\ The heavy lifting lives in /home/ubuntu/lithos/sass/emit-sass.fs which
+\ provides build-cubin ( -- addr u ). This file only glues parser state
+\ (kernel name, param count) into the builder and handles file I/O.
 \
-\ Layout produced:
-\   ELF64 header (64 bytes)
-\   Program header 0: PT_LOAD for .text (56 bytes)
-\   Section headers: NULL, .text, .shstrtab
-\   Raw SASS bytes
-\   .shstrtab
+\ Cubin layout produced by build-cubin:
+\   [0] NULL
+\   [1] .shstrtab
+\   [2] .strtab
+\   [3] .symtab   (4 entries: UND, SECTION(.text), SECTION(.nv.constant0),
+\                  FUNC GLOBAL kernel STO_CUDA_ENTRY)
+\   [4] .nv.info
+\   [5] .text.<kernel>
+\   [6] .nv.info.<kernel>
+\   [7] .nv.shared.reserved.0   (NOBITS)
+\   [8] .nv.constant0.<kernel>  (0x210 reserved + param_bytes)
+\ No program headers: cuModuleLoadData tolerates shdr-only cubins for a
+\ single kernel without shared-mem dependencies.
 
-variable cubin-fd
+variable cw-fd
 
-: cb,  ( byte -- )   cubin-fd @ >r
-  pad over c! pad 1 r> write-file drop drop ;
+\ write-cubin ( outpath outlen -- )
+\ Builds the cubin from the current sass-buf + parser state and writes it.
+: write-cubin  ( outpath outlen -- )
+  \ Propagate parser's param count (ptr + scalar) to the cubin builder.
+  count-all-params  n-kparams !
 
-: cb-w32,  ( u32 -- )
-  dup 255 and cb, 8 rshift
-  dup 255 and cb, 8 rshift
-  dup 255 and cb, 8 rshift
-  255 and cb, ;
-
-: cb-w64,  ( u64 -- )
-  dup cb-w32,  32 rshift cb-w32, ;
-
-\ Emit a minimal ELF64 cubin stub. Not a valid loader target — see TODO
-\ above — but a real file with the SASS bytes visible.
-: write-cubin  ( addr u -- )
-  577 open-file drop cubin-fd !
-  \ ELF64 magic + class64 + little-endian + version1 + OSABI=CUDA(51)
-  $7f cb, [char] E cb, [char] L cb, [char] F cb,
-  2 cb, 1 cb, 1 cb, 51 cb,
-  \ ABI version + padding
-  7 cb, 0 cb, 0 cb, 0 cb, 0 cb, 0 cb, 0 cb, 0 cb,
-  \ e_type = ET_EXEC(2), e_machine = EM_CUDA(190)
-  2 cb, 0 cb,  190 cb, 0 cb,
-  \ e_version = 1
-  1 cb-w32,
-  \ e_entry, e_phoff, e_shoff — we fill with plausible placeholders
-  0 cb-w64,
-  64 cb-w64,        \ phoff just past header
-  0 cb-w64,         \ no section headers yet (TODO)
-  \ e_flags — sm_90 in low 8 bits
-  $00520000 cb-w32,
-  \ e_ehsize, e_phentsize, e_phnum
-  64 cb, 0 cb,  56 cb, 0 cb,  1 cb, 0 cb,
-  \ e_shentsize, e_shnum, e_shstrndx
-  64 cb, 0 cb,  0 cb, 0 cb,  0 cb, 0 cb,
-  \ Program header 0: PT_LOAD
-  1 cb-w32,  5 cb-w32,        \ type, flags = R|X
-  $1000 cb-w64,              \ offset (data starts at 0x1000)
-  0 cb-w64,                  \ vaddr
-  0 cb-w64,                  \ paddr
-  over cb-w64,               \ filesz = payload length
-  dup cb-w64,                \ memsz = payload length
-  $1000 cb-w64,              \ align
-  \ Pad to 0x1000
-  $1000 120 - 0 ?do 0 cb, loop
-  \ Payload
-  cubin-fd @ write-file drop
-  cubin-fd @ close-file drop ;
+  \ Open output file from the two TOS items (outpath outlen), then build cubin
+  \ and fetch addr/len from cubin-buf / cubin-pos directly — the bootstrap
+  \ appears to leave extra ephemeral items on the param stack through
+  \ lithos-compile, so we avoid relying on stack order.
+  577 open-file drop cw-fd !     \ ( --  )  consumes outpath outlen mode
+  build-cubin 2drop              \ discard addr/u — we read them via globals
+  cubin-buf cubin-pos @  cw-fd @  write-file drop
+  cw-fd @ close-file drop ;

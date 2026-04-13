@@ -41,12 +41,14 @@ create pa-emit-kw 6 allot   s" --emit" pa-emit-kw swap move
 create pa-o-kw    2 allot   s" -o"     pa-o-kw    swap move
 create pa-ptx-kw  3 allot   s" ptx"    pa-ptx-kw  swap move
 create pa-sass-kw 4 allot   s" sass"   pa-sass-kw swap move
-create pa-arm-kw  5 allot   s" arm64"  pa-arm-kw  swap move
+create pa-arm-kw   5 allot   s" arm64"  pa-arm-kw  swap move
+create pa-cubin-kw 5 allot   s" cubin"  pa-cubin-kw swap move
 
 : pa-try-emit-val  ( addr u -- )
-  2dup pa-ptx-kw  3 li-tok= if 2drop 0 arg-emit ! exit then
-  2dup pa-sass-kw 4 li-tok= if 2drop 1 arg-emit ! exit then
-  2dup pa-arm-kw  5 li-tok= if 2drop 2 arg-emit ! exit then
+  2dup pa-ptx-kw   3 li-tok= if 2drop 0 arg-emit ! exit then
+  2dup pa-sass-kw  4 li-tok= if 2drop 1 arg-emit ! exit then
+  2dup pa-arm-kw   5 li-tok= if 2drop 2 arg-emit ! exit then
+  2dup pa-cubin-kw 5 li-tok= if 2drop 3 arg-emit ! exit then
   2drop ;
 
 \ Handle one argv[i]; i on stack coming in, consumed on exit.
@@ -86,7 +88,7 @@ create pa-arm-kw  5 allot   s" arm64"  pa-arm-kw  swap move
 
 \ ---- Main ------------------------------------------------------------------
 : usage  ( -- )
-  s" usage: lithos.fs <input.li> --emit {ptx|sass|arm64} -o <output>" type cr ;
+  s" usage: lithos.fs <input.li> --emit {ptx|sass|arm64|cubin} -o <output>" type cr ;
 
 : lithos-main  ( -- )
   parse-args
@@ -95,19 +97,26 @@ create pa-arm-kw  5 allot   s" arm64"  pa-arm-kw  swap move
 
   arg-input-buf arg-input-len @ slurp-file
   dup 0= if drop 2drop s" ERROR: cannot read input" type cr exit then
+  arg-emit @ 1 = arg-emit @ 3 = or if 1 li-backend ! else 0 li-backend ! then
+  arg-emit @ 1 = arg-emit @ 3 = or if
+    s" /home/ubuntu/lithos/compiler/emit-sass.fs" included
+  then
   lithos-compile
 
   arg-emit @ 0= if
     arg-output-buf arg-output-len @ write-ptx
   else arg-emit @ 1 = if
-    \ SASS: included lazily
-    s" /home/ubuntu/lithos/compiler/emit-sass.fs" included
+    \ SASS raw bytes
     arg-output-buf arg-output-len @ write-sass-raw
   else arg-emit @ 2 = if
     s" /home/ubuntu/lithos/compiler/emit-arm64.fs" included
     emit-host-stub
     arg-output-buf arg-output-len @ write-arm64-raw
-  then then then
+  else arg-emit @ 3 = if
+    \ cubin: SASS wrapped in a complete ELF64 cubin for cuModuleLoadData
+    s" /home/ubuntu/lithos/compiler/cubin-wrap.fs" included
+    arg-output-buf arg-output-len @ write-cubin
+  then then then then
 
   s" lithos: wrote " type arg-output-buf arg-output-len @ type
   s"  (defs=" type li-defs @ .
