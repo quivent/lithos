@@ -141,10 +141,15 @@ def quantize(weights: np.ndarray, group_size: int = 128) -> dict:
     codebooks = []
     n_sub = block_size // SUB_DIM
 
+    # Subsample blocks for codebook training (cap at 10k blocks for speed)
+    max_train_blocks = min(n_blocks, 10000)
+    rng_cb = np.random.RandomState(42)
+    train_indices = rng_cb.choice(n_blocks, max_train_blocks, replace=False) if n_blocks > max_train_blocks else np.arange(n_blocks)
+    train_blocks = centered_blocks[train_indices]
+
     for s in range(n_sub):
-        # Collect all sub-vectors for this sub-space
-        sub_data = centered_blocks[:, s * SUB_DIM:(s + 1) * SUB_DIM]
-        cb = _train_codebook(sub_data, N_CODEBOOK_ENTRIES, n_iter=15)
+        sub_data = train_blocks[:, s * SUB_DIM:(s + 1) * SUB_DIM]
+        cb = _train_codebook(sub_data, N_CODEBOOK_ENTRIES, n_iter=10)
         codebooks.append(cb.astype(np.float32))
 
     # Encode each block
