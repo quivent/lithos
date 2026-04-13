@@ -144,13 +144,16 @@ def main():
         _check(f"memset {name}", cuda.cuMemsetD8_v2(d, fill, c_size_t(nbytes)))
         return d
 
-    # Allocate MLP weights
+    # Allocate MLP weights -- share gate/up to save memory (same format, same K)
+    # We need to save every MB for the LM head
     d_gate_qw = tracked_alloc(gate_qw_size, "gate_qw")
-    d_gate_sc = tracked_alloc(gate_sc_size, "gate_sc", 0x38)  # ~0.005 f16
+    d_gate_sc = tracked_alloc(gate_sc_size, "gate_sc", 0x38)
     d_gate_zr = tracked_alloc(gate_zr_size, "gate_zr", 0x08)
-    d_up_qw = tracked_alloc(gate_qw_size, "up_qw")
-    d_up_sc = tracked_alloc(gate_sc_size, "up_sc", 0x38)
-    d_up_zr = tracked_alloc(gate_zr_size, "up_zr", 0x08)
+    # Up shares with gate (both are [17408, 640] packed)
+    d_up_qw = d_gate_qw
+    d_up_sc = d_gate_sc
+    d_up_zr = d_gate_zr
+    # Down: different dimensions, allocate separately
     d_down_qw = tracked_alloc(down_qw_size, "down_qw")
     d_down_sc = tracked_alloc(down_sc_size, "down_sc", 0x38)
     d_down_zr = tracked_alloc(down_zr_size, "down_zr", 0x08)
@@ -322,6 +325,13 @@ def main():
         max_rel = max(max_rel, re)
         if re > 0.05:
             n_wrong += 1
+
+    # Print a few values regardless
+    print(f"  Sample logits (first 5):")
+    for i in range(5):
+        rv = struct.unpack_from('<f', out_ref, i * 4)[0]
+        nv = struct.unpack_from('<f', out_new, i * 4)[0]
+        print(f"    [{i}] ref={rv:.8e} new={nv:.8e}")
 
     if n_wrong == 0:
         print(f"  PASS: {CHECK_N} logits (max_abs={max_abs:.6e}, max_rel={max_rel:.4f}, nonzero={n_nonzero})")

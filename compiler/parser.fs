@@ -1576,55 +1576,60 @@ create k-raw 3 allot  s" raw" k-raw swap move
         r> drop
     again ;
 
+\ Check if token is a body keyword (returns -1 if yes, 0 if no)
+: is-body-keyword? ( addr u -- flag )
+    2dup k-each   4 li-tok= if 2drop -1 exit then
+    2dup k-fn     2 li-tok= if 2drop -1 exit then
+    2dup k-for    3 li-tok= if 2drop -1 exit then
+    2dup k-ifge   4 li-tok= if 2drop -1 exit then
+    2dup k-iflt   4 li-tok= if 2drop -1 exit then
+    2dup k-label  5 li-tok= if 2drop -1 exit then
+    2dup k-shr    3 li-tok= if 2drop -1 exit then
+    2dup k-shl    3 li-tok= if 2drop -1 exit then
+    2dup k-and    3 li-tok= if 2drop -1 exit then
+    2dup k-or     2 li-tok= if 2drop -1 exit then
+    2dup k-xor    3 li-tok= if 2drop -1 exit then
+    2dup k-mov    3 li-tok= if 2drop -1 exit then
+    2dup k-add    3 li-tok= if 2drop -1 exit then
+    2dup k-sub    3 li-tok= if 2drop -1 exit then
+    2dup k-mul    3 li-tok= if 2drop -1 exit then
+    2dup k-mad    3 li-tok= if 2drop -1 exit then
+    2dup k-exp    3 li-tok= if 2drop -1 exit then
+    2dup k-rcp    3 li-tok= if 2drop -1 exit then
+    2drop 0 ;
+
+: is-body-keyword2? ( addr u -- flag )
+    2dup k-rsqrt  5 li-tok= if 2drop -1 exit then
+    2dup k-sqrt   4 li-tok= if 2drop -1 exit then
+    2dup k-neg    3 li-tok= if 2drop -1 exit then
+    2dup k-fma    3 li-tok= if 2drop -1 exit then
+    2dup k-sin    3 li-tok= if 2drop -1 exit then
+    2dup k-cos    3 li-tok= if 2drop -1 exit then
+    2dup k-setp   4 li-tok= if 2drop -1 exit then
+    2dup k-bar    7 li-tok= if 2drop -1 exit then
+    2dup k-bra    3 li-tok= if 2drop -1 exit then
+    2dup k-shfl   9 li-tok= if 2drop -1 exit then
+    2dup k-cvt    3 li-tok= if 2drop -1 exit then
+    2dup k-f32s32 7 li-tok= if 2drop -1 exit then
+    2dup k-f32u32 7 li-tok= if 2drop -1 exit then
+    2dup k-u32f32 7 li-tok= if 2drop -1 exit then
+    2dup k-s32f32 7 li-tok= if 2drop -1 exit then
+    2dup k-endfor 6 li-tok= if 2drop -1 exit then
+    2dup k-ldg    8 li-tok= if 2drop -1 exit then
+    2dup k-stg    8 li-tok= if 2drop -1 exit then
+    2dup k-lds    9 li-tok= if 2drop -1 exit then
+    2dup k-sts    9 li-tok= if 2drop -1 exit then
+    over c@ [char] @ = if 2drop -1 exit then
+    2drop 0 ;
+
 : parse-fn-decls-and-outputs  ( -- )
-    \ After parsing input params and "->", read outputs and declarations
-    \ until we hit a body keyword (each, for, if>=, label, or known body start)
     begin
         src-pos @ >r
         src-token dup 0= if 2drop r> src-pos ! exit then
 
-        \ Body-starting keywords — stop collecting
-        2dup k-each   4 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-fn     2 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-for    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-ifge   4 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-iflt   4 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-label  5 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-shr    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-shl    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-and    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-or     2 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-xor    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-mov    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-add    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-sub    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-mul    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-mad    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-exp    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-rcp    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-rsqrt  5 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-sqrt   4 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-neg    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-fma    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-sin    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-cos    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-setp   4 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-ldg    8 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-stg    8 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-lds    9 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-sts    9 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-bar    7 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-bra    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-shfl   9 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-cvt    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-f32s32 7 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-f32u32 7 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-u32f32 7 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-s32f32 7 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-endfor 6 li-tok= if 2drop r> src-pos ! exit then
-
-        \ Check if @ predicated
-        over c@ [char] @ = if 2drop r> src-pos ! exit then
+        \ Check body keywords (split into two words to avoid Forth limits)
+        2dup is-body-keyword? if 2drop r> src-pos ! exit then
+        2dup is-body-keyword2? if 2drop r> src-pos ! exit then
 
         \ Declarations
         2dup k-param 5 li-tok= if
