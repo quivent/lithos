@@ -203,6 +203,10 @@ footer {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
 }
+.subnav { display: flex; gap: 16px; padding: 12px 32px; background: #141420; border-bottom: 1px solid #2a2a3a; font-size: 13px; overflow-x: auto; position: sticky; top: 36px; z-index: 99; }
+.subnav a { color: #a0a0a8; text-decoration: none; white-space: nowrap; }
+.subnav a:hover { color: #d4a053; text-decoration: none; }
+.subnav a.active { color: #d4a053; border-bottom: 2px solid #d4a053; padding-bottom: 10px; margin-bottom: -12px; }
 </style>
 </head>
 <body>
@@ -210,21 +214,35 @@ footer {
 <!-- Navigation -->
 <nav>
 <div class="container">
-  <a href="index.html" class="nav-brand">Lithos</a>
-  <a href="index.html">Home</a>
-  <a href="#what-it-does">What It Does</a>
-  <a href="#how-it-decides">How It Decides</a>
-  <a href="#what-lithos-controls">Lithos Controls</a>
-  <a href="#control-word">Control Word</a>
-  <a href="#why-it-matters">Why It Matters</a>
-  <a href="pytorch.html">Lithos vs PyTorch</a>
-  <a href="performance.html">Performance</a>
-  <a href="bandwidth.html">Bandwidth</a>
-  <a href="memory.html">Memory</a>
-  <a href="architecture.html">Architecture</a>
-  <a href="kernels.html">Kernels</a>
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture" class="active">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/quantization">Quantization</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/token-journey">Token Journey</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
 </div>
 </nav>
+
+<!-- Architecture Subnav -->
+<div class="subnav">
+  <a href="/architecture">Pipeline</a>
+  <a href="/arch-gpu">GPU</a>
+  <a href="/sm-architecture">SM</a>
+  <a href="/arch-cores">Cores</a>
+  <a href="/arch-registers">Registers</a>
+  <a href="/warp-scheduler" class="active">Warp</a>
+  <a href="/memory">Memory</a>
+  <a href="/arch-kernel">Kernel</a>
+</div>
 
 <!-- Hero -->
 <header class="hero">

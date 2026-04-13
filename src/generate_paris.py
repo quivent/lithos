@@ -4,7 +4,7 @@ Generate the next token after "The capital of France is" by processing
 all 5 prompt tokens sequentially through the full 64-layer pipeline.
 
 DeltaNet state (S matrices) and conv1d history are maintained between tokens.
-Full attention layers use V-passthrough (no KV cache) for simplicity.
+Full attention layers use real attention with KV cache and RoPE.
 
 Run:
     python3 /home/ubuntu/lithos/src/generate_paris.py
@@ -119,6 +119,9 @@ class PrefillEngine:
         self._preload_norms()
         self._preload_deltanet_weights()
         self._init_deltanet_state()
+        self.kv_cache = KVCache(max_seq_len=64)
+        self._preload_qk_norms()
+        print(f"  KV cache initialized ({self.kv_cache.memory_bytes() / 1024 / 1024:.1f} MB)")
 
         t1 = time.monotonic()
         print(f"  Init time: {t1-t0:.3f}s")
@@ -226,6 +229,22 @@ class PrefillEngine:
         print(f"    DeltaNet state initialized ({len(self.dn_S)} layers, "
               f"S shape={NUM_VALUE_HEADS}x{VALUE_HEAD_DIM}x{KEY_HEAD_DIM})")
 
+    def _preload_qk_norms(self):
+        """Preload Q/K RMSNorm weights for full attention layers.
+
+        Qwen3.5 uses Qwen3NextRMSNorm (1+w) for Q/K normalization in full attention.
+        These are per-head norms applied after projection and before RoPE.
+        """
+        self.q_norm_weights = {}
+        self.k_norm_weights = {}
+        for i in range(NUM_LAYERS):
+            if self.layer_types[i] != "full_attention":
+                continue
+            prefix = f"model.language_model.layers.{i}.self_attn"
+            self.q_norm_weights[i] = load_norm_weight(self.model, f"{prefix}.q_norm.weight") + 1.0
+            self.k_norm_weights[i] = load_norm_weight(self.model, f"{prefix}.k_norm.weight") + 1.0
+        print(f"    Q/K norm weights preloaded for {len(self.q_norm_weights)} full attention layers")
+
     # ------------------------------------------------------------------
     # GPU kernel wrappers (same as generate_first_token.py)
     # ------------------------------------------------------------------
@@ -319,24 +338,61 @@ class PrefillEngine:
                               INTERMEDIATE_SIZE, HIDDEN_DIM)
         self.gpu.synchronize()
 
-    def run_full_attention_vpass(self, layer_idx: int, d_normed):
-        """Full attention with V-passthrough (no KV cache).
-
-        For simplicity: output = V through o_proj (same as first-token behavior).
-        This means full attention layers don't build up cross-token context,
-        but the 48 DeltaNet layers do.
-        """
+    def run_full_attention(self, layer_idx: int, d_normed, position: int):
+        """Full attention with KV cache and RoPE."""
         prefix = f"model.language_model.layers.{layer_idx}.self_attn"
+
+        # Q projection: 5120 -> 6144 (24 heads * 256 dim)
+        self.gpu_gptq_matvec(f"{prefix}.q_proj",
+                              d_normed, self.d_attn_scratch1,
+                              HIDDEN_DIM, 6144)
+        self.gpu.synchronize()
+        q_raw = download_f32(self.gpu, self.d_attn_scratch1, 6144)
+
+        # K projection: 5120 -> 1024 (4 heads * 256 dim)
+        self.gpu_gptq_matvec(f"{prefix}.k_proj",
+                              d_normed, self.d_attn_scratch1,
+                              HIDDEN_DIM, 1024)
+        self.gpu.synchronize()
+        k_raw = download_f32(self.gpu, self.d_attn_scratch1, 1024)
+
+        # V projection: 5120 -> 1024 (4 heads * 256 dim)
         self.gpu_gptq_matvec(f"{prefix}.v_proj",
                               d_normed, self.d_attn_scratch1,
                               HIDDEN_DIM, 1024)
         self.gpu.synchronize()
         v_raw = download_f32(self.gpu, self.d_attn_scratch1, 1024)
-        v_heads = v_raw.reshape(4, 256)
-        v_expanded = np.repeat(v_heads, 6, axis=0)  # [24, 256]
-        v_flat = v_expanded.flatten()  # 6144
+
+        # Apply QK RMSNorm per head (Qwen3NextRMSNorm with 1+w, already loaded)
+        q_heads = q_raw.reshape(24, 256)  # [num_q_heads, head_dim]
+        k_heads = k_raw.reshape(4, 256)   # [num_kv_heads, head_dim]
+        q_norm_w = self.q_norm_weights[layer_idx]  # [256] with +1.0
+        k_norm_w = self.k_norm_weights[layer_idx]  # [256] with +1.0
+        for h in range(24):
+            rms = np.sqrt(np.mean(q_heads[h] ** 2) + self.epsilon)
+            q_heads[h] = (q_heads[h] / rms) * q_norm_w
+        for h in range(4):
+            rms = np.sqrt(np.mean(k_heads[h] ** 2) + self.epsilon)
+            k_heads[h] = (k_heads[h] / rms) * k_norm_w
+        q_raw = q_heads.flatten()
+        k_raw = k_heads.flatten()
+
+        # Apply RoPE to Q and K
+        q_rope, k_rope = process_qkv_with_rope(q_raw, k_raw, position)
+
+        # Store K (after RoPE) and V (no RoPE) in KV cache
+        v_2d = v_raw.reshape(4, 256)
+        self.kv_cache.store(layer_idx, position, k_rope, v_2d)
+
+        # Get cached keys and values up to current position
+        k_cache, v_cache = self.kv_cache.get(layer_idx, position)
+
+        # Compute attention
+        attended = attention_prefill(q_rope, k_cache, v_cache, position)
+
+        # O projection: 6144 -> 5120
         self.gpu.memcpy_htod(self.d_attn_scratch2,
-                             v_flat.ctypes.data_as(ctypes.c_void_p),
+                             attended.ctypes.data_as(ctypes.c_void_p),
                              6144 * 4)
         self.gpu_gptq_matvec(f"{prefix}.o_proj",
                               self.d_attn_scratch2, self.d_attn_out,
@@ -465,7 +521,7 @@ class PrefillEngine:
                               6144, HIDDEN_DIM)
         self.gpu.synchronize()
 
-    def run_layer(self, layer_idx: int, x: np.ndarray) -> np.ndarray:
+    def run_layer(self, layer_idx: int, x: np.ndarray, position: int) -> np.ndarray:
         """Run one transformer layer with full attention/DeltaNet."""
         layer_type = self.layer_types[layer_idx]
         gpu = self.gpu
@@ -478,7 +534,7 @@ class PrefillEngine:
         gpu.synchronize()
 
         if layer_type == "full_attention":
-            self.run_full_attention_vpass(layer_idx, self.d_norm_out)
+            self.run_full_attention(layer_idx, self.d_norm_out, position)
         else:  # linear_attention
             self.run_deltanet(layer_idx, self.d_norm_out)
 
@@ -502,7 +558,7 @@ class PrefillEngine:
         x = self.gpu_embed(token_id)
 
         for layer_idx in range(NUM_LAYERS):
-            x = self.run_layer(layer_idx, x)
+            x = self.run_layer(layer_idx, x, token_pos)
 
             if (layer_idx + 1) % 16 == 0:
                 x_norm = np.linalg.norm(x)
