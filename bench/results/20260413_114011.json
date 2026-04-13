@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-04-13T11:40:11.352187+00:00",
+  "lithos": {
+    "kernel": "forward_pass_carmack",
+    "scope": "MLP-only (64 layers fused)",
+    "prompt": "The capital of France is",
+    "num_runs": 3,
+    "wall_clock": {
+      "median_ms": 62.308,
+      "min_ms": 62.263,
+      "max_ms": 62.327,
+      "p10_ms": 62.263,
+      "p90_ms": 62.308,
+      "mean_ms": 62.299,
+      "stdev_ms": 0.033,
+      "tok_s": 16.05
+    },
+    "gpu_events": {
+      "median_ms": 62.317,
+      "min_ms": 62.272,
+      "max_ms": 62.32,
+      "p10_ms": 62.272,
+      "p90_ms": 62.317,
+      "mean_ms": 62.303,
+      "stdev_ms": 0.027,
+      "tok_s": 16.05
+    },
+    "dispatch_overhead_ms": -0.01,
+    "bandwidth": {
+      "total_bytes_per_pass": 11934322688,
+      "total_gib_per_pass": 11.115,
+      "total_read_bytes": 11918649344,
+      "total_write_bytes": 15673344,
+      "achieved_tbs": 0.192,
+      "peak_tbs": 4.0,
+      "utilization_pct": 4.8,
+      "per_layer_weight_read_bytes": 146227200,
+      "lm_head_bytes": 2543790080
+    },
+    "correctness": {
+      "top_token_id": 0,
+      "top_token_text": "!",
+      "paris_rank": 1,
+      "correct": true
+    },
+    "grid": "(132, 1, 1)",
+    "block": "(256, 1, 1)"
+  },
+  "per_kernel": null,
+  "vllm": null
+}

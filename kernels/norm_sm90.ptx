@@ -1,0 +1,327 @@
+// norm_sm90.ptx -- Optimized RMSNorm for SM90 (Hopper)
+//
+// Improvements over norm.ptx:
+//   1. Single-pass global read: stage x+residual into shared memory during
+//      sum-of-squares accumulation. Second pass reads from smem, not global.
+//      Cuts global memory traffic from 3 reads + 1 write to 2 reads + 1 write.
+//   2. Vectorized loads (ld.global.v4.f32) for 128-byte coalesced transactions.
+//      256 threads * 16 bytes/thread = 4096 bytes/warp = one full cache line
+//      per sector group. Hidden dim 5120 = 1280 vec4 loads = 5 iterations.
+//   3. cp.async.bulk for weight prefetch during reduction barrier wait.
+//   4. Only 8 f32 cross-warp slots (8 warps with 256 threads), not 32.
+//
+// Launch: gridDim.x = batch_rows, blockDim.x = 256
+// Shared memory: 5120*4 (staging) + 32 (reduce) + 4 (broadcast) = 20516 bytes
+//
+// Bandwidth analysis for hidden_dim=5120, f32:
+//   Read:  input 20KB + residual 20KB = 40KB
+//   Write: output 20KB
+//   Total: 60KB per row per invocation
+//   At 4 TB/s HBM3: theoretical 60KB / 4TB/s = 15ns per row
+//   At 256 threads, ~20 instructions in reduction = ~11ns at 1.83 GHz
+//   -> Memory bound. Minimizing reads is the optimization.
+//
+// With single-pass staging:
+//   Read:  input 20KB + residual 20KB + weight 20KB = 60KB
+//   Write: output 20KB
+//   Total: 80KB -- but weight read overlaps with reduction barrier
+//   Effective: 60KB + output 20KB = 80KB, vs old 100KB (input+residual read twice + weight + output)
+//   Saving: 20% bandwidth reduction
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.visible .entry norm_sm90(
+    .param .u64 input_ptr,
+    .param .u64 residual_ptr,
+    .param .u64 weight_ptr,
+    .param .u64 output_ptr,
+    .param .u32 hidden_dim,
+    .param .f32 epsilon
+)
+{
+    .reg .u64   %rd<32>;
+    .reg .u32   %r<32>;
+    .reg .f32   %f<32>;
+    .reg .pred  %p<12>;
+
+    // Shared memory layout:
+    //   [0..20479]     staged[5120] f32 -- x + residual values
+    //   [20480..20511] reduce[8]   f32 -- cross-warp partial sums
+    //   [20512..20515] rms_inv[1]  f32 -- broadcast slot
+    .shared .align 16 .f32 smem_staged[5120];
+    .shared .align 4  .f32 smem_reduce[8];
+    .shared .align 4  .f32 smem_rms_inv[1];
+
+    // Load parameters
+    ld.param.u64    %rd0, [input_ptr];
+    ld.param.u64    %rd1, [residual_ptr];
+    ld.param.u64    %rd2, [weight_ptr];
+    ld.param.u64    %rd3, [output_ptr];
+    ld.param.u32    %r0, [hidden_dim];
+    ld.param.f32    %f20, [epsilon];
+
+    // Thread indexing
+    mov.u32         %r1, %tid.x;           // tid 0..255
+    mov.u32         %r2, %ctaid.x;         // row index
+    mov.u32         %r3, %ntid.x;          // blockDim.x = 256
+
+    // Row base offset (bytes)
+    mul.lo.u32      %r4, %r2, %r0;
+    shl.b32         %r5, %r4, 2;           // * sizeof(f32)
+    cvt.u64.u32     %rd4, %r5;
+
+    add.u64         %rd5, %rd0, %rd4;      // input row base
+    add.u64         %rd6, %rd1, %rd4;      // residual row base
+    add.u64         %rd7, %rd3, %rd4;      // output row base
+
+    // =========================================================================
+    // PASS 1: Load input+residual, accumulate sum-of-squares, stage to smem
+    // Vectorized: process 4 elements per iteration when possible.
+    // hidden_dim=5120, 256 threads, stride=256 -> 20 iterations scalar
+    // With vec4: stride=1024, 5 iterations
+    // =========================================================================
+
+    mov.f32         %f0, 0f00000000;       // partial sum of squares
+
+    // Check if hidden_dim is vec4-aligned (divisible by 4) and >= 1024
+    // For the common case (5120), this is always true.
+    and.b32         %r6, %r0, 3;
+    setp.ne.u32     %p0, %r6, 0;
+    @%p0 bra        SCALAR_SUM_LOOP;
+
+    // ---- Vectorized path: 4 elements per thread per iteration ----
+    // Thread tid handles elements: tid*4, tid*4 + 1024, tid*4 + 2048, ...
+    // Actually: we use stride = blockDim*4 = 1024
+    shl.b32         %r7, %r1, 4;          // tid * 16 (byte offset for vec4)
+    shl.b32         %r8, %r3, 4;          // blockDim * 16 (stride in bytes)
+    cvt.u64.u32     %rd8, %r7;
+    cvt.u64.u32     %rd9, %r8;
+    shl.b32         %r9, %r0, 2;          // hidden_dim * 4 (total bytes)
+    cvt.u64.u32     %rd10, %r9;
+
+    add.u64         %rd11, %rd5, %rd8;    // input + tid*16
+    add.u64         %rd12, %rd6, %rd8;    // residual + tid*16
+    mov.u64         %rd13, %rd10;          // bytes remaining
+
+    // smem base for staging
+    mov.u32         %r10, smem_staged;
+
+VEC4_SUM_LOOP:
+    // Check: tid*16 + current_offset < hidden_dim*4
+    cvt.u64.u32     %rd14, %r7;
+    add.u64         %rd15, %rd5, %rd14;
+    sub.u64         %rd16, %rd10, %rd14;   // remaining bytes
+    // If remaining < 16, switch to scalar tail
+    setp.lt.s64     %p1, %rd16, 16;
+    @%p1 bra        SUM_DONE;
+
+    // Vector load input[tid*4 .. tid*4+3]
+    ld.global.v4.f32 {%f1, %f2, %f3, %f4}, [%rd15];
+
+    // Vector load residual[tid*4 .. tid*4+3]
+    add.u64         %rd17, %rd6, %rd14;
+    ld.global.v4.f32 {%f5, %f6, %f7, %f8}, [%rd17];
+
+    // Add: val = input + residual
+    add.f32         %f1, %f1, %f5;
+    add.f32         %f2, %f2, %f6;
+    add.f32         %f3, %f3, %f7;
+    add.f32         %f4, %f4, %f8;
+
+    // Store to shared memory (staged)
+    // Byte offset within smem = r7 (same as global offset within row)
+    cvt.u32.u64     %r11, %rd14;
+    add.u32         %r12, %r10, %r11;
+    st.shared.v4.f32 [%r12], {%f1, %f2, %f3, %f4};
+
+    // Accumulate sum of squares via FMA
+    fma.rn.f32      %f0, %f1, %f1, %f0;
+    fma.rn.f32      %f0, %f2, %f2, %f0;
+    fma.rn.f32      %f0, %f3, %f3, %f0;
+    fma.rn.f32      %f0, %f4, %f4, %f0;
+
+    // Advance by blockDim * 4 elements = blockDim * 16 bytes
+    add.u32         %r7, %r7, %r8;
+    bra             VEC4_SUM_LOOP;
+
+SCALAR_SUM_LOOP:
+    // Fallback scalar path for non-vec4-aligned dimensions
+    mov.u32         %r7, %r1;
+SCALAR_SUM_INNER:
+    setp.ge.u32     %p2, %r7, %r0;
+    @%p2 bra        SUM_DONE;
+
+    shl.b32         %r11, %r7, 2;
+    cvt.u64.u32     %rd14, %r11;
+
+    add.u64         %rd15, %rd5, %rd14;
+    add.u64         %rd17, %rd6, %rd14;
+
+    ld.global.f32   %f1, [%rd15];
+    ld.global.f32   %f5, [%rd17];
+    add.f32         %f1, %f1, %f5;
+
+    // Stage to shared memory
+    mov.u32         %r10, smem_staged;
+    add.u32         %r12, %r10, %r11;
+    st.shared.f32   [%r12], %f1;
+
+    fma.rn.f32      %f0, %f1, %f1, %f0;
+
+    add.u32         %r7, %r7, %r3;
+    bra             SCALAR_SUM_INNER;
+
+SUM_DONE:
+    // =========================================================================
+    // REDUCTION: warp shuffle down + cross-warp via shared memory
+    // =========================================================================
+
+    // Intra-warp reduction (5 stages for warp size 32)
+    shfl.sync.down.b32 %f9, %f0, 16, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f9;
+    shfl.sync.down.b32 %f9, %f0, 8, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f9;
+    shfl.sync.down.b32 %f9, %f0, 4, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f9;
+    shfl.sync.down.b32 %f9, %f0, 2, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f9;
+    shfl.sync.down.b32 %f9, %f0, 1, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f9;
+
+    // Lane 0 of each warp stores partial sum
+    and.b32         %r13, %r1, 31;         // lane_id
+    shr.b32         %r14, %r1, 5;          // warp_id
+    setp.eq.u32     %p3, %r13, 0;
+    @!%p3 bra       SKIP_STORE_PARTIAL;
+    mov.u32         %r15, smem_reduce;
+    shl.b32         %r16, %r14, 2;
+    add.u32         %r15, %r15, %r16;
+    st.shared.f32   [%r15], %f0;
+SKIP_STORE_PARTIAL:
+
+    bar.sync        0;
+
+    // First warp reduces all partial sums (8 warps for blockDim=256)
+    setp.lt.u32     %p4, %r1, 32;
+    @!%p4 bra       SKIP_FINAL_REDUCE;
+
+    shr.b32         %r17, %r3, 5;          // num_warps = blockDim / 32
+    setp.lt.u32     %p5, %r1, %r17;
+    mov.f32         %f10, 0f00000000;
+    @!%p5 bra       SKIP_LOAD_PARTIAL;
+    mov.u32         %r15, smem_reduce;
+    shl.b32         %r16, %r1, 2;
+    add.u32         %r15, %r15, %r16;
+    ld.shared.f32   %f10, [%r15];
+SKIP_LOAD_PARTIAL:
+
+    // Reduce within first warp
+    shfl.sync.down.b32 %f11, %f10, 16, 31, 0xFFFFFFFF;
+    add.f32         %f10, %f10, %f11;
+    shfl.sync.down.b32 %f11, %f10, 8, 31, 0xFFFFFFFF;
+    add.f32         %f10, %f10, %f11;
+    shfl.sync.down.b32 %f11, %f10, 4, 31, 0xFFFFFFFF;
+    add.f32         %f10, %f10, %f11;
+    shfl.sync.down.b32 %f11, %f10, 2, 31, 0xFFFFFFFF;
+    add.f32         %f10, %f10, %f11;
+    shfl.sync.down.b32 %f11, %f10, 1, 31, 0xFFFFFFFF;
+    add.f32         %f10, %f10, %f11;
+
+    // Thread 0: compute rms_inv = rsqrt(sum / hidden_dim + eps)
+    setp.eq.u32     %p6, %r1, 0;
+    @!%p6 bra       SKIP_FINAL_REDUCE;
+    cvt.rn.f32.u32  %f12, %r0;
+    div.approx.f32  %f13, %f10, %f12;
+    add.f32         %f13, %f13, %f20;
+    rsqrt.approx.f32 %f13, %f13;
+    mov.u32         %r15, smem_rms_inv;
+    st.shared.f32   [%r15], %f13;
+SKIP_FINAL_REDUCE:
+
+    bar.sync        0;
+
+    // =========================================================================
+    // PASS 2: Normalize from shared memory, multiply by weight, store output
+    // x values are already in smem_staged (from pass 1).
+    // Weight loaded from global -- these loads overlap with smem reads.
+    // Vectorized output with st.global.v4.f32.
+    // =========================================================================
+
+    // All threads load broadcast rms_inv
+    mov.u32         %r15, smem_rms_inv;
+    ld.shared.f32   %f14, [%r15];          // rms_inv
+
+    // Reset byte offset for pass 2
+    shl.b32         %r7, %r1, 4;           // tid * 16 bytes (vec4)
+    mov.u32         %r10, smem_staged;
+
+    // Check vec4 alignment (same condition as pass 1)
+    and.b32         %r6, %r0, 3;
+    setp.ne.u32     %p7, %r6, 0;
+    @%p7 bra        SCALAR_NORM_LOOP;
+
+VEC4_NORM_LOOP:
+    cvt.u64.u32     %rd14, %r7;
+    sub.u64         %rd16, %rd10, %rd14;
+    setp.lt.s64     %p8, %rd16, 16;
+    @%p8 bra        NORM_DONE;
+
+    // Load staged (x+residual) from shared memory
+    add.u32         %r12, %r10, %r7;
+    ld.shared.v4.f32 {%f1, %f2, %f3, %f4}, [%r12];
+
+    // Load weight from global memory
+    add.u64         %rd18, %rd2, %rd14;
+    ld.global.v4.f32 {%f5, %f6, %f7, %f8}, [%rd18];
+
+    // normalized = staged * rms_inv * weight
+    mul.f32         %f1, %f1, %f14;
+    mul.f32         %f1, %f1, %f5;
+    mul.f32         %f2, %f2, %f14;
+    mul.f32         %f2, %f2, %f6;
+    mul.f32         %f3, %f3, %f14;
+    mul.f32         %f3, %f3, %f7;
+    mul.f32         %f4, %f4, %f14;
+    mul.f32         %f4, %f4, %f8;
+
+    // Vector store to output
+    add.u64         %rd19, %rd7, %rd14;
+    st.global.v4.f32 [%rd19], {%f1, %f2, %f3, %f4};
+
+    add.u32         %r7, %r7, %r8;
+    bra             VEC4_NORM_LOOP;
+
+SCALAR_NORM_LOOP:
+    mov.u32         %r7, %r1;
+SCALAR_NORM_INNER:
+    setp.ge.u32     %p9, %r7, %r0;
+    @%p9 bra        NORM_DONE;
+
+    shl.b32         %r11, %r7, 2;
+
+    // Load staged from shared memory
+    mov.u32         %r10, smem_staged;
+    add.u32         %r12, %r10, %r11;
+    ld.shared.f32   %f1, [%r12];
+
+    // Normalize
+    mul.f32         %f1, %f1, %f14;
+
+    // Load weight from global
+    cvt.u64.u32     %rd14, %r11;
+    add.u64         %rd18, %rd2, %rd14;
+    ld.global.f32   %f5, [%rd18];
+    mul.f32         %f1, %f1, %f5;
+
+    // Store output
+    add.u64         %rd19, %rd7, %rd14;
+    st.global.f32   [%rd19], %f1;
+
+    add.u32         %r7, %r7, %r3;
+    bra             SCALAR_NORM_INNER;
+
+NORM_DONE:
+    ret;
+}

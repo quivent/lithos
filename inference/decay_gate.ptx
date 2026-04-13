@@ -1,0 +1,83 @@
+.version 8.0
+.target sm_90
+.address_size 64
+
+// decay_gate: compute GatedDeltaNet per-head state decay factor
+//
+// decay[i] = exp( -exp(A_log[i]) * softplus(a_proj[i] + dt_bias[i]) )
+// softplus(x) = log(1 + exp(x))
+//
+// Launch: gridDim.x=1, blockDim.x=48
+
+.visible .entry decay_gate(
+    .param .u64 a_proj,
+    .param .u64 a_log,
+    .param .u64 dt_bias,
+    .param .u64 decay,
+    .param .u32 param_N
+)
+{
+    .reg .pred %p<32>;
+    .reg .b32  %r<128>;
+    .reg .b64  %rd<64>;
+    .reg .f32  %f<128>;
+
+    ld.param.u64 %rd0, [a_proj];
+    ld.param.u64 %rd1, [a_log];
+    ld.param.u64 %rd2, [dt_bias];
+    ld.param.u64 %rd3, [decay];
+    ld.param.u32 %r10, [param_N];
+
+    // i = blockIdx.x * blockDim.x + threadIdx.x
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %ntid.x;
+    mov.u32 %r2, %tid.x;
+    mad.lo.s32 %r3, %r0, %r1, %r2;
+
+    // bounds check: if i >= N, exit
+    setp.ge.u32 %p0, %r3, %r10;
+    @%p0 bra $L_exit;
+
+    // load a_proj[i]
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    ld.global.f32 %f0, [%rd23];
+
+    // load dt_bias[i]
+    add.u64 %rd24, %rd2, %rd22;
+    ld.global.f32 %f1, [%rd24];
+
+    // t = a_proj[i] + dt_bias[i]
+    add.f32 %f2, %f0, %f1;
+
+    // softplus(t) = log(1 + exp(t))
+    // exp(t) via 2^(t * log2(e))
+    mul.f32 %f3, %f2, 0f3FB8AA3B;       // t * log2(e) = t * 1.4426950408
+    ex2.approx.f32 %f4, %f3;            // exp(t)
+    add.f32 %f5, %f4, 0f3F800000;       // 1.0 + exp(t)
+    lg2.approx.f32 %f6, %f5;            // log2(1 + exp(t))
+    mul.f32 %f7, %f6, 0f3F317218;       // * ln(2) = 0.6931471805  -> ln(1+exp(t)) = softplus(t)
+
+    // load A_log[i]
+    add.u64 %rd25, %rd1, %rd22;
+    ld.global.f32 %f10, [%rd25];
+
+    // exp(A_log)
+    mul.f32 %f11, %f10, 0f3FB8AA3B;     // A_log * log2(e)
+    ex2.approx.f32 %f12, %f11;          // exp(A_log)
+
+    // g = -exp(A_log) * softplus(t)
+    neg.f32 %f13, %f12;                 // -exp(A_log)
+    mul.f32 %f14, %f13, %f7;            // g = -exp(A_log) * softplus(t)
+
+    // decay = exp(g)
+    mul.f32 %f15, %f14, 0f3FB8AA3B;     // g * log2(e)
+    ex2.approx.f32 %f16, %f15;          // exp(g) = decay
+
+    // store decay[i]
+    add.u64 %rd26, %rd3, %rd22;
+    st.global.f32 [%rd26], %f16;
+
+$L_exit:
+    ret;
+}

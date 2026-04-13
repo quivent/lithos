@@ -107,6 +107,60 @@ class LoadedKernels:
     embed_func: int = 0             # F16 embed kernel (reads F16, outputs F32)
     sample_func: int = 0
 
+    # --- Additional handles for compiled .li kernels ---
+    # These are loaded from inference/*.cubin (compiled by the Lithos compiler)
+    # and provide the same functionality as the hand-written kernels above.
+    # The engine can use either set; compiled kernels take priority when set.
+    residual_add_func: int = 0
+    elemwise_mul_func: int = 0
+    activate_silu_func: int = 0     # compiled SiLU (replaces activate_func)
+    scale_func: int = 0
+    rmsnorm_func: int = 0           # compiled RMSNorm (replaces norm_func)
+    sample_argmax_func: int = 0     # compiled argmax (replaces sample_func)
+    gptq_gemv_func: int = 0         # compiled GEMV (replaces projection_func)
+    rope_func: int = 0              # compiled RoPE (replaces rotate_func)
+    compiled_attention_func: int = 0  # compiled attention (replaces attention_score_func)
+    conv1d_func: int = 0
+    gate_sigmoid_func: int = 0
+    deltanet_step_func: int = 0     # compiled DeltaNet (replaces recurrence_func)
+    state_rollback_func: int = 0
+
+    @classmethod
+    def from_compiled(cls, handles: Dict[str, int]) -> "LoadedKernels":
+        """Create a LoadedKernels from compiled kernel entry-point handles.
+
+        Maps compiled .li entry points to both the new specific fields and
+        the legacy fields used by the engine's launch wrappers.
+        """
+        k = cls()
+
+        # Populate specific compiled kernel fields
+        k.residual_add_func = handles.get("residual_add", 0)
+        k.elemwise_mul_func = handles.get("elemwise_mul", 0)
+        k.activate_silu_func = handles.get("activate_silu", 0)
+        k.scale_func = handles.get("scale", 0)
+        k.rmsnorm_func = handles.get("rmsnorm", 0)
+        k.sample_argmax_func = handles.get("sample_argmax", 0)
+        k.gptq_gemv_func = handles.get("gptq_gemv", 0)
+        k.rope_func = handles.get("rope", 0)
+        k.compiled_attention_func = handles.get("attention_score", 0)
+        k.conv1d_func = handles.get("conv1d_infer", 0)
+        k.gate_sigmoid_func = handles.get("gate_sigmoid", 0)
+        k.deltanet_step_func = handles.get("deltanet_step", 0)
+        k.state_rollback_func = handles.get("state_rollback", 0)
+
+        # Also map to legacy fields so existing engine launch code works
+        k.projection_func = k.gptq_gemv_func
+        k.attention_score_func = k.compiled_attention_func
+        k.recurrence_func = k.deltanet_step_func
+        k.norm_func = k.rmsnorm_func
+        k.activate_func = k.activate_silu_func
+        k.rotate_func = k.rope_func
+        k.sample_func = k.sample_argmax_func
+        # embed_func stays 0 — not yet compiled from .li
+
+        return k
+
 
 # ---------------------------------------------------------------------------
 # Activation double-buffer

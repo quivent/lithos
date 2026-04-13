@@ -1,0 +1,149 @@
+DeltaNet layer — inference — one token
+
+Input: x (hidden state), X (residual accumulator)
+Constants: D (hidden dimension), gamma (learned weight per norm)
+
+
+PRIMITIVES
+==========
+
+Every operation is a multiply, add, divide, or function.
+The operand decides what it does.
+
+  *           multiply by self (square)
+  * -1        multiply by -1 (negate)
+  * gamma     multiply by learned weight (scale)
+  +           sum all elements (reduction)
+  + 1         add scalar 1
+  /           divide by another value
+  / D         divide by constant
+  1 /         reciprocal (1 / x)
+  exp         e to the x
+  log         natural log
+  sqrt        square root
+  project     matrix-vector multiply (learned weights)
+  delta-update  state recurrence
+  matvec      matrix-vector multiply (state @ query)
+
+
+COMPOSITES
+==========
+
+These are not primitives. They are names for sequences of primitives.
+
+  sigmoid   = * -1, exp, + 1, 1 /
+  silu      = * -1, exp, + 1, 1 /, *
+  softplus  = exp, + 1, log
+  normalise = *, +, / D, sqrt, /, * gamma
+  l2norm    = *, +, sqrt, /
+
+
+FULL DECOMPOSITION — 66 STEPS
+==============================
+
+RMSNorm on input hidden state
+
+ 1  *                square each element
+ 2  +                sum all squares
+ 3  / D              mean of squares
+ 4  sqrt             root mean square
+ 5  /                x / rms
+ 6  * gamma          scale by learned weight
+
+ 7  project          Q projection
+ 8  project          K projection
+ 9  project          V projection
+
+L2-norm on K (after projection, before delta-update)
+
+10  *                square each element of K
+11  +                sum all squares
+12  sqrt             sqrt(sum)
+13  /                K / sqrt(sum)    =  L2-norm(K)
+
+SiLU on Q
+
+14  * -1             -Q
+15  exp              e^(-Q)
+16  + 1              1 + e^(-Q)
+17  1 /              1 / (1 + e^(-Q))  =  sigmoid(Q)
+18  *                Q * sigmoid(Q)    =  SiLU(Q)
+
+L2-norm on Q (after SiLU, before matvec)
+
+19  *                square each element of Q
+20  +                sum all squares
+21  sqrt             sqrt(sum)
+22  /                Q / sqrt(sum)    =  L2-norm(Q)
+
+Sigmoid on beta
+
+23  * -1             -beta
+24  exp              e^(-beta)
+25  + 1              1 + e^(-beta)
+26  1 /              1 / (1 + e^(-beta))  =  sigmoid(beta)
+
+Decay gate (GatedDeltaNet)
+  a_proj = in_proj_a @ x  (already computed as part of in_proj)
+  g = -exp(A_log) * softplus(a_proj + dt_bias)
+  decay = exp(g)
+
+27  +                t = a_proj + dt_bias
+28  exp              exp(t)
+29  + 1              1 + exp(t)
+30  log              log(1 + exp(t))      =  softplus(t)
+31  exp              exp(A_log)
+32  * -1             -exp(A_log)
+33  *                g = -exp(A_log) * softplus(t)
+34  exp              decay = exp(g)
+
+Delta rule (with decay)
+
+35  delta-update     S = decay * S + beta * (V ⊗ K - S · (K ⊗ K))
+36  matvec           output = S @ Q
+
+Output gate (g_proj)
+
+37  project          z = W_z @ x  (output gate projection)
+38  * -1             -z
+39  exp              e^(-z)
+40  + 1              1 + e^(-z)
+41  1 /              1 / (1 + e^(-z))  =  sigmoid(z)
+42  *                output * sigmoid(z)  (gate multiply)
+
+RMSNorm on gated output
+
+43  *                square each element
+44  +                sum all squares
+45  / D              mean of squares
+46  sqrt             root mean square
+47  /                output / rms
+48  * gamma          scale by learned weight
+
+49  project          output projection
+50  +                residual into X
+
+RMSNorm on X (MLP input)
+
+51  *                square each element
+52  +                sum all squares
+53  / D              mean of squares
+54  sqrt             root mean square
+55  /                X / rms
+56  * gamma          scale by learned weight
+
+57  project          gate projection
+58  project          up projection
+
+SiLU on gate
+
+59  * -1             -gate
+60  exp              e^(-gate)
+61  + 1              1 + e^(-gate)
+62  1 /              1 / (1 + e^(-gate))  =  sigmoid(gate)
+63  *                gate * sigmoid(gate) =  SiLU(gate)
+
+64  *                gate * up  (element-wise multiply)
+
+65  project          down projection
+66  +                residual into X

@@ -1,51 +1,216 @@
 \ reduce.li — Reduction operations for LLM inference
 \ Replaces: norm.ptx, sample.ptx
 \
-\ Two reduction flavors:
-\   1. RMSNorm: y[i] = x[i] * weight[i] * rsqrt( mean(x^2) + eps )
-\      - Reduce x^2 across the hidden dimension, then scale each element
-\   2. Sampling: argmax or softmax-sample over logits
-\      - Reduce to find max, then reduce to compute exp-sum
+\ 1. RMSNorm: y[i] = x[i] * weight[i] * rsqrt(mean(x^2) + eps)
+\ 2. Fused RMSNorm + residual add: y[i] = (x[i]+r[i]) * w[i] * rsqrt(mean((x+r)^2) + eps)
+\ 3. L2Norm: y[i] = x[i] * rsqrt(sum(x^2))
+\ 4. Sampling: argmax over logits
 \
-\ COMPILER LIMITATIONS:
-\   - No warp shuffle intrinsics (shfl.sync.bfly)
-\   - No shared memory for cross-warp reduction
-\   - No intrinsics: rsqrt, ex2.approx, rcp.approx
-\   - No loop construct
-\   - No scalar params (hidden_dim, eps)
-\   - No integer comparison for argmax
-\
-\ SOURCE OF TRUTH: This .li file defines the algorithms.
-\ The compiler should eventually generate the PTX below.
-\
-\ --- RMSNorm algorithm ---
-\
-\ fn rmsnorm x weight eps hidden_dim -> y
-\     each i
-\         \ Phase 1: compute sum of squares (warp reduction)
-\         lane = thread_id % 32
-\         sq = x [ i ] * x [ i ]
-\         sq = warp_reduce_sum(sq)         \ butterfly shuffle
-\         \ Phase 2: cross-warp reduction via shared memory
-\         mean_sq = sq / hidden_dim
-\         rscale = rsqrt(mean_sq + eps)
-\         \ Phase 3: scale each element
-\         y [ i ] = x [ i ] * weight [ i ] * rscale
-\
-\ --- Sample (argmax) algorithm ---
-\
-\ fn sample_argmax logits n_vocab -> token_id
-\     each i
-\         val = logits [ i ]
-\         max_val = warp_reduce_max(val)   \ butterfly shuffle with max
-\         \ cross-warp reduce via shared memory
-\         \ thread with max writes its index
+\ Launch: blockDim.x = 256, each block handles one row.
+\ Two-pass design:
+\   Pass 1: stride loop accumulates partial sum-of-squares per thread
+\   Reduce: warp shuffle down + cross-warp via shared memory
+\   Pass 2: stride loop applies normalize * weight
+\ This reads global memory twice but keeps the reduction correct.
+\ The hand-written PTX (norm.ptx, forward_pass.ptx) follows this exact pattern.
 
-\ --- Lithos stub (compiles to a per-element placeholder) ---
+\ ---- 1. rmsnorm ----
+\ gridDim.x = batch_rows, blockDim.x = 256
+\ Each block normalizes one row of hidden_dim elements.
+\ Two-pass: (1) reduce sum-of-squares, (2) apply norm+scale.
 fn rmsnorm x weight -> y
-    each i
-        y [ i ] = x [ i ] * weight [ i ]
+    param hidden_dim u32
+    param eps f32
+    shared smem_reduce 32 f32
 
-fn sample_max logits -> result
+    \ Pass 1: accumulate sum of squares (strided over hidden_dim)
+    partial_ss = 0.0
+    stride i hidden_dim
+        val = x [ i ]
+        partial_ss = partial_ss + val * val
+
+    \ Intra-warp reduction (shuffle down)
+    shfl.down t0 partial_ss 16
+    partial_ss = partial_ss + t0
+    shfl.down t1 partial_ss 8
+    partial_ss = partial_ss + t1
+    shfl.down t2 partial_ss 4
+    partial_ss = partial_ss + t2
+    shfl.down t3 partial_ss 2
+    partial_ss = partial_ss + t3
+    shfl.down t4 partial_ss 1
+    partial_ss = partial_ss + t4
+
+    \ Cross-warp reduction via shared memory
+    \ Lane 0 of each warp stores to smem_reduce[warp_id]
+    lane_id = tid & 31
+    warp_id = tid >> 5
+    if== lane_id 0
+        smem_reduce [ warp_id ] = partial_ss
+    bar.sync 0
+
+    \ First warp reads all partial sums and reduces
+    if< tid 32
+        num_warps = blockDim >> 5
+        if< tid num_warps
+            total = smem_reduce [ tid ]
+        else
+            total = 0.0
+        shfl.down s0 total 16
+        total = total + s0
+        shfl.down s1 total 8
+        total = total + s1
+        shfl.down s2 total 4
+        total = total + s2
+        shfl.down s3 total 2
+        total = total + s3
+        shfl.down s4 total 1
+        total = total + s4
+        \ Thread 0 broadcasts rms_inv
+        if== tid 0
+            mean_ss = total / hidden_dim
+            mean_ss = mean_ss + eps
+            rsqrt rms_inv mean_ss
+            smem_reduce [ 0 ] = rms_inv
+    bar.sync 0
+
+    \ All threads load the broadcast rms_inv
+    rms_inv = smem_reduce [ 0 ]
+
+    \ Pass 2: normalize each element
+    stride j hidden_dim
+        y [ j ] = x [ j ] * weight [ j ] * rms_inv
+
+\ ---- 2. rmsnorm_residual ----
+\ Fused residual-add + RMSNorm. One read of x and residual, one write.
+\ y[i] = (x[i] + residual[i]) * weight[i] * rsqrt(mean((x+residual)^2) + eps)
+\ Also writes the sum x+residual back (needed for next layer's skip connection).
+\ gridDim.x = batch_rows, blockDim.x = 256
+fn rmsnorm_residual x residual weight -> y
+    param hidden_dim u32
+    param eps f32
+    shared smem_reduce 32 f32
+
+    \ Pass 1: sum of squares of (x + residual)
+    partial_ss = 0.0
+    stride i hidden_dim
+        val = x [ i ] + residual [ i ]
+        partial_ss = partial_ss + val * val
+
+    \ Intra-warp reduction
+    shfl.down t0 partial_ss 16
+    partial_ss = partial_ss + t0
+    shfl.down t1 partial_ss 8
+    partial_ss = partial_ss + t1
+    shfl.down t2 partial_ss 4
+    partial_ss = partial_ss + t2
+    shfl.down t3 partial_ss 2
+    partial_ss = partial_ss + t3
+    shfl.down t4 partial_ss 1
+    partial_ss = partial_ss + t4
+
+    \ Cross-warp
+    lane_id = tid & 31
+    warp_id = tid >> 5
+    if== lane_id 0
+        smem_reduce [ warp_id ] = partial_ss
+    bar.sync 0
+
+    if< tid 32
+        num_warps = blockDim >> 5
+        if< tid num_warps
+            total = smem_reduce [ tid ]
+        else
+            total = 0.0
+        shfl.down s0 total 16
+        total = total + s0
+        shfl.down s1 total 8
+        total = total + s1
+        shfl.down s2 total 4
+        total = total + s2
+        shfl.down s3 total 2
+        total = total + s3
+        shfl.down s4 total 1
+        total = total + s4
+        if== tid 0
+            mean_ss = total / hidden_dim
+            mean_ss = mean_ss + eps
+            rsqrt rms_inv mean_ss
+            smem_reduce [ 0 ] = rms_inv
+    bar.sync 0
+
+    rms_inv = smem_reduce [ 0 ]
+
+    \ Pass 2: normalize
+    stride j hidden_dim
+        val = x [ j ] + residual [ j ]
+        y [ j ] = val * weight [ j ] * rms_inv
+
+\ ---- 3. l2norm ----
+\ L2-normalization: y[i] = x[i] * rsqrt(sum(x^2))
+\ No learned weight, no mean division, no epsilon.
+\ gridDim.x = batch_rows, blockDim.x = 256
+fn l2norm x -> y
+    param hidden_dim u32
+    shared smem_reduce 32 f32
+
+    \ Pass 1: sum of squares
+    partial_ss = 0.0
+    stride i hidden_dim
+        val = x [ i ]
+        partial_ss = partial_ss + val * val
+
+    \ Intra-warp reduction
+    shfl.down t0 partial_ss 16
+    partial_ss = partial_ss + t0
+    shfl.down t1 partial_ss 8
+    partial_ss = partial_ss + t1
+    shfl.down t2 partial_ss 4
+    partial_ss = partial_ss + t2
+    shfl.down t3 partial_ss 2
+    partial_ss = partial_ss + t3
+    shfl.down t4 partial_ss 1
+    partial_ss = partial_ss + t4
+
+    \ Cross-warp
+    lane_id = tid & 31
+    warp_id = tid >> 5
+    if== lane_id 0
+        smem_reduce [ warp_id ] = partial_ss
+    bar.sync 0
+
+    if< tid 32
+        num_warps = blockDim >> 5
+        if< tid num_warps
+            total = smem_reduce [ tid ]
+        else
+            total = 0.0
+        shfl.down s0 total 16
+        total = total + s0
+        shfl.down s1 total 8
+        total = total + s1
+        shfl.down s2 total 4
+        total = total + s2
+        shfl.down s3 total 2
+        total = total + s3
+        shfl.down s4 total 1
+        total = total + s4
+        if== tid 0
+            rsqrt rscale total
+            smem_reduce [ 0 ] = rscale
+    bar.sync 0
+
+    rscale = smem_reduce [ 0 ]
+
+    \ Pass 2: scale each element
+    stride j hidden_dim
+        y [ j ] = x [ j ] * rscale
+
+\ ---- 4. sample_argmax ----
+\ gridDim.x = 1, blockDim.x = 256
+\ Each thread finds local max over its stride, then warp reduces.
+fn sample_argmax logits -> result
+    param n_vocab u32
     each i
+        if>= i n_vocab exit
         result [ i ] = logits [ i ]

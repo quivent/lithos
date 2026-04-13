@@ -1,0 +1,128 @@
+// gate_sigmoid.ptx --- Fused sigmoid gate: output[i] = output[i] * sigmoid(z[i])
+// Used for DeltaNet output gating (steps 29-34 in STEPS)
+// sigmoid(z) = 1 / (1 + exp(-z))
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.visible .entry gate_sigmoid(
+    .param .u64 output_ptr,       // in-place: gated on return
+    .param .u64 z_ptr,            // z = W_z @ x (gate projection)
+    .param .u32 n                 // number of elements (value_dim = 6144)
+)
+{
+    .reg .u64   %rd<10>;
+    .reg .u32   %r<10>;
+    .reg .f32   %f<16>;
+    .reg .pred  %p<4>;
+
+    // Load params
+    ld.param.u64    %rd0, [output_ptr];
+    ld.param.u64    %rd1, [z_ptr];
+    ld.param.u32    %r0, [n];
+
+    // Global thread index
+    mov.u32         %r1, %ctaid.x;
+    mov.u32         %r2, %ntid.x;
+    mov.u32         %r3, %tid.x;
+    mul.lo.u32      %r4, %r1, %r2;
+    add.u32         %r4, %r4, %r3;
+
+    // Grid stride
+    mov.u32         %r5, %nctaid.x;
+    mul.lo.u32      %r5, %r5, %r2;
+
+    // Vectorized path: 4 elements per thread per iteration
+    shr.u32         %r6, %r0, 2;       // n_vec4 = n / 4
+
+VEC_LOOP:
+    setp.ge.u32     %p0, %r4, %r6;
+    @%p0 bra        VEC_DONE;
+
+    // Byte offset for vec4 chunk: idx * 16
+    shl.b32         %r7, %r4, 4;
+    cvt.u64.u32     %rd3, %r7;
+
+    // Load output[idx*4 .. idx*4+3]
+    add.u64         %rd4, %rd0, %rd3;
+    ld.global.v4.f32 {%f0, %f1, %f2, %f3}, [%rd4];
+
+    // Load z[idx*4 .. idx*4+3]
+    add.u64         %rd5, %rd1, %rd3;
+    ld.global.v4.f32 {%f4, %f5, %f6, %f7}, [%rd5];
+
+    // sigmoid(z) = 1 / (1 + exp(-z)), using exp2 approximation
+    // exp(x) = exp2(x * log2(e)), log2(e) = 1.4426950408889634 = 0x3FB8AA3B
+
+    // Element 0
+    neg.f32         %f8, %f4;
+    mul.f32         %f8, %f8, 0f3FB8AA3B;
+    ex2.approx.f32  %f8, %f8;
+    add.f32         %f8, %f8, 0f3F800000;      // 1.0 + exp(-z)
+    rcp.approx.f32  %f8, %f8;                  // sigmoid(z)
+    mul.f32         %f0, %f0, %f8;             // output * sigmoid(z)
+
+    // Element 1
+    neg.f32         %f9, %f5;
+    mul.f32         %f9, %f9, 0f3FB8AA3B;
+    ex2.approx.f32  %f9, %f9;
+    add.f32         %f9, %f9, 0f3F800000;
+    rcp.approx.f32  %f9, %f9;
+    mul.f32         %f1, %f1, %f9;
+
+    // Element 2
+    neg.f32         %f10, %f6;
+    mul.f32         %f10, %f10, 0f3FB8AA3B;
+    ex2.approx.f32  %f10, %f10;
+    add.f32         %f10, %f10, 0f3F800000;
+    rcp.approx.f32  %f10, %f10;
+    mul.f32         %f2, %f2, %f10;
+
+    // Element 3
+    neg.f32         %f11, %f7;
+    mul.f32         %f11, %f11, 0f3FB8AA3B;
+    ex2.approx.f32  %f11, %f11;
+    add.f32         %f11, %f11, 0f3F800000;
+    rcp.approx.f32  %f11, %f11;
+    mul.f32         %f3, %f3, %f11;
+
+    // Store result
+    st.global.v4.f32 [%rd4], {%f0, %f1, %f2, %f3};
+
+    // Grid stride advance
+    add.u32         %r4, %r4, %r5;
+    bra             VEC_LOOP;
+
+VEC_DONE:
+    // Scalar tail: handle remaining elements (n % 4)
+    shl.b32         %r4, %r4, 2;       // convert back from vec4 index to element index
+
+SCALAR_LOOP:
+    setp.ge.u32     %p1, %r4, %r0;
+    @%p1 bra        DONE;
+
+    shl.b32         %r7, %r4, 2;       // byte offset
+    cvt.u64.u32     %rd3, %r7;
+
+    add.u64         %rd4, %rd0, %rd3;
+    ld.global.f32   %f0, [%rd4];
+
+    add.u64         %rd5, %rd1, %rd3;
+    ld.global.f32   %f4, [%rd5];
+
+    neg.f32         %f8, %f4;
+    mul.f32         %f8, %f8, 0f3FB8AA3B;
+    ex2.approx.f32  %f8, %f8;
+    add.f32         %f8, %f8, 0f3F800000;
+    rcp.approx.f32  %f8, %f8;
+    mul.f32         %f0, %f0, %f8;
+
+    st.global.f32   [%rd4], %f0;
+
+    add.u32         %r4, %r4, 1;
+    bra             SCALAR_LOOP;
+
+DONE:
+    ret;
+}

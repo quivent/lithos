@@ -233,9 +233,17 @@ footer {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
 }
+.nav-search { margin-left: auto; color: var(--text-faint); display: flex; align-items: center; }
+.nav-search:hover { color: var(--accent); }
 </style>
 </head>
 <body>
+<div id="search-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(5,5,10,0.85);align-items:flex-start;justify-content:center;padding-top:15vh" onclick="closeSearch(event)">
+<div style="width:100%;max-width:600px;padding:0 1rem" onclick="event.stopPropagation()">
+<input id="search-input" type="text" placeholder="Search Lithos docs..." style="width:100%;padding:0.8rem 1.2rem;background:#10101a;border:1px solid #1a1a28;border-radius:4px;color:#e0e0e8;font-family:'JetBrains Mono',monospace;font-size:0.95rem;outline:none" onfocus="this.style.borderColor='#d4a053'" onblur="this.style.borderColor='#1a1a28'" oninput="doSearch(this.value)">
+<div id="search-results" style="margin-top:0.5rem;max-height:60vh;overflow-y:auto"></div>
+</div>
+</div>
 
 <!-- Navigation -->
 <nav>
@@ -255,6 +263,8 @@ footer {
   <a href="/token-journey">Token Journey</a>
   <a href="/language-design">Language Design</a>
   <a href="/glossary">Glossary</a>
+
+  <a href="#" class="nav-search" onclick="openSearch(event)" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
 </div>
 </nav>
 
@@ -465,5 +475,7 @@ footer {
 </footer>
 
 <script src="glossary-data.js"></script>
+<script src="/search-data.js"></script>
+<script src="/search.js"></script>
 </body>
 </html>

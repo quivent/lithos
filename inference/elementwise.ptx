@@ -1,31 +1,17 @@
-// elementwise.ptx -- Generated from elementwise.li
-// Replaces: activate.ptx, add_store.ptx, elemwise_mul.ptx, residual_add.ptx
-// Target: sm_90, PTX 8.0
-//
-// COMPILER STATUS:
-//   residual_add -- compiler generates correct PTX
-//   elemwise_mul -- compiler generates correct PTX
-//   activate_silu -- requires intrinsics (ex2, rcp); hand-written below
-//   scale -- compiler generates correct PTX
-
 .version 8.0
 .target sm_90
 .address_size 64
 
-// ============================================================
-// 1. residual_add: output[i] = a[i] + b[i]
-//    Replaces: residual_add.ptx, add_store.ptx
-// ============================================================
 .visible .entry residual_add(
     .param .u64 a,
     .param .u64 b,
     .param .u64 output
 )
 {
-    .reg .pred %p<4>;
-    .reg .b32  %r<8>;
-    .reg .b64  %rd<8>;
-    .reg .f32  %f<4>;
+    .reg .pred %p<32>;
+    .reg .b32  %r<128>;
+    .reg .b64  %rd<64>;
+    .reg .f32  %f<128>;
 
     ld.param.u64 %rd0, [a];
     ld.param.u64 %rd1, [b];
@@ -36,33 +22,30 @@
     mov.u32 %r2, %tid.x;
     mad.lo.s32 %r3, %r0, %r1, %r2;
 
-    // addr = base + tid * 4
-    mul.wide.u32 %rd3, %r3, 4;
-    add.u64 %rd4, %rd0, %rd3;
-    ld.global.f32 %f0, [%rd4];
-    add.u64 %rd5, %rd1, %rd3;
-    ld.global.f32 %f1, [%rd5];
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    ld.global.f32 %f0, [%rd23];
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd1, %rd22;
+    ld.global.f32 %f1, [%rd23];
     add.f32 %f2, %f0, %f1;
-    add.u64 %rd6, %rd2, %rd3;
-    st.global.f32 [%rd6], %f2;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd2, %rd22;
+    st.global.f32 [%rd23], %f2;
 
+$L_exit:
     ret;
 }
-
-// ============================================================
-// 2. elemwise_mul: output[i] = a[i] * b[i]
-//    Replaces: elemwise_mul.ptx
-// ============================================================
 .visible .entry elemwise_mul(
     .param .u64 a,
     .param .u64 b,
     .param .u64 output
 )
 {
-    .reg .pred %p<4>;
-    .reg .b32  %r<8>;
-    .reg .b64  %rd<8>;
-    .reg .f32  %f<4>;
+    .reg .pred %p<32>;
+    .reg .b32  %r<128>;
+    .reg .b64  %rd<64>;
+    .reg .f32  %f<128>;
 
     ld.param.u64 %rd0, [a];
     ld.param.u64 %rd1, [b];
@@ -73,33 +56,29 @@
     mov.u32 %r2, %tid.x;
     mad.lo.s32 %r3, %r0, %r1, %r2;
 
-    mul.wide.u32 %rd3, %r3, 4;
-    add.u64 %rd4, %rd0, %rd3;
-    ld.global.f32 %f0, [%rd4];
-    add.u64 %rd5, %rd1, %rd3;
-    ld.global.f32 %f1, [%rd5];
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    ld.global.f32 %f0, [%rd23];
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd1, %rd22;
+    ld.global.f32 %f1, [%rd23];
     mul.f32 %f2, %f0, %f1;
-    add.u64 %rd6, %rd2, %rd3;
-    st.global.f32 [%rd6], %f2;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd2, %rd22;
+    st.global.f32 [%rd23], %f2;
 
+$L_exit:
     ret;
 }
-
-// ============================================================
-// 3. activate_silu: output[i] = x[i] * sigmoid(x[i])
-//    Replaces: activate.ptx
-//    COMPILER TODO: needs neg.f32, ex2.approx.f32, rcp.approx.f32,
-//                   literal float constants (0f3FB8AA3B = 1/ln2)
-// ============================================================
 .visible .entry activate_silu(
     .param .u64 x,
     .param .u64 output
 )
 {
-    .reg .pred %p<4>;
-    .reg .b32  %r<8>;
-    .reg .b64  %rd<8>;
-    .reg .f32  %f<16>;
+    .reg .pred %p<32>;
+    .reg .b32  %r<128>;
+    .reg .b64  %rd<64>;
+    .reg .f32  %f<128>;
 
     ld.param.u64 %rd0, [x];
     ld.param.u64 %rd1, [output];
@@ -109,40 +88,38 @@
     mov.u32 %r2, %tid.x;
     mad.lo.s32 %r3, %r0, %r1, %r2;
 
-    mul.wide.u32 %rd3, %r3, 4;
-    add.u64 %rd4, %rd0, %rd3;
-    ld.global.f32 %f0, [%rd4];          // x_val
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    ld.global.f32 %f1, [%rd23];
+    mov.f32 %f0, %f1;
+    neg.f32 %f2, %f0;
+    mov.f32 %f4, 0f3FB8AA3B;
+    mul.f32 %f5, %f2, %f4;
+    mov.f32 %f3, %f5;
+    ex2.approx.f32 %f6, %f3;
+    mov.f32 %f8, 0f3F800000;
+    add.f32 %f9, %f6, %f8;
+    mov.f32 %f7, %f9;
+    rcp.approx.f32 %f10, %f7;
+    mul.f32 %f12, %f0, %f10;
+    mov.f32 %f11, %f12;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd1, %rd22;
+    st.global.f32 [%rd23], %f11;
 
-    // sigmoid(x) = 1 / (1 + exp(-x))
-    // Use base-2: exp(-x) = 2^(-x * log2(e))
-    // log2(e) = 1.4426950408... = 0x3FB8AA3B in IEEE754
-    neg.f32 %f1, %f0;                    // -x
-    mul.f32 %f2, %f1, 0f3FB8AA3B;        // -x * log2(e)
-    ex2.approx.f32 %f3, %f2;             // 2^(-x*log2e) ~ exp(-x)
-    add.f32 %f4, %f3, 0f3F800000;        // 1.0 + exp(-x)
-    rcp.approx.f32 %f5, %f4;             // sigmoid = 1/(1+exp(-x))
-    mul.f32 %f6, %f0, %f5;               // silu = x * sigmoid(x)
-
-    add.u64 %rd5, %rd1, %rd3;
-    st.global.f32 [%rd5], %f6;
-
+$L_exit:
     ret;
 }
-
-// ============================================================
-// 4. scale: output[i] = x[i] * factor[i]
-//    Replaces: scale portion of activate.ptx
-// ============================================================
 .visible .entry scale(
     .param .u64 x,
     .param .u64 factor,
     .param .u64 output
 )
 {
-    .reg .pred %p<4>;
-    .reg .b32  %r<8>;
-    .reg .b64  %rd<8>;
-    .reg .f32  %f<4>;
+    .reg .pred %p<32>;
+    .reg .b32  %r<128>;
+    .reg .b64  %rd<64>;
+    .reg .f32  %f<128>;
 
     ld.param.u64 %rd0, [x];
     ld.param.u64 %rd1, [factor];
@@ -153,14 +130,17 @@
     mov.u32 %r2, %tid.x;
     mad.lo.s32 %r3, %r0, %r1, %r2;
 
-    mul.wide.u32 %rd3, %r3, 4;
-    add.u64 %rd4, %rd0, %rd3;
-    ld.global.f32 %f0, [%rd4];
-    add.u64 %rd5, %rd1, %rd3;
-    ld.global.f32 %f1, [%rd5];
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    ld.global.f32 %f0, [%rd23];
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd1, %rd22;
+    ld.global.f32 %f1, [%rd23];
     mul.f32 %f2, %f0, %f1;
-    add.u64 %rd6, %rd2, %rd3;
-    st.global.f32 [%rd6], %f2;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd2, %rd22;
+    st.global.f32 [%rd23], %f2;
 
+$L_exit:
     ret;
 }

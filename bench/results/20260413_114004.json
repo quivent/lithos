@@ -1,0 +1,97 @@
+{
+  "timestamp": "2026-04-13T11:40:04.500209+00:00",
+  "lithos": {
+    "kernel": "forward_pass_carmack",
+    "scope": "MLP-only (64 layers fused)",
+    "prompt": "The capital of France is",
+    "num_runs": 5,
+    "wall_clock": {
+      "median_ms": 62.764,
+      "min_ms": 62.561,
+      "max_ms": 63.258,
+      "p10_ms": 62.561,
+      "p90_ms": 62.819,
+      "mean_ms": 62.824,
+      "stdev_ms": 0.261,
+      "tok_s": 15.93
+    },
+    "gpu_events": {
+      "median_ms": 62.557,
+      "min_ms": 62.42,
+      "max_ms": 62.723,
+      "p10_ms": 62.42,
+      "p90_ms": 62.611,
+      "mean_ms": 62.549,
+      "stdev_ms": 0.127,
+      "tok_s": 15.99
+    },
+    "dispatch_overhead_ms": 0.207,
+    "bandwidth": {
+      "total_bytes_per_pass": 11934322688,
+      "total_gib_per_pass": 11.115,
+      "total_read_bytes": 11918649344,
+      "total_write_bytes": 15673344,
+      "achieved_tbs": 0.191,
+      "peak_tbs": 4.0,
+      "utilization_pct": 4.8,
+      "per_layer_weight_read_bytes": 146227200,
+      "lm_head_bytes": 2543790080
+    },
+    "correctness": {
+      "top_token_id": 0,
+      "top_token_text": "!",
+      "paris_rank": 1,
+      "correct": true
+    },
+    "grid": "(132, 1, 1)",
+    "block": "(256, 1, 1)"
+  },
+  "per_kernel": {
+    "layer_idx": 0,
+    "num_runs": 5,
+    "norm": {
+      "median_ms": 0.0227,
+      "min_ms": 0.0178,
+      "max_ms": 0.0713,
+      "mean_ms": 0.0314
+    },
+    "gate_proj_5120x17408": {
+      "median_ms": 0.3004,
+      "min_ms": 0.2408,
+      "max_ms": 4.6846,
+      "mean_ms": 1.1669,
+      "bytes_read": 44564480,
+      "bw_gbs": 148.4,
+      "bw_pct": 3.7
+    },
+    "up_proj_5120x17408": {
+      "median_ms": 0.2269,
+      "min_ms": 0.2257,
+      "max_ms": 4.7914,
+      "mean_ms": 1.1394,
+      "bytes_read": 44564480,
+      "bw_gbs": 196.4,
+      "bw_pct": 4.9
+    },
+    "activate": {
+      "median_ms": 0.0087,
+      "min_ms": 0.0081,
+      "max_ms": 0.0285,
+      "mean_ms": 0.0142
+    },
+    "down_proj_17408x5120": {
+      "median_ms": 0.2232,
+      "min_ms": 0.2211,
+      "max_ms": 6.0415,
+      "mean_ms": 1.3865,
+      "bytes_read": 44564480,
+      "bw_gbs": 199.6,
+      "bw_pct": 5.0
+    },
+    "dispatch_overhead": {
+      "mean_per_call_ms": 0.0122,
+      "total_per_mlp_layer_ms": 0.0609
+    }
+  },
+  "vllm": null
+}

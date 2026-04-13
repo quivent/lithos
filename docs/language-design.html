@@ -185,9 +185,17 @@ footer {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
 }
+.nav-search { margin-left: auto; color: var(--text-faint); display: flex; align-items: center; }
+.nav-search:hover { color: var(--accent); }
 </style>
 </head>
 <body>
+<div id="search-overlay" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(5,5,10,0.85);align-items:flex-start;justify-content:center;padding-top:15vh" onclick="closeSearch(event)">
+<div style="width:100%;max-width:600px;padding:0 1rem" onclick="event.stopPropagation()">
+<input id="search-input" type="text" placeholder="Search Lithos docs..." style="width:100%;padding:0.8rem 1.2rem;background:#10101a;border:1px solid #1a1a28;border-radius:4px;color:#e0e0e8;font-family:'JetBrains Mono',monospace;font-size:0.95rem;outline:none" onfocus="this.style.borderColor='#d4a053'" onblur="this.style.borderColor='#1a1a28'" oninput="doSearch(this.value)">
+<div id="search-results" style="margin-top:0.5rem;max-height:60vh;overflow-y:auto"></div>
+</div>
+</div>
 
 <!-- Navigation -->
 <nav>
@@ -207,6 +215,8 @@ footer {
   <a href="/token-journey">Token Journey</a>
   <a href="/language-design" class="active">Language Design</a>
   <a href="/glossary">Glossary</a>
+
+  <a href="#" class="nav-search" onclick="openSearch(event)" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
 </div>
 </nav>
 
@@ -388,6 +398,132 @@ footer {
 <p>A human can learn the whole surface in an afternoon. An <a href="/glossary#LLM">LLM</a> can hold the whole surface in a system prompt.</p>
 </section>
 
+<section id="functions-not-kernels">
+<h2>Functions, Not Kernels</h2>
+
+<div class="decision">
+<h3>The insight</h3>
+<p>There is no &ldquo;kernel&rdquo; in Lithos. A kernel is a math function that happens to run on the GPU. It can be as trivial as <code>1 + 1</code>. It can be as large as a full DeltaNet layer. There is no minimum size, no special construct, no ceremony.</p>
+
+<p>What GPU programmers call &ldquo;fusion&rdquo; is function composition. When the compiler inlines a call, two functions become one GPU launch. That is not an optimisation &mdash; that is what function calls do.</p>
+
+<p>A &ldquo;fused kernel&rdquo; is a redundant phrase. Every function is already a composition of smaller functions. RMSNorm is square &rarr; sum &rarr; 1/&radic; &rarr; multiply. SiLU is negate &rarr; e<sup>x</sup> &rarr; +1 &rarr; 1/ &rarr; multiply. The word &ldquo;fused&rdquo; only exists because other systems make separation the default and fusion the exception. In Lithos, composition is the default. There is nothing to fuse because nothing was ever separated.</p>
+</div>
+</section>
+
+<section id="deltanet-decomposition">
+<h2>A DeltaNet Layer &mdash; 41 Primitive Steps</h2>
+
+<p>A DeltaNet layer takes a hidden state vector <strong>x</strong> and accumulates into the residual stream <strong>X</strong>. It is 22 high-level operations that decompose to 41 irreducible math steps.</p>
+
+<h3>The 22 operations</h3>
+<table>
+<tr><th>#</th><th>Operation</th></tr>
+<tr><td class="num">1</td><td>normalise</td></tr>
+<tr><td class="num">2</td><td>project</td></tr>
+<tr><td class="num">3</td><td>project</td></tr>
+<tr><td class="num">4</td><td>convolve</td></tr>
+<tr><td class="num">5</td><td>silu</td></tr>
+<tr><td class="num">6</td><td>l2norm</td></tr>
+<tr><td class="num">7</td><td>scale</td></tr>
+<tr><td class="num">8</td><td>sigmoid</td></tr>
+<tr><td class="num">9</td><td>softplus</td></tr>
+<tr><td class="num">10</td><td>matvec</td></tr>
+<tr><td class="num">11</td><td>subtract, multiply</td></tr>
+<tr><td class="num">12</td><td>outer, multiply, add</td></tr>
+<tr><td class="num">13</td><td>matvec</td></tr>
+<tr><td class="num">14</td><td>rmsnorm</td></tr>
+<tr><td class="num">15</td><td>sigmoid, multiply, multiply</td></tr>
+<tr><td class="num">16</td><td>project</td></tr>
+<tr><td class="num">17</td><td>add</td></tr>
+<tr><td class="num">18</td><td>rmsnorm</td></tr>
+<tr><td class="num">19</td><td>project</td></tr>
+<tr><td class="num">20</td><td>silu, multiply</td></tr>
+<tr><td class="num">21</td><td>project</td></tr>
+<tr><td class="num">22</td><td>add</td></tr>
+</table>
+
+<h3>Fully decomposed</h3>
+<p>Every composite broken into irreducible math:</p>
+<table>
+<tr><th>#</th><th>Primitive</th><th style="color:var(--text-dim)">Context</th></tr>
+<tr><td class="num">1</td><td>normalise</td><td style="color:var(--text-dim)">input hidden state</td></tr>
+<tr><td class="num">2</td><td>project</td><td style="color:var(--text-dim)">&rarr; q k v</td></tr>
+<tr><td class="num">3</td><td>project</td><td style="color:var(--text-dim)">&rarr; z</td></tr>
+<tr><td class="num">4</td><td>multiply</td><td style="color:var(--text-dim)">convolve</td></tr>
+<tr><td class="num">5</td><td>sum</td><td style="color:var(--text-dim)">convolve</td></tr>
+<tr><td class="num">6</td><td>negate</td><td style="color:var(--text-dim)">silu</td></tr>
+<tr><td class="num">7</td><td>e<sup>x</sup></td><td style="color:var(--text-dim)">silu</td></tr>
+<tr><td class="num">8</td><td>+ 1</td><td style="color:var(--text-dim)">silu</td></tr>
+<tr><td class="num">9</td><td>1 /</td><td style="color:var(--text-dim)">silu</td></tr>
+<tr><td class="num">10</td><td>multiply</td><td style="color:var(--text-dim)">silu</td></tr>
+<tr><td class="num">11</td><td>square</td><td style="color:var(--text-dim)">l2norm</td></tr>
+<tr><td class="num">12</td><td>sum</td><td style="color:var(--text-dim)">l2norm</td></tr>
+<tr><td class="num">13</td><td>1 / &radic;</td><td style="color:var(--text-dim)">l2norm</td></tr>
+<tr><td class="num">14</td><td>multiply</td><td style="color:var(--text-dim)">l2norm</td></tr>
+<tr><td class="num">15</td><td>scale</td><td style="color:var(--text-dim)">q by 1/&radic;d</td></tr>
+<tr><td class="num">16</td><td>sigmoid</td><td style="color:var(--text-dim)">&rarr; beta</td></tr>
+<tr><td class="num">17</td><td>e<sup>x</sup></td><td style="color:var(--text-dim)">softplus</td></tr>
+<tr><td class="num">18</td><td>+ 1</td><td style="color:var(--text-dim)">softplus</td></tr>
+<tr><td class="num">19</td><td>log</td><td style="color:var(--text-dim)">softplus</td></tr>
+<tr><td class="num">20</td><td>multiply</td><td style="color:var(--text-dim)">matvec S &times; k</td></tr>
+<tr><td class="num">21</td><td>sum</td><td style="color:var(--text-dim)">matvec S &times; k</td></tr>
+<tr><td class="num">22</td><td>subtract</td><td style="color:var(--text-dim)">v &minus; recall</td></tr>
+<tr><td class="num">23</td><td>multiply</td><td style="color:var(--text-dim)">&times; beta &rarr; correction</td></tr>
+<tr><td class="num">24</td><td>outer</td><td style="color:var(--text-dim)">correction &otimes; k</td></tr>
+<tr><td class="num">25</td><td>multiply</td><td style="color:var(--text-dim)">decay &times; S</td></tr>
+<tr><td class="num">26</td><td>add</td><td style="color:var(--text-dim)">S update</td></tr>
+<tr><td class="num">27</td><td>multiply</td><td style="color:var(--text-dim)">matvec S &times; q</td></tr>
+<tr><td class="num">28</td><td>sum</td><td style="color:var(--text-dim)">matvec S &times; q</td></tr>
+<tr><td class="num">29</td><td>rmsnorm</td><td style="color:var(--text-dim)">output</td></tr>
+<tr><td class="num">30</td><td>sigmoid</td><td style="color:var(--text-dim)">gate z</td></tr>
+<tr><td class="num">31</td><td>multiply</td><td style="color:var(--text-dim)">silu(z)</td></tr>
+<tr><td class="num">32</td><td>multiply</td><td style="color:var(--text-dim)">output &times; gate</td></tr>
+<tr><td class="num">33</td><td>project</td><td style="color:var(--text-dim)">&rarr; hidden dim</td></tr>
+<tr><td class="num">34</td><td>add</td><td style="color:var(--text-dim)">residual X</td></tr>
+<tr><td class="num">35</td><td>rmsnorm</td><td style="color:var(--text-dim)">MLP input</td></tr>
+<tr><td class="num">36</td><td>project</td><td style="color:var(--text-dim)">&rarr; gate, up</td></tr>
+<tr><td class="num">37</td><td>sigmoid</td><td style="color:var(--text-dim)">silu gate</td></tr>
+<tr><td class="num">38</td><td>multiply</td><td style="color:var(--text-dim)">silu gate</td></tr>
+<tr><td class="num">39</td><td>multiply</td><td style="color:var(--text-dim)">gate &times; up</td></tr>
+<tr><td class="num">40</td><td>project</td><td style="color:var(--text-dim)">&rarr; down</td></tr>
+<tr><td class="num">41</td><td>add</td><td style="color:var(--text-dim)">residual X</td></tr>
+</table>
+
+<h3>The 12 irreducible primitives</h3>
+<pre class="lithos"><span class="kw">multiply</span>   <span class="kw">add</span>   <span class="kw">subtract</span>   <span class="mnemonic">e^</span>   <span class="mnemonic">log</span>   <span class="mnemonic">1/</span>   <span class="mnemonic">1/&radic;</span>   <span class="mnemonic">square</span>   <span class="kw">outer</span>   <span class="kw">negate</span>   <span class="kw">sum</span>   <span class="kw">scale</span></pre>
+
+<p>A DeltaNet layer is 41 of these in sequence. The compiler decides how many GPU launches that becomes. The programmer writes math.</p>
+
+<h3>Key decompositions</h3>
+<div class="decisions-grid">
+<div class="decision-card">
+  <div><span class="dc-title">silu</span></div>
+  <p><code>negate</code> &rarr; <code>e^</code> &rarr; <code>+ 1</code> &rarr; <code>1/</code> &rarr; <code>multiply</code></p>
+</div>
+<div class="decision-card">
+  <div><span class="dc-title">l2norm</span></div>
+  <p><code>square</code> &rarr; <code>sum</code> &rarr; <code>1/&radic;</code> &rarr; <code>multiply</code></p>
+</div>
+<div class="decision-card">
+  <div><span class="dc-title">softplus</span></div>
+  <p><code>e^</code> &rarr; <code>+ 1</code> &rarr; <code>log</code></p>
+</div>
+<div class="decision-card">
+  <div><span class="dc-title">sigmoid</span></div>
+  <p><code>negate</code> &rarr; <code>e^</code> &rarr; <code>+ 1</code> &rarr; <code>1/</code></p>
+</div>
+<div class="decision-card">
+  <div><span class="dc-title">convolve</span></div>
+  <p><code>multiply</code> &rarr; <code>sum</code></p>
+</div>
+<div class="decision-card">
+  <div><span class="dc-title">matvec</span></div>
+  <p><code>multiply</code> &rarr; <code>sum</code></p>
+</div>
+</div>
+</section>
+
 <section id="status-footer">
 <h2>Status</h2>
 <div class="decision">
@@ -412,5 +548,7 @@ footer {
 </div>
 </footer>
 
+<script src="/search-data.js"></script>
+<script src="/search.js"></script>
 </body>
 </html>

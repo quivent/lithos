@@ -1,4 +1,4 @@
-// activate.ptx --- SiLU activation with elementwise multiply: output = gate * silu(up)
+// activate.ptx --- SwiGLU activation: output = silu(gate) * up
 // SiLU(x) = x / (1 + exp(-x)) = x * sigmoid(x)
 
 .version 8.5
@@ -48,19 +48,19 @@ LOOP:
     ld.global.f32   %f0, [%rd4];           // gate_val
     ld.global.f32   %f1, [%rd5];           // up_val
 
-    // Compute SiLU(up_val) = up_val * sigmoid(up_val)
+    // Compute SiLU(gate_val) = gate_val * sigmoid(gate_val)
     // sigmoid(x) = 1 / (1 + exp(-x))
-    neg.f32         %f2, %f1;              // -up_val
+    neg.f32         %f2, %f0;              // -gate_val
     // Use ex2 and convert: exp(x) = exp2(x * log2(e))
     // log2(e) = 1.4426950408889634
-    mul.f32         %f3, %f2, 0f3FB8AA3B;  // -up_val * log2(e)
-    ex2.approx.f32  %f4, %f3;             // exp(-up_val) via 2^(...)
-    add.f32         %f5, %f4, 0f3F800000;  // 1.0 + exp(-up_val)
-    rcp.approx.f32  %f6, %f5;             // sigmoid = 1 / (1 + exp(-up_val))
-    mul.f32         %f7, %f1, %f6;         // silu = up_val * sigmoid(up_val)
+    mul.f32         %f3, %f2, 0f3FB8AA3B;  // -gate_val * log2(e)
+    ex2.approx.f32  %f4, %f3;             // exp(-gate_val) via 2^(...)
+    add.f32         %f5, %f4, 0f3F800000;  // 1.0 + exp(-gate_val)
+    rcp.approx.f32  %f6, %f5;             // sigmoid = 1 / (1 + exp(-gate_val))
+    mul.f32         %f7, %f0, %f6;         // silu = gate_val * sigmoid(gate_val)
 
-    // output = gate_val * silu(up_val)
-    mul.f32         %f8, %f0, %f7;
+    // output = silu(gate_val) * up_val
+    mul.f32         %f8, %f7, %f1;
 
     // Store
     add.u64         %rd6, %rd2, %rd3;

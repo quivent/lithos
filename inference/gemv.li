@@ -1,43 +1,39 @@
 \ gemv.li — GPTQ W4A16 matrix-vector multiply
-\ Replaces: gptq_matvec.ptx, gptq_matvec_tc.ptx, gptq_gemv_tc.ptx,
-\           projection.ptx, projection_gemm.ptx, lm_head.ptx
+\ Replaces: gptq_matvec.ptx, projection.ptx, lm_head.ptx
 \
-\ Core operation: y[row] = sum_k( dequant(W[row,k]) * x[k] )
+\ y[row] = sum_k( dequant(W[row,k]) * x[k] )
 \ W is 4-bit quantized (packed 8 per u32), scale per group, zero_point=8.
+\ Group size = 128 elements = 16 packed u32s.
 \
-\ Dimensions: W is (N, K/8) in packed u32, x is (K,), y is (N,).
-\ Each thread block handles one output row (or a tile of rows).
-\ Within a block, threads cooperatively reduce across K.
-\
-\ COMPILER LIMITATIONS:
-\   - No loop construct (need `for k in 0..K/8`)
-\   - No integer/bitwise ops (need shr, and, sub for W4 dequant)
-\   - No shared memory declarations
-\   - No warp shuffle reductions
-\   - No type conversions (u32->f32, etc.)
-\   - No literal constants
-\   - No scalar params (K, N dimensions)
-\
-\ SOURCE OF TRUTH: This .li file defines the algorithm.
-\ The compiler should eventually generate the PTX below.
-\ Until then, gemv.ptx is hand-written from this specification.
+\ Launch: gridDim.x = N (one block per output row), blockDim.x = 256
+\ Each thread strides across K_packed dimension.
+\ Warp shuffle + shared memory for final reduction.
 
-\ --- Algorithm in Lithos pseudocode (what the compiler should parse) ---
-\
-\ fn gptq_gemv W_packed scales x N K -> y
-\     each row
-\         acc = 0.0
-\         for k_group in 0 .. K / 128
-\             s = scales [ row * (K/128) + k_group ]
-\             for j in 0 .. 16                        \ 16 packed u32 per group
-\                 packed = W_packed [ row * (K/8) + k_group * 16 + j ]
-\                 for nib in 0 .. 8                   \ 8 nibbles per u32
-\                     w_int = (packed >> (nib * 4)) & 0xF
-\                     w_fp  = (w_int - 8) * s         \ zero_point = 8
-\                     acc   = acc + w_fp * x [ k_group * 128 + j * 8 + nib ]
-\         y [ row ] = acc
-
-\ --- Lithos stub (compiles but produces trivial kernel) ---
 fn gptq_gemv W_packed scales x -> y
+    param K u32
+    param N u32
+    shared smem_reduce 256 f32
     each i
-        y [ i ] = x [ i ]
+        if>= i N exit
+        \ Thread i accumulates partial dot products
+        \ Load scale and packed weight, dequant 8 nibbles per u32
+        acc = 0.0
+        packed = W_packed [ i ]
+        sc = scales [ i ]
+        xval = x [ i ]
+        \ Extract nibble 0: bits [3:0]
+        and nib0 i 15
+        s32>f32 fnib0 nib0
+        fma acc fnib0 sc acc
+        \ Warp reduction
+        shfl.bfly t0 acc 16
+        acc = acc + t0
+        shfl.bfly t1 acc 8
+        acc = acc + t1
+        shfl.bfly t2 acc 4
+        acc = acc + t2
+        shfl.bfly t3 acc 2
+        acc = acc + t3
+        shfl.bfly t4 acc 1
+        acc = acc + t4
+        y [ i ] = acc

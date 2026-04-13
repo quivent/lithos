@@ -76,6 +76,8 @@ create pa-arm-kw  5 allot   s" arm64"  pa-arm-kw  swap move
 
 \ Drive the parser over the whole source (src-* words come from lexer.fs).
 : lithos-compile  ( src-addr src-len -- )
+  ptx-reset
+  0 global-header-emitted !
   src-load
   begin
     src-token dup 0= if 2drop exit then

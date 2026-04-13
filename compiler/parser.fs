@@ -216,7 +216,7 @@ variable n-fconst  0 n-fconst !
 
 : fconst-find ( addr u -- hex-val -1 | 0 )
     n-fconst @ 0 ?do
-        2dup i cells fconst-lens + @ over = if
+        i cells fconst-lens + @ over = if
             2dup i 16 * fconst-strs + over li-tok= if
                 2drop i cells fconst-vals + @ -1 unloop exit
             then
@@ -257,6 +257,7 @@ fix-fconst-zero
 \ ---- PTX header for a function -----------------------------------------------
 
 variable header-emitted  0 header-emitted !
+variable global-header-emitted  0 global-header-emitted !
 
 \ Count pointer params (kinds 0 and 1)
 : count-ptr-params ( -- n )
@@ -270,7 +271,10 @@ variable header-emitted  0 header-emitted !
 
 : ptx-emit-header  ( -- )
     header-emitted @ if exit then  1 header-emitted !
-    ptx-header
+    global-header-emitted @ 0= if
+        ptx-header
+        1 global-header-emitted !
+    then
     s" .visible .entry " ptx+  li-name$ ptx+  s" (" ptx+ ptx-nl
 
     \ Emit pointer params
@@ -357,21 +361,38 @@ variable header-emitted  0 header-emitted !
     ptx-indent s" mad.lo.s32 %r3, %r0, %r1, %r2;" ptx+ ptx-nl
     ptx-nl ;
 
-\ ---- Emit indexed load: freg = param_base_rd[%r3] (f32) --------------------
+\ ---- Emit indexed load/store with variable index register --------------------
+\ idx-reg holds the r32 register number to use as the array index.
+\ Default is 3 (%r3 = each-var global tid), but for-loop counters override it.
 
-: emit-iload  ( param-rd -- freg )
-    freg+ swap
-    ptx-indent s" mul.wide.u32 %rd22, %r3, 4;" ptx+ ptx-nl
+variable idx-reg   3 idx-reg !
+
+: resolve-idx ( addr u -- rreg )
+    \ Look up index variable name and return its r32 register number.
+    \ If it's the each-var (kind=3), return 3 (%r3).
+    \ If it's a local-u32 (kind=4, e.g. for counter), return its reg.
+    \ If it's a scalar-u32 (kind=5), return its reg.
+    sym-find dup -1 = if drop 3 exit then
+    dup sym-kind@ 3 = if drop 3 exit then
+    sym-reg@ ;
+
+: emit-iload-r  ( param-rd idx-rreg -- freg )
+    freg+ -rot
+    ptx-indent s" mul.wide.u32 %rd22, " ptx+  ptx-r32  s" , 4;" ptx+ ptx-nl
     ptx-indent s" add.u64 %rd23, " ptx+  ptx-r64  s" , %rd22;" ptx+ ptx-nl
     ptx-indent s" ld.global.f32 " ptx+  dup ptx-freg  s" , [%rd23];" ptx+ ptx-nl ;
 
-\ ---- Emit indexed store: param_base_rd[%r3] = freg --------------------------
+: emit-iload  ( param-rd -- freg )
+    3 emit-iload-r ;
+
+: emit-istore-r  ( param-rd idx-rreg freg -- )
+    >r                          \ save freg on return stack
+    ptx-indent s" mul.wide.u32 %rd22, " ptx+  ptx-r32  s" , 4;" ptx+ ptx-nl
+    ptx-indent s" add.u64 %rd23, " ptx+  ptx-r64  s" , %rd22;" ptx+ ptx-nl
+    ptx-indent s" st.global.f32 [%rd23], " ptx+  r> ptx-freg  s" ;" ptx+ ptx-nl ;
 
 : emit-istore  ( param-rd freg -- )
-    swap
-    ptx-indent s" mul.wide.u32 %rd22, %r3, 4;" ptx+ ptx-nl
-    ptx-indent s" add.u64 %rd23, " ptx+  ptx-r64  s" , %rd22;" ptx+ ptx-nl
-    ptx-indent s" st.global.f32 [%rd23], " ptx+  ptx-freg  s" ;" ptx+ ptx-nl ;
+    swap 3 swap emit-istore-r ;
 
 \ ---- Helper: check if token looks like a number (starts with digit or '-' followed by digit)
 : is-digit? ( c -- flag ) dup [char] 0 < 0= swap [char] 9 > 0= and ;
@@ -457,13 +478,13 @@ variable fc-freg
 variable fc-hex
 : emit-fconst ( addr u -- freg )
     2dup fconst-find if
-        fc-hex ! 2drop freg+ dup fc-freg !
+        fc-hex ! 2drop freg+ fc-freg !
         ptx-indent s" mov.f32 " ptx+  fc-freg @ ptx-freg  s" , 0f" ptx+
         fc-hex @ emit-hex32
         s" ;" ptx+ ptx-nl
         fc-freg @
     else
-        2drop freg+ dup fc-freg !
+        2drop freg+ fc-freg !
         ptx-indent s" mov.f32 " ptx+  fc-freg @ ptx-freg  s" , 0f00000000;" ptx+ ptx-nl
         fc-freg @
     then ;
@@ -523,9 +544,10 @@ variable pa-saved-pos
     then
     2dup k-lbrack 1 li-tok= if
         2drop
-        src-token 2drop          \ consume index var (the "i")
+        src-token resolve-idx    \ look up index var -> rreg
         src-token 2drop          \ consume "]"
-        sym-reg@ emit-iload      \ emit load, returns freg
+        swap sym-reg@ swap       \ ( param-rd idx-rreg )
+        emit-iload-r             \ emit load with correct index register
         exit
     then
     \ Not "[" — put token back
@@ -766,26 +788,69 @@ variable shfl-dst
 variable shfl-src
 variable shfl-off
 
-: emit-shfl-bfly ( -- )
-    src-token 2dup sym-find dup -1 = if
-        drop rreg+ dup shfl-dst !
-        >r 4 r> sym-add drop
-    else nip nip sym-reg@ shfl-dst ! then
+variable shfl-dst-is-float
+variable shfl-src-is-float
+variable shfl-dst-freg
+variable shfl-src-freg
 
+: emit-shfl-bfly ( -- )
+    0 shfl-dst-is-float !
+    0 shfl-src-is-float !
+
+    \ Parse DST
+    src-token 2dup sym-find dup -1 = if
+        drop
+        \ New variable: create as float, use temp r32 for shuffle
+        freg+ shfl-dst-freg !
+        2 shfl-dst-freg @ sym-add drop
+        rreg+ shfl-dst !
+        1 shfl-dst-is-float !
+    else
+        nip nip
+        dup sym-kind@ 2 = if
+            \ Float variable: allocate temp r32 for shuffle, remember freg
+            sym-reg@ shfl-dst-freg !
+            rreg+ shfl-dst !
+            1 shfl-dst-is-float !
+        else sym-reg@ shfl-dst ! then
+    then
+
+    \ Parse SRC
     src-token 2dup sym-find dup -1 = if
         drop 2drop 0 shfl-src !
-    else nip nip sym-reg@ shfl-src ! then
+    else
+        nip nip
+        dup sym-kind@ 2 = if
+            \ Float variable: move to temp r32 before shuffle
+            sym-reg@ shfl-src-freg !
+            rreg+ dup shfl-src !
+            1 shfl-src-is-float !
+            \ mov.b32 %rtemp, %fSRC
+            ptx-indent s" mov.b32 " ptx+
+            shfl-src @ ptx-r32 s" , " ptx+
+            shfl-src-freg @ ptx-freg s" ;" ptx+ ptx-nl
+        else sym-reg@ shfl-src ! then
+    then
 
+    \ Parse OFFSET
     src-token 2dup is-number? if
         parse-uint shfl-off !
     else
         sym-find dup -1 <> if sym-reg@ shfl-off ! else drop 0 shfl-off ! then
     then
 
+    \ Emit shuffle
     ptx-indent s" shfl.sync.bfly.b32 " ptx+
     shfl-dst @ ptx-r32 s" , " ptx+
     shfl-src @ ptx-r32 s" , " ptx+
-    shfl-off @ ptx-num ptx+ s" , 31, -1;" ptx+ ptx-nl ;
+    shfl-off @ ptx-num ptx+ s" , 31, -1;" ptx+ ptx-nl
+
+    \ If DST is float, move result back to float register
+    shfl-dst-is-float @ if
+        ptx-indent s" mov.b32 " ptx+
+        shfl-dst-freg @ ptx-freg s" , " ptx+
+        shfl-dst @ ptx-r32 s" ;" ptx+ ptx-nl
+    then ;
 
 \ ==============================================================================
 \ FEATURE 4: SHARED MEMORY
@@ -1525,12 +1590,13 @@ variable ps-saved-pos
     src-token dup 0= if 2drop ps-saved-pos @ src-pos ! drop -1 exit then
     2dup k-lbrack 1 li-tok= if
         2drop                       ( sym-idx )
-        src-token 2drop             \ consume index var
+        src-token resolve-idx       \ look up index var -> rreg
         src-token 2drop             \ consume "]"
         src-token 2drop             \ consume "="
-        parse-expr                  ( sym-idx freg )
-        swap sym-reg@ swap          ( param-rd freg )
-        emit-istore
+        swap                        ( idx-rreg sym-idx )
+        >r parse-expr r>            ( idx-rreg freg sym-idx )
+        sym-reg@ -rot               ( param-rd idx-rreg freg )
+        emit-istore-r
         -1 exit
     then
     2dup k-eq 1 li-tok= if
@@ -1654,7 +1720,6 @@ variable pfb-saved-pos
     0 n-sparams !
     0 for-depth !
     0 next-label !
-    ptx-reset
     regs-reset
     1 li-defs +!  1 li-kernels +!
     src-token dup 0= if 2drop exit then

@@ -190,6 +190,72 @@ def _load_libcuda() -> ctypes.CDLL:
     ]
     lib.cuOccupancyMaxActiveBlocksPerMultiprocessor.restype = CUresult
 
+    # -- CUDA Graph APIs -----------------------------------------------------
+
+    # cuStreamBeginCapture_v2(stream, mode)
+    # mode: 0 = cudaStreamCaptureModeGlobal
+    lib.cuStreamBeginCapture_v2.argtypes = [CUstream, c_int]
+    lib.cuStreamBeginCapture_v2.restype = CUresult
+
+    # cuStreamEndCapture(stream, *phGraph)
+    CUgraph = c_void_p
+    lib.cuStreamEndCapture.argtypes = [CUstream, POINTER(CUgraph)]
+    lib.cuStreamEndCapture.restype = CUresult
+
+    # cuGraphInstantiateWithFlags(*phGraphExec, hGraph, flags)
+    CUgraphExec = c_void_p
+    lib.cuGraphInstantiateWithFlags.argtypes = [POINTER(CUgraphExec), CUgraph, c_uint64]
+    lib.cuGraphInstantiateWithFlags.restype = CUresult
+
+    # cuGraphLaunch(hGraphExec, hStream)
+    lib.cuGraphLaunch.argtypes = [CUgraphExec, CUstream]
+    lib.cuGraphLaunch.restype = CUresult
+
+    # cuGraphDestroy(hGraph)
+    lib.cuGraphDestroy.argtypes = [CUgraph]
+    lib.cuGraphDestroy.restype = CUresult
+
+    # cuGraphExecDestroy(hGraphExec)
+    lib.cuGraphExecDestroy.argtypes = [CUgraphExec]
+    lib.cuGraphExecDestroy.restype = CUresult
+
+    # cuGraphGetNodes(hGraph, *nodes, *numNodes)
+    lib.cuGraphGetNodes.argtypes = [CUgraph, c_void_p, POINTER(c_size_t)]
+    lib.cuGraphGetNodes.restype = CUresult
+
+    # cuGraphExecUpdate_v2(hGraphExec, hGraph, *resultInfo)
+    # resultInfo is a struct but we can pass NULL
+    lib.cuGraphExecUpdate_v2.argtypes = [CUgraphExec, CUgraph, c_void_p]
+    lib.cuGraphExecUpdate_v2.restype = CUresult
+
+    # cuGraphNodeGetType(hNode, *type)
+    lib.cuGraphNodeGetType.argtypes = [c_void_p, POINTER(c_int)]
+    lib.cuGraphNodeGetType.restype = CUresult
+
+    # cuGraphKernelNodeSetParams(hNode, *nodeParams) — CUDA_KERNEL_NODE_PARAMS struct
+    lib.cuGraphKernelNodeSetParams.argtypes = [c_void_p, c_void_p]
+    lib.cuGraphKernelNodeSetParams.restype = CUresult
+
+    # cuGraphExecKernelNodeSetParams(hGraphExec, hNode, *nodeParams)
+    lib.cuGraphExecKernelNodeSetParams.argtypes = [CUgraphExec, c_void_p, c_void_p]
+    lib.cuGraphExecKernelNodeSetParams.restype = CUresult
+
+    # cuEventCreate / cuEventRecord / cuEventElapsedTime for GPU timing
+    lib.cuEventCreate.argtypes = [POINTER(c_void_p), c_uint]
+    lib.cuEventCreate.restype = CUresult
+
+    lib.cuEventRecord.argtypes = [c_void_p, CUstream]
+    lib.cuEventRecord.restype = CUresult
+
+    lib.cuEventSynchronize.argtypes = [c_void_p]
+    lib.cuEventSynchronize.restype = CUresult
+
+    lib.cuEventElapsedTime.argtypes = [POINTER(ctypes.c_float), c_void_p, c_void_p]
+    lib.cuEventElapsedTime.restype = CUresult
+
+    lib.cuEventDestroy_v2.argtypes = [c_void_p]
+    lib.cuEventDestroy_v2.restype = CUresult
+
     return lib
 
 
@@ -454,6 +520,91 @@ class CUDADriver:
             ),
         )
         return num_blocks.value
+
+    # -- CUDA Graph API ------------------------------------------------------
+
+    def stream_begin_capture(self, stream: CUstream, mode: int = 0) -> None:
+        """Begin capturing kernel launches on *stream* into a CUDA graph.
+
+        mode 0 = cudaStreamCaptureModeGlobal (default, safest).
+        """
+        _check(
+            "cuStreamBeginCapture_v2",
+            self._lib.cuStreamBeginCapture_v2(stream, mode),
+        )
+
+    def stream_end_capture(self, stream: CUstream) -> c_void_p:
+        """End capture and return the CUgraph handle."""
+        graph = c_void_p()
+        _check(
+            "cuStreamEndCapture",
+            self._lib.cuStreamEndCapture(stream, byref(graph)),
+        )
+        return graph
+
+    def graph_instantiate(self, graph: c_void_p, flags: int = 0) -> c_void_p:
+        """Instantiate a CUgraph into an executable CUgraphExec."""
+        graph_exec = c_void_p()
+        _check(
+            "cuGraphInstantiateWithFlags",
+            self._lib.cuGraphInstantiateWithFlags(
+                byref(graph_exec), graph, c_uint64(flags)
+            ),
+        )
+        return graph_exec
+
+    def graph_launch(self, graph_exec: c_void_p, stream: CUstream | None = None) -> None:
+        """Launch an instantiated graph on *stream*."""
+        _check(
+            "cuGraphLaunch",
+            self._lib.cuGraphLaunch(graph_exec, stream),
+        )
+
+    def graph_destroy(self, graph: c_void_p) -> None:
+        """Destroy a CUgraph."""
+        _check("cuGraphDestroy", self._lib.cuGraphDestroy(graph))
+
+    def graph_exec_destroy(self, graph_exec: c_void_p) -> None:
+        """Destroy a CUgraphExec."""
+        _check("cuGraphExecDestroy", self._lib.cuGraphExecDestroy(graph_exec))
+
+    def graph_get_node_count(self, graph: c_void_p) -> int:
+        """Return the number of nodes in a captured graph."""
+        num = c_size_t(0)
+        _check(
+            "cuGraphGetNodes",
+            self._lib.cuGraphGetNodes(graph, None, byref(num)),
+        )
+        return num.value
+
+    # -- CUDA Events (for GPU-side timing) -----------------------------------
+
+    def event_create(self, flags: int = 0) -> c_void_p:
+        """Create a CUDA event."""
+        event = c_void_p()
+        _check("cuEventCreate", self._lib.cuEventCreate(byref(event), c_uint(flags)))
+        return event
+
+    def event_record(self, event: c_void_p, stream: CUstream | None = None) -> None:
+        """Record an event on *stream*."""
+        _check("cuEventRecord", self._lib.cuEventRecord(event, stream))
+
+    def event_synchronize(self, event: c_void_p) -> None:
+        """Block until *event* completes."""
+        _check("cuEventSynchronize", self._lib.cuEventSynchronize(event))
+
+    def event_elapsed_time(self, start: c_void_p, end: c_void_p) -> float:
+        """Return elapsed time in milliseconds between two events."""
+        ms = ctypes.c_float()
+        _check(
+            "cuEventElapsedTime",
+            self._lib.cuEventElapsedTime(byref(ms), start, end),
+        )
+        return ms.value
+
+    def event_destroy(self, event: c_void_p) -> None:
+        """Destroy a CUDA event."""
+        _check("cuEventDestroy_v2", self._lib.cuEventDestroy_v2(event))
 
     # -- Cleanup -------------------------------------------------------------
     def close(self) -> None:

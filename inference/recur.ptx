@@ -1,196 +1,126 @@
-// recur.ptx -- Generated from recur.li
-// DeltaNet recurrence with conv1d, gating, state management
-// Replaces: recurrence.ptx, recurrence_rollback.ptx, conv1d.ptx, fused_deltanet.ptx
-// Target: sm_90, PTX 8.0
-//
-// COMPILER GAPS:
-//   - Sequential (non-parallel) iteration for recurrence
-//   - Outer product (v * k^T) for state update
-//   - Shared memory for state matrix
-//   - Sigmoid intrinsic
-//   - Conditional for rollback
-//   - Scalar params
-
 .version 8.0
 .target sm_90
 .address_size 64
 
-// ============================================================
-// 1. conv1d: Causal 1D convolution, kernel width=4
-//    Replaces: conv1d.ptx
-//    Launch: gridDim.x = ceil(seq_len * d_model / 256), blockDim.x = 256
-//    Each thread computes one output element.
-// ============================================================
-.visible .entry conv1d(
-    .param .u64 x,
+// conv1d REMOVED: was a pointwise multiply, not a causal convolution.
+// Replaced by conv1d_infer below.
+
+.visible .entry conv1d_infer(
+    .param .u64 input,
+    .param .u64 history,
     .param .u64 weights,
-    .param .u64 y,
-    .param .u32 seq_len,
-    .param .u32 d_model,
-    .param .u32 conv_width
-)
-{
-    .reg .pred %p<8>;
-    .reg .b32  %r<32>;
-    .reg .b64  %rd<16>;
-    .reg .f32  %f<16>;
-
-    ld.param.u64 %rd0, [x];
-    ld.param.u64 %rd1, [weights];
-    ld.param.u64 %rd2, [y];
-    ld.param.u32 %r10, [seq_len];
-    ld.param.u32 %r11, [d_model];
-    ld.param.u32 %r12, [conv_width];
-
-    // global_id = blockIdx.x * blockDim.x + threadIdx.x
-    mov.u32 %r0, %ctaid.x;
-    mov.u32 %r1, %ntid.x;
-    mov.u32 %r2, %tid.x;
-    mad.lo.s32 %r3, %r0, %r1, %r2;
-
-    // total_elements = seq_len * d_model
-    mul.lo.u32 %r13, %r10, %r11;
-    setp.ge.u32 %p0, %r3, %r13;
-    @%p0 bra $L_conv_exit;
-
-    // t = global_id / d_model, d = global_id % d_model
-    div.u32 %r4, %r3, %r11;            // t
-    rem.u32 %r5, %r3, %r11;            // d
-
-    // acc = 0
-    mov.f32 %f0, 0f00000000;
-
-    // Unroll conv_width=4 (most common case)
-    // w=0: t_src = t
-    // Load x[t * d_model + d]
-    mul.lo.u32 %r14, %r4, %r11;
-    add.u32 %r14, %r14, %r5;
-    mul.wide.u32 %rd3, %r14, 4;
-    add.u64 %rd4, %rd0, %rd3;
-    ld.global.f32 %f1, [%rd4];
-    // Load weights[0 * d_model + d]
-    mul.wide.u32 %rd5, %r5, 4;
-    add.u64 %rd6, %rd1, %rd5;
-    ld.global.f32 %f2, [%rd6];
-    fma.rn.f32 %f0, %f1, %f2, %f0;
-
-    // w=1: t_src = t-1
-    sub.s32 %r15, %r4, 1;
-    setp.lt.s32 %p1, %r15, 0;
-    @%p1 bra $L_conv_w2;
-    mul.lo.u32 %r14, %r15, %r11;
-    add.u32 %r14, %r14, %r5;
-    mul.wide.u32 %rd3, %r14, 4;
-    add.u64 %rd4, %rd0, %rd3;
-    ld.global.f32 %f1, [%rd4];
-    add.u32 %r16, %r11, %r5;           // 1*d_model + d
-    mul.wide.u32 %rd5, %r16, 4;
-    add.u64 %rd6, %rd1, %rd5;
-    ld.global.f32 %f2, [%rd6];
-    fma.rn.f32 %f0, %f1, %f2, %f0;
-
-$L_conv_w2:
-    // w=2: t_src = t-2
-    sub.s32 %r15, %r4, 2;
-    setp.lt.s32 %p2, %r15, 0;
-    @%p2 bra $L_conv_w3;
-    mul.lo.u32 %r14, %r15, %r11;
-    add.u32 %r14, %r14, %r5;
-    mul.wide.u32 %rd3, %r14, 4;
-    add.u64 %rd4, %rd0, %rd3;
-    ld.global.f32 %f1, [%rd4];
-    shl.b32 %r16, %r11, 1;             // 2*d_model
-    add.u32 %r16, %r16, %r5;
-    mul.wide.u32 %rd5, %r16, 4;
-    add.u64 %rd6, %rd1, %rd5;
-    ld.global.f32 %f2, [%rd6];
-    fma.rn.f32 %f0, %f1, %f2, %f0;
-
-$L_conv_w3:
-    // w=3: t_src = t-3
-    sub.s32 %r15, %r4, 3;
-    setp.lt.s32 %p3, %r15, 0;
-    @%p3 bra $L_conv_store;
-    mul.lo.u32 %r14, %r15, %r11;
-    add.u32 %r14, %r14, %r5;
-    mul.wide.u32 %rd3, %r14, 4;
-    add.u64 %rd4, %rd0, %rd3;
-    ld.global.f32 %f1, [%rd4];
-    mul.lo.u32 %r16, %r11, 3;          // 3*d_model
-    add.u32 %r16, %r16, %r5;
-    mul.wide.u32 %rd5, %r16, 4;
-    add.u64 %rd6, %rd1, %rd5;
-    ld.global.f32 %f2, [%rd6];
-    fma.rn.f32 %f0, %f1, %f2, %f0;
-
-$L_conv_store:
-    // Store y[global_id]
-    mul.wide.u32 %rd7, %r3, 4;
-    add.u64 %rd8, %rd2, %rd7;
-    st.global.f32 [%rd8], %f0;
-
-$L_conv_exit:
-    ret;
-}
-
-// ============================================================
-// 2. gate_sigmoid: beta[i] = sigmoid(logit[i])
-//    Gating function for DeltaNet.
-//    Launch: gridDim.x = ceil(N/256), blockDim.x = 256
-// ============================================================
-.visible .entry gate_sigmoid(
-    .param .u64 logit,
-    .param .u64 beta,
-    .param .u32 N
+    .param .u64 output,
+    .param .u32 param_N
 )
 {
     .reg .pred %p<4>;
     .reg .b32  %r<16>;
-    .reg .b64  %rd<8>;
-    .reg .f32  %f<8>;
+    .reg .b64  %rd<16>;
+    .reg .f32  %f<16>;
+
+    ld.param.u64 %rd0, [input];
+    ld.param.u64 %rd1, [history];
+    ld.param.u64 %rd2, [weights];
+    ld.param.u64 %rd3, [output];
+    ld.param.u32 %r4, [param_N];
+
+    // Global thread index = channel index
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %ntid.x;
+    mov.u32 %r2, %tid.x;
+    mad.lo.s32 %r3, %r0, %r1, %r2;
+
+    // Bounds check
+    setp.ge.u32 %p0, %r3, %r4;
+    @%p0 bra $L_conv1d_exit;
+
+    // Compute base byte offset: base = channel * 4_taps * 4_bytes = channel * 16
+    shl.b32 %r5, %r3, 4;              // r5 = channel * 16 (byte offset for tap 0)
+    mul.wide.u32 %rd4, %r5, 1;        // rd4 = base byte offset (64-bit)
+
+    // Pointers to history[channel*4] and weights[channel*4]
+    add.u64 %rd5, %rd1, %rd4;         // rd5 = &history[ch*4]
+    add.u64 %rd6, %rd2, %rd4;         // rd6 = &weights[ch*4]
+
+    // Load 4 history taps: h0, h1, h2, h3
+    ld.global.f32 %f0, [%rd5];        // h[0]
+    ld.global.f32 %f1, [%rd5+4];      // h[1]
+    ld.global.f32 %f2, [%rd5+8];      // h[2]
+    ld.global.f32 %f3, [%rd5+12];     // h[3]
+
+    // Load 4 weight taps: w0, w1, w2, w3
+    ld.global.f32 %f4, [%rd6];        // w[0]
+    ld.global.f32 %f5, [%rd6+4];      // w[1]
+    ld.global.f32 %f6, [%rd6+8];      // w[2]
+    ld.global.f32 %f7, [%rd6+12];     // w[3]
+
+    // Accumulate: acc = w0*h0 + w1*h1 + w2*h2 + w3*h3
+    mul.f32    %f8, %f4, %f0;         // acc  = w0 * h0
+    fma.rn.f32 %f8, %f5, %f1, %f8;   // acc += w1 * h1
+    fma.rn.f32 %f8, %f6, %f2, %f8;   // acc += w2 * h2
+    fma.rn.f32 %f8, %f7, %f3, %f8;   // acc += w3 * h3
+
+    // Store output
+    mul.wide.u32 %rd7, %r3, 4;        // byte offset for output[channel]
+    add.u64 %rd8, %rd3, %rd7;
+    st.global.f32 [%rd8], %f8;
+
+    // Shift history: h[0]=h[1], h[1]=h[2], h[2]=h[3], h[3]=input[channel]
+    st.global.f32 [%rd5],    %f1;     // h[0] = old h[1]
+    st.global.f32 [%rd5+4],  %f2;     // h[1] = old h[2]
+    st.global.f32 [%rd5+8],  %f3;     // h[2] = old h[3]
+
+    // Load input[channel] and store as h[3]
+    mul.wide.u32 %rd9, %r3, 4;
+    add.u64 %rd10, %rd0, %rd9;
+    ld.global.f32 %f9, [%rd10];       // input[channel]
+    st.global.f32 [%rd5+12], %f9;     // h[3] = input[channel]
+
+$L_conv1d_exit:
+    ret;
+}
+.visible .entry gate_sigmoid(
+    .param .u64 logit,
+    .param .u64 beta,
+    .param .u32 param_N
+)
+{
+    .reg .pred %p<32>;
+    .reg .b32  %r<128>;
+    .reg .b64  %rd<64>;
+    .reg .f32  %f<128>;
 
     ld.param.u64 %rd0, [logit];
     ld.param.u64 %rd1, [beta];
-    ld.param.u32 %r10, [N];
+    ld.param.u32 %r4, [param_N];
 
     mov.u32 %r0, %ctaid.x;
     mov.u32 %r1, %ntid.x;
     mov.u32 %r2, %tid.x;
     mad.lo.s32 %r3, %r0, %r1, %r2;
 
-    setp.ge.u32 %p0, %r3, %r10;
-    @%p0 bra $L_gate_exit;
+    setp.ge.u32 %p0, %r3, %r4;
+    @%p0 bra $L_exit;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    ld.global.f32 %f1, [%rd23];
+    mov.f32 %f0, %f1;
+    neg.f32 %f2, %f0;
+    mov.f32 %f4, 0f3FB8AA3B;
+    mul.f32 %f5, %f2, %f4;
+    mov.f32 %f3, %f5;
+    ex2.approx.f32 %f6, %f3;
+    mov.f32 %f8, 0f3F800000;
+    add.f32 %f9, %f6, %f8;
+    mov.f32 %f7, %f9;
+    rcp.approx.f32 %f10, %f7;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd1, %rd22;
+    st.global.f32 [%rd23], %f10;
 
-    mul.wide.u32 %rd2, %r3, 4;
-    add.u64 %rd3, %rd0, %rd2;
-    ld.global.f32 %f0, [%rd3];
-
-    // sigmoid(x) = 1 / (1 + exp(-x))
-    neg.f32 %f1, %f0;
-    mul.f32 %f2, %f1, 0f3FB8AA3B;      // * log2(e)
-    ex2.approx.f32 %f3, %f2;           // exp(-x)
-    add.f32 %f4, %f3, 0f3F800000;      // 1 + exp(-x)
-    rcp.approx.f32 %f5, %f4;           // sigmoid
-
-    add.u64 %rd4, %rd1, %rd2;
-    st.global.f32 [%rd4], %f5;
-
-$L_gate_exit:
+$L_exit:
     ret;
 }
-
-// ============================================================
-// 3. deltanet_step: One step of DeltaNet state update
-//    S_new = S_old + beta * (v * k^T - diag(k) * S_old * diag(k))
-//    Simplified: for each (i,j) in state matrix:
-//      S[i,j] += beta * (v[i]*k[j] - k[j]*S[i,j]*k[j])
-//      (this is a rank-1 update with decay)
-//    Then: output[i] = sum_j(S[i,j] * q[j])
-//
-//    Launch: gridDim.x = n_heads, blockDim.x = d_state
-//    Each block handles one head. Threads parallelize over d_v (state rows).
-//    State: (n_heads, d_v, d_k) matrix
-// ============================================================
 .visible .entry deltanet_step(
     .param .u64 state,
     .param .u64 q,
@@ -198,14 +128,13 @@ $L_gate_exit:
     .param .u64 v,
     .param .u64 beta_ptr,
     .param .u64 output,
-    .param .u32 d_state,
-    .param .u32 n_heads
+    .param .u32 param_d_state
 )
 {
-    .reg .pred %p<4>;
-    .reg .b32  %r<32>;
-    .reg .b64  %rd<24>;
-    .reg .f32  %f<24>;
+    .reg .pred %p<32>;
+    .reg .b32  %r<128>;
+    .reg .b64  %rd<64>;
+    .reg .f32  %f<128>;
 
     ld.param.u64 %rd0, [state];
     ld.param.u64 %rd1, [q];
@@ -213,128 +142,75 @@ $L_gate_exit:
     ld.param.u64 %rd3, [v];
     ld.param.u64 %rd4, [beta_ptr];
     ld.param.u64 %rd5, [output];
-    ld.param.u32 %r10, [d_state];
-    ld.param.u32 %r11, [n_heads];
-
-    // head = blockIdx.x
-    mov.u32 %r0, %ctaid.x;
-    // row_i = threadIdx.x (parallelize over d_v dimension)
-    mov.u32 %r1, %tid.x;
-
-    setp.ge.u32 %p0, %r1, %r10;
-    @%p0 bra $L_dn_exit;
-
-    // Load beta for this head
-    mul.wide.u32 %rd6, %r0, 4;
-    add.u64 %rd7, %rd4, %rd6;
-    ld.global.f32 %f0, [%rd7];         // beta
-
-    // Load v[head * d_state + row_i]
-    mul.lo.u32 %r12, %r0, %r10;
-    add.u32 %r13, %r12, %r1;
-    mul.wide.u32 %rd8, %r13, 4;
-    add.u64 %rd9, %rd3, %rd8;
-    ld.global.f32 %f1, [%rd9];         // v_i
-
-    // state_row_base = state + (head * d_state + row_i) * d_state * 4
-    mul.lo.u32 %r14, %r13, %r10;
-    mul.wide.u32 %rd10, %r14, 4;
-    add.u64 %rd11, %rd0, %rd10;        // state_row_ptr
-
-    // k_base = k + head * d_state * 4
-    mul.wide.u32 %rd12, %r12, 4;
-    add.u64 %rd13, %rd2, %rd12;        // k_head_ptr
-
-    // q_base = q + head * d_state * 4
-    add.u64 %rd14, %rd1, %rd12;        // q_head_ptr
-
-    // output accumulator for dot(S_row, q)
-    mov.f32 %f10, 0f00000000;
-
-    // For each column j in [0, d_state):
-    //   k_j = k[head*d + j]
-    //   S[i,j] += beta * (v_i * k_j - k_j * S[i,j] * k_j)
-    //   output_i += S[i,j] * q[j]
-    mov.u32 %r3, 0;
-
-$L_dn_col_loop:
-    setp.ge.u32 %p1, %r3, %r10;
-    @%p1 bra $L_dn_col_done;
-
-    // Load k_j
-    mul.wide.u32 %rd15, %r3, 4;
-    add.u64 %rd16, %rd13, %rd15;
-    ld.global.f32 %f2, [%rd16];        // k_j
-
-    // Load S[i,j]
-    add.u64 %rd17, %rd11, %rd15;
-    ld.global.f32 %f3, [%rd17];        // S_ij
-
-    // delta = beta * (v_i * k_j - k_j * S_ij * k_j)
-    mul.f32 %f4, %f1, %f2;             // v_i * k_j
-    mul.f32 %f5, %f2, %f3;             // k_j * S_ij
-    mul.f32 %f5, %f5, %f2;             // k_j * S_ij * k_j
-    sub.f32 %f6, %f4, %f5;             // outer - decay
-    fma.rn.f32 %f3, %f0, %f6, %f3;    // S_ij += beta * delta
-
-    // Store updated S[i,j]
-    st.global.f32 [%rd17], %f3;
-
-    // Load q_j and accumulate output
-    add.u64 %rd18, %rd14, %rd15;
-    ld.global.f32 %f7, [%rd18];        // q_j
-    fma.rn.f32 %f10, %f3, %f7, %f10;  // output_i += S_ij * q_j
-
-    add.u32 %r3, %r3, 1;
-    bra $L_dn_col_loop;
-
-$L_dn_col_done:
-    // Store output[head * d_state + row_i]
-    mul.wide.u32 %rd19, %r13, 4;
-    add.u64 %rd20, %rd5, %rd19;
-    st.global.f32 [%rd20], %f10;
-
-$L_dn_exit:
-    ret;
-}
-
-// ============================================================
-// 4. state_rollback: restore state from checkpoint
-//    Replaces: recurrence_rollback.ptx
-//    For speculative decoding: if a speculated position was wrong,
-//    roll back state to the checkpoint.
-//    Launch: gridDim.x = ceil(N/256), blockDim.x = 256
-// ============================================================
-.visible .entry state_rollback(
-    .param .u64 state,
-    .param .u64 checkpoint,
-    .param .u32 N
-)
-{
-    .reg .pred %p<4>;
-    .reg .b32  %r<16>;
-    .reg .b64  %rd<8>;
-    .reg .f32  %f<4>;
-
-    ld.param.u64 %rd0, [state];
-    ld.param.u64 %rd1, [checkpoint];
-    ld.param.u32 %r10, [N];
+    ld.param.u32 %r4, [param_d_state];
 
     mov.u32 %r0, %ctaid.x;
     mov.u32 %r1, %ntid.x;
     mov.u32 %r2, %tid.x;
     mad.lo.s32 %r3, %r0, %r1, %r2;
 
-    setp.ge.u32 %p0, %r3, %r10;
-    @%p0 bra $L_rb_exit;
+    setp.ge.u32 %p0, %r3, %r4;
+    @%p0 bra $L_exit;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd4, %rd22;
+    ld.global.f32 %f1, [%rd23];
+    mov.f32 %f0, %f1;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd3, %rd22;
+    ld.global.f32 %f3, [%rd23];
+    mov.f32 %f2, %f3;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    ld.global.f32 %f5, [%rd23];
+    mov.f32 %f4, %f5;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd1, %rd22;
+    ld.global.f32 %f7, [%rd23];
+    mov.f32 %f6, %f7;
+    fma.rn.f32 %f4, %f0, %f2, %f4;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    st.global.f32 [%rd23], %f4;
+    mov.f32 %f9, 0f00000000;
+    fma.rn.f32 %f8, %f4, %f6, %f9;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd5, %rd22;
+    st.global.f32 [%rd23], %f8;
 
-    // Copy checkpoint -> state (simple memcpy per element)
-    mul.wide.u32 %rd2, %r3, 4;
-    add.u64 %rd3, %rd1, %rd2;
-    ld.global.f32 %f0, [%rd3];
-    add.u64 %rd4, %rd0, %rd2;
-    st.global.f32 [%rd4], %f0;
+$L_exit:
+    ret;
+}
+.visible .entry state_rollback(
+    .param .u64 state,
+    .param .u64 checkpoint,
+    .param .u64 state_out,
+    .param .u32 param_N
+)
+{
+    .reg .pred %p<32>;
+    .reg .b32  %r<128>;
+    .reg .b64  %rd<64>;
+    .reg .f32  %f<128>;
 
-$L_rb_exit:
+    ld.param.u64 %rd0, [state];
+    ld.param.u64 %rd1, [checkpoint];
+    ld.param.u64 %rd2, [state_out];
+    ld.param.u32 %r4, [param_N];
+
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %ntid.x;
+    mov.u32 %r2, %tid.x;
+    mad.lo.s32 %r3, %r0, %r1, %r2;
+
+    setp.ge.u32 %p0, %r3, %r4;
+    @%p0 bra $L_exit;
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd1, %rd22;
+    ld.global.f32 %f0, [%rd23];
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd2, %rd22;
+    st.global.f32 [%rd23], %f0;
+
+$L_exit:
     ret;
 }

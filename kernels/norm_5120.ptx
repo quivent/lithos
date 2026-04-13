@@ -1,0 +1,405 @@
+// norm_5120.ptx -- RMSNorm specialized for hidden_dim=5120, SM90
+//
+// Fully unrolled for Qwen 3.5-27B (hidden_dim=5120).
+// 256 threads, each thread handles exactly 20 elements (5120/256).
+// No loop branches. No bounds checks. No shared-memory staging.
+//
+// Strategy: single-pass with register accumulation.
+//   - Each thread loads 20 f32 from input and 20 from residual = 40 loads
+//   - Adds and accumulates sum-of-squares in registers
+//   - Warp shuffle + cross-warp reduction
+//   - Each thread loads 20 weights and writes 20 outputs
+//
+// This avoids shared memory staging entirely. 20 elements per thread
+// uses 20 f32 registers for the cached values = 20 regs, plus ~15 working
+// regs = ~35 total. Well within limits.
+//
+// But: 20 values per thread means we re-read input+residual in pass 2.
+// Alternative: keep all 20 values in registers across the barrier.
+// 20 f32 + working regs ~= 40 registers. Still fine.
+//
+// Memory traffic:
+//   Read: input 20KB + residual 20KB + weight 20KB = 60KB
+//   Write: output 20KB
+//   Total: 80KB (same as staged version, but no smem overhead)
+//
+// Register file: ~40 regs/thread * 256 threads = 10240 regs per block
+//   65536 regs per SM / 10240 = 6 blocks. 6*256=1536 threads = 48 warps.
+//   75% occupancy. Acceptable for a bandwidth-bound kernel.
+//
+// Launch: gridDim.x = batch_rows, blockDim.x = 256
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.visible .entry norm_5120(
+    .param .u64 input_ptr,
+    .param .u64 residual_ptr,
+    .param .u64 weight_ptr,
+    .param .u64 output_ptr,
+    .param .f32 epsilon
+)
+{
+    .reg .u64   %rd<16>;
+    .reg .u32   %r<16>;
+    .reg .f32   %f<48>;
+    .reg .f32   %v<20>;       // cached values (input + residual)
+    .reg .pred  %p<8>;
+
+    .shared .align 4 .f32 smem_reduce[8];
+    .shared .align 4 .f32 smem_rms_inv[1];
+
+    // Load parameters
+    ld.param.u64    %rd0, [input_ptr];
+    ld.param.u64    %rd1, [residual_ptr];
+    ld.param.u64    %rd2, [weight_ptr];
+    ld.param.u64    %rd3, [output_ptr];
+    ld.param.f32    %f30, [epsilon];
+
+    // Thread indexing
+    mov.u32         %r0, %tid.x;           // tid 0..255
+    mov.u32         %r1, %ctaid.x;         // row index
+
+    // Row base: row * 5120 * 4 bytes = row * 20480
+    mul.lo.u32      %r2, %r1, 20480;
+    cvt.u64.u32     %rd4, %r2;
+
+    add.u64         %rd5, %rd0, %rd4;      // input row base
+    add.u64         %rd6, %rd1, %rd4;      // residual row base
+    add.u64         %rd7, %rd3, %rd4;      // output row base
+
+    // Each thread handles elements: tid, tid+256, tid+512, ..., tid+4864
+    // = 20 elements at stride 256 (256*20 = 5120)
+    // Byte offset for tid: tid * 4
+    shl.b32         %r3, %r0, 2;           // tid * 4 bytes
+    cvt.u64.u32     %rd8, %r3;
+
+    // =========================================================================
+    // PASS 1: Load 20 elements, compute sum-of-squares, keep values in regs
+    // Stride = 256 elements = 1024 bytes
+    // =========================================================================
+
+    mov.f32         %f0, 0f00000000;       // partial sum of squares
+
+    // Element 0: offset = tid * 4
+    add.u64         %rd9, %rd5, %rd8;
+    add.u64         %rd10, %rd6, %rd8;
+    ld.global.f32   %f1, [%rd9];
+    ld.global.f32   %f2, [%rd10];
+    add.f32         %v0, %f1, %f2;
+    fma.rn.f32      %f0, %v0, %v0, %f0;
+
+    // Element 1: offset = (tid + 256) * 4 = tid*4 + 1024
+    ld.global.f32   %f1, [%rd9+1024];
+    ld.global.f32   %f2, [%rd10+1024];
+    add.f32         %v1, %f1, %f2;
+    fma.rn.f32      %f0, %v1, %v1, %f0;
+
+    // Element 2
+    ld.global.f32   %f1, [%rd9+2048];
+    ld.global.f32   %f2, [%rd10+2048];
+    add.f32         %v2, %f1, %f2;
+    fma.rn.f32      %f0, %v2, %v2, %f0;
+
+    // Element 3
+    ld.global.f32   %f1, [%rd9+3072];
+    ld.global.f32   %f2, [%rd10+3072];
+    add.f32         %v3, %f1, %f2;
+    fma.rn.f32      %f0, %v3, %v3, %f0;
+
+    // Element 4
+    ld.global.f32   %f1, [%rd9+4096];
+    ld.global.f32   %f2, [%rd10+4096];
+    add.f32         %v4, %f1, %f2;
+    fma.rn.f32      %f0, %v4, %v4, %f0;
+
+    // Element 5
+    ld.global.f32   %f1, [%rd9+5120];
+    ld.global.f32   %f2, [%rd10+5120];
+    add.f32         %v5, %f1, %f2;
+    fma.rn.f32      %f0, %v5, %v5, %f0;
+
+    // Element 6
+    ld.global.f32   %f1, [%rd9+6144];
+    ld.global.f32   %f2, [%rd10+6144];
+    add.f32         %v6, %f1, %f2;
+    fma.rn.f32      %f0, %v6, %v6, %f0;
+
+    // Element 7
+    ld.global.f32   %f1, [%rd9+7168];
+    ld.global.f32   %f2, [%rd10+7168];
+    add.f32         %v7, %f1, %f2;
+    fma.rn.f32      %f0, %v7, %v7, %f0;
+
+    // Element 8
+    ld.global.f32   %f1, [%rd9+8192];
+    ld.global.f32   %f2, [%rd10+8192];
+    add.f32         %v8, %f1, %f2;
+    fma.rn.f32      %f0, %v8, %v8, %f0;
+
+    // Element 9
+    ld.global.f32   %f1, [%rd9+9216];
+    ld.global.f32   %f2, [%rd10+9216];
+    add.f32         %v9, %f1, %f2;
+    fma.rn.f32      %f0, %v9, %v9, %f0;
+
+    // Element 10
+    ld.global.f32   %f1, [%rd9+10240];
+    ld.global.f32   %f2, [%rd10+10240];
+    add.f32         %v10, %f1, %f2;
+    fma.rn.f32      %f0, %v10, %v10, %f0;
+
+    // Element 11
+    ld.global.f32   %f1, [%rd9+11264];
+    ld.global.f32   %f2, [%rd10+11264];
+    add.f32         %v11, %f1, %f2;
+    fma.rn.f32      %f0, %v11, %v11, %f0;
+
+    // Element 12
+    ld.global.f32   %f1, [%rd9+12288];
+    ld.global.f32   %f2, [%rd10+12288];
+    add.f32         %v12, %f1, %f2;
+    fma.rn.f32      %f0, %v12, %v12, %f0;
+
+    // Element 13
+    ld.global.f32   %f1, [%rd9+13312];
+    ld.global.f32   %f2, [%rd10+13312];
+    add.f32         %v13, %f1, %f2;
+    fma.rn.f32      %f0, %v13, %v13, %f0;
+
+    // Element 14
+    ld.global.f32   %f1, [%rd9+14336];
+    ld.global.f32   %f2, [%rd10+14336];
+    add.f32         %v14, %f1, %f2;
+    fma.rn.f32      %f0, %v14, %v14, %f0;
+
+    // Element 15
+    ld.global.f32   %f1, [%rd9+15360];
+    ld.global.f32   %f2, [%rd10+15360];
+    add.f32         %v15, %f1, %f2;
+    fma.rn.f32      %f0, %v15, %v15, %f0;
+
+    // Element 16
+    ld.global.f32   %f1, [%rd9+16384];
+    ld.global.f32   %f2, [%rd10+16384];
+    add.f32         %v16, %f1, %f2;
+    fma.rn.f32      %f0, %v16, %v16, %f0;
+
+    // Element 17
+    ld.global.f32   %f1, [%rd9+17408];
+    ld.global.f32   %f2, [%rd10+17408];
+    add.f32         %v17, %f1, %f2;
+    fma.rn.f32      %f0, %v17, %v17, %f0;
+
+    // Element 18
+    ld.global.f32   %f1, [%rd9+18432];
+    ld.global.f32   %f2, [%rd10+18432];
+    add.f32         %v18, %f1, %f2;
+    fma.rn.f32      %f0, %v18, %v18, %f0;
+
+    // Element 19: offset = (tid + 19*256) * 4 = tid*4 + 19456
+    ld.global.f32   %f1, [%rd9+19456];
+    ld.global.f32   %f2, [%rd10+19456];
+    add.f32         %v19, %f1, %f2;
+    fma.rn.f32      %f0, %v19, %v19, %f0;
+
+    // =========================================================================
+    // REDUCTION: warp shuffle down + cross-warp
+    // =========================================================================
+
+    shfl.sync.down.b32 %f3, %f0, 16, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f3;
+    shfl.sync.down.b32 %f3, %f0, 8, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f3;
+    shfl.sync.down.b32 %f3, %f0, 4, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f3;
+    shfl.sync.down.b32 %f3, %f0, 2, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f3;
+    shfl.sync.down.b32 %f3, %f0, 1, 31, 0xFFFFFFFF;
+    add.f32         %f0, %f0, %f3;
+
+    // Cross-warp
+    and.b32         %r4, %r0, 31;
+    shr.b32         %r5, %r0, 5;
+    setp.eq.u32     %p0, %r4, 0;
+    @!%p0 bra       SKIP_STORE;
+    mov.u32         %r6, smem_reduce;
+    shl.b32         %r7, %r5, 2;
+    add.u32         %r6, %r6, %r7;
+    st.shared.f32   [%r6], %f0;
+SKIP_STORE:
+    bar.sync        0;
+
+    setp.lt.u32     %p1, %r0, 32;
+    @!%p1 bra       SKIP_REDUCE;
+
+    mov.f32         %f4, 0f00000000;
+    setp.lt.u32     %p2, %r0, 8;          // 8 warps
+    @!%p2 bra       SKIP_LOAD;
+    mov.u32         %r6, smem_reduce;
+    shl.b32         %r7, %r0, 2;
+    add.u32         %r6, %r6, %r7;
+    ld.shared.f32   %f4, [%r6];
+SKIP_LOAD:
+
+    shfl.sync.down.b32 %f5, %f4, 16, 31, 0xFFFFFFFF;
+    add.f32         %f4, %f4, %f5;
+    shfl.sync.down.b32 %f5, %f4, 8, 31, 0xFFFFFFFF;
+    add.f32         %f4, %f4, %f5;
+    shfl.sync.down.b32 %f5, %f4, 4, 31, 0xFFFFFFFF;
+    add.f32         %f4, %f4, %f5;
+    shfl.sync.down.b32 %f5, %f4, 2, 31, 0xFFFFFFFF;
+    add.f32         %f4, %f4, %f5;
+    shfl.sync.down.b32 %f5, %f4, 1, 31, 0xFFFFFFFF;
+    add.f32         %f4, %f4, %f5;
+
+    setp.eq.u32     %p3, %r0, 0;
+    @!%p3 bra       SKIP_REDUCE;
+    // rms_inv = rsqrt(sum / 5120 + eps)
+    // 1.0/5120 = 0.0001953125 = 0x394CCCCD
+    mul.f32         %f6, %f4, 0f394CCCCD;  // 1/5120
+    add.f32         %f6, %f6, %f30;
+    rsqrt.approx.f32 %f6, %f6;
+    mov.u32         %r6, smem_rms_inv;
+    st.shared.f32   [%r6], %f6;
+SKIP_REDUCE:
+    bar.sync        0;
+
+    // =========================================================================
+    // PASS 2: Normalize. Values are in %v0..%v19. Load weight, write output.
+    // =========================================================================
+
+    mov.u32         %r6, smem_rms_inv;
+    ld.shared.f32   %f7, [%r6];           // rms_inv
+
+    // Weight base for this row
+    // Note: weight is NOT per-row, it's per-column (same weight for all rows)
+    // So weight base = weight_ptr + tid * 4
+    add.u64         %rd9, %rd2, %rd8;     // weight + tid * 4
+
+    // Output base for this row
+    add.u64         %rd10, %rd7, %rd8;    // output_row + tid * 4
+
+    // Element 0
+    ld.global.f32   %f8, [%rd9];
+    mul.f32         %f9, %v0, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10], %f9;
+
+    // Element 1
+    ld.global.f32   %f8, [%rd9+1024];
+    mul.f32         %f9, %v1, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+1024], %f9;
+
+    // Element 2
+    ld.global.f32   %f8, [%rd9+2048];
+    mul.f32         %f9, %v2, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+2048], %f9;
+
+    // Element 3
+    ld.global.f32   %f8, [%rd9+3072];
+    mul.f32         %f9, %v3, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+3072], %f9;
+
+    // Element 4
+    ld.global.f32   %f8, [%rd9+4096];
+    mul.f32         %f9, %v4, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+4096], %f9;
+
+    // Element 5
+    ld.global.f32   %f8, [%rd9+5120];
+    mul.f32         %f9, %v5, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+5120], %f9;
+
+    // Element 6
+    ld.global.f32   %f8, [%rd9+6144];
+    mul.f32         %f9, %v6, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+6144], %f9;
+
+    // Element 7
+    ld.global.f32   %f8, [%rd9+7168];
+    mul.f32         %f9, %v7, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+7168], %f9;
+
+    // Element 8
+    ld.global.f32   %f8, [%rd9+8192];
+    mul.f32         %f9, %v8, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+8192], %f9;
+
+    // Element 9
+    ld.global.f32   %f8, [%rd9+9216];
+    mul.f32         %f9, %v9, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+9216], %f9;
+
+    // Element 10
+    ld.global.f32   %f8, [%rd9+10240];
+    mul.f32         %f9, %v10, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+10240], %f9;
+
+    // Element 11
+    ld.global.f32   %f8, [%rd9+11264];
+    mul.f32         %f9, %v11, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+11264], %f9;
+
+    // Element 12
+    ld.global.f32   %f8, [%rd9+12288];
+    mul.f32         %f9, %v12, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+12288], %f9;
+
+    // Element 13
+    ld.global.f32   %f8, [%rd9+13312];
+    mul.f32         %f9, %v13, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+13312], %f9;
+
+    // Element 14
+    ld.global.f32   %f8, [%rd9+14336];
+    mul.f32         %f9, %v14, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+14336], %f9;
+
+    // Element 15
+    ld.global.f32   %f8, [%rd9+15360];
+    mul.f32         %f9, %v15, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+15360], %f9;
+
+    // Element 16
+    ld.global.f32   %f8, [%rd9+16384];
+    mul.f32         %f9, %v16, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+16384], %f9;
+
+    // Element 17
+    ld.global.f32   %f8, [%rd9+17408];
+    mul.f32         %f9, %v17, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+17408], %f9;
+
+    // Element 18
+    ld.global.f32   %f8, [%rd9+18432];
+    mul.f32         %f9, %v18, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+18432], %f9;
+
+    // Element 19
+    ld.global.f32   %f8, [%rd9+19456];
+    mul.f32         %f9, %v19, %f7;
+    mul.f32         %f9, %f9, %f8;
+    st.global.f32   [%rd10+19456], %f9;
+
+    ret;
+}

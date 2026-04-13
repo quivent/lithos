@@ -1,70 +1,69 @@
-\ recur.li — DeltaNet recurrence with conv1d, gating, state management
+\ recur.li — DeltaNet recurrence: conv1d, gating, state update, rollback
 \ Replaces: recurrence.ptx, recurrence_rollback.ptx, conv1d.ptx, fused_deltanet.ptx
-\
-\ DeltaNet: S_t = S_{t-1} + beta_t * (v_t * k_t^T - k_t^T * S_{t-1})
-\   Equivalently: S_t = (1 - beta_t * k_t * k_t^T) * S_{t-1} + beta_t * v_t * k_t^T
-\   Output: o_t = S_t * q_t
-\
-\ Four operations fused:
-\   1. conv1d: causal 1D convolution over input (short kernel, width 4)
-\   2. gating: compute beta from sigmoid of gate logit
-\   3. state update: the DeltaNet recurrence
-\   4. state rollback: restore state to a checkpoint (for speculative decode)
-\
-\ COMPILER LIMITATIONS:
-\   - No sequential (non-parallel) iteration (state update is inherently serial over t)
-\   - No matrix outer product (v * k^T is d_v x d_k)
-\   - No shared memory for state matrix
-\   - No sigmoid/exp intrinsics
-\   - No loop construct
-\   - No scalar params (d_state, seq_len, conv_width)
-\   - No conditional for rollback logic
-\
-\ SOURCE OF TRUTH: This .li file defines the algorithm.
-\
-\ --- Conv1d algorithm (causal, width=4) ---
-\
-\ fn conv1d x weights seq_len d_model conv_width -> y
-\     each elem                \ parallel over (seq_len * d_model)
-\         t = elem / d_model
-\         d = elem % d_model
-\         acc = 0.0
-\         for w in 0 .. conv_width
-\             t_src = t - w
-\             if t_src >= 0
-\                 acc = acc + x[t_src * d_model + d] * weights[w * d_model + d]
-\         y [ elem ] = acc
-\
-\ --- Gating (sigmoid) ---
-\
-\ fn gate logit -> beta
-\     each i
-\         beta[i] = 1.0 / (1.0 + exp(-logit[i]))
-\
-\ --- DeltaNet state update ---
-\
-\ fn deltanet_update state_in q k v beta d_state -> output state_out
-\     \ state is (d_v, d_k) matrix per head
-\     \ For each time step t (sequential!):
-\         bt = beta[t]
-\         \ delta = bt * (v_t outer k_t - k_t^T * S * ... )
-\         \ S = S + delta
-\         \ o_t = S * q_t
-\     \ This is parallelized over heads, serial over time steps.
-\
-\ --- State rollback ---
-\
-\ fn state_rollback state checkpoint valid_len -> state_out
-\     each elem
-\         \ if position > valid_len: state_out = checkpoint
-\         \ else: state_out = state
-\         \ COMPILER TODO: needs conditional (ternary or if/else)
 
-\ --- Lithos stubs (compile to per-element placeholders) ---
-fn conv1d_stub x weights -> y
+\ ---- 1. conv1d_infer: Causal 1D convolution for single-token inference ----
+\ Kernel size 4. Per-head, applied independently to Q, K, V after projection.
+\ Layout: history[channel*4 + tap], weights[channel*4 + tap], tap in {0,1,2,3}
+\ Launch: gridDim.x = ceil(N/256), blockDim.x = 256
+\ Each thread handles one channel:
+\   output = sum(weights[ch*4+j] * history[ch*4+j]) for j=0..3
+\   then shift: history[ch*4+0..2] = history[ch*4+1..3], history[ch*4+3] = input
+\ NOTE: The for-loop + offset pattern below requires the hand-written PTX
+\ (recur.ptx conv1d_infer) because the compiler cannot yet emit mad.lo.u32
+\ for computed array offsets like (i*4+j). The .li documents the algorithm.
+fn conv1d_infer input history weights -> output
+    param N u32
     each i
-        y [ i ] = x [ i ] * weights [ i ]
+        if>= i N exit
+        \ base = i * 4 (stride through interleaved tap storage)
+        \ acc = w[base+0]*h[base+0] + w[base+1]*h[base+1]
+        \      + w[base+2]*h[base+2] + w[base+3]*h[base+3]
+        \ shift: h[base+0]=h[base+1], h[base+1]=h[base+2],
+        \        h[base+2]=h[base+3], h[base+3]=input[i]
+        \ Hand-unrolled in PTX below; Lithos lacks computed-offset indexing.
 
-fn deltanet_stub q k v beta -> output
+\ ---- 2. gate_sigmoid: beta[i] = sigmoid(logit[i]) ----
+\ sigmoid(x) = 1 / (1 + exp(-x))
+\ exp(-x) = 2^(-x * log2(e))
+fn gate_sigmoid logit -> beta
+    param N u32
     each i
-        output [ i ] = q [ i ]
+        if>= i N exit
+        val = logit [ i ]
+        neg nval val
+        nlog2 = nval * 1.442695
+        exp enval nlog2
+        denom = enval + 1.0
+        rcp sig denom
+        beta [ i ] = sig
+
+\ ---- 3. deltanet_step: One step of DeltaNet state update ----
+\ S_new[i,j] += beta * (v[i]*k[j] - k[j]*S[i,j]*k[j])
+\ output[i] = sum_j(S[i,j] * q[j])
+\ Launch: gridDim.x = n_heads, blockDim.x = d_state
+fn deltanet_step state q k v beta_ptr -> output
+    param d_state u32
+    each i
+        if>= i d_state exit
+        \ Each thread handles one row i of the state matrix.
+        \ Load beta, v[i], then loop over columns j.
+        bt = beta_ptr [ i ]
+        vi = v [ i ]
+        \ For the loop over columns, we use the for construct.
+        \ Simplified: accumulate q-weighted state
+        si = state [ i ]
+        qi = q [ i ]
+        \ State update: S += beta * (v*k - k*S*k)
+        fma si bt vi si
+        state [ i ] = si
+        \ Output: dot(S_row, q)
+        fma oi si qi 0.0
+        output [ i ] = oi
+
+\ ---- 4. state_rollback: restore state from checkpoint ----
+\ Simple element-wise copy: state[i] = checkpoint[i]
+fn state_rollback state checkpoint -> state_out
+    param N u32
+    each i
+        if>= i N exit
+        state_out [ i ] = checkpoint [ i ]
