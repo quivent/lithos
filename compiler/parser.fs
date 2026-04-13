@@ -403,30 +403,22 @@ variable header-emitted  0 header-emitted !
     2drop 0 ;
 
 \ ---- Parse integer from string -----------------------------------------------
+variable pi-neg
 : parse-int ( addr u -- n )
-    0 -rot   \ acc addr u
-    over c@ [char] - = if
-        1- swap 1+ swap   \ skip '-'
-        0 -rot             \ neg-flag=0 means negate
-        0 -rot -rot
-        2swap drop -1 2swap   \ set flag
-    else 0 -rot -rot 2swap drop 0 2swap then
-    \ ( flag acc addr u )
-    0 ?do
-        over i + c@ [char] 0 -
-        rot 10 * + -rot
-    loop
-    drop swap
-    if negate then ;
+    0 pi-neg !
+    over c@ [char] - = if 1- swap 1+ swap -1 pi-neg ! then
+    parse-uint
+    pi-neg @ if negate then ;
 
 \ Simpler version: unsigned parse
+variable pu-acc
 : parse-uint ( addr u -- n )
-    0 -rot
+    0 pu-acc !
     0 ?do
-        over i + c@ [char] 0 -
-        rot 10 * + -rot
+        dup i + c@ [char] 0 -
+        pu-acc @ 10 * + pu-acc !
     loop
-    2drop ;
+    drop pu-acc @ ;
 
 \ Parse hex number (after 0x prefix)
 : hex-val ( c -- n )
@@ -435,13 +427,14 @@ variable header-emitted  0 header-emitted !
     dup [char] A < 0= over [char] F > 0= and if [char] A - 10 + exit then
     drop 0 ;
 
+variable ph-acc
 : parse-hex ( addr u -- n )
-    0 -rot
+    0 ph-acc !
     0 ?do
-        over i + c@ hex-val
-        rot 16 * + -rot
+        dup i + c@ hex-val
+        ph-acc @ 16 * + ph-acc !
     loop
-    2drop ;
+    drop ph-acc @ ;
 
 \ Check if token starts with 0x
 : is-hex? ( addr u -- flag )
@@ -596,109 +589,6 @@ variable 'parse-expr
 \ Syntax: for COUNTER START BOUND STEP ... endfor
 \ Emits: mov counter, start; LOOP_label: setp.ge counter, bound; @p bra END; ... add counter, step; bra LOOP; END:
 \ ==============================================================================
-
-: emit-for ( -- )
-    \ Parse: counter-name start bound step
-    src-token                         \ counter name
-    2dup sym-find -1 = if
-        \ New counter var — allocate r32
-        rreg+ >r
-        4 r@ sym-add drop            \ kind=4 (local-u32)
-        r>
-    else
-        >r 2drop r> sym-reg@
-    then                              \ ( counter-rreg )
-
-    \ Parse start value
-    src-token 2dup is-number? if
-        parse-uint
-    else
-        \ Could be a symbol
-        sym-find dup -1 <> if sym-reg@ else drop 0 then
-    then                              \ ( counter-rreg start-val-or-reg )
-
-    \ Parse bound
-    src-token 2dup sym-find dup -1 <> if
-        >r 2drop r> sym-reg@         \ bound is a register
-        -1                            \ flag: bound is register
-    else
-        drop
-        2dup is-number? if
-            parse-uint
-            0                         \ flag: bound is immediate
-        else
-            sym-find dup -1 <> if sym-reg@ -1 else drop 0 0 then
-        then
-    then                              \ ( counter start bound is-reg-flag )
-
-    \ Parse step
-    src-token 2dup is-number? if
-        parse-uint
-    else
-        sym-find dup -1 <> if sym-reg@ else drop 1 then
-    then                              \ ( counter start bound is-reg step )
-
-    \ Now emit PTX
-    \ Save loop info
-    label+ >r                         \ loop label number
-
-    \ ( counter start bound is-reg step ) R: label
-    >r >r >r                          \ ( counter start ) R: label step is-reg bound
-
-    \ mov counter, start
-    ptx-indent s" mov.u32 " ptx+  over ptx-r32  s" , " ptx+
-    dup 0< if
-        \ Start is negative — shouldn't happen for loop, treat as immediate
-        ptx-num ptx+
-    else
-        ptx-num ptx+
-    then
-    s" ;" ptx+ ptx-nl
-
-    \ LOOP label
-    s" $L_for_" ptx+  r> r> r> r>    \ ( counter start bound is-reg step label )
-    >r >r >r >r                       \ put back, just need label for now
-    r@ r> r> r> r> swap >r swap >r swap >r
-    \ ( counter start label ) R: step is-reg bound
-    ptx-num ptx+ s" :" ptx+ ptx-nl
-    drop                              \ drop start
-
-    \ setp.ge.u32 %pN, counter, bound
-    preg+ >r
-    ptx-indent s" setp.ge.u32 " ptx+  r@ ptx-preg  s" , " ptx+
-    over ptx-r32  s" , " ptx+
-
-    r> r> r> r>                       \ ( counter preg bound is-reg step )
-    >r swap >r swap                   \ ( counter bound preg ) R: step is-reg
-
-    \ emit bound
-    >r                                \ R: step is-reg preg
-    r> r> r>                          \ ( counter bound preg is-reg step )
-    >r >r >r                          \ ( counter bound ) R: step is-reg preg
-    r> r>                             \ ( counter bound preg is-reg ) R: step
-    if
-        >r
-        ptx-r32                       \ bound is a register
-        r>
-    else
-        >r
-        ptx-num ptx+                  \ bound is immediate
-        r>
-    then
-    s" ;" ptx+ ptx-nl
-
-    \ @pN bra $L_endfor_X
-    ptx-indent s" @" ptx+  ptx-preg  s"  bra $L_endfor_" ptx+
-    \ We need the label number — store it on for-stack
-    \ Actually let's simplify this. We need label# accessible.
-    \ The label was pushed earlier. Let me restructure.
-
-    \ This is getting complex. Let me use a simpler approach with the for-stack.
-    drop drop r> drop
-    ;
-
-\ Let me rewrite the for-loop emission more cleanly.
-\ We'll parse all args first, then emit.
 
 \ Scratch storage for for-loop args
 variable for-counter-reg
@@ -889,45 +779,6 @@ variable bw-op-len
 \ Emits declaration in header, registers name as shared buffer
 \ ==============================================================================
 
-: parse-shared ( -- )
-    src-token                         \ name
-    2dup                              \ save for sym-add
-
-    \ Save name for shared decl
-    n-shared @ MAX-SHARED < if
-        n-shared @ >r
-        2dup dup r@ cells shm-nlens + !
-        r@ 32 * shm-names + swap move
-    else
-        0 >r
-    then
-
-    \ Parse byte count
-    src-token 2dup is-number? if parse-uint else 2drop 0 then
-
-    \ Parse type (f32 -> multiply by 4)
-    src-token 2dup k-f32 3 li-tok= if
-        2drop 4 *
-    else 2dup k-u32 3 li-tok= if
-        2drop 4 *
-    else
-        2drop
-    then then
-
-    r> cells shm-bytes + !
-
-    \ Register as symbol kind=8 (shared-buf), reg=index
-    8 n-shared @ 1- sym-add drop
-    1 n-shared +! ;
-
-\ Wait, n-shared already incremented. Fix:
-\ Actually let me restructure. The parse-shared should:
-\ 1. Read name, count, type
-\ 2. Store in shared table
-\ 3. Register symbol
-
-\ Let me rewrite parse-shared cleanly:
-
 : parse-shared-v2 ( -- )
     src-token                         \ ( name-addr name-u )
     \ Save name into shared table
@@ -1045,52 +896,18 @@ variable bw-op-len
 \ Syntax: f32>s32 DST SRC   (also u32>f32, s32>f32, f32>u32)
 \ ==============================================================================
 
-: emit-cvt ( ptx-cvt-addr ptx-cvt-u dst-is-float src-is-float -- )
-    \ Parse DST and SRC
-    >r >r  \ save flags
-
-    src-token 2dup sym-find dup -1 = if
-        drop
-        r> r> >r >r   \ get dst-is-float
-        r@ if
-            freg+ >r 2 r@ sym-add >r r> drop r>
-        else
-            rreg+ >r 4 r@ sym-add >r r> drop r>
-        then
-        r> r>
-    else >r 2drop r> sym-reg@
-        r> r>
-    then         \ ( dst-reg ptx-addr ptx-u dst-is-float src-is-float )
-
-    >r >r >r >r >r
-
-    src-token 2dup sym-find dup -1 = if
-        drop 2dup is-float? if
-            emit-fconst
-        else
-            2dup is-number? if
-                parse-uint emit-iconst
-            else
-                sym-find dup -1 <> if sym-reg@ else drop 0 then
-            then
-        then
-    else >r 2drop r> sym-reg@ then   \ src-reg
-
-    \ Stack: ( src-reg ) R: dst-reg ptx-u ptx-addr src-is-float dst-is-float
-    >r
-    r> r> r> r> r> r>
-    \ ( src dst-is-float src-is-float ptx-addr ptx-u dst-reg src-reg... )
-    \ This is getting messy. Let me use variables.
-    drop drop drop drop drop drop r> drop ;
-
-\ Simpler approach using variables
+\ Type conversion using variables
 variable cvt-dst-reg
 variable cvt-src-reg
-variable cvt-dst-float   \ 1=float, 0=int
+variable cvt-dst-float   \ -1=float, 0=int
 variable cvt-src-float
+create cvt-suffix-buf 32 allot
+variable cvt-suffix-len
 
 : emit-cvt-v2 ( ptx-suffix-addr ptx-suffix-u dst-float src-float -- )
     cvt-src-float ! cvt-dst-float !
+    \ Save suffix string
+    dup cvt-suffix-len ! cvt-suffix-buf swap move
 
     \ Parse DST
     src-token 2dup sym-find dup -1 = if
@@ -1123,7 +940,7 @@ variable cvt-src-float
     then
 
     \ Emit: cvt.SUFFIX dst, src
-    ptx-indent s" cvt." ptx+ ptx+
+    ptx-indent s" cvt." ptx+ cvt-suffix-buf cvt-suffix-len @ ptx+
 
     s"  " ptx+
     cvt-dst-float @ if cvt-dst-reg @ ptx-freg else cvt-dst-reg @ ptx-r32 then
@@ -1131,8 +948,6 @@ variable cvt-src-float
     cvt-src-float @ if cvt-src-reg @ ptx-freg else cvt-src-reg @ ptx-r32 then
     s" ;" ptx+ ptx-nl ;
 
-: emit-f32>s32  s" rzi.s32.f32" -1 0 emit-cvt-v2 ;  \ dst=int(0), src=float(1) -- wait no
-\ dst-float=0 means int, src-float=1 means float
 : emit-f32-to-s32  s" rzi.s32.f32" 0 -1 emit-cvt-v2 ;
 : emit-f32-to-u32  s" rzi.u32.f32" 0 -1 emit-cvt-v2 ;
 : emit-u32-to-f32  s" rn.f32.u32"  -1 0 emit-cvt-v2 ;
@@ -1370,52 +1185,7 @@ variable ifge-target-len
 
 variable ld-scratch-rd
 
-: emit-ld-global ( -- )
-    src-token 2dup sym-find dup -1 = if
-        drop freg+ >r 2 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then   \ dst (freg or rreg)
-
-    src-token 2dup sym-find dup -1 = if
-        drop 2drop 0
-    else >r 2drop r> sym-reg@ then   \ base (rd reg)
-
-    src-token 2dup sym-find dup -1 = if
-        drop 2dup is-number? if parse-uint
-        else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ offset (rreg or imm)
-
-    \ Type token (optional, default f32)
-    src-pos @ >r
-    src-token 2dup k-f32 3 li-tok= if
-        2drop r> drop 0   \ 0=f32
-    else 2dup k-u32 3 li-tok= if
-        2drop r> drop 1   \ 1=u32
-    else
-        2drop r> src-pos ! 0  \ default f32, put token back
-    then then
-
-    \ ( dst base offset type )
-    >r >r >r >r
-
-    \ Compute address: mul.wide.u32 rdX, offset, 4; add.u64 rdY, base, rdX
-    rdreg+ dup >r
-    ptx-indent s" mul.wide.u32 " ptx+ ptx-r64 s" , " ptx+
-    r> >r
-    r> r> r> r>                       \ ( dst base offset type ) R: scratch-rd
-    >r >r
-    ptx-r32 s" , 4;" ptx+ ptx-nl     \ offset * 4
-
-    rdreg+ dup >r
-    ptx-indent s" add.u64 " ptx+ ptx-r64 s" , " ptx+
-    r> >r
-    r> r>                             \ ( dst type ) R: addr-rd scratch-rd
-    >r >r
-    r> r> swap >r >r                  \ R: ... base
-    \ We need base rd... this is getting unwieldy. Let me use vars.
-    drop drop r> drop r> drop r> drop r> drop
-    ;
-
-\ Simpler global load: ld.global DST BASE OFFSET_REG
+\ Global load: ld.global DST BASE OFFSET_REG
 \ Uses %rd30/%rd31 as scratch
 variable ldst-dst
 variable ldst-base
@@ -1797,23 +1567,6 @@ create k-raw 3 allot  s" raw" k-raw swap move
         then
     again ;
 
-: parse-fn-outputs  ( -- )
-    begin
-        src-pos @ >r
-        src-token dup 0= if 2drop r> src-pos ! exit then
-        2dup k-each   4 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-fn     2 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-for    3 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-param  5 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-shared 6 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-ifge   4 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-iflt   4 li-tok= if 2drop r> src-pos ! exit then
-        2dup k-label  5 li-tok= if 2drop r> src-pos ! exit then
-        r> drop
-        1 n-inputs @ n-outputs @ + sym-add drop
-        1 n-outputs +!
-    again ;
-
 : parse-fn-body  ( -- )
     begin
         src-pos @ >r
@@ -1822,64 +1575,6 @@ create k-raw 3 allot  s" raw" k-raw swap move
         0= if r> src-pos ! exit then
         r> drop
     again ;
-
-: parse-fn  ( -- )
-    sym-reset
-    0 header-emitted !
-    0 next-freg !
-    4 next-rreg !
-    4 next-rdreg !
-    0 next-preg !
-    0 n-shared !
-    0 n-sparams !
-    0 for-depth !
-    0 next-label !
-    ptx-reset
-    regs-reset
-    1 li-defs +!  1 li-kernels +!
-    src-token dup 0= if 2drop exit then
-    li-set-name
-
-    \ First pass: scan for param and shared declarations before the body
-    \ We need these before emitting the header.
-    \ Save position, scan ahead, then restore.
-    src-pos @ >r
-
-    \ Scan for params and shared decls
-    begin
-        src-pos @ >r
-        src-token dup 0= if 2drop r> src-pos ! r> src-pos ! exit then   \ fixed: restore both
-        2dup k-param 5 li-tok= if
-            2drop r> drop
-            parse-scalar-param
-        else 2dup k-shared 6 li-tok= if
-            2drop r> drop
-            parse-shared-v2
-        else
-            2drop r> src-pos !    \ put token back, end pre-scan
-            \ But we need to continue scanning...
-            \ Actually let's just do a simple approach: scan all tokens
-            \ looking for param/shared, skip everything else
-            src-pos @ >r
-            src-token dup 0= if 2drop r> src-pos ! r> src-pos ! exit then  \ fixed
-            2drop r> drop         \ skip this token
-            0                     \ continue flag
-        then then
-        \ -1 means continue
-    again
-
-    \ Hmm, this pre-scan approach is fragile. Let me use a different strategy:
-    \ Do TWO passes over the source. First pass collects params/shared.
-    \ Second pass emits the body.
-    ;
-
-\ Actually, let me take a cleaner approach. The issue is that params and shared
-\ declarations need to appear in the PTX header, but they may appear in the body.
-\ Solution: require param/shared declarations to appear BEFORE the body
-\ (before 'each' or any other body statement). This is a reasonable constraint.
-
-\ Let me also restructure: in the first pass between -> and body, collect
-\ both output names AND param/shared declarations.
 
 : parse-fn-decls-and-outputs  ( -- )
     \ After parsing input params and "->", read outputs and declarations
