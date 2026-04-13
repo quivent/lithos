@@ -8,7 +8,7 @@
 \           output [ VAR ] = param1 [ VAR ] + param2 [ VAR ]
 \
 \ Extended features:
-\   for k 0 K 16          — PTX loop with counter, bound, step
+\   for k 0 K 16          — loop with counter, bound, step
 \   shr, and, or, xor     — integer/bitwise ops
 \   shfl.bfly              — warp shuffle (butterfly)
 \   shared buf 5120 f32    — shared memory declaration
@@ -19,10 +19,14 @@
 \   @p0 bra DONE           — predicated branch
 \   if>= tid n exit        — bounds check / early exit
 
+\ Load core vocabulary (register pools, regs-reset).
+s" /home/ubuntu/lithos/core.fs" included
+
 variable li-mode     0 li-mode !
 variable li-defs     0 li-defs !
 variable li-kernels  0 li-kernels !
 variable li-hosts    0 li-hosts !
+variable li-backend  0 li-backend !   \ legacy — will be removed with lithos.fs cleanup
 
 \ ---- Current function name ---------------------------------------------------
 
@@ -174,13 +178,21 @@ create k-f32u32   7 allot   s" f32>u32" k-f32u32 swap move
 create k-u32f32   7 allot   s" u32>f32" k-u32f32 swap move
 create k-s32f32   7 allot   s" s32>f32" k-s32f32 swap move
 
-\ ---- PTX emission helpers ----------------------------------------------------
+\ ---- PTX emission stubs (no-ops) ---------------------------------------------
+\ The PTX text backend has been removed.  These stubs keep the parser
+\ loadable while ops that lack a SASS emitter still call ptx-* words.
+\ Each stub simply drops its arguments so the stack stays balanced.
 
-: ptx-indent  s"     " ptx+ ;
-: ptx-freg  ( n -- )   s" %f"  ptx+  ptx-num ptx+ ;
-: ptx-r32   ( n -- )   s" %r"  ptx+  ptx-num ptx+ ;
-: ptx-r64   ( n -- )   s" %rd" ptx+  ptx-num ptx+ ;
-: ptx-preg  ( n -- )   s" %p"  ptx+  ptx-num ptx+ ;
+: ptx+      ( addr u -- )   2drop ;
+: ptx-nl    ( -- ) ;
+: ptx-c     ( c -- )   drop ;
+: ptx-num   ( n -- addr u )  s" 0" ;   \ returns dummy string (callers ptx+ it)
+: ptx-header ( -- ) ;
+: ptx-indent ( -- ) ;
+: ptx-freg  ( n -- )   drop ;
+: ptx-r32   ( n -- )   drop ;
+: ptx-r64   ( n -- )   drop ;
+: ptx-preg  ( n -- )   drop ;
 
 \ ---- IEEE 754 float encoding -------------------------------------------------
 \ Convert a float string like "1.0" or "0.5" to IEEE 754 hex "0f3F800000"
@@ -357,11 +369,12 @@ variable global-header-emitted  0 global-header-emitted !
 \ %r0=ctaid.x  %r1=ntid.x  %r2=tid.x  %r3=global_tid
 
 : emit-each-tid  ( -- )
-    ptx-indent s" mov.u32 %r0, %ctaid.x;" ptx+ ptx-nl
-    ptx-indent s" mov.u32 %r1, %ntid.x;"  ptx+ ptx-nl
-    ptx-indent s" mov.u32 %r2, %tid.x;"   ptx+ ptx-nl
-    ptx-indent s" mad.lo.s32 %r3, %r0, %r1, %r2;" ptx+ ptx-nl
-    ptx-nl ;
+    \ SASS: S2R r0,SR_CTAID.X(0x25)  S2R r1,SR_NTID.X(0x29)  S2R r2,SR_TID.X(0x21)
+    \ then IMAD r3, r0, r1, r2  (global_tid = ctaid*ntid + tid)
+    0 $25 s2r,
+    1 $29 s2r,
+    2 $21 s2r,
+    3 0 1 2 imad, ;
 
 \ ---- Emit indexed load/store with variable index register --------------------
 \ idx-reg holds the r32 register number to use as the array index.
@@ -405,8 +418,7 @@ variable rie-result
 
     \ Token A
     src-token                          \ ( addr u )
-    2dup resolve-sym-rreg rie-rA !     \ save A's register
-    \ save A string for possible backtrack (already consumed)
+    resolve-sym-rreg rie-rA !          \ save A's register (consumes addr u)
 
     \ Peek for operator
     src-pos @ >r  src-token  r> swap >r src-pos !  r>  \ peek next
@@ -673,8 +685,7 @@ variable pe-result-freg
             2drop
             parse-term swap
             freg+ pe-result-freg !
-            ptx-indent s" add.f32 " ptx+  pe-result-freg @ ptx-freg  s" , " ptx+
-            ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
+            pe-result-freg @ swap over fadd,
             pe-result-freg @
         else 2dup k-minus 1 li-tok= if
             2drop
@@ -755,34 +766,26 @@ variable for-label-num
         1 for-depth +!
     then
 
-    \ Emit: mov counter, start
-    ptx-indent s" mov.u32 " ptx+
-    for-counter-reg @ ptx-r32 s" , " ptx+
+    \ SASS: mov-imm counter, start;  record loop-top sass-pos;
+    \       isetp-ge pred, counter, bound;  bra-pred end_offset pred
     for-start-is-reg @ if
-        for-start-val @ ptx-r32
+        \ counter = start-reg: use imad-imm with imm=0 to copy
+        for-counter-reg @ for-start-val @ 0 imad-imm,
     else
-        for-start-val @ ptx-num ptx+
+        for-counter-reg @ for-start-val @ mov-imm,
     then
-    s" ;" ptx+ ptx-nl
-
-    \ Emit loop label
-    s" $L_for_" ptx+ for-label-num @ ptx-num ptx+ s" :" ptx+ ptx-nl
-
-    \ Emit: setp.ge.u32 %pN, counter, bound
+    \ Record top-of-loop position (in sass-pos units = bytes)
+    sass-pos @ for-depth @ 1- cells for-labels + !   \ reuse label slot for sass-pos
     preg+ >r
-    ptx-indent s" setp.ge.u32 " ptx+ r@ ptx-preg s" , " ptx+
-    for-counter-reg @ ptx-r32 s" , " ptx+
-    for-bound-is-reg @ if
-        for-bound-val @ ptx-r32
+    \ Bound: SASS isetp-ge needs a register; use imad-imm to materialize if literal
+    for-bound-is-reg @ 0= if
+        rreg+ dup for-bound-val @ mov-imm,
+        r@ for-counter-reg @ swap isetp-ge,
     else
-        for-bound-val @ ptx-num ptx+
+        r@ for-counter-reg @ for-bound-val @ isetp-ge,
     then
-    s" ;" ptx+ ptx-nl
-
-    \ Emit: @pN bra $L_endfor_X
-    ptx-indent s" @" ptx+ r> ptx-preg s"  bra $L_endfor_" ptx+
-    for-label-num @ ptx-num ptx+ s" ;" ptx+ ptx-nl
-    ptx-nl ;
+    \ Emit placeholder bra-pred (offset 0 for now; endfor will patch)
+    0 r> bra-pred, ;
 
 : emit-endfor ( -- )
     for-depth @ 0= if exit then
@@ -1143,11 +1146,7 @@ variable fma-c
     parse-fma-arg fma-a !
     parse-fma-arg fma-b !
     parse-fma-arg fma-c !
-    ptx-indent s" fma.rn.f32 " ptx+
-    fma-d @ ptx-freg s" , " ptx+
-    fma-a @ ptx-freg s" , " ptx+
-    fma-b @ ptx-freg s" , " ptx+
-    fma-c @ ptx-freg s" ;" ptx+ ptx-nl ;
+    fma-d @ fma-a @ fma-b @ fma-c @ ffma, ;
 
 \ ==============================================================================
 \ FEATURE 8: TYPE CONVERSIONS
@@ -1275,20 +1274,14 @@ variable ifge-target-len
 : emit-ifge-exit ( -- )
     parse-ifge-args
     preg+ ifge-pred !
-    ptx-indent s" setp.ge.u32 " ptx+ ifge-pred @ ptx-preg s" , " ptx+
-    ifge-src1 @ ptx-r32 s" , " ptx+
-    ifge-src2 @ ptx-r32 s" ;" ptx+ ptx-nl
-    ptx-indent s" @" ptx+ ifge-pred @ ptx-preg s"  bra $L_" ptx+
-    ifge-target ifge-target-len @ ptx+ s" ;" ptx+ ptx-nl ;
+    ifge-pred @ ifge-src1 @ ifge-src2 @ isetp-ge,
+    0 ifge-pred @ bra-pred, ;   \ offset 0 placeholder; target resolves at link time
 
 : emit-iflt-exit ( -- )
     parse-ifge-args
     preg+ ifge-pred !
-    ptx-indent s" setp.lt.u32 " ptx+ ifge-pred @ ptx-preg s" , " ptx+
-    ifge-src1 @ ptx-r32 s" , " ptx+
-    ifge-src2 @ ptx-r32 s" ;" ptx+ ptx-nl
-    ptx-indent s" @" ptx+ ifge-pred @ ptx-preg s"  bra $L_" ptx+
-    ifge-target ifge-target-len @ ptx+ s" ;" ptx+ ptx-nl ;
+    ifge-pred @ ifge-src1 @ ifge-src2 @ isetp-lt,
+    0 ifge-pred @ bra-pred, ;
 
 \ ==============================================================================
 \ EXTENDED STATEMENT: Direct PTX-like instructions
@@ -1475,20 +1468,11 @@ variable ldst-type    \ 0=f32 1=u32
         2drop r> src-pos ! 0 ldst-type !
     then then
 
-    \ Emit address calc
-    ptx-indent s" mul.wide.u32 %rd30, " ptx+
-    ldst-offset @ ptx-r32 s" , 4;" ptx+ ptx-nl
-    ptx-indent s" add.u64 %rd31, " ptx+
-    ldst-base @ ptx-r64 s" , %rd30;" ptx+ ptx-nl
-
-    \ Emit load
-    ldst-type @ 0= if
-        ptx-indent s" ld.global.f32 " ptx+
-        ldst-dst @ ptx-freg s" , [%rd31];" ptx+ ptx-nl
-    else
-        ptx-indent s" ld.global.u32 " ptx+
-        ldst-dst @ ptx-r32 s" , [%rd31];" ptx+ ptx-nl
-    then ;
+    \ SASS: ldg-off rd, ra, byte_offset (offset=idx*4)
+    \ We use imad to compute byte offset into a temp reg, then ldg-off
+    rreg+ >r   \ temp reg for byte offset
+    r@ ldst-offset @ 4 0 imad,   \ temp = idx * 4 + 0
+    ldst-dst @ ldst-base @ r> ldg-off, ;
 
 : emit-st-global-v2 ( -- )
     \ st.global BASE OFFSET SRC
@@ -1523,20 +1507,10 @@ variable ldst-type    \ 0=f32 1=u32
         2drop r> src-pos ! 0 ldst-type !
     then then
 
-    \ Emit address calc
-    ptx-indent s" mul.wide.u32 %rd30, " ptx+
-    ldst-offset @ ptx-r32 s" , 4;" ptx+ ptx-nl
-    ptx-indent s" add.u64 %rd31, " ptx+
-    ldst-base @ ptx-r64 s" , %rd30;" ptx+ ptx-nl
-
-    \ Emit store
-    ldst-type @ 0= if
-        ptx-indent s" st.global.f32 [%rd31], " ptx+
-        ldst-dst @ ptx-freg s" ;" ptx+ ptx-nl
-    else
-        ptx-indent s" st.global.u32 [%rd31], " ptx+
-        ldst-dst @ ptx-r32 s" ;" ptx+ ptx-nl
-    then ;
+    \ SASS: stg-off ra, rs, byte_offset
+    rreg+ >r   \ temp reg for byte offset
+    r@ ldst-offset @ 4 0 imad,   \ temp = idx * 4 + 0
+    ldst-base @ ldst-dst @ r> stg-off, ;
 
 \ ---- Shared memory load/store ------------------------------------------------
 \ ld.shared DST SHMEM_NAME OFFSET
