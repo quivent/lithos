@@ -234,11 +234,11 @@ cubin_embed:       .asciz "embed_f16.cubin"
 cubin_norm:        .asciz "norm.cubin"
 cubin_proj:        .asciz "gptq_gemv_safe.cubin"    // was projection.cubin
 cubin_attn:        .asciz "attention_score.cubin"
-cubin_recur:       .asciz "recurrence.cubin"
+cubin_recur:       .asciz "recur.cubin"
 cubin_activate:    .asciz "activate.cubin"
 cubin_rope:        .asciz "rotate.cubin"
 cubin_gate_sig:    .asciz "gate_sigmoid.cubin"
-cubin_conv1d:      .asciz "recur.cubin"
+cubin_conv1d:      .asciz "conv1d.cubin"
 cubin_l2norm:      .asciz "reduce.cubin"
 
 // Kernel function names (must match symbols inside the cubins)
@@ -246,11 +246,11 @@ kname_embed:       .asciz "embed_f16"
 kname_norm:        .asciz "norm"
 kname_proj:        .asciz "gptq_gemv_safe"           // was "projection"
 kname_attn:        .asciz "attention_score"
-kname_recur:       .asciz "recurrence"
+kname_recur:       .asciz "deltanet_step"
 kname_activate:    .asciz "activate"
 kname_rope:        .asciz "rotate"
 kname_gate_sig:    .asciz "gate_sigmoid"
-kname_conv1d:      .asciz "conv1d_infer"
+kname_conv1d:      .asciz "conv1d"
 kname_l2norm:      .asciz "l2norm"
 cubin_lm_head:     .asciz "lm_head.cubin"
 kname_lm_head:     .asciz "lm_head"
@@ -1949,21 +1949,20 @@ launch_attention:
 // ============================================================
 // launch_recurrence -- launch DeltaNet recurrence kernel
 // ============================================================
-// Kernel signature: recurrence(state, k, v, q, gate, beta, output,
-//                               num_heads, key_dim, value_dim)
-//   param[0]: .u64 state_ptr   -- dn_state_ptr + dn_layer_idx * DN_PER_LAYER
-//   param[1]: .u64 k_ptr       -- QKV buffer + 8192 (K slice)
-//   param[2]: .u64 v_ptr       -- QKV buffer + 16384 (V slice)
-//   param[3]: .u64 q_ptr       -- QKV buffer + 0 (Q slice)
-//   param[4]: .u64 gate_ptr    -- WS_DN_A_LOG (decay gate from model)
-//   param[5]: .u64 beta_ptr    -- WS_DN_DT_BIAS (dt bias from model)
-//   param[6]: .u64 output_ptr  -- "other" act buffer (recurrence output)
-//   param[7]: .u32 num_heads   -- 16 (linear_num_key_heads)
-//   param[8]: .u32 key_dim     -- 128 (linear_key_head_dim)
-//   param[9]: .u32 value_dim   -- 128 (linear_value_head_dim)
+// Kernel: deltanet_step(state, query, _unused, key, value, output, count)
+//   Verified from recur.cubin SASS (non-cluster, no shared memory needed).
+//   param[0]: .u64 state_ptr   -- dn_state_ptr + dn_layer_idx * DN_PER_LAYER (f32, read/write)
+//   param[1]: .u64 q_ptr       -- QKV buffer + 0 (Q slice, bf16)
+//   param[2]: .u64 _unused_ptr -- any valid ptr (not accessed by kernel)
+//   param[3]: .u64 k_ptr       -- QKV buffer + 8192 (K slice, bf16)
+//   param[4]: .u64 v_ptr       -- QKV buffer + 16384 (V slice, bf16)
+//   param[5]: .u64 output_ptr  -- "other" act buffer (recurrence output, f32)
+//   param[6]: .u32 count       -- num_heads * key_dim = 16 * 128 = 2048
 //
-// dn_layer_idx is read from dn_layer_counter (NOT the same as layer_idx).
-// Grid: 16 blocks (one per head), Block: 128 threads, SharedMem: 32768
+// Operation: state_new[i] = value[i] * key[i] + state[i]
+//            output[i] = query[i] * state_new[i]
+//
+// Grid: ceil(count/256) = ceil(2048/256) = 8 blocks, Block: 256 threads, SharedMem: 0
 .align 4
 launch_recurrence:
     stp     x29, x30, [sp, #-16]!
@@ -1999,74 +1998,53 @@ launch_recurrence:
 .recur_qkv_done:
     // x9 = QKV buffer base
 
-    // param[1] = k_ptr: QKV base + 8192
+    // param[1] = q_ptr: QKV base + 0 (Q slice)
+    str     x9, [x1, #8]              // param[1] = q_ptr
+
+    // param[2] = _unused (pass state_ptr as safe valid ptr)
+    str     x9, [x1, #16]             // param[2] = (unused, any valid ptr)
+
+    // param[3] = k_ptr: QKV base + 8192 (K slice, 16*128*bf16)
     add     x3, x9, #8192
-    str     x3, [x1, #8]              // param[1] = k_ptr
+    str     x3, [x1, #24]             // param[3] = k_ptr
 
-    // param[2] = v_ptr: QKV base + 16384
+    // param[4] = v_ptr: QKV base + 16384 (V slice, 16*128*bf16)
     add     x3, x9, #16384
-    str     x3, [x1, #16]             // param[2] = v_ptr
+    str     x3, [x1, #32]             // param[4] = v_ptr
 
-    // param[3] = q_ptr: QKV base + 0
-    str     x9, [x1, #24]             // param[3] = q_ptr
+    // param[5] = output_ptr: reuse QKV buffer (QKV consumed, output is f32 per element)
+    str     x9, [x1, #40]             // param[5] = output_ptr
 
-    // param[4] = gate_ptr: WS_DN_A_LOG (decay gate)
-    ldr     x3, [x23, #(WS_DN_A_LOG * 8)]
-    str     x3, [x1, #32]             // param[4] = gate_ptr
-
-    // param[5] = beta_ptr: WS_DN_DT_BIAS
-    ldr     x3, [x23, #(WS_DN_DT_BIAS * 8)]
-    str     x3, [x1, #40]             // param[5] = beta_ptr
-
-    // param[6] = output_ptr: the "other" act buffer
-    // NOTE: recurrence output is VALUE_DIM*4=24576 bytes, which exceeds
-    // ACT_BUF_SIZE=20480. Buffer allocation needs to be enlarged to >=24576.
-    // For now, we write to the same "other" buffer (QKV data is consumed).
-    str     x9, [x1, #48]             // param[6] = output_ptr (reuse QKV buffer)
-
-    // param[7] = num_heads (u32) = 16
-    mov     w3, #16
-    str     w3, [x1, #56]             // param[7] = num_heads
-
-    // param[8] = key_dim (u32) = 128
-    mov     w3, #128
-    str     w3, [x1, #60]             // param[8] = key_dim
-
-    // param[9] = value_dim (u32) = 128
-    mov     w3, #128
-    str     w3, [x1, #64]             // param[9] = value_dim
+    // param[6] = count = 16 * 128 = 2048 (u32)
+    mov     w3, #2048
+    str     w3, [x1, #48]             // param[6] = count (u32)
 
     // ---- Build param_ptrs array ----
     mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]              // &param[0] = state
     add     x3, x1, #8
-    str     x3, [x2, #8]              // &param[1] = k
+    str     x3, [x2, #8]              // &param[1] = q
     add     x3, x1, #16
-    str     x3, [x2, #16]             // &param[2] = v
+    str     x3, [x2, #16]             // &param[2] = unused
     add     x3, x1, #24
-    str     x3, [x2, #24]             // &param[3] = q
+    str     x3, [x2, #24]             // &param[3] = k
     add     x3, x1, #32
-    str     x3, [x2, #32]             // &param[4] = gate
+    str     x3, [x2, #32]             // &param[4] = v
     add     x3, x1, #40
-    str     x3, [x2, #40]             // &param[5] = beta
+    str     x3, [x2, #40]             // &param[5] = output
     add     x3, x1, #48
-    str     x3, [x2, #48]             // &param[6] = output
-    add     x3, x1, #56
-    str     x3, [x2, #56]             // &param[7] = num_heads
-    add     x3, x1, #60
-    str     x3, [x2, #64]             // &param[8] = key_dim
-    add     x3, x1, #64
-    str     x3, [x2, #72]             // &param[9] = value_dim
+    str     x3, [x2, #48]             // &param[6] = count (u32)
 
     // ---- Launch kernel ----
     // x0 still holds KF_RECUR CUfunction from null-check load above
-    mov     x1, #16                 // gridX = 16 (linear_num_key_heads)
+    // Grid: ceil(2048/256) = 8 blocks, Block: 256 threads, SharedMem: 0
+    mov     x1, #8                  // gridX = 8
     mov     x2, #1
     mov     x3, #1
-    mov     x4, #128                // blockX = 128 (key_dim)
+    mov     x4, #256                // blockX = 256
     mov     x5, #1
     mov     x6, #1
-    mov     x7, #32768              // sharedMem = 128 * 128 * 2 = 32768
+    mov     x7, #0                  // sharedMem = 0 (no shared memory needed)
 
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
@@ -2537,7 +2515,7 @@ launch_z_proj:
     mov     x4, #64                 // blockX = 64 (kernel requires exactly 64 threads/block)
     mov     x5, #1                  // blockY
     mov     x6, #1                  // blockZ
-    mov     x7, #0                  // no shared mem
+    mov     x7, #20480              // sharedMem = K*4 = 5120*4 (input in smem)
 
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
@@ -2631,18 +2609,21 @@ launch_conv1d:
     // x13 = num_heads for this slice
 
     // ---- Build launch_params (x1 already set above) ----
+    // Kernel: conv1d(input_ptr, weight_ptr, hist_ptr, output_ptr, num_heads, channels)
+    // From conv1d.cubin SASS: 6 params (4 u64 ptrs + 2 u32)
+    // Grid = num_heads blocks, Block = 256 threads (threads >= channels exit)
 
-    // param[0] = input_ptr: QKV output buffer + data_offset
-    // QKV output is in the "other" act buffer (proj wrote to other)
+    // Compute input/output ptr: QKV output buffer + data_offset (in-place)
     cbz     x27, .conv1d_input_b
-    // x27=1 -> input is act_buf_b, so output (other) is act_buf_a
+    // x27=1 -> input buffer is act_buf_b, so QKV output went to act_buf_a
     add     x9, x20, x11              // act_buf_a + offset
     b       .conv1d_input_done
 .conv1d_input_b:
-    // x27=0 -> input is act_buf_a, so output (other) is act_buf_b
+    // x27=0 -> input buffer is act_buf_a, so QKV output went to act_buf_b
     add     x9, x21, x11              // act_buf_b + offset
 .conv1d_input_done:
-    str     x9, [x1, #0]              // param[0] = input_ptr
+    // param[0] = input_ptr
+    str     x9, [x1, #0]
 
     // param[1] = weight_ptr from model weights (WS_DN_CONV1D)
     ldr     x9, [x23, #(WS_DN_CONV1D * 8)]
@@ -2685,8 +2666,9 @@ launch_conv1d:
     add     x3, x1, #36
     str     x3, [x2, #40]             // &param[5] = channels
 
-    // ---- Compute gridX = ceil(num_heads * 128 / 256) ----
-    // Q/K: 16*128=2048, ceil(2048/256)=8
+    // ---- Compute gridX = num_heads ----
+    // Each block processes one head (channels threads per block)
+    mov     w9, w13                    // gridX = num_heads
     // V: 48*128=6144, ceil(6144/256)=24
     lsl     w9, w13, #7               // num_heads * 128
     add     w9, w9, #255
@@ -3267,10 +3249,9 @@ load_weights:
     b.lt    .shard_open_fail
     mov     x21, x0                // fd
 
-    // ---- Allocate pinned host memory via cuMemAllocHost (iter-17 fix) ----
-    // Replaces file-mmap + cuMemHostRegister which returned NOT_PERMITTED (801).
-    // cuMemAllocHost(void **pp, size_t bytesize) -- allocates page-locked host memory.
-    // GPU kernels can read pinned host memory directly without registration.
+    // ---- cuMemAllocHost + pread (iter-17 fix) ----
+    // File-backed mmap fails: cuMemHostRegister NOT_PERMITTED (801).
+    // Fix: cuMemAllocHost gives pinned host pages; pread fills them.
     stp     x23, x24, [sp, #-16]!
     stp     x25, x26, [sp, #-16]!
     stp     x27, x28, [sp, #-16]!
@@ -3279,79 +3260,65 @@ load_weights:
     add     x0, x0, :lo12:shard_alloc_ptr  // pp = &shard_alloc_ptr
     mov     x1, x28                         // bytesize = file_size
     bl      cuMemAllocHost
-    cbnz    x0, .shard_alloc_fail_restore   // non-zero return = CUDA error
+    cbnz    x0, .shard_alloc_fail
 
-    // Load the allocated host pointer
     adrp    x22, shard_alloc_ptr
     add     x22, x22, :lo12:shard_alloc_ptr
-    ldr     x22, [x22]                      // x22 = pinned host buffer base
+    ldr     x22, [x22]                      // x22 = pinned host buf ptr
 
     ldp     x27, x28, [sp], #16
     ldp     x25, x26, [sp], #16
     ldp     x23, x24, [sp], #16
 
-    // ---- pread loop: fill pinned buffer from shard file ----
-    // x21 = fd, x22 = buf_base, x28 = file_size
-    // x9 = offset into file, x10 = remaining bytes, x12 = write cursor
-    mov     x12, x22                        // write cursor = buffer start
-    mov     x9, #0                          // file offset = 0
-    mov     x10, x28                        // remaining = file_size
+    // pread loop: x21=fd, x22=buf, x28=file_size
+    mov     x12, x22                        // write cursor
+    mov     x9, #0                          // file offset
+    mov     x10, x28                        // remaining
 
 .shard_pread_loop:
     cbz     x10, .shard_pread_done
-    // chunk = min(remaining, 256MB)
     mov     x11, #(256 * 1024 * 1024)
     cmp     x10, x11
-    csel    x2, x10, x11, lo               // x2 = this chunk size
-    // pread64(fd, buf, count, offset)
+    csel    x2, x10, x11, lo               // chunk = min(remaining, 256MB)
     mov     x0, x21                         // fd
-    mov     x1, x12                         // destination
-    // x2 already set (chunk size)
-    mov     x3, x9                          // file offset
+    mov     x1, x12                         // buf
+    mov     x3, x9                          // offset
     mov     x8, #SYS_PREAD64
     svc     #0
     cmp     x0, #0
-    b.le    .shard_pread_fail               // 0=EOF or negative=error
-    add     x12, x12, x0                    // advance write cursor
-    add     x9, x9, x0                      // advance file offset
-    sub     x10, x10, x0                    // decrement remaining
+    b.le    .shard_pread_fail
+    add     x12, x12, x0
+    add     x9, x9, x0
+    sub     x10, x10, x0
     b       .shard_pread_loop
 
 .shard_pread_done:
-    // Store shard base pointer (pinned host memory)
     adrp    x1, shard_bases
     add     x1, x1, :lo12:shard_bases
     str     x22, [x1, x26, lsl #3]
 
-    // Store shard size
     adrp    x1, shard_sizes
     add     x1, x1, :lo12:shard_sizes
     str     x28, [x1, x26, lsl #3]
 
-    // Close fd (buffer is independent)
     mov     x0, x21
     mov     x8, #SYS_CLOSE
     svc     #0
-    b       .shard_loop_next
+    // Next shard
+    add     x26, x26, #1
+    b       .shard_loop
 
-.shard_alloc_fail_restore:
+.shard_alloc_fail:
     ldp     x27, x28, [sp], #16
     ldp     x25, x26, [sp], #16
     ldp     x23, x24, [sp], #16
     b       .shard_mmap_fail
 
 .shard_pread_fail:
-    // Close fd and fall through to error
     mov     x0, x21
     mov     x8, #SYS_CLOSE
     svc     #0
     b       .shard_mmap_fail
-
-.shard_loop_next:
-    // Next shard
-    add     x26, x26, #1
-    b       .shard_loop
-
 .shards_done:
     // Store num_shards_loaded
     adrp    x0, num_shards_loaded
