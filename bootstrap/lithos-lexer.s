@@ -123,6 +123,7 @@
 .equ TOK_SQRT,      79      // √ E2 88 9A
 .equ TOK_SIN,       80      // ≅ E2 89 85
 .equ TOK_COS,       81      // ≡ E2 89 A1
+.equ TOK_TRAP,      89      // trap (syscall)
 
 .equ LEX_MAX_TOKENS, 87381  // 262143 / 3
 
@@ -175,6 +176,8 @@ lex_kw_table:
     .ascii "exit"
     .byte 4, TOK_HOST
     .ascii "host"
+    .byte 4, TOK_TRAP
+    .ascii "trap"
     .byte 4, TOK_TRAP
     .ascii "trap"
     // 5-char

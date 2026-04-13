@@ -511,6 +511,7 @@ parse_comp_call build/lithos-parser.o
 parse_composition build/lithos-parser.o
 parse_composition_or_stmt build/lithos-parser.o
 parse_const_decl build/lithos-parser.o
+parse_dollar_reg build/lithos-parser.o
 parse_each build/lithos-parser.o
 parse_error build/lithos-parser.o
 parse_error_regspill build/lithos-parser.o
