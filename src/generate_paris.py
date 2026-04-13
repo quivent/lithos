@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cuda_driver import CUDADriver, CUdeviceptr
 from loader import LithosModel
 from tokenizer import Tokenizer
+from kv_cache import KVCache
+from attention import process_qkv_with_rope, attention_prefill
 
 MODEL_DIR = "/home/ubuntu/models/Huihui-Qwen3.5-27B-abliterated-GPTQ-W4A16"
 KERNEL_DIR = str(Path(__file__).resolve().parent.parent / "kernels")
@@ -165,11 +167,11 @@ class PrefillEngine:
         for i in range(NUM_LAYERS):
             prefix = f"model.language_model.layers.{i}"
             self.input_norms.append(
-                load_norm_weight(self.model, f"{prefix}.input_layernorm.weight"))
+                load_norm_weight(self.model, f"{prefix}.input_layernorm.weight") + 1.0)
             self.post_attn_norms.append(
-                load_norm_weight(self.model, f"{prefix}.post_attention_layernorm.weight"))
-        self.final_norm_w = load_norm_weight(self.model, "model.language_model.norm.weight")
-        print(f"    {NUM_LAYERS * 2 + 1} norm weights preloaded")
+                load_norm_weight(self.model, f"{prefix}.post_attention_layernorm.weight") + 1.0)
+        self.final_norm_w = load_norm_weight(self.model, "model.language_model.norm.weight") + 1.0
+        print(f"    {NUM_LAYERS * 2 + 1} norm weights preloaded (with +1.0 for Qwen3NextRMSNorm)")
 
     def _preload_deltanet_weights(self):
         """Preload all DeltaNet CPU-side weights to avoid repeated I/O."""
@@ -391,20 +393,20 @@ class PrefillEngine:
         k = qkv_conv[2048:4096].reshape(NUM_KEY_HEADS, KEY_HEAD_DIM)
         v = qkv_conv[4096:].reshape(NUM_VALUE_HEADS, VALUE_HEAD_DIM)
 
-        # --- Q and K RMS normalization + scaling ---
-        # From fused_gdn kernel: q_scale = rms_norm(q) * (1/dk), k_scale = rms_norm(k) * (1/sqrt(dk))
-        inv_scale = KEY_HEAD_DIM ** -0.5  # 1/sqrt(128)
+        # --- Q and K L2 normalization + Q scaling ---
+        # L2 normalize Q and K per head, then scale Q by 1/sqrt(head_dim)
         for hi in range(NUM_KEY_HEADS):
-            q_rms = np.sqrt(np.mean(q[hi] ** 2) + 1e-6)
-            q[hi] = (q[hi] / q_rms) * (inv_scale ** 2)  # = q_normed / dk
-            k_rms = np.sqrt(np.mean(k[hi] ** 2) + 1e-6)
-            k[hi] = (k[hi] / k_rms) * inv_scale  # = k_normed / sqrt(dk)
+            q_norm = np.sqrt(np.sum(q[hi] ** 2) + 1e-6)
+            q[hi] = q[hi] / q_norm
+            k_norm = np.sqrt(np.sum(k[hi] ** 2) + 1e-6)
+            k[hi] = k[hi] / k_norm
+        q = q * (1.0 / np.sqrt(float(KEY_HEAD_DIM)))  # scale Q by 1/sqrt(128)
 
-        # --- Beta (from in_proj_a) ---
-        beta = 1.0 / (1.0 + np.exp(-(self.dn_a_weight[layer_idx] @ normed_cpu).clip(-80, 80)))
+        # --- Beta (from in_proj_b) ---
+        beta = 1.0 / (1.0 + np.exp(-(self.dn_b_weight[layer_idx] @ normed_cpu).clip(-80, 80)))
 
-        # --- dt/decay (from in_proj_b) ---
-        dt = self.dn_b_weight[layer_idx] @ normed_cpu + self.dn_dt_bias[layer_idx]
+        # --- dt/decay (from in_proj_a) ---
+        dt = self.dn_a_weight[layer_idx] @ normed_cpu + self.dn_dt_bias[layer_idx]
         dt = np.log1p(np.exp(dt.clip(-20, 20)))  # softplus
 
         # Gate = exp(-A_exp * dt) where A_exp = exp(A_log) (positive)
@@ -581,6 +583,14 @@ class PrefillEngine:
             print(f"    {rank+1}. token={idx:6d} logit={logits[idx]:8.3f} '{word}'")
 
         print(f"\n  Generated token: {token_out} = '{token_text}'")
+
+        # Check where "Paris" / " Paris" rank
+        for candidate in ["Paris", " Paris"]:
+            cand_ids = self.tok.encode(candidate)
+            for cid in cand_ids:
+                rank = int(np.sum(logits > logits[cid])) + 1
+                cword = self.tok.decode([cid])
+                print(f"  '{candidate}' (id={cid}, decoded='{cword}'): logit={logits[cid]:.3f}, rank={rank}")
 
         return token_out, token_text, logits
 

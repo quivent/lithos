@@ -2,6 +2,9 @@
 
 Writing on silicon — a Forth-derived GPU compute language for the GH200
 
+📖 **Documentation:** [docs-delta-mauve.vercel.app](https://docs-delta-mauve.vercel.app)
+📦 **GitHub:** [github.com/quivent/lithos](https://github.com/quivent/lithos)
+
 ## What Lithos Is
 
 **Lithos is a Forth-derived language with three backends.** One source language. Three outputs: **PTX** text for NVIDIA GPUs, raw **SASS** binary for Hopper, and **ARM64** machine code for the Grace host. A single Lithos program describes both the GPU kernels and the CPU-side orchestrator; the compiler routes each definition to the right backend based on whether it is declared `kernel` or `host`.

@@ -177,7 +177,7 @@ def main() -> int:
     gpu.synchronize()
 
     # Timed run
-    NRUNS = 5
+    NRUNS = 20
     gpu.memcpy_htod(d_ref_output, zero_buf.ctypes.data_as(ctypes.c_void_p), N * 4)
     t0 = time.perf_counter()
     for _ in range(NRUNS):
@@ -219,13 +219,13 @@ def main() -> int:
     d_tc_output = gpu.mem_alloc(N * 4)
     gpu.memcpy_htod(d_tc_output, zero_buf.ctypes.data_as(ctypes.c_void_p), N * 4)
 
-    print(f"  Launching: grid=({GRID_TC}, 1, 1), block=(128, 1, 1)")
+    print(f"  Launching: grid=({GRID_TC}, 1, 1), block=(256, 1, 1)")
 
     # Warmup
     gpu.launch(
         tc_func,
         grid=(GRID_TC, 1, 1),
-        block=(128, 1, 1),
+        block=(256, 1, 1),
         args=[
             ctypes.c_uint64(qweight_ptr),
             ctypes.c_uint64(scales_ptr),
@@ -234,7 +234,7 @@ def main() -> int:
             ctypes.c_uint32(N),
             ctypes.c_uint32(K),
         ],
-        shared_mem=14464,
+        shared_mem=20768,
     )
     gpu.synchronize()
 
@@ -245,7 +245,7 @@ def main() -> int:
         gpu.launch(
             tc_func,
             grid=(GRID_TC, 1, 1),
-            block=(128, 1, 1),
+            block=(256, 1, 1),
             args=[
                 ctypes.c_uint64(qweight_ptr),
                 ctypes.c_uint64(scales_ptr),
@@ -254,7 +254,7 @@ def main() -> int:
                 ctypes.c_uint32(N),
                 ctypes.c_uint32(K),
             ],
-            shared_mem=14464,
+            shared_mem=20768,
         )
     gpu.synchronize()
     t1 = time.perf_counter()

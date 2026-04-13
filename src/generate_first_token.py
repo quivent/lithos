@@ -178,18 +178,23 @@ class InferenceEngine:
         print(f"    GPU buffers allocated")
 
     def _preload_norms(self):
-        """Preload all norm weights into CPU arrays."""
+        """Preload all norm weights into CPU arrays.
+
+        Qwen3NextRMSNorm uses (1 + weight) * norm(x), but our GPU norm kernel
+        multiplies by weight directly.  We add 1.0 to all norm weights here
+        so the kernel produces the correct result.
+        """
         self.input_norms = []
         self.post_attn_norms = []
         for i in range(NUM_LAYERS):
             prefix = f"model.language_model.layers.{i}"
             self.input_norms.append(
-                load_norm_weight(self.model, f"{prefix}.input_layernorm.weight"))
+                load_norm_weight(self.model, f"{prefix}.input_layernorm.weight") + 1.0)
             self.post_attn_norms.append(
-                load_norm_weight(self.model, f"{prefix}.post_attention_layernorm.weight"))
+                load_norm_weight(self.model, f"{prefix}.post_attention_layernorm.weight") + 1.0)
 
-        self.final_norm_w = load_norm_weight(self.model, "model.language_model.norm.weight")
-        print(f"    {NUM_LAYERS * 2 + 1} norm weights preloaded")
+        self.final_norm_w = load_norm_weight(self.model, "model.language_model.norm.weight") + 1.0
+        print(f"    {NUM_LAYERS * 2 + 1} norm weights preloaded (with +1.0 for Qwen3NextRMSNorm)")
 
     # ------------------------------------------------------------------
     # GPU kernel wrappers
@@ -455,6 +460,16 @@ class InferenceEngine:
         q = qkv_conv[:2048].reshape(16, 128)    # 16 key heads, 128 dim
         k = qkv_conv[2048:4096].reshape(16, 128)
         v = qkv_conv[4096:].reshape(48, 128)    # 48 value heads, 128 dim
+
+        # L2 normalize Q and K per head
+        for hi in range(16):
+            q_norm = np.sqrt(np.sum(q[hi] ** 2) + 1e-6)
+            q[hi] = q[hi] / q_norm
+            k_norm = np.sqrt(np.sum(k[hi] ** 2) + 1e-6)
+            k[hi] = k[hi] / k_norm
+
+        # Scale Q by 1/sqrt(head_dim)
+        q = q * (1.0 / np.sqrt(128.0))
 
         # --- Step 3: Compute beta (controls state update) ---
         # beta = sigmoid(in_proj_b @ x)  -- shape [48] (one per value head)
