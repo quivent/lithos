@@ -1,28 +1,24 @@
 // gptq_gemv_tc.ptx -- GPTQ W4A16 GEMV using tensor cores (mma.sync.m16n8k16)
 //
 // Computes: output[n] = sum_k( dequant(qweight[k/8, n], k%8) * input[k] )
-//   where dequant(packed, bit) = ((packed >> (bit*4)) & 0xF - 8.0) * scales[k/128, n]
+//   where dequant = ((nibble - 8) * scale)
 //
-// qweight layout: [K/8, N] int32 row-major  (each int32 packs 8 W4 values)
-// scales layout:  [K/128, N] float16 row-major
-// input layout:   [K] float32
-// output layout:  [N] float32
+// qweight: [K/8, N] int32 row-major
+// scales:  [K/128, N] float16 row-major
+// input:   [K] float32
+// output:  [N] float32
 //
-// Design:
-//   Block: 128 threads = 4 warps, each warp handles 32 N-columns (4 n-tiles of 8)
-//   Total: 128 output columns per block. Grid: ceil(N/128).
-//   K loop in steps of 16 (matching mma k-dim).
+// Block: 128 threads = 4 warps, 32 output cols per warp, 128 cols/block.
+// Grid: ceil(N/128).
+// K loop in steps of 16. A and B tiles staged through shared memory.
 //
-//   A-operand (input vector): constructed in registers.
-//   Since all 16 M-rows are identical (replicated input), the A-fragment for
-//   mma.m16n8k16 is the same for all threads at the same lane%4 position.
-//   Thread t's A-fragment contains input[k + (t%4)*2 + {0,1,8,9}].
+// Shared memory:
+//   X_smem: K*4 bytes (input vector f32, loaded once)
+//   A_smem: 512 bytes (16x16 f16, replicated input for ldmatrix)
+//   B_smem: 4096 bytes (16x128 f16, dequantized weights)
+//   Total: K*4 + 4608 bytes
 //
-//   B-operand (weight): dequantized into B_smem (16 x 128 f16), then loaded via ldmatrix.
-//
-//   Shared memory: X_smem (K*4 bytes, input f32) + B_smem (4096 bytes, deq weights f16)
-//
-// Launch: grid=(ceil(N/128),1,1), block=(128,1,1), smem = K*4 + 4096
+// Launch: grid=(ceil(N/128),1,1), block=(128,1,1), smem=K*4+4608
 
 .version 8.5
 .target sm_90
@@ -45,7 +41,7 @@
     .reg .f16x2 %h<40>;
     .reg .b32   %b<60>;
     .reg .pred  %p<20>;
-    .reg .b16   %htmp, %htmp2;
+    .reg .b16   %htmp;
     .reg .f32   %scale;
     .reg .b16   %scale_h;
     .reg .u32   %packed0, %packed1;
@@ -53,7 +49,6 @@
     .reg .f32   %dq;
     .reg .b16   %dq_h;
 
-    // ---- Load parameters ----
     ld.param.u64    %rd0, [qweight_ptr];
     ld.param.u64    %rd1, [scales_ptr];
     ld.param.u64    %rd2, [input_ptr];
@@ -61,28 +56,25 @@
     ld.param.u32    %r0,  [param_N];
     ld.param.u32    %r1,  [param_K];
 
-    mov.u32         %r3,  %tid.x;           // 0..127
+    mov.u32         %r3,  %tid.x;
     mov.u32         %r4,  %ctaid.x;
     and.b32         %r6,  %r3, 31;          // lane id
-    shr.b32         %r7,  %r3, 5;           // warp id (0..3)
+    shr.b32         %r7,  %r3, 5;           // warp id
 
-    // N-tile origin: ctaid.x * 128
-    shl.b32         %r10, %r4, 7;
+    shl.b32         %r10, %r4, 7;           // tile origin
     setp.ge.u32     %p0, %r10, %r0;
     @%p0 bra        DONE;
 
-    // ================================================================
-    // Shared memory:
-    //   [0, K*4)            : X_smem (input vector, f32)
-    //   [K*4, K*4+4096)     : B_smem (dequantized weight tile, 16x128 f16)
-    // ================================================================
-    mov.u32         %r20, smem_base;        // X_smem base
-    shl.b32         %r21, %r1, 2;           // K*4
-    add.u32         %r23, %r20, %r21;       // B_smem base
+    // Shared memory layout:
+    //   [0, K*4)                 : X_smem
+    //   [K*4, K*4+512)           : A_smem (16x16 f16)
+    //   [K*4+512, K*4+512+4096)  : B_smem (16x128 f16)
+    mov.u32         %r20, smem_base;
+    shl.b32         %r21, %r1, 2;
+    add.u32         %r22, %r20, %r21;       // A_smem base
+    add.u32         %r23, %r22, 512;        // B_smem base
 
-    // ================================================================
     // Load input vector into X_smem
-    // ================================================================
     mov.u32         %r30, %r3;
 LOAD_X:
     setp.ge.u32     %p1, %r30, %r1;
@@ -99,105 +91,71 @@ LOAD_X:
 LOAD_X_DONE:
     bar.sync        0;
 
-    // ================================================================
-    // Precompute constants
-    // ================================================================
+    // Precompute
     shl.b32         %r40, %r7, 5;           // warp_id * 32
     add.u32         %r41, %r10, %r40;       // warp's global col base
-
-    shl.b32         %r42, %r0, 2;           // N * 4 (qweight row stride bytes)
+    shl.b32         %r42, %r0, 2;           // N * 4 (qweight stride)
     cvt.u64.u32     %rd20, %r42;
-    shl.b32         %r43, %r0, 1;           // N * 2 (scales row stride bytes)
+    shl.b32         %r43, %r0, 1;           // N * 2 (scales stride)
     cvt.u64.u32     %rd21, %r43;
+    add.u32         %r44, %r10, %r3;        // thread's global col
+    setp.ge.u32     %p3, %r44, %r0;
 
-    // Thread's global column (for B loading)
-    add.u32         %r44, %r10, %r3;        // tile_origin + tid
-    setp.ge.u32     %p3, %r44, %r0;         // OOB check
-
-    // Lane decomposition for MMA A-fragment
-    and.b32         %r45, %r6, 3;           // lane % 4
-    shl.b32         %r46, %r45, 1;          // (lane%4)*2 = k_base_lo
-
-    // ldmatrix lane decomposition
+    // ldmatrix lane mapping
     and.b32         %r90, %r6, 15;          // lane % 16
     shr.b32         %r91, %r6, 4;           // lane / 16
 
-    // ================================================================
-    // Initialize accumulators
-    // ================================================================
-    mov.f32         %f0,  0f00000000;
-    mov.f32         %f1,  0f00000000;
-    mov.f32         %f2,  0f00000000;
-    mov.f32         %f3,  0f00000000;
-    mov.f32         %f4,  0f00000000;
-    mov.f32         %f5,  0f00000000;
-    mov.f32         %f6,  0f00000000;
-    mov.f32         %f7,  0f00000000;
-    mov.f32         %f8,  0f00000000;
-    mov.f32         %f9,  0f00000000;
-    mov.f32         %f10, 0f00000000;
-    mov.f32         %f11, 0f00000000;
-    mov.f32         %f12, 0f00000000;
-    mov.f32         %f13, 0f00000000;
-    mov.f32         %f14, 0f00000000;
-    mov.f32         %f15, 0f00000000;
+    // Init accumulators
+    mov.f32         %f0,  0f00000000; mov.f32 %f1,  0f00000000;
+    mov.f32         %f2,  0f00000000; mov.f32 %f3,  0f00000000;
+    mov.f32         %f4,  0f00000000; mov.f32 %f5,  0f00000000;
+    mov.f32         %f6,  0f00000000; mov.f32 %f7,  0f00000000;
+    mov.f32         %f8,  0f00000000; mov.f32 %f9,  0f00000000;
+    mov.f32         %f10, 0f00000000; mov.f32 %f11, 0f00000000;
+    mov.f32         %f12, 0f00000000; mov.f32 %f13, 0f00000000;
+    mov.f32         %f14, 0f00000000; mov.f32 %f15, 0f00000000;
 
-    // Scale tracking
-    mov.u32         %r55, 0;                // current_group_row
-    mov.u32         %r56, 128;              // next_group_boundary
+    mov.u32         %r55, 0;                // scale group_row
+    mov.u32         %r56, 128;              // next boundary
 
-    // ================================================================
-    // MAIN K LOOP -- steps of 16
-    // ================================================================
-    mov.u32         %r50, 0;
+    mov.u32         %r50, 0;                // k_offset
 
 K_LOOP:
     setp.ge.u32     %p2, %r50, %r1;
     @%p2 bra        K_DONE;
 
     // ================================================================
-    // Step 1: Construct A-fragment in registers from X_smem
-    //
-    // For mma.sync.m16n8k16 A-operand (row-major), thread t holds:
-    //   a0 = {f16(input[k + (t%4)*2]),     f16(input[k + (t%4)*2 + 1])}
-    //   a1 = {f16(input[k + (t%4)*2 + 8]), f16(input[k + (t%4)*2 + 9])}
-    //   a2 = a0  (same because all rows identical)
-    //   a3 = a1  (same because all rows identical)
+    // Build A_smem: 16 rows x 16 cols f16, all rows = input[k..k+15]
+    // 128 threads, 256 elements -> 2 elements per thread
     // ================================================================
+    // Pass 1: element e = tid (0..127)
+    and.b32         %r60, %r3, 15;          // col = tid % 16
+    add.u32         %r62, %r50, %r60;       // k_offset + col
+    shl.b32         %r63, %r62, 2;
+    add.u32         %r64, %r20, %r63;
+    ld.shared.f32   %f20, [%r64];
+    cvt.rn.f16.f32  %htmp, %f20;
+    shl.b32         %r65, %r3, 1;           // tid * 2
+    add.u32         %r66, %r22, %r65;
+    st.shared.b16   [%r66], %htmp;
 
-    // k_lo = k_offset + (lane%4)*2
-    add.u32         %r60, %r50, %r46;       // k_offset + (lane%4)*2
-
-    // Load 4 f32 input values, convert to f16, pack into f16x2
-    shl.b32         %r61, %r60, 2;
-    add.u32         %r62, %r20, %r61;       // X_smem addr for k_lo
-    ld.shared.f32   %f20, [%r62];           // input[k_lo]
-    ld.shared.f32   %f21, [%r62 + 4];       // input[k_lo + 1]
-    cvt.rn.f16x2.f32 %h0, %f21, %f20;      // a0 = {f16(lo), f16(hi)}
-
-    // k_hi = k_offset + (lane%4)*2 + 8
-    add.u32         %r63, %r60, 8;
-    shl.b32         %r64, %r63, 2;
-    add.u32         %r65, %r20, %r64;
-    ld.shared.f32   %f22, [%r65];           // input[k_hi]
-    ld.shared.f32   %f23, [%r65 + 4];       // input[k_hi + 1]
-    cvt.rn.f16x2.f32 %h1, %f23, %f22;      // a1
-
-    // a2 = a0, a3 = a1 (all rows identical)
-    mov.b32         %h2, %h0;
-    mov.b32         %h3, %h1;
+    // Pass 2: element e = tid + 128
+    add.u32         %r67, %r3, 128;
+    and.b32         %r68, %r67, 15;
+    add.u32         %r69, %r50, %r68;
+    shl.b32         %r70, %r69, 2;
+    add.u32         %r71, %r20, %r70;
+    ld.shared.f32   %f21, [%r71];
+    cvt.rn.f16.f32  %htmp, %f21;
+    shl.b32         %r72, %r67, 1;
+    add.u32         %r73, %r22, %r72;
+    st.shared.b16   [%r73], %htmp;
 
     // ================================================================
-    // Step 2: Dequantize weights into B_smem (16 rows x 128 cols, f16)
-    //
-    // Each thread handles 1 column (tid 0..127), loads 2 packed int32
-    // (for k_packed rows 0,1 of this K-step -> 16 nibbles -> 16 rows).
+    // Build B_smem: 16 rows x 128 cols f16
     // ================================================================
+    shr.b32         %r74, %r50, 3;          // k_packed_base
 
-    // k_packed_base
-    shr.b32         %r74, %r50, 3;
-
-    // Scale group update
     setp.lt.u32     %p4, %r50, %r56;
     @%p4 bra        SKIP_SCALE_UPDATE;
     shr.b32         %r55, %r50, 7;
@@ -205,7 +163,6 @@ K_LOOP:
     shl.b32         %r56, %r77, 7;
 SKIP_SCALE_UPDATE:
 
-    // Load scale
     mov.f32         %scale, 0f00000000;
     @%p3 bra        SKIP_SCALE_LOAD;
     cvt.u64.u32     %rd30, %r55;
@@ -218,7 +175,6 @@ SKIP_SCALE_UPDATE:
     cvt.f32.f16     %scale, %scale_h;
 SKIP_SCALE_LOAD:
 
-    // Load packed weights
     mov.u32         %packed0, 0;
     mov.u32         %packed1, 0;
     @%p3 bra        SKIP_WEIGHT_LOAD;
@@ -233,132 +189,108 @@ SKIP_SCALE_LOAD:
     ld.global.b32   %packed1, [%rd40];
 SKIP_WEIGHT_LOAD:
 
-    // Dequantize and store to B_smem
-    // B_smem: 16 rows x 128 cols, stride = 256 bytes. Col = tid.
+    // Dequantize to B_smem (16 rows x 128 cols, stride 256B)
     shl.b32         %r80, %r3, 1;
-    add.u32         %r81, %r23, %r80;       // B_smem + tid*2 (row 0)
+    add.u32         %r81, %r23, %r80;
 
-    // Row 0
     and.b32 %nib, %packed0, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; st.shared.b16 [%r81], %dq_h;
-    // Row 1
     shr.b32 %nib, %packed0, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 2
     shr.b32 %nib, %packed0, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 3
     shr.b32 %nib, %packed0, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 4
     shr.b32 %nib, %packed0, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 5
     shr.b32 %nib, %packed0, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 6
     shr.b32 %nib, %packed0, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 7
     shr.b32 %nib, %packed0, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
 
-    // Row 8
     and.b32 %nib, %packed1, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 9
     shr.b32 %nib, %packed1, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 10
     shr.b32 %nib, %packed1, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 11
     shr.b32 %nib, %packed1, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 12
     shr.b32 %nib, %packed1, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 13
     shr.b32 %nib, %packed1, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 14
     shr.b32 %nib, %packed1, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
-    // Row 15
     shr.b32 %nib, %packed1, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale;
     cvt.rn.f16.f32 %dq_h, %dq; add.u32 %r81, %r81, 256; st.shared.b16 [%r81], %dq_h;
 
     bar.sync        0;
 
     // ================================================================
-    // Step 3: Load B fragments via ldmatrix and issue mma.sync
+    // Load A via ldmatrix from A_smem (16x16 f16 row-major, stride=32B)
+    // ldmatrix.x4: lane addr = base + (lane%16)*32 + (lane/16)*16
     // ================================================================
+    shl.b32         %r92, %r90, 5;          // (lane%16) * 32
+    shl.b32         %r93, %r91, 4;          // (lane/16) * 16
+    add.u32         %r94, %r22, %r92;
+    add.u32         %r94, %r94, %r93;
 
-    // B_smem: 16 rows x 128 cols f16, stride = 256 bytes.
-    // Warp's 32-col slice starts at warp_id * 64 bytes.
-    // ldmatrix.x4.trans loads 16 rows x 16 cols per call.
-    // Lane addr: row = lane%16, col_group = lane/16
-    // addr = B_smem + warp_offset + (lane%16)*256 + (lane/16)*16
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16
+        {%b0, %b1, %b2, %b3}, [%r94];
 
-    shl.b32         %r95, %r7, 6;           // warp_id * 64 bytes
-    add.u32         %r96, %r23, %r95;       // B_smem + warp_offset
-
-    shl.b32         %r97, %r90, 8;          // (lane%16) * 256 bytes
-    shl.b32         %r98, %r91, 4;          // (lane/16) * 16 bytes
+    // Load B via ldmatrix from B_smem (16x128 f16, stride=256B)
+    // Warp's 32-col slice at offset warp_id * 64B
+    // Lane addr: base + warp_off + (lane%16)*256 + (lane/16)*16
+    shl.b32         %r95, %r7, 6;
+    add.u32         %r96, %r23, %r95;
+    shl.b32         %r97, %r90, 8;          // (lane%16) * 256
+    shl.b32         %r98, %r91, 4;          // (lane/16) * 16
     add.u32         %r99, %r96, %r97;
     add.u32         %r99, %r99, %r98;
 
-    // Load B n-tiles 0,1 (cols 0..15 of warp's 32)
+    // n-tiles 0,1 (cols 0..15 of warp's 32)
     ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
         {%b10, %b11, %b12, %b13}, [%r99];
-
-    // Load B n-tiles 2,3 (cols 16..31): advance by 32 bytes
+    // n-tiles 2,3 (cols 16..31)
     add.u32         %r100, %r99, 32;
     ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16
         {%b14, %b15, %b16, %b17}, [%r100];
 
-    // ---- 4 MMA operations ----
+    // A regs
+    mov.b32         %h0, %b0;
+    mov.b32         %h1, %b1;
+    mov.b32         %h2, %b2;
+    mov.b32         %h3, %b3;
+
+    // 4 MMA operations
     mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
         {%f0,%f1,%f2,%f3}, {%h0,%h1,%h2,%h3}, {%b10,%b11}, {%f0,%f1,%f2,%f3};
-
     mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
         {%f4,%f5,%f6,%f7}, {%h0,%h1,%h2,%h3}, {%b12,%b13}, {%f4,%f5,%f6,%f7};
-
     mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
         {%f8,%f9,%f10,%f11}, {%h0,%h1,%h2,%h3}, {%b14,%b15}, {%f8,%f9,%f10,%f11};
-
     mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
         {%f12,%f13,%f14,%f15}, {%h0,%h1,%h2,%h3}, {%b16,%b17}, {%f12,%f13,%f14,%f15};
 
-    // Barrier before next iteration writes to B_smem
     bar.sync        0;
     add.u32         %r50, %r50, 16;
     bra             K_LOOP;
 
 K_DONE:
-    // ================================================================
-    // Epilogue: extract row 0 results and write to output
-    //
-    // mma.sync.m16n8k16 accumulator layout per thread:
-    //   c0 = C[lane/4, (lane%4)*2]
-    //   c1 = C[lane/4, (lane%4)*2 + 1]
-    //   c2 = C[lane/4 + 8, (lane%4)*2]
-    //   c3 = C[lane/4 + 8, (lane%4)*2 + 1]
-    //
-    // For GEMV, all rows are identical. We need row 0.
-    // Threads with lane/4 == 0 (lanes 0,1,2,3) hold row 0 in c0, c1.
-    // ================================================================
-
+    // Epilogue: extract row 0 results
+    // c0 = C[lane/4, (lane%4)*2], c1 = C[lane/4, (lane%4)*2+1]
+    // Row 0 is held by threads with lane/4 == 0 (lanes 0,1,2,3)
     shr.b32         %r103, %r6, 2;
     setp.ne.u32     %p5, %r103, 0;
     @%p5 bra        DONE;
 
-    // Lanes 0-3 write their 2 outputs per n-tile
     and.b32         %r104, %r6, 3;
     shl.b32         %r105, %r104, 1;        // (lane%4)*2
 
-    // Helper macro: write f_lo, f_hi for n-tile at col_offset
-    // n-tile 0 (col offset 0)
+    // n-tile 0
     add.u32         %r106, %r41, %r105;
     setp.lt.u32     %p6, %r106, %r0;
     cvt.u64.u32     %rd50, %r106; shl.b64 %rd51, %rd50, 2; add.u64 %rd52, %rd3, %rd51;
@@ -368,7 +300,7 @@ K_DONE:
     cvt.u64.u32     %rd53, %r107; shl.b64 %rd54, %rd53, 2; add.u64 %rd55, %rd3, %rd54;
     @%p7 st.global.f32 [%rd55], %f1;
 
-    // n-tile 1 (col offset 8)
+    // n-tile 1
     add.u32         %r108, %r41, 8; add.u32 %r108, %r108, %r105;
     setp.lt.u32     %p8, %r108, %r0;
     cvt.u64.u32     %rd56, %r108; shl.b64 %rd57, %rd56, 2; add.u64 %rd58, %rd3, %rd57;
@@ -378,7 +310,7 @@ K_DONE:
     cvt.u64.u32     %rd59, %r109; shl.b64 %rd60, %rd59, 2; add.u64 %rd61, %rd3, %rd60;
     @%p9 st.global.f32 [%rd61], %f5;
 
-    // n-tile 2 (col offset 16)
+    // n-tile 2
     add.u32         %r110, %r41, 16; add.u32 %r110, %r110, %r105;
     setp.lt.u32     %p10, %r110, %r0;
     cvt.u64.u32     %rd62, %r110; shl.b64 %rd63, %rd62, 2; add.u64 %rd64, %rd3, %rd63;
@@ -388,7 +320,7 @@ K_DONE:
     cvt.u64.u32     %rd65, %r111; shl.b64 %rd66, %rd65, 2; add.u64 %rd67, %rd3, %rd66;
     @%p11 st.global.f32 [%rd67], %f9;
 
-    // n-tile 3 (col offset 24)
+    // n-tile 3
     add.u32         %r112, %r41, 24; add.u32 %r112, %r112, %r105;
     setp.lt.u32     %p12, %r112, %r0;
     cvt.u64.u32     %rd68, %r112; shl.b64 %rd69, %rd68, 2; add.u64 %rd70, %rd3, %rd69;

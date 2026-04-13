@@ -206,7 +206,7 @@ def main():
         denom = max(abs(ref_vals[i]), 1e-8)
         rel = err / denom
         max_rel_err = max(max_rel_err, rel)
-        if rel > 0.05:  # 5% tolerance for f16 rounding
+        if err > 0.01:  # absolute tolerance for f16 vs f32 precision
             n_wrong += 1
 
     print(f"Correctness check:")
