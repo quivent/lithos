@@ -62,7 +62,7 @@ MLP    # SwiGLU
   GateProjection
   UpProjection
   SiLU on gate
-  multiply gate by up
+  ** gate by up
   DownProjection
 
 
@@ -228,17 +228,17 @@ DecayGate a_proj dt_bias A_log
 DeltaUpdate S K V β decay
   V
   K
-  outer
+  ***
   S
   K
   K
-  outer
+  ***
   matmul
-  -
+  ---
   * β
   S
   * decay
-  +
+  +++
 
 
 OutputGate x output
@@ -279,7 +279,7 @@ shift_history
   history[3] = new input
 
 
-outer u v
+*** u v
   each i
     each j
       u[i] * v[j]

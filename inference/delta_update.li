@@ -3,7 +3,7 @@
 
 \ delta_update.li — GatedDeltaNet state recurrence (step 35 of STEPS decomposition)
 \
-\ S <- decay * S + beta * (V outer K - S . (K outer K))
+\ S <- decay * S + beta * (V *** K - S . (K *** K))
 \
 \ Equivalent expanded form per element:
 \   delta[j]   = v[j] - sum_i( k[i] * S[i,j] )     (kT @ S, per column)
