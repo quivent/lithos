@@ -165,6 +165,14 @@ def _load_libcuda() -> ctypes.CDLL:
     lib.cuFuncSetAttribute.argtypes = [CUfunction, c_int, c_int]
     lib.cuFuncSetAttribute.restype = CUresult
 
+    # -- cuMemsetD8_v2 --------------------------------------------------------
+    lib.cuMemsetD8_v2.argtypes = [CUdeviceptr, ctypes.c_ubyte, c_size_t]
+    lib.cuMemsetD8_v2.restype = CUresult
+
+    # -- cuMemsetD8Async -------------------------------------------------------
+    lib.cuMemsetD8Async.argtypes = [CUdeviceptr, ctypes.c_ubyte, c_size_t, CUstream]
+    lib.cuMemsetD8Async.restype = CUresult
+
     return lib
 
 
@@ -272,6 +280,21 @@ class CUDADriver:
             "cuMemcpyHtoDAsync_v2",
             self._lib.cuMemcpyHtoDAsync_v2(dst, src, c_size_t(nbytes), stream),
         )
+
+    def memset_d8(self, dst: CUdeviceptr, value: int, nbytes: int, stream: Any = None) -> None:
+        """Set *nbytes* at device address *dst* to *value* (0-255).
+        If *stream* is provided, the operation is asynchronous on that stream.
+        """
+        if stream is not None:
+            _check(
+                "cuMemsetD8Async",
+                self._lib.cuMemsetD8Async(dst, ctypes.c_ubyte(value), c_size_t(nbytes), stream),
+            )
+        else:
+            _check(
+                "cuMemsetD8_v2",
+                self._lib.cuMemsetD8_v2(dst, ctypes.c_ubyte(value), c_size_t(nbytes)),
+            )
 
     # -- Streams -------------------------------------------------------------
     def stream_create(self, flags: int = 0) -> CUstream:

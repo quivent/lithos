@@ -187,6 +187,9 @@ class PrefillEngine:
         proj_mod_old = gpu.load_cubin(f"{KERNEL_DIR}/gptq_matvec.cubin")
         self.proj_func_old = gpu.get_function(proj_mod_old, "gptq_matvec")
 
+        fast_mod = gpu.load_cubin(f"{KERNEL_DIR}/gptq_gemv_fast.cubin")
+        self.proj_func_fast = gpu.get_function(fast_mod, "gptq_gemv_fast")
+
         activate_mod = gpu.load_cubin(f"{CACHE_DIR}/activate.cubin")
         self.activate_func = gpu.get_function(activate_mod, "activate")
 
@@ -200,7 +203,7 @@ class PrefillEngine:
         self.recurrence_func = gpu.get_function(recurrence_mod, "recurrence")
         gpu.set_max_dynamic_shared(self.recurrence_func, 67080)
 
-        print("    embed_f16, norm, gptq_matvec_tc, activate, lm_head, recurrence: loaded")
+        print("    embed_f16, norm, gptq_matvec_tc, gptq_gemv_fast, activate, lm_head, recurrence: loaded")
 
     def _alloc_buffers(self):
         gpu = self.gpu
@@ -349,19 +352,18 @@ class PrefillEngine:
     def gpu_gptq_matvec(self, prefix, d_input, d_output, K, N, stream=None):
         qw_ptr = self.model.weight_info(f"{prefix}.qweight").ptr
         sc_ptr = self.model.weight_info(f"{prefix}.scales").ptr
-        zeros_buf = np.zeros(N, dtype=np.float32)
-        if stream is not None:
-            self.gpu.memcpy_htod_async(d_output,
-                                       zeros_buf.ctypes.data_as(ctypes.c_void_p),
-                                       N * 4, stream)
-        else:
-            self.gpu.memcpy_htod(d_output,
-                                 zeros_buf.ctypes.data_as(ctypes.c_void_p),
-                                 N * 4)
-        # Optimized tiled kernel with dynamic shared memory (K * 4 bytes for input vector)
+
+        # Zero the output buffer (required for atomicAdd in gptq_gemv_fast)
+        self.gpu.memset_d8(d_output, 0, N * 4, stream=stream)
+
+        K_SPLITS = 16
+        K_packed = K // 8
+        k_packed_per_split = K_packed // K_SPLITS
+        fast_smem = k_packed_per_split * 8 * 4  # k_packed_per_split * 32
+
         self.gpu.launch(
-            self.proj_func,
-            grid=(math.ceil(N / 128), 1, 1),
+            self.proj_func_fast,
+            grid=(math.ceil(N / 256), K_SPLITS, 1),
             block=(256, 1, 1),
             args=[
                 ctypes.c_uint64(qw_ptr),
@@ -370,8 +372,10 @@ class PrefillEngine:
                 ctypes.c_uint64(d_output.value),
                 ctypes.c_uint32(N),
                 ctypes.c_uint32(K),
+                ctypes.c_uint32(K_SPLITS),
+                ctypes.c_uint32(k_packed_per_split),
             ],
-            shared_mem=K * 4,
+            shared_mem=fast_smem,
             stream=stream,
         )
 
