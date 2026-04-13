@@ -1,92 +1,182 @@
-# Lithos Primitives
+# Primitives → SASS
 
-## Operations
+The Lithos language is 12 primitives. The compiler maps each to a known SASS
+implementation pattern on Hopper. Context (operand shape) selects the pattern.
 
-```
-+       add
-*       multiply
-/       divide
--       subtract (* -1 +)
-√       square root
-```
-
-## Constants
+## The 12 primitives
 
 ```
-e       2.71828182845904523536...
+*    +    -    /    exp    log    sqrt    1/    1/√    outer    project    matvec
 ```
 
-## Computation of Constants
+Everything else is a named composition of these. sigmoid = `* -1, exp, + 1, 1 /`.
+A DeltaNet layer is 66 of them in sequence.
 
-### e
+## Mapping
 
-e = exp(1) = the sum that never ends
+### `*` — multiply
+
+Context determines shape:
+
+| Usage | Meaning | SASS |
+|---|---|---|
+| `* -1` | negate | `FMUL Rd, Ra, -1.0` (FP32 core) |
+| `*` (self) | square | `FMUL Rd, Ra, Ra` (FP32 core) |
+| `* gamma` | scale by weight vector | stride loop: `LDG` weight + `FMUL Rd, Ra, Rb` per element |
+| `* (two vectors)` | elementwise multiply | stride loop: `LDG` both + `FMUL` per element |
+
+All cases: one `FMUL` per element, trivially parallel. Compiler emits
+parallel stride loop when operating on vectors.
+
+### `+` — add
+
+| Usage | Meaning | SASS |
+|---|---|---|
+| `+ 1` | add scalar | `FADD Rd, Ra, 1.0` (FP32 core) |
+| `+ (two vectors)` | elementwise add | stride loop: `LDG` both + `FADD` per element |
+| `+` (reduce) | sum all elements | **reduction pattern** (see below) |
+
+**Reduction pattern** (the only non-trivial implementation):
+1. Stride loop: each thread accumulates partial sum via `FFMA`/`FADD`
+2. Intra-warp: 5x `SHFL.BFLY` + `FADD` (butterfly reduction, 32 to 1)
+3. Cross-warp: `STS` to shared memory, `BAR.SYNC`, first warp loads + reduces
+4. Broadcast: `STS` result to smem[0], `BAR.SYNC`, all threads `LDS`
+
+This is the ONLY primitive that needs shared memory, barriers, and shuffles.
+The compiler derives all of it from the single word `+` applied to a vector.
+
+### `-` — subtract
+
+| Usage | Meaning | SASS |
+|---|---|---|
+| `- (two values)` | subtract | `FADD Rd, Ra, -Rb` (FP32 core, negate src modifier) |
+
+One instruction. Trivially parallel on vectors.
+
+### `/` — divide
+
+| Usage | Meaning | SASS |
+|---|---|---|
+| `/ D` | divide by constant | `MUFU.RCP Rt, D` (SFU) then `FMUL Rd, Ra, Rt` (FP32) |
+| `/ (two values)` | divide | `MUFU.RCP Rt, Rb` (SFU) then `FMUL Rd, Ra, Rt` (FP32) |
+
+Two instructions (reciprocal + multiply). SFU for the reciprocal.
+
+### `exp` — e^x
+
+| Usage | SASS |
+|---|---|
+| `exp` | `FMUL Rt, Ra, 1.442695` (FP32) then `MUFU.EX2 Rd, Rt` (SFU) |
+
+Two instructions. Convert to base-2 (multiply by log2(e)), then hardware exp2.
+
+### `log` — ln(x)
+
+| Usage | SASS |
+|---|---|
+| `log` | `MUFU.LG2 Rt, Ra` (SFU) then `FMUL Rd, Rt, 0.693147` (FP32) |
+
+Two instructions. Hardware log2, then convert to natural log (multiply by ln(2)).
+
+### `sqrt` — square root
+
+| Usage | SASS |
+|---|---|
+| `sqrt` | `MUFU.RSQ Rt, Ra` (SFU) then `MUFU.RCP Rd, Rt` (SFU) |
+
+Two SFU ops: reciprocal-square-root then reciprocal.
+
+### `1/` — reciprocal
+
+| Usage | SASS |
+|---|---|
+| `1/` | `MUFU.RCP Rd, Ra` (SFU) |
+
+One instruction.
+
+### `1/sqrt` — reciprocal square root
+
+| Usage | SASS |
+|---|---|
+| `1/sqrt` | `MUFU.RSQ Rd, Ra` (SFU) |
+
+One instruction. This is RMSNorm's core op.
+
+### `outer` — outer product (v tensor k)
+
+| Usage | SASS |
+|---|---|
+| `outer` | Nested loop: for each (i,j), `FFMA M[i,j], v[i], k[j], M[i,j]` |
+
+head_dim x head_dim iterations. Each is one `FFMA`. Parallelized across threads
+within a warp (each thread handles a tile of the output matrix). The tiling
+strategy is a compiler decision.
+
+Alternatively on Hopper: `HMMA` (tensor core) for FP16 outer products, if the
+dimensions align to 16x16x16 tiles.
+
+### `project` — matrix-vector multiply with learned weights
+
+| Usage | SASS |
+|---|---|
+| `project` | GPTQ W4A16 GEMV pattern |
+
+The heaviest primitive. Implementation per output element:
+1. Stride loop over K_packed (weight columns / 8)
+2. Per iteration: `LDG` packed u32, `LDG` scale
+3. 8x unroll: `LOP3` extract nibble, `I2F` convert, `FADD` zero-point, `FMUL` scale, `FFMA` accumulate
+4. Warp reduction: 5x `SHFL.BFLY` + `FADD`
+5. Cross-warp: smem reduction (same pattern as `+` reduce)
+
+40 SASS instructions per loop iteration (8 weights x 5 ops each). Memory-bandwidth
+bound. Compiler's job is coalesced loads and maximal FMA throughput per byte.
+
+Quantization scheme (W4A16, W8A16, NF4, etc.) parameterizes the dequant sequence
+inside step 3. The outer structure is identical.
+
+### `matvec` — matrix-vector multiply against state matrix
+
+| Usage | SASS |
+|---|---|
+| `matvec` | Dot product: for each head, `FFMA` across head_dim, then reduce |
+
+Simpler than `project` — state matrix is FP32, no dequant. Per head:
+1. Stride loop: `LDG` state row element + `LDG` query element
+2. `FFMA` accumulate
+3. Warp reduction (same shuffle tree)
+
+---
+
+## What the compiler derives (never in source)
+
+| Concept | Derived from | Implementation |
+|---|---|---|
+| Thread indexing | vector operand | `S2R SR_TID.X` + `S2R SR_CTAID.X` + `IMAD` |
+| Stride loops | vector length > blockDim | `ISETP` + `@P BRA` + `IADD3` stride |
+| Warp shuffle tree | `+` reduce on vector | 5x `SHFL.BFLY` + `FADD` |
+| Shared memory alloc | `+` reduce needing cross-warp | `STS` / `LDS` / `BAR.SYNC` |
+| Barriers | cross-warp communication | `BAR.SYNC` placed by compiler |
+| Register allocation | all live values | linear-scan allocator |
+| Coalesced access | array indexing pattern | address arithmetic |
+| Loop unrolling | `project` inner loop | compiler decides unroll factor |
+| Tiling | `outer`, `project` | compiler decides tile shape |
+| Grid sync | layer boundary in megakernel | cooperative barrier between layers |
+
+None of these appear in the source language. The 66 steps in STEPS are the
+complete source for a DeltaNet layer. The compiler handles everything below.
+
+---
+
+## Composition examples (from VOCABULARY.md)
 
 ```
-1
-+ 1
-+ 1 * 1 / 2
-+ 1 * 1 * 1 / 6
-+ 1 * 1 * 1 * 1 / 24
-+ 1 * 1 * 1 * 1 * 1 / 120
-+ 1 * 1 * 1 * 1 * 1 * 1 / 720
-...
+sigmoid     = * -1, exp, + 1, 1 /           4 SASS instructions
+SiLU        = * -1, exp, + 1, 1 /, *        5 SASS instructions
+RMSNorm     = *, +, / D, 1/sqrt, *          ~25 SASS instructions (reduction dominates)
+softplus    = exp, + 1, log                  5 SASS instructions
+L2Norm      = *, +, 1/sqrt, *               ~25 SASS instructions (reduction dominates)
 ```
 
-Which simplifies (since 1 * 1 = 1):
-
-```
-1
-+ 1
-+ 1 / 2
-+ 1 / 6
-+ 1 / 24
-+ 1 / 120
-+ 1 / 720
-+ 1 / 5040
-+ 1 / 40320
-+ 1 / 362880
-+ 1 / 3628800
-```
-
-Each denominator is the previous denominator multiplied by the next integer:
-
-```
-1
-1 * 2 = 2
-2 * 3 = 6
-6 * 4 = 24
-24 * 5 = 120
-120 * 6 = 720
-720 * 7 = 5040
-5040 * 8 = 40320
-40320 * 9 = 362880
-362880 * 10 = 3628800
-```
-
-At 10 terms: 2.71828180...
-At 12 terms: 2.71828182845...
-Float32 exact at 12 terms.
-
-In stack form:
-
-```
-1       // denominator
-1       // sum
-
-swap 1 * swap    // denom = 1
-1 over / +       // sum += 1/1
-
-swap 2 * swap    // denom = 2
-1 over / +       // sum += 1/2
-
-swap 3 * swap    // denom = 6
-1 over / +       // sum += 1/6
-
-swap 4 * swap    // denom = 24
-1 over / +       // sum += 1/24
-
-...12 times total
-```
-
-e is computed from: `+ * /` and the integers 1 through 12.
+Every composite is a sequence of primitives. The compiler concatenates their SASS
+patterns. Fusion is the default. There is nothing to fuse because nothing was
+ever separated.
