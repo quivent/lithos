@@ -1510,7 +1510,10 @@ v3_parse_composition:
 v3_parse_body:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
-    str     w9, [sp, #-16]!    // save body indent level
+    sub     sp, sp, #16
+    str     w9, [sp, #0]       // save body indent level
+    mov     w10, #1
+    str     w10, [sp, #4]      // saw_indent flag (1 = initially true since caller consumed indent)
 
 .Lv3_body_loop:
     cmp     x19, x27
@@ -1521,19 +1524,31 @@ v3_parse_body:
     b.eq    .Lv3_body_done
 
     cmp     w0, #TOK_NEWLINE
-    b.eq    .Lv3_body_skip
+    b.eq    .Lv3_body_newline
     cmp     w0, #TOK_INDENT
-    b.ne    .Lv3_body_line
+    b.eq    .Lv3_body_indent
 
-    // Check indent level
-    ldr     w9, [sp]           // reload saved indent
-    ldr     w1, [x19, #8]
-    cmp     w1, w9
-    b.lt    .Lv3_body_done      // dedent
+    // Statement token — check if we saw indent for this line
+    ldr     w10, [sp, #4]
+    cbz     w10, .Lv3_body_done  // no indent → dedent to column 0 → end of body
+    mov     w10, #0
+    str     w10, [sp, #4]      // reset for next line
+    b       .Lv3_body_line
+
+.Lv3_body_newline:
+    mov     w10, #0
+    str     w10, [sp, #4]      // reset indent flag
     add     x19, x19, #TOK_STRIDE_SZ
     b       .Lv3_body_loop
 
-.Lv3_body_skip:
+.Lv3_body_indent:
+    // Check indent level
+    ldr     w9, [sp, #0]       // reload saved indent
+    ldr     w1, [x19, #8]
+    cmp     w1, w9
+    b.lt    .Lv3_body_done      // dedent below body level
+    mov     w10, #1
+    str     w10, [sp, #4]      // mark indent seen
     add     x19, x19, #TOK_STRIDE_SZ
     b       .Lv3_body_loop
 
@@ -1545,7 +1560,7 @@ v3_parse_body:
     b       .Lv3_body_loop
 
 .Lv3_body_done:
-    add     sp, sp, #16        // drop saved indent
+    add     sp, sp, #16        // drop locals
     ldp     x29, x30, [sp], #16
     ret
 

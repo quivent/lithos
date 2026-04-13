@@ -422,8 +422,10 @@ parse_binding_compose:
     cmp     w0, #TOK_IDENT
     b.ne    parse_error
 
-    // Save token position so we can create the symbol after parse_expr
-    stp     x19, xzr, [sp, #-16]!
+    // Save name token's offset and length (for sym_add later)
+    ldr     w5, [x19, #4]          // name offset in source
+    ldr     w6, [x19, #8]          // name length
+    stp     x5, x6, [sp, #-16]!
 
     // Skip the name — advance to expression
     add     x19, x19, #TOK_STRIDE_SZ
@@ -433,11 +435,21 @@ parse_binding_compose:
     bl      parse_expr
 
     // w0 = register holding expression result
+    // x19 is now PAST the expression tokens (correct position to continue)
     mov     w4, w0
 
-    // Restore name token pointer
-    ldp     x19, xzr, [sp], #16
-    // x19 now points at the name token again
+    // Recover saved name offset/length
+    ldp     x5, x6, [sp], #16
+
+    // Point x19 temporarily at a fake token with the name's offset/length
+    // so sym_add can read it. We use the stack as scratch.
+    sub     sp, sp, #16
+    mov     w0, #TOK_IDENT
+    str     w0, [sp, #0]           // token type
+    str     w5, [sp, #4]           // name offset
+    str     w6, [sp, #8]           // name length
+    mov     x20, x19               // save real x19 (post-expr position)
+    mov     x19, sp                // point x19 at fake token
 
     // Register the binding: name → result register
     mov     w1, #KIND_LOCAL_REG
@@ -447,8 +459,9 @@ parse_binding_compose:
     ldr     w3, [x3]
     bl      sym_add
 
-    // Advance x19 past the name token (parse_expr already consumed the rest)
-    add     x19, x19, #TOK_STRIDE_SZ
+    // Restore real token position (past the expression)
+    mov     x19, x20
+    add     sp, sp, #16
 
     ldp     x29, x30, [sp], #16
     ret

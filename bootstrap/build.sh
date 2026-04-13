@@ -37,6 +37,7 @@ SRCS=(
     lithos-expr.s
     emit-arm64.s
     lithos-elf-writer.s
+    lithos-glue.s
     driver.s
 )
 
@@ -112,7 +113,7 @@ globals_for() {
         /^(code_|entry_|var_|xtl_|xtf_|cfa_|emit_|lex_|parse_|elf_|drv_|do_|saved_|ls_|lithos_|bootstrap_|sym_|reg_)[A-Za-z0-9_]*:/ {
             name = $0; sub(/:.*/, "", name); print ".global " name
         }
-        /^(last_entry|main_loop|mem_space|data_stack_top|ret_stack_top|data_stack_bottom|ret_stack_bottom|bootstrap_init|emit_last_entry|entry_pad|entry_ls_loop_peek|entry_lex_token_fetch|entry_emit_word|entry_lithos_lex):/ {
+        /^(last_entry|main_loop|mem_space|data_stack_top|ret_stack_top|data_stack_bottom|ret_stack_bottom|bootstrap_init|emit_last_entry|entry_pad|entry_ls_loop_peek|entry_lex_token_fetch|entry_emit_word|entry_lithos_lex|alloc_reg|emit32|free_reg|patch_b|patch_b_cond|reset_regs|skip_newlines|scope_depth|next_reg):/ {
             name = $0; sub(/:.*/, "", name); print ".global " name
         }
     ' "$src" | sort -u
@@ -201,6 +202,7 @@ LINK_ORDER=(
     "$BUILD/lithos-expr.o"
     "$BUILD/emit-arm64.o"
     "$BUILD/lithos-elf-writer.o"
+    "$BUILD/lithos-glue.o"
     "$BUILD/ls-shared.o"
 )
 
