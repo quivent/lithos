@@ -164,6 +164,26 @@ td code {
   background: var(--track-hw-border);
   color: var(--track-hw);
 }
+.track-badge.done {
+  background: #0a2a0a;
+  color: var(--green);
+  border: 1px solid #1a5a1a;
+}
+.track-badge.wip {
+  background: #2a1a08;
+  color: var(--orange);
+  border: 1px solid #5a3a18;
+}
+.status-banner {
+  background: #0a1a0a;
+  border: 1px solid #1a3a1a;
+  border-radius: 3px;
+  padding: 1rem 1.2rem;
+  margin: 1rem 0 1.5rem 0;
+  color: var(--text-dim);
+  font-size: 0.88rem;
+}
+.status-banner strong { color: var(--green); }
 
 /* Item cards */
 .item-card {
@@ -383,6 +403,7 @@ footer {
   <a href="/pytorch">Lithos vs PyTorch</a>
   <a href="/token-journey">Token Journey</a>
   <a href="/language-design">Language Design</a>
+  <a href="/language">Language Reference</a>
   <a href="/glossary">Glossary</a>
   <a href="#" class="nav-search" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
 </div>
@@ -404,9 +425,13 @@ footer {
 <section id="overview">
 <h2>Overview</h2>
 
-<p>Lithos reaches its endgame through six architecture work items on two independent tracks. The <span style="color: var(--track-compiler);">compiler track</span> (items 1&ndash;4) transforms a safetensors model file into two cooperative megakernel ELF binaries. The <span style="color: var(--track-hw);">hardware track</span> (items 5&ndash;6) eliminates C and libcuda.so by booting the GPU and submitting work directly from Forth.</p>
+<div class="status-banner">
+  <strong>Status:</strong> the self-hosting compiler is <strong>DONE</strong>. All six compiler components are written in Lithos (<code>.ls</code>), totalling <strong>6,125 lines</strong> across lexer, parser, GPU emitter, ARM64 emitter, ELF wrapper, and safetensors reader. The compiler compiles itself. Remaining work: model-to-binary templating (item 2/3), megakernel linking (item 4), and the hardware track (items 5&ndash;6).
+</div>
 
-<p>When both tracks complete, the entire system is: a Forth bootstrap that reads a safetensors file, compiles it into two megakernels, boots the GPU via BAR0/BAR4 register writes, and runs inference by writing GPFIFO entries and ringing a doorbell. No Python. No C. No CUDA. No kernel module. No runtime weight loading.</p>
+<p>Lithos reaches its endgame through six architecture work items on two independent tracks. The <span style="color: var(--track-compiler);">compiler track</span> (items 1&ndash;4) transforms a safetensors model file into two cooperative megakernel ELF binaries. The <span style="color: var(--track-hw);">hardware track</span> (items 5&ndash;6) eliminates C and libcuda.so by booting the GPU and submitting work directly from the self-hosted compiler binary.</p>
+
+<p>When both tracks complete, the entire system is: a native ARM64 binary (itself compiled from Lithos <code>.ls</code> sources) that reads a safetensors file, compiles it into two megakernels, boots the GPU via BAR0/BAR4 register writes, and runs inference by writing GPFIFO entries and ringing a doorbell. No Python. No C. No CUDA. No kernel module. No runtime weight loading.</p>
 
 <h3>Dependency Graph</h3>
 
@@ -414,11 +439,11 @@ footer {
   <div class="dep-row">
     <div class="dep-node compiler">1. Safetensors Parser</div>
     <div style="width: 80px;"></div>
-    <div class="dep-node hw">5. GSP Boot from Forth</div>
+    <div class="dep-node hw">5. GSP Boot from Lithos</div>
   </div>
   <div class="dep-arrow"><div class="dep-arrow-line"></div><div class="dep-arrow-head"></div></div>
   <div class="dep-row">
-    <div class="dep-node compiler">2. Template Language (.li v2)</div>
+    <div class="dep-node compiler">2. Template Language (.ls v2)</div>
     <div style="width: 80px;"></div>
     <div class="dep-node hw">6. GPFIFO + Doorbell</div>
   </div>
@@ -440,7 +465,9 @@ footer {
 <!-- ITEM 1: SAFETENSORS PARSER -->
 <!-- ================================================================== -->
 <section id="safetensors-parser">
-<h2>1. Safetensors Parser in Forth <span class="track-badge compiler">Compiler Track</span></h2>
+<h2>1. Safetensors Parser <span class="track-badge compiler">Compiler Track</span> <span class="track-badge done">Done</span></h2>
+
+<p><strong>Status: DONE.</strong> Implemented as <code>compiler/lithos-safetensors.ls</code> (617 lines). The compiler reads model weight files at compile time via the self-hosted Lithos safetensors reader.</p>
 
 <p>The compiler must read model weight files at compile time. The safetensors format is straightforward binary: an 8-byte little-endian header length, a JSON header mapping tensor names to metadata, and contiguous raw tensor data. The parser runs in the Forth bootstrap interpreter during compilation.</p>
 
@@ -511,9 +538,11 @@ s" model.layers.0.self_attn.q_proj.qweight" tensor-lookup
 <!-- ITEM 2: TEMPLATE LANGUAGE -->
 <!-- ================================================================== -->
 <section id="template-language">
-<h2>2. Template Language (.li v2) <span class="track-badge compiler">Compiler Track</span></h2>
+<h2>2. Template Language (.ls v2) <span class="track-badge compiler">Compiler Track</span> <span class="track-badge wip">In Progress</span></h2>
 
-<p>The .li file format evolves from a standalone kernel description into a parameterized template. The compiler instantiates the template once per layer, binding concrete weight tensor addresses from safetensors. The same template with different weight bindings produces 48 different instruction streams &mdash; identical structure, different addresses and immediates.</p>
+<p><strong>Status:</strong> lexer (818 lines) and parser (1,931 lines) are done in <code>compiler/lithos-lexer.ls</code> and <code>compiler/lithos-parser.ls</code>. Template keywords (<code>weight</code>, <code>layer</code>, <code>bind</code>, <code>project</code>, <code>runtime</code>) are the remaining piece.</p>
+
+<p>The .ls file format evolves from a standalone kernel description into a parameterized template. The compiler instantiates the template once per layer, binding concrete weight tensor addresses from safetensors. The same template with different weight bindings produces 48 different instruction streams &mdash; identical structure, different addresses and immediates.</p>
 
 <h3>New Syntax Elements</h3>
 
@@ -604,7 +633,7 @@ runtime x : [5120] f32                 \ input hidden state
     <ul>
       <li><code>param W_packed ptr</code> syntax</li>
       <li>Indexed weight loads (<code>W_packed [ idx ]</code>)</li>
-      <li>Runtime dequantization in .li source</li>
+      <li>Runtime dequantization in .ls source</li>
       <li>The <code>for k_p ... endfor</code> weight reduction loop</li>
     </ul>
   </div>
@@ -616,7 +645,9 @@ runtime x : [5120] f32                 \ input hidden state
 <!-- ITEM 3: MODEL-TO-BINARY COMPILER -->
 <!-- ================================================================== -->
 <section id="model-to-binary">
-<h2>3. Model-to-Binary Compiler <span class="track-badge compiler">Compiler Track</span></h2>
+<h2>3. Model-to-Binary Compiler <span class="track-badge compiler">Compiler Track</span> <span class="track-badge wip">In Progress</span></h2>
+
+<p><strong>Status:</strong> GPU emitter (<code>compiler/emit-gpu.ls</code>, 1,016 lines) and ARM64 emitter (<code>compiler/emit-arm64.ls</code>, 1,067 lines) are done. The <code>emit-project</code> weight-immediate specialization is the remaining piece.</p>
 
 <p>The <code>project</code> primitive's emit word changes completely. Instead of emitting a parameterized GEMV loop, it reads the Q4 weight tensor from safetensors at compile time and emits a straight-line instruction stream with all addresses hardcoded.</p>
 
@@ -639,10 +670,10 @@ runtime x : [5120] f32                 \ input hidden state
 
 <h3>Compilation Model</h3>
 
-<p>The compiler becomes a model-to-binary translator. It reads safetensors once, instantiates the .li template once per layer (binding different weight tensors each time), and outputs per-layer instruction streams. Each stream is a self-contained ELF section.</p>
+<p>The compiler becomes a model-to-binary translator. It reads safetensors once, instantiates the .ls template once per layer (binding different weight tensors each time), and outputs per-layer instruction streams. Each stream is a self-contained ELF section.</p>
 
 <pre>
-safetensors + .li template
+safetensors + .ls template
       |
       v
   lithos-compile  (Forth bootstrap)
@@ -702,7 +733,9 @@ safetensors + .li template
 <!-- ITEM 4: MEGAKERNEL LINKER -->
 <!-- ================================================================== -->
 <section id="megakernel-linker">
-<h2>4. Megakernel Linker <span class="track-badge compiler">Compiler Track</span></h2>
+<h2>4. Megakernel Linker <span class="track-badge compiler">Compiler Track</span> <span class="track-badge wip">In Progress</span></h2>
+
+<p><strong>Status:</strong> ELF wrapping is done in <code>compiler/lithos-elf.ls</code> (676 lines). Per-layer concatenation and grid-sync insertion remain.</p>
 
 <p>The per-layer instruction streams from item 3 must be linked into two cooperative megakernels. The megakernel IS the model. One QMD dispatch, one doorbell write per token.</p>
 
@@ -788,7 +821,9 @@ layer_00.text + layer_01.text + ... + layer_47.text
 <!-- ITEM 5: GSP BOOT FROM FORTH -->
 <!-- ================================================================== -->
 <section id="gsp-boot">
-<h2>5. GSP Boot from Forth <span class="track-badge hw">Hardware Track</span></h2>
+<h2>5. GSP Boot from Lithos <span class="track-badge hw">Hardware Track</span></h2>
+
+<p><strong>Status:</strong> not started. Currently <code>lithos.ko</code> (C kernel module) handles GSP boot; this item replaces that path with Lithos code running entirely in userspace over <code>vfio-pci</code>.</p>
 
 <p>The GH200's BAR0 (16 MB GPU registers) and BAR4 (128 GB coherent HBM) can both be mmap'd from userspace via <code>vfio-pci</code> &mdash; a stock Linux kernel module, zero custom code. The entire GSP boot sequence reduces to register writes via BAR0 and structure population in BAR4.</p>
 
@@ -876,7 +911,9 @@ Phase 7:  Poll BAR0+0x1100F4 bit 13 until PRIV_LOCKDOWN releases
 <!-- ITEM 6: GPFIFO + DOORBELL -->
 <!-- ================================================================== -->
 <section id="gpfifo-doorbell">
-<h2>6. GPFIFO + Doorbell from Forth <span class="track-badge hw">Hardware Track</span></h2>
+<h2>6. GPFIFO + Doorbell from Lithos <span class="track-badge hw">Hardware Track</span></h2>
+
+<p><strong>Status:</strong> not started. Depends on item 5.</p>
 
 <p>After GSP boots and the RISC-V coprocessor is running, the Forth bootstrap creates a GPFIFO channel via GSP RPC, builds the QMD pushbuffer, and runs inference with zero syscalls per token.</p>
 
@@ -963,7 +1000,7 @@ Phase 7:  Poll BAR0+0x1100F4 bit 13 until PRIV_LOCKDOWN releases
   </div>
   <div class="timeline-item compiler">
     <div class="timeline-label compiler">Phase 2: Template Language</div>
-    <div class="timeline-desc">Extend parser.fs with <code>weight</code>, <code>layer</code>, <code>bind</code>, <code>project</code>, <code>runtime</code> keywords. Parse a full DeltaNet .li v2 template.</div>
+    <div class="timeline-desc">Extend parser.fs with <code>weight</code>, <code>layer</code>, <code>bind</code>, <code>project</code>, <code>runtime</code> keywords. Parse a full DeltaNet .ls v2 template.</div>
   </div>
   <div class="timeline-item hw">
     <div class="timeline-label hw">Phase 2: GSP Boot</div>
@@ -1015,7 +1052,7 @@ Phase 7:  Poll BAR0+0x1100F4 bit 13 until PRIV_LOCKDOWN releases
     <h4>What Remains</h4>
     <ul class="outcome-list">
       <li>Forth/ARM64 bootstrap &mdash; the compiler and GPU driver</li>
-      <li><code>.li</code> templates &mdash; layer computation descriptions</li>
+      <li><code>.ls</code> templates &mdash; layer computation descriptions</li>
       <li><code>gpu/emit.fs</code> &mdash; SASS instruction emitter</li>
       <li><code>gpu/opcodes-sm90.fs</code> &mdash; opcode definitions</li>
       <li>ELF wrapper (<code>compiler/elf-wrap.fs</code>)</li>

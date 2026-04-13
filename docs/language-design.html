@@ -232,7 +232,7 @@ footer {
 <section id="status">
 <div class="draft-banner">
   <strong>Language Design Notes</strong>
-  This page documents Lithos language design: the current primitive-based system (12 families with dimensional notation, used in working <code>.li</code> files) and an earlier proposal for an assembly-flavored surface syntax (PTX-mnemonic style). The examples below show the earlier proposal, which has not been implemented. The working language uses primitive families described in the DeltaNet section.
+  This page documents Lithos language design: the current primitive-based system (12 families with dimensional notation, used in working <code>.ls</code> files) and an earlier proposal for an assembly-flavored surface syntax (PTX-mnemonic style). The examples below show the earlier proposal, which has not been implemented. The working language uses primitive families described in the DeltaNet section.
 </div>
 
 <p>The Lithos language centers on <strong>dimensional notation</strong> and <strong>primitive families</strong>. Primitives compose directly: <code>silu</code> = <code>* -1, exp, ++, //, **</code> (five primitives in sequence). No optimizer, no fusion pass &mdash; composition is the default.</p>
@@ -531,7 +531,7 @@ footer {
 <h2>Status</h2>
 <div class="decision">
 <h3>Current working language: primitive families</h3>
-<p>The 12 primitive families with dimensional notation are implemented and in use. Working <code>.li</code> kernel files compile to sm90a GPU machine code via the bootstrap Forth compiler. GEMV compiles correctly. The DeltaNet operation set (50 primitives, verified) is the primary target.</p>
+<p>The 12 primitive families with dimensional notation are implemented and in use. Working <code>.ls</code> kernel files compile to sm90a GPU machine code via the bootstrap Forth compiler. GEMV compiles correctly. The DeltaNet operation set (50 primitives, verified) is the primary target.</p>
 <p>The PTX-mnemonic surface syntax shown in the examples above remains a proposal. It was not ratified by running code through a compiler. The dimensional primitive notation proved more regular and suited the stack-based IR better.</p>
 </div>
 </section>

@@ -620,11 +620,11 @@ footer {
 
 <h3>The Fused Kernel Target</h3>
 
-<p>In production, the 12 kernel types collapse into <span class="mono" style="color: var(--cyan);">5</span> fused kernels. All Lithos kernel output is in ELF format (<code>.elf</code>) containing sm90 GPU machine code &mdash; 64-bit instruction words emitted directly, no text-format assembly intermediate. With weights-as-code, the ELF <code>.text</code> section IS the model weights (Q4 values as instruction immediates). The primary fused kernel is <code>deltanet_fused.li</code>.</p>
+<p>In production, the 12 kernel types collapse into <span class="mono" style="color: var(--cyan);">5</span> fused kernels. All Lithos kernel output is in ELF format (<code>.elf</code>) containing sm90 GPU machine code &mdash; 64-bit instruction words emitted directly, no text-format assembly intermediate. With weights-as-code, the ELF <code>.text</code> section IS the model weights (Q4 values as instruction immediates). The primary fused kernel is <code>deltanet_fused.ls</code>.</p>
 
 <table>
 <tr><th>Fused Kernel</th><th>Covers</th><th>Layers</th></tr>
-<tr><td><code>FUSED-DELTANET-LAYER</code> (<code>deltanet_fused.li</code>)</td><td>NORM + CONV1D + PROJECTION + RECURRENCE + DELTANET-OUTPUT + RESIDUAL</td><td>0,1,2,4,5,6,...(48 DeltaNet layers)</td></tr>
+<tr><td><code>FUSED-DELTANET-LAYER</code> (<code>deltanet_fused.ls</code>)</td><td>NORM + CONV1D + PROJECTION + RECURRENCE + DELTANET-OUTPUT + RESIDUAL</td><td>0,1,2,4,5,6,...(48 DeltaNet layers)</td></tr>
 <tr><td><code>FUSED-ATTENTION-LAYER</code></td><td>NORM + PROJECTION + ROTATE + ATTENTION-SCORE + RESIDUAL</td><td>3,7,11,...(16 attention layers)</td></tr>
 <tr><td><code>SAMPLE</code></td><td>Logits to token</td><td>Once per forward pass</td></tr>
 <tr><td><code>DRAFT-FORWARD</code></td><td>DeltaNet-only path for speculative decoding &mdash; skip all 16 attention layers</td><td>48 DeltaNet layers only</td></tr>

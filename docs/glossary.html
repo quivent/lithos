@@ -537,7 +537,7 @@ footer {
 
 <div class="glossary-entry" id="term-kernel">
 <div class="glossary-term">Kernel</div>
-<div class="glossary-def">A function that runs on the GPU, executed by thousands of threads organized into thread blocks. In <span class="term" data-term="Lithos">Lithos</span>, kernels are compiled from <span class="term" data-term="Forth">Forth</span> words directly into sm90 GPU machine code and stored in ELF files (<code>.elf</code>). A <em>fused kernel</em> combines multiple operations (e.g., norm + projection + activation + residual) into a single launch, eliminating inter-kernel <span class="term" data-term="HBM">HBM</span> round-trips. The primary fused kernel is <code>deltanet_fused.li</code>. <span class="term" data-term="Lithos">Lithos</span> targets 2 cooperative megakernels per model (one per phase), with all layer iterations inside each megakernel via grid-sync.</div>
+<div class="glossary-def">A function that runs on the GPU, executed by thousands of threads organized into thread blocks. In <span class="term" data-term="Lithos">Lithos</span>, kernels are compiled from <span class="term" data-term="Forth">Forth</span> words directly into sm90 GPU machine code and stored in ELF files (<code>.elf</code>). A <em>fused kernel</em> combines multiple operations (e.g., norm + projection + activation + residual) into a single launch, eliminating inter-kernel <span class="term" data-term="HBM">HBM</span> round-trips. The primary fused kernel is <code>deltanet_fused.ls</code>. <span class="term" data-term="Lithos">Lithos</span> targets 2 cooperative megakernels per model (one per phase), with all layer iterations inside each megakernel via grid-sync.</div>
 </div>
 
 <div class="glossary-entry" id="term-kv-cache">

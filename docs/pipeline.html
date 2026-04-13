@@ -441,6 +441,7 @@ footer {
   <a href="/pytorch">Lithos vs PyTorch</a>
   <a href="/token-journey">Token Journey</a>
   <a href="/language-design">Language Design</a>
+  <a href="/language">Language Reference</a>
   <a href="/glossary">Glossary</a>
   <a href="#" class="nav-search" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
 </div>
@@ -473,13 +474,13 @@ footer {
         <div class="stage-icon">&#9998;</div>
         <div>
           <div class="stage-label">Source Layer</div>
-          <div class="stage-name">.li &nbsp;/&nbsp; .ls</div>
-          <div class="stage-desc">Lithos kernel source (<code>.li</code>) and composed layer source (<code>.ls</code>). Written in a Forth-like stack language. Primitives are expressed with dimensional notation: <code>*</code>&nbsp;scalar, <code>**</code>&nbsp;vector, <code>***</code>&nbsp;matrix, <code>&Sigma;</code>&nbsp;shuffle-tree reduction.</div>
-          <div class="stage-detail">inference/gemv.li
-inference/attend.li
-inference/reduce.li
-inference/recur.li
-inference/elementwise.li</div>
+          <div class="stage-name">.ls source</div>
+          <div class="stage-desc">Lithos source (<code>.ls</code>). Primitives are expressed with dimensional notation: <code>*</code>&nbsp;scalar, <code>**</code>&nbsp;vector, <code>***</code>&nbsp;matrix, <code>&Sigma;</code>&nbsp;shuffle-tree reduction.</div>
+          <div class="stage-detail">inference/gemv.ls
+inference/attend.ls
+inference/reduce.ls
+inference/recur.ls
+inference/elementwise.ls</div>
         </div>
       </div>
     </div>
@@ -487,7 +488,7 @@ inference/elementwise.li</div>
     <div class="pipe-arrow" style="position:relative">
       <div class="pipe-arrow-line"></div>
       <div class="pipe-arrow-head"></div>
-      <span class="pipe-arrow-label">bootstrap Forth interpreter</span>
+      <span class="pipe-arrow-label">compiler.ls (self-hosting, ARM64 binary)</span>
     </div>
 
     <!-- Stage 2: Compiler -->
@@ -496,12 +497,14 @@ inference/elementwise.li</div>
         <div class="stage-icon">&#9881;</div>
         <div>
           <div class="stage-label">Compiler Layer</div>
-          <div class="stage-name">gpu/emit.fs</div>
-          <div class="stage-desc">Macro assembler, not an optimizing compiler. Each Lithos primitive maps to a fixed binary pattern. No analysis, no optimization passes, no intermediate representations. The programmer controls register allocation, instruction interleaving, and memory access patterns via the primitive vocabulary.</div>
-          <div class="stage-detail">compiler/lithos.fs  &mdash;  bootstrap Forth + outer interpreter
-compiler/parser.fs  &mdash;  tokenizer and word dispatch
-gpu/emit.fs         &mdash;  SASS emitter: opcode tables, encoding logic
-gpu/elf-wrap.fs     &mdash;  ELF section layout and symbol table</div>
+          <div class="stage-name">compiler.ls &rarr; ARM64 binary</div>
+          <div class="stage-desc">Self-hosting compiler written in Lithos (<code>.ls</code>). 6 components, 6125 lines. Each Lithos primitive maps to a fixed binary pattern. No analysis, no optimization passes, no intermediate representations. The programmer controls register allocation, instruction interleaving, and memory access patterns via the primitive vocabulary. Bootstrap Forth (<code>.fs</code>) was a one-time seed; the compiler now compiles itself.</div>
+          <div class="stage-detail">compiler/lithos-lexer.ls      &mdash;  lexer (818 lines)
+compiler/lithos-parser.ls     &mdash;  parser + dispatch (1931 lines)
+compiler/emit-gpu.ls          &mdash;  SASS emitter (1016 lines)
+compiler/emit-arm64.ls        &mdash;  ARM64 host emitter (1067 lines)
+compiler/lithos-elf.ls        &mdash;  ELF packaging (676 lines)
+compiler/lithos-safetensors.ls&mdash;  safetensors reader (617 lines)</div>
         </div>
       </div>
     </div>
@@ -509,7 +512,7 @@ gpu/elf-wrap.fs     &mdash;  ELF section layout and symbol table</div>
     <div class="pipe-arrow" style="position:relative">
       <div class="pipe-arrow-line"></div>
       <div class="pipe-arrow-head"></div>
-      <span class="pipe-arrow-label">gpu/emit.fs encodes 64-bit words</span>
+      <span class="pipe-arrow-label">emit-gpu.ls encodes 64-bit words</span>
     </div>
 
     <!-- Stage 3: Machine code / ELF -->
@@ -533,7 +536,7 @@ inference/*.cubin               (ELF packages)</div>
     <div class="pipe-arrow" style="position:relative">
       <div class="pipe-arrow-line"></div>
       <div class="pipe-arrow-head"></div>
-      <span class="pipe-arrow-label">gpu/elf-wrap.fs &rarr; lithos.ko loads</span>
+      <span class="pipe-arrow-label">lithos-elf.ls &rarr; lithos.ko loads</span>
     </div>
 
     <!-- Stage 4: Kernel module -->
@@ -665,9 +668,9 @@ Target:  two cooperative-grid megakernels per model</div>
     <h4>Recurrence Update Kernel</h4>
     <ul>
       <li>DeltaNet state update (delta rule)</li>
-      <li>KV cache write (attend.li)</li>
-      <li>Recurrent hidden state (recur.li)</li>
-      <li>Elementwise gating (elementwise.li)</li>
+      <li>KV cache write (attend.ls)</li>
+      <li>Recurrent hidden state (recur.ls)</li>
+      <li>Elementwise gating (elementwise.ls)</li>
       <li>Cross-layer state threading</li>
       <li>Cooperative grid sync between SMs</li>
     </ul>
@@ -682,7 +685,7 @@ Target:  two cooperative-grid megakernels per model</div>
 <section id="instruction-format">
 <h2>Instruction Format &mdash; 16 Bytes</h2>
 
-<p>Every sm90a Hopper instruction occupies exactly 16 bytes in the instruction stream. The Lithos compiler (<code>gpu/emit.fs</code>) emits both words directly from the primitive vocabulary &mdash; there is no assembler, no intermediate text format.</p>
+<p>Every sm90a Hopper instruction occupies exactly 16 bytes in the instruction stream. The Lithos compiler (<code>emit-gpu.ls</code>) emits both words directly from the primitive vocabulary &mdash; there is no assembler, no intermediate text format.</p>
 
 <div class="byte-map">
   <div class="cell header">B0</div>
@@ -752,7 +755,7 @@ Target:  two cooperative-grid megakernels per model</div>
 <section id="primitives">
 <h2>12 Primitive Families</h2>
 
-<p>The entire Lithos vocabulary is 12 primitive families. Each family maps to a known-good binary pattern that the compiler (<code>gpu/emit.fs</code>) emits directly. The dimensional notation encodes the shape of the data flowing through each operation.</p>
+<p>The entire Lithos vocabulary is 12 primitive families. Each family maps to a known-good binary pattern that the compiler (<code>emit-gpu.ls</code>) emits directly. The dimensional notation encodes the shape of the data flowing through each operation.</p>
 
 <table>
   <thead>
@@ -892,7 +895,7 @@ Target:  two cooperative-grid megakernels per model</div>
 
 <h3>Compile-time input</h3>
 
-<pre>safetensors file  +  model config  +  Lithos source (.li)
+<pre>safetensors file  +  model config  +  Lithos source (.ls)
          |                 |                    |
          v                 v                    v
     weight values    dimensions/shapes    primitive families
@@ -924,7 +927,7 @@ Target:  two cooperative-grid megakernels per model</div>
     <tr>
       <td>Source language</td>
       <td>Python &rarr; C++ &rarr; CUDA C</td>
-      <td>Lithos <code>.li</code> / <code>.ls</code> (Forth stack language)</td>
+      <td>Lithos <code>.ls</code> (primitive stack language)</td>
     </tr>
     <tr>
       <td>Compilation</td>

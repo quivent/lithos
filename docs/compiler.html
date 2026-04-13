@@ -310,7 +310,7 @@ footer {
 <p>Same language, two output formats. No intermediate representation, no PTX, no AST &mdash; primitives dispatch directly to binary emitters:</p>
 
 <div class="compile-flow">
-  <div class="compile-node source">Lithos source <span class="sub">.li (kernels) / .ls (compositions)</span></div>
+  <div class="compile-node source">Lithos source <span class="sub">.ls (kernels and compositions)</span></div>
   <div class="compile-arrow"></div>
   <div class="compile-node router">Primitive Dispatch<span class="sub">per-word: kernel primitive or host word?</span></div>
   <div class="compile-fork-rail"><span></span><span></span></div>
@@ -340,7 +340,7 @@ footer {
 <ul class="clean">
   <li><strong><code>model.safetensors</code></strong> &mdash; weight values read at compile time, encoded into instruction immediates</li>
   <li><strong><code>config.json</code></strong> &mdash; model dimensions determine the instruction stream shape</li>
-  <li><strong><code>.li</code> source</strong> &mdash; primitive families determine the instruction patterns</li>
+  <li><strong><code>.ls</code> source</strong> &mdash; primitive families determine the instruction patterns</li>
 </ul>
 
 <h3>What the compiler emits per layer</h3>
@@ -425,7 +425,7 @@ footer {
 <section id="surface">
 <h2>Language Surface</h2>
 
-<p>Primitive-based with dimensional notation. Kernels (<code>.li</code>) express computation as sequences of primitives that compile directly to GPU machine code. Composed layers (<code>.ls</code>) wire kernels together. The implementation uses bootstrap Forth (<code>.fs</code> files) internally, but the language surface is Lithos primitives, not Forth syntax.</p>
+<p>Primitive-based with dimensional notation. Lithos source (<code>.ls</code>) expresses computation as sequences of primitives that compile directly to GPU machine code. The implementation uses bootstrap Forth (<code>.fs</code> files) internally, but the language surface is Lithos primitives, not Forth syntax.</p>
 
 <h3>GPU <span class="term" data-term="Kernel">kernel</span> (&rarr; sm90a machine code)</h3>
 <pre class="forth"><span class="keyword">kernel</span> <span class="def">vadd</span>
@@ -456,7 +456,7 @@ footer {
 <p class="small">Same word syntax. The parser sees <code>host</code> and routes to the ARM64 emitter. Stack operations compile to <code>X0</code>&ndash;<code>X8</code> register stack manipulation; control flow compiles to <code>B.cond</code>/<code>BL</code>; I/O compiles to <code>SVC 0</code> syscalls.</p>
 
 <h3>Backend routing</h3>
-<p>The router is per-definition, not per-file. A single <code>.li</code> source can define several <code>kernel</code> words and several <code>host</code> words side by side. The host binary and the GPU ELF binaries it loads are built from the same source, and symbol names are shared &mdash; the launcher knows the kernels by the names they were defined under.</p>
+<p>The router is per-definition, not per-file. A single <code>.ls</code> source can define several <code>kernel</code> words and several <code>host</code> words side by side. The host binary and the GPU ELF binaries it loads are built from the same source, and symbol names are shared &mdash; the launcher knows the kernels by the names they were defined under.</p>
 </section>
 
 <!-- Section 6: File Organization -->

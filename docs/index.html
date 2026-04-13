@@ -306,6 +306,7 @@ footer {
   <a href="/pytorch">Lithos vs PyTorch</a>
   <a href="/token-journey">Token Journey</a>
   <a href="/language-design">Language Design</a>
+  <a href="/language">Language Reference</a>
   <a href="/glossary">Glossary</a>
 
   <a href="#" class="nav-search" onclick="openSearch(event)" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
@@ -325,7 +326,7 @@ footer {
 <!-- What Lithos Is -->
 <section id="what">
 <h2>What Lithos Is</h2>
-<p>Lithos is a GPU inference engine with no CUDA dependency. Lithos source files (<code>.li</code> for kernels, <code>.ls</code> for composed layers) compile via 12 primitive families directly to sm90a GPU machine code (64-bit instruction words), packaged into ELF binaries. An ARM64 launcher writes directly to the GPFIFO ring with a doorbell write &mdash; zero syscalls at inference time. A minimal Linux kernel module (<code>lithos.ko</code>) replaces <code>nvidia.ko</code> and owns the GPU hardware through 4 ioctls. No C++, no nvcc, no ptxas, no CUDA runtime, no framework.</p>
+<p>Lithos is a GPU inference engine with no CUDA dependency. Lithos source files (<code>.ls</code>) compile via 12 primitive families directly to sm90a GPU machine code (64-bit instruction words), packaged into ELF binaries. An ARM64 launcher writes directly to the GPFIFO ring with a doorbell write &mdash; zero syscalls at inference time. A minimal Linux kernel module (<code>lithos.ko</code>) replaces <code>nvidia.ko</code> and owns the GPU hardware through 4 ioctls. No C++, no nvcc, no ptxas, no CUDA runtime, no framework.</p>
 
 <p><strong>Weights are code.</strong> The compiler reads <code>model.safetensors</code> at compile time and encodes Q4 weight values as instruction immediates in <code>FMUL-IMM</code> instructions. The ELF <code>.text</code> section IS the model weights. There is no runtime weight loading from HBM &mdash; weights flow through the instruction cache hierarchy (L1I &rarr; L2) instead of the data path. Only activations, state matrices, and KV cache remain as runtime data.</p>
 </section>
@@ -471,7 +472,7 @@ footer {
 <h2>Architecture</h2>
 
 <h3>Compilation Path: Lithos + safetensors &rarr; GPU machine code &rarr; ELF</h3>
-<div class="diagram"><span class="accent">Lithos Source (.li / .ls) + model.safetensors</span>
+<div class="diagram"><span class="accent">Lithos Source (.ls) + model.safetensors</span>
        <span class="dim">|</span>
        <span class="dim">|</span> <span class="highlight">primitive families</span>      <span class="dim">12 families: */+/-////Σ/scalar/project/matvec</span>
        <span class="dim">|</span> <span class="highlight">+ weight immediates</span>    <span class="dim">Q4 weights from safetensors encoded into FMUL-IMM</span>
@@ -934,7 +935,7 @@ footer {
   <li><strong>13 compiled GPU binaries</strong> + 3 fused + DeltaNet-specific kernels (132 KB total).</li>
   <li><strong>GPTQ W4A16 dequantization correct</strong> (zero-point 8.0 per auto-GPTQ convention).</li>
   <li><strong>Weights-as-code architecture:</strong> compiler reads safetensors, encodes Q4 weights as instruction immediates. ELF .text IS the weights. No runtime weight loading from HBM. BAR4 coherent HBM, CPU PA == GPU VA.</li>
-  <li><strong>Lithos compiler:</strong> compiles <code>.li</code> files to sm90a GPU machine code ELF binaries. lithos.ko kernel module owns GPU hardware (4 ioctls).</li>
+  <li><strong>Lithos compiler:</strong> compiles <code>.ls</code> files to sm90a GPU machine code ELF binaries. lithos.ko kernel module owns GPU hardware (4 ioctls).</li>
   <li><strong>GPU machine code emitter:</strong> vector-add runs correctly on GH200 (direct binary, no ptxas, no CUDA).</li>
   <li><strong>5 quantization schemes</strong> designed + implementations.</li>
   <li><strong>23+ documentation pages.</strong></li>
@@ -976,7 +977,7 @@ footer {
 <h2>Code Examples</h2>
 
 <h3>1. Defining a Kernel</h3>
-<p>A kernel definition using the bootstrap Forth implementation vocabulary (<code>core.fs</code> layer). This shows the compiler&rsquo;s internal implementation language, not the <code>.li</code> source surface:</p>
+<p>A kernel definition using the bootstrap Forth implementation vocabulary (<code>core.fs</code> layer). This shows the compiler&rsquo;s internal implementation language, not the <code>.ls</code> source surface:</p>
 
 <pre class="forth"><span class="comment">\ Vector add kernel: output[i] = input_a[i] + input_b[i]</span>
 
