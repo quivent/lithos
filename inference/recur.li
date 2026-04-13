@@ -1,0 +1,70 @@
+\ recur.li — DeltaNet recurrence with conv1d, gating, state management
+\ Replaces: recurrence.ptx, recurrence_rollback.ptx, conv1d.ptx, fused_deltanet.ptx
+\
+\ DeltaNet: S_t = S_{t-1} + beta_t * (v_t * k_t^T - k_t^T * S_{t-1})
+\   Equivalently: S_t = (1 - beta_t * k_t * k_t^T) * S_{t-1} + beta_t * v_t * k_t^T
+\   Output: o_t = S_t * q_t
+\
+\ Four operations fused:
+\   1. conv1d: causal 1D convolution over input (short kernel, width 4)
+\   2. gating: compute beta from sigmoid of gate logit
+\   3. state update: the DeltaNet recurrence
+\   4. state rollback: restore state to a checkpoint (for speculative decode)
+\
+\ COMPILER LIMITATIONS:
+\   - No sequential (non-parallel) iteration (state update is inherently serial over t)
+\   - No matrix outer product (v * k^T is d_v x d_k)
+\   - No shared memory for state matrix
+\   - No sigmoid/exp intrinsics
+\   - No loop construct
+\   - No scalar params (d_state, seq_len, conv_width)
+\   - No conditional for rollback logic
+\
+\ SOURCE OF TRUTH: This .li file defines the algorithm.
+\
+\ --- Conv1d algorithm (causal, width=4) ---
+\
+\ fn conv1d x weights seq_len d_model conv_width -> y
+\     each elem                \ parallel over (seq_len * d_model)
+\         t = elem / d_model
+\         d = elem % d_model
+\         acc = 0.0
+\         for w in 0 .. conv_width
+\             t_src = t - w
+\             if t_src >= 0
+\                 acc = acc + x[t_src * d_model + d] * weights[w * d_model + d]
+\         y [ elem ] = acc
+\
+\ --- Gating (sigmoid) ---
+\
+\ fn gate logit -> beta
+\     each i
+\         beta[i] = 1.0 / (1.0 + exp(-logit[i]))
+\
+\ --- DeltaNet state update ---
+\
+\ fn deltanet_update state_in q k v beta d_state -> output state_out
+\     \ state is (d_v, d_k) matrix per head
+\     \ For each time step t (sequential!):
+\         bt = beta[t]
+\         \ delta = bt * (v_t outer k_t - k_t^T * S * ... )
+\         \ S = S + delta
+\         \ o_t = S * q_t
+\     \ This is parallelized over heads, serial over time steps.
+\
+\ --- State rollback ---
+\
+\ fn state_rollback state checkpoint valid_len -> state_out
+\     each elem
+\         \ if position > valid_len: state_out = checkpoint
+\         \ else: state_out = state
+\         \ COMPILER TODO: needs conditional (ternary or if/else)
+
+\ --- Lithos stubs (compile to per-element placeholders) ---
+fn conv1d_stub x weights -> y
+    each i
+        y [ i ] = x [ i ] * weights [ i ]
+
+fn deltanet_stub q k v beta -> output
+    each i
+        output [ i ] = q [ i ]

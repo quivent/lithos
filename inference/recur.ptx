@@ -1,0 +1,38 @@
+.version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry deltanet_stub(
+    .param .u64 q,
+    .param .u64 k,
+    .param .u64 v,
+    .param .u64 beta,
+    .param .u64 output
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32  %r<64>;
+    .reg .b64  %rd<32>;
+    .reg .f32  %f<64>;
+
+    ld.param.u64 %rd0, [q];
+    ld.param.u64 %rd1, [k];
+    ld.param.u64 %rd2, [v];
+    ld.param.u64 %rd3, [beta];
+    ld.param.u64 %rd4, [output];
+
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %ntid.x;
+    mov.u32 %r2, %tid.x;
+    mad.lo.s32 %r3, %r0, %r1, %r2;
+
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd0, %rd22;
+    ld.global.f32 %f0, [%rd23];
+    mul.wide.u32 %rd22, %r3, 4;
+    add.u64 %rd23, %rd4, %rd22;
+    st.global.f32 [%rd23], %f0;
+
+$L_exit:
+    ret;
+}

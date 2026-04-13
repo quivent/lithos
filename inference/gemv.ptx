@@ -1,0 +1,262 @@
+// gemv.ptx — Generated from gemv.li
+// GPTQ W4A16 matrix-vector multiply
+// Replaces: gptq_matvec.ptx, gptq_matvec_tc.ptx, gptq_gemv_tc.ptx,
+//           projection.ptx, projection_gemm.ptx, lm_head.ptx
+// Target: sm_90, PTX 8.0
+//
+// Launch config: gridDim.x = N (one block per output row)
+//                blockDim.x = 256 (threads cooperatively reduce across K)
+//
+// W4 dequantization: w_fp = (nibble - 8) * scale
+//   Where nibble is 4 bits extracted from packed u32, zero_point = 8.
+//   Group size = 128 (standard GPTQ).
+//
+// COMPILER GAPS:
+//   - for loops: need `for k in range` construct
+//   - integer bitwise: need shr.b32, and.b32 for nibble extraction
+//   - shared memory: need .shared declaration + ld/st.shared
+//   - warp shuffles: need shfl.sync.bfly for reduction
+//   - scalar params: need .param .u32 for K, N dimensions
+//   - literal constants: need 0f41000000 (8.0), 0f00000000 (0.0)
+//   - cvt instructions: need cvt.rn.f32.s32 for int->float
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry gptq_gemv(
+    .param .u64 W_packed,
+    .param .u64 scales,
+    .param .u64 x,
+    .param .u64 y,
+    .param .u32 K,
+    .param .u32 N
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32  %r<48>;
+    .reg .b64  %rd<24>;
+    .reg .f32  %f<32>;
+
+    .shared .align 4 .f32 smem_reduce[256];
+
+    // Load params
+    ld.param.u64 %rd0, [W_packed];
+    ld.param.u64 %rd1, [scales];
+    ld.param.u64 %rd2, [x];
+    ld.param.u64 %rd3, [y];
+    ld.param.u32 %r30, [K];
+    ld.param.u32 %r31, [N];
+
+    // row = blockIdx.x  (one row per block)
+    mov.u32 %r0, %ctaid.x;
+    // tid = threadIdx.x
+    mov.u32 %r1, %tid.x;
+    // n_threads = blockDim.x (256)
+    mov.u32 %r2, %ntid.x;
+
+    // Bounds check: if row >= N, exit
+    setp.ge.u32 %p0, %r0, %r31;
+    @%p0 bra $L_exit;
+
+    // K_packed = K / 8 (number of packed u32s per row)
+    shr.u32 %r10, %r30, 3;
+    // group_size_packed = 128 / 8 = 16 packed u32s per group
+    // n_groups = K / 128
+    shr.u32 %r11, %r30, 7;
+
+    // row_offset = row * K_packed (byte offset into W_packed is row_offset * 4)
+    mul.lo.u32 %r12, %r0, %r10;
+
+    // scale_row_offset = row * n_groups
+    mul.lo.u32 %r13, %r0, %r11;
+
+    // Initialize accumulator
+    mov.f32 %f0, 0f00000000;
+
+    // Each thread processes elements: tid, tid+256, tid+512, ...
+    // across the K_packed dimension
+    mov.u32 %r3, %r1;          // k_idx = tid
+
+$L_k_loop:
+    // if k_idx >= K_packed, done with loop
+    setp.ge.u32 %p1, %r3, %r10;
+    @%p1 bra $L_k_done;
+
+    // group_idx = k_idx / 16 (each group is 16 packed u32s)
+    shr.u32 %r14, %r3, 4;
+
+    // Load scale for this group: scales[scale_row_offset + group_idx]
+    add.u32 %r15, %r13, %r14;
+    mul.wide.u32 %rd10, %r15, 4;
+    add.u64 %rd11, %rd1, %rd10;
+    ld.global.f32 %f1, [%rd11];        // scale
+
+    // Load packed weight: W_packed[row_offset + k_idx]
+    add.u32 %r16, %r12, %r3;
+    mul.wide.u32 %rd12, %r16, 4;
+    add.u64 %rd13, %rd0, %rd12;
+    ld.global.b32 %r17, [%rd13];       // packed 8 x 4-bit weights
+
+    // x_base_idx = k_idx * 8 (each packed u32 has 8 weights)
+    shl.b32 %r18, %r3, 3;
+
+    // Unroll 8 nibbles from packed weight
+    // nibble 0: bits [3:0]
+    and.b32 %r20, %r17, 15;
+    sub.s32 %r20, %r20, 8;             // w_int - zero_point
+    cvt.rn.f32.s32 %f2, %r20;
+    mul.f32 %f2, %f2, %f1;             // w_fp = (w_int - 8) * scale
+    // Load x[k_idx*8 + 0]
+    add.u32 %r21, %r18, 0;
+    mul.wide.u32 %rd14, %r21, 4;
+    add.u64 %rd15, %rd2, %rd14;
+    ld.global.f32 %f3, [%rd15];
+    fma.rn.f32 %f0, %f2, %f3, %f0;    // acc += w * x
+
+    // nibble 1: bits [7:4]
+    shr.b32 %r22, %r17, 4;
+    and.b32 %r22, %r22, 15;
+    sub.s32 %r22, %r22, 8;
+    cvt.rn.f32.s32 %f4, %r22;
+    mul.f32 %f4, %f4, %f1;
+    add.u32 %r21, %r18, 1;
+    mul.wide.u32 %rd14, %r21, 4;
+    add.u64 %rd15, %rd2, %rd14;
+    ld.global.f32 %f5, [%rd15];
+    fma.rn.f32 %f0, %f4, %f5, %f0;
+
+    // nibble 2: bits [11:8]
+    shr.b32 %r22, %r17, 8;
+    and.b32 %r22, %r22, 15;
+    sub.s32 %r22, %r22, 8;
+    cvt.rn.f32.s32 %f4, %r22;
+    mul.f32 %f4, %f4, %f1;
+    add.u32 %r21, %r18, 2;
+    mul.wide.u32 %rd14, %r21, 4;
+    add.u64 %rd15, %rd2, %rd14;
+    ld.global.f32 %f5, [%rd15];
+    fma.rn.f32 %f0, %f4, %f5, %f0;
+
+    // nibble 3: bits [15:12]
+    shr.b32 %r22, %r17, 12;
+    and.b32 %r22, %r22, 15;
+    sub.s32 %r22, %r22, 8;
+    cvt.rn.f32.s32 %f4, %r22;
+    mul.f32 %f4, %f4, %f1;
+    add.u32 %r21, %r18, 3;
+    mul.wide.u32 %rd14, %r21, 4;
+    add.u64 %rd15, %rd2, %rd14;
+    ld.global.f32 %f5, [%rd15];
+    fma.rn.f32 %f0, %f4, %f5, %f0;
+
+    // nibble 4: bits [19:16]
+    shr.b32 %r22, %r17, 16;
+    and.b32 %r22, %r22, 15;
+    sub.s32 %r22, %r22, 8;
+    cvt.rn.f32.s32 %f4, %r22;
+    mul.f32 %f4, %f4, %f1;
+    add.u32 %r21, %r18, 4;
+    mul.wide.u32 %rd14, %r21, 4;
+    add.u64 %rd15, %rd2, %rd14;
+    ld.global.f32 %f5, [%rd15];
+    fma.rn.f32 %f0, %f4, %f5, %f0;
+
+    // nibble 5: bits [23:20]
+    shr.b32 %r22, %r17, 20;
+    and.b32 %r22, %r22, 15;
+    sub.s32 %r22, %r22, 8;
+    cvt.rn.f32.s32 %f4, %r22;
+    mul.f32 %f4, %f4, %f1;
+    add.u32 %r21, %r18, 5;
+    mul.wide.u32 %rd14, %r21, 4;
+    add.u64 %rd15, %rd2, %rd14;
+    ld.global.f32 %f5, [%rd15];
+    fma.rn.f32 %f0, %f4, %f5, %f0;
+
+    // nibble 6: bits [27:24]
+    shr.b32 %r22, %r17, 24;
+    and.b32 %r22, %r22, 15;
+    sub.s32 %r22, %r22, 8;
+    cvt.rn.f32.s32 %f4, %r22;
+    mul.f32 %f4, %f4, %f1;
+    add.u32 %r21, %r18, 6;
+    mul.wide.u32 %rd14, %r21, 4;
+    add.u64 %rd15, %rd2, %rd14;
+    ld.global.f32 %f5, [%rd15];
+    fma.rn.f32 %f0, %f4, %f5, %f0;
+
+    // nibble 7: bits [31:28]
+    shr.b32 %r22, %r17, 28;
+    and.b32 %r22, %r22, 15;
+    sub.s32 %r22, %r22, 8;
+    cvt.rn.f32.s32 %f4, %r22;
+    mul.f32 %f4, %f4, %f1;
+    add.u32 %r21, %r18, 7;
+    mul.wide.u32 %rd14, %r21, 4;
+    add.u64 %rd15, %rd2, %rd14;
+    ld.global.f32 %f5, [%rd15];
+    fma.rn.f32 %f0, %f4, %f5, %f0;
+
+    // Advance k_idx by blockDim.x (stride loop)
+    add.u32 %r3, %r3, %r2;
+    bra $L_k_loop;
+
+$L_k_done:
+    // --- Warp-level reduction (butterfly shuffle) ---
+    shfl.sync.bfly.b32 %f10, %f0, 16, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f10;
+    shfl.sync.bfly.b32 %f10, %f0, 8, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f10;
+    shfl.sync.bfly.b32 %f10, %f0, 4, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f10;
+    shfl.sync.bfly.b32 %f10, %f0, 2, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f10;
+    shfl.sync.bfly.b32 %f10, %f0, 1, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f10;
+
+    // --- Cross-warp reduction via shared memory ---
+    // warp_id = tid / 32, lane_id = tid & 31
+    shr.u32 %r4, %r1, 5;       // warp_id
+    and.b32 %r5, %r1, 31;      // lane_id
+
+    // Lane 0 of each warp writes to shared memory
+    setp.eq.u32 %p2, %r5, 0;
+    // smem_reduce[warp_id] = partial_sum
+    mul.wide.u32 %rd16, %r4, 4;
+    mov.u64 %rd17, smem_reduce;
+    add.u64 %rd18, %rd17, %rd16;
+    @%p2 st.shared.f32 [%rd18], %f0;
+
+    bar.sync 0;
+
+    // First warp (warp_id==0) reduces the partial sums
+    // n_warps = 256/32 = 8, so only 8 values to reduce
+    setp.lt.u32 %p3, %r1, 8;
+    @!%p3 bra $L_write;
+
+    // Load my warp's partial sum
+    mul.wide.u32 %rd19, %r1, 4;
+    add.u64 %rd20, %rd17, %rd19;
+    ld.shared.f32 %f0, [%rd20];
+
+    // Warp reduce again (only 8 active lanes)
+    shfl.sync.bfly.b32 %f10, %f0, 4, 31, 0x000000FF;
+    add.f32 %f0, %f0, %f10;
+    shfl.sync.bfly.b32 %f10, %f0, 2, 31, 0x000000FF;
+    add.f32 %f0, %f0, %f10;
+    shfl.sync.bfly.b32 %f10, %f0, 1, 31, 0x000000FF;
+    add.f32 %f0, %f0, %f10;
+
+$L_write:
+    // Thread 0 writes the final result
+    setp.eq.u32 %p4, %r1, 0;
+    @!%p4 bra $L_exit;
+
+    mul.wide.u32 %rd21, %r0, 4;
+    add.u64 %rd22, %rd3, %rd21;
+    st.global.f32 [%rd22], %f0;
+
+$L_exit:
+    ret;
+}

@@ -1,0 +1,44 @@
+\ elementwise.li — Per-element operations for LLM inference
+\ Replaces: activate.ptx, add_store.ptx, elemwise_mul.ptx, residual_add.ptx
+\
+\ The Lithos compiler currently handles simple infix expressions with
+\ each-based parallelism.  The four functions below use only that subset.
+\
+\ COMPILER LIMITATIONS HIT:
+\   - silu requires intrinsics (ex2.approx, rcp.approx) -- not yet in parser
+\   - scale requires a scalar param (not pointer-indexed) -- not yet in parser
+\   - Workaround: we define silu/scale as simple .li functions here but
+\     provide hand-written PTX below in comments for the actual instruction
+\     sequences the compiler should eventually emit.
+
+\ ---- 1. residual_add: output[i] = a[i] + b[i] ----------------------------
+\ Direct replacement for residual_add.ptx and add_store.ptx
+
+fn residual_add a b -> output
+    each i
+        output [ i ] = a [ i ] + b [ i ]
+
+\ ---- 2. elemwise_mul: output[i] = a[i] * b[i] ----------------------------
+\ Direct replacement for elemwise_mul.ptx
+
+fn elemwise_mul a b -> output
+    each i
+        output [ i ] = a [ i ] * b [ i ]
+
+\ ---- 3. activate_silu: output[i] = x[i] * sigmoid(x[i]) -----------------
+\ Replacement for activate.ptx
+\ COMPILER TODO: needs intrinsic support for neg.f32, ex2.approx.f32,
+\   rcp.approx.f32, and literal constants (1.0f, 1.4426950408f).
+\ For now, the compiler will emit a placeholder; real PTX is in elementwise.ptx.
+
+fn activate_silu x -> output
+    each i
+        output [ i ] = x [ i ]
+
+\ ---- 4. scale: output[i] = x[i] * factor[i] ------------------------------
+\ Replacement for the scale portion of activate.ptx
+\ Uses a per-element factor vector. For scalar scale, the host broadcasts.
+
+fn scale x factor -> output
+    each i
+        output [ i ] = x [ i ] * factor [ i ]

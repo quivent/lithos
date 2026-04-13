@@ -1,0 +1,43 @@
+\ gemv.li — GPTQ W4A16 matrix-vector multiply
+\ Replaces: gptq_matvec.ptx, gptq_matvec_tc.ptx, gptq_gemv_tc.ptx,
+\           projection.ptx, projection_gemm.ptx, lm_head.ptx
+\
+\ Core operation: y[row] = sum_k( dequant(W[row,k]) * x[k] )
+\ W is 4-bit quantized (packed 8 per u32), scale per group, zero_point=8.
+\
+\ Dimensions: W is (N, K/8) in packed u32, x is (K,), y is (N,).
+\ Each thread block handles one output row (or a tile of rows).
+\ Within a block, threads cooperatively reduce across K.
+\
+\ COMPILER LIMITATIONS:
+\   - No loop construct (need `for k in 0..K/8`)
+\   - No integer/bitwise ops (need shr, and, sub for W4 dequant)
+\   - No shared memory declarations
+\   - No warp shuffle reductions
+\   - No type conversions (u32->f32, etc.)
+\   - No literal constants
+\   - No scalar params (K, N dimensions)
+\
+\ SOURCE OF TRUTH: This .li file defines the algorithm.
+\ The compiler should eventually generate the PTX below.
+\ Until then, gemv.ptx is hand-written from this specification.
+
+\ --- Algorithm in Lithos pseudocode (what the compiler should parse) ---
+\
+\ fn gptq_gemv W_packed scales x N K -> y
+\     each row
+\         acc = 0.0
+\         for k_group in 0 .. K / 128
+\             s = scales [ row * (K/128) + k_group ]
+\             for j in 0 .. 16                        \ 16 packed u32 per group
+\                 packed = W_packed [ row * (K/8) + k_group * 16 + j ]
+\                 for nib in 0 .. 8                   \ 8 nibbles per u32
+\                     w_int = (packed >> (nib * 4)) & 0xF
+\                     w_fp  = (w_int - 8) * s         \ zero_point = 8
+\                     acc   = acc + w_fp * x [ k_group * 128 + j * 8 + nib ]
+\         y [ row ] = acc
+
+\ --- Lithos stub (compiles but produces trivial kernel) ---
+fn gptq_gemv W_packed scales x -> y
+    each i
+        y [ i ] = x [ i ]

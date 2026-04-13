@@ -36,13 +36,153 @@ from tokenizer import Tokenizer
 from kv_cache import KVCache
 from attention import process_qkv_with_rope, attention_prefill
 from shannon_smrs import (
-    quantize as shannon_quantize,
-    dequantize as shannon_dequantize,
+    quantize as _shannon_quantize_slow,
+    dequantize as _shannon_dequantize_slow,
     bits_per_weight as shannon_bpw,
     layer_size_bytes as shannon_size_bytes,
     CODEBOOK_6, CODEBOOK_8, PACK_WIDTH,
     _unpack_6level, _unpack_8level,
+    _compute_sensitivity, _pack_6level, _pack_8level,
 )
+
+
+def shannon_quantize(weights: np.ndarray, group_size: int = 128) -> dict:
+    """Fast vectorized Shannon SMRS quantization (avoids per-group Python loops)."""
+    original_shape = weights.shape
+    w = weights.flatten().astype(np.float32)
+    n = len(w)
+
+    n_groups = (n + group_size - 1) // group_size
+    padded = np.zeros(n_groups * group_size, dtype=np.float32)
+    padded[:n] = w
+    groups = padded.reshape(n_groups, group_size)
+
+    # Per-group stats
+    group_min = groups.min(axis=1)
+    group_max = groups.max(axis=1)
+    group_zero = (group_min + group_max) / 2.0
+    group_std = np.std(groups, axis=1)
+    group_std = np.maximum(group_std, 1e-10)
+
+    # Sensitivity-based class assignment
+    sensitivity = _compute_sensitivity(padded, group_size)
+    target_alpha = 0.515
+    threshold_idx = int(n_groups * (1 - target_alpha))
+    sorted_sensitivity = np.sort(sensitivity)
+    threshold = sorted_sensitivity[min(threshold_idx, len(sorted_sensitivity) - 1)]
+    is_class_s = sensitivity >= threshold
+
+    actual_s = np.sum(is_class_s)
+    target_s = int(n_groups * target_alpha)
+    if actual_s > target_s:
+        s_indices = np.where(is_class_s)[0]
+        s_sensitivities = sensitivity[s_indices]
+        cutoff = np.sort(s_sensitivities)[actual_s - target_s]
+        is_class_s = sensitivity > cutoff
+
+    # Vectorized quantization: normalize all groups at once
+    normalized = (groups - group_zero[:, np.newaxis]) / (group_std[:, np.newaxis] + 1e-30)
+    # shape: [n_groups, group_size]
+
+    s_mask = is_class_s
+    i_mask = ~is_class_s
+    s_idx = np.where(s_mask)[0]
+    i_idx = np.where(i_mask)[0]
+
+    # Quantize class-S (8-level) groups: vectorized nearest-codebook
+    indices_all = np.zeros((n_groups, group_size), dtype=np.uint8)
+
+    if len(s_idx) > 0:
+        norm_s = normalized[s_idx]  # [n_s, group_size]
+        # Distance to each codebook entry: [n_s, group_size, 8]
+        dists_s = np.abs(norm_s[:, :, np.newaxis] - CODEBOOK_8[np.newaxis, np.newaxis, :])
+        indices_all[s_idx] = np.argmin(dists_s, axis=2).astype(np.uint8)
+
+    if len(i_idx) > 0:
+        norm_i = normalized[i_idx]
+        dists_i = np.abs(norm_i[:, :, np.newaxis] - CODEBOOK_6[np.newaxis, np.newaxis, :])
+        indices_all[i_idx] = np.argmin(dists_i, axis=2).astype(np.uint8)
+
+    # Pack: collect indices for S and I groups separately, then pack
+    packed_data_8 = []
+    packed_data_6 = []
+
+    if len(s_idx) > 0:
+        s_indices_flat = indices_all[s_idx].flatten()
+        packed_8 = _pack_8level(s_indices_flat)
+    else:
+        packed_8 = np.array([], dtype=np.uint32)
+
+    if len(i_idx) > 0:
+        i_indices_flat = indices_all[i_idx].flatten()
+        packed_6 = _pack_6level(i_indices_flat)
+    else:
+        packed_6 = np.array([], dtype=np.uint32)
+
+    return {
+        'scheme': 'SMRS',
+        'original_shape': original_shape,
+        'n_weights': n,
+        'group_size': group_size,
+        'n_groups': n_groups,
+        'scales': group_std.astype(np.float16),
+        'zeros': group_zero.astype(np.float16),
+        'is_class_s': np.packbits(is_class_s),
+        'n_class_s': int(np.sum(is_class_s)),
+        'packed_6': packed_6,
+        'packed_8': packed_8,
+        'group_class_s_indices': np.where(is_class_s)[0].astype(np.int32),
+        'group_class_i_indices': np.where(~is_class_s)[0].astype(np.int32),
+    }
+
+
+def shannon_dequantize(packed: dict) -> np.ndarray:
+    """Fast vectorized Shannon SMRS dequantization (no Python loops over groups)."""
+    n = packed['n_weights']
+    group_size = packed['group_size']
+    n_groups = packed['n_groups']
+
+    scales = packed['scales'].astype(np.float32)
+    zeros = packed['zeros'].astype(np.float32)
+
+    s_indices = packed['group_class_s_indices']
+    i_indices = packed['group_class_i_indices']
+
+    result = np.zeros(n_groups * group_size, dtype=np.float32)
+
+    # Vectorized class-S (8-level) groups
+    if len(packed['packed_8']) > 0:
+        all_idx_8 = _unpack_8level(packed['packed_8'], len(s_indices) * group_size)
+        # Codebook lookup: all at once
+        all_vals_8 = CODEBOOK_8[all_idx_8]  # [n_s_groups * group_size]
+        all_vals_8 = all_vals_8.reshape(len(s_indices), group_size)  # [n_s, gs]
+
+        # Apply scale and zero per group: vals * scale[g] + zero[g]
+        s_scales = scales[s_indices][:, np.newaxis]  # [n_s, 1]
+        s_zeros = zeros[s_indices][:, np.newaxis]   # [n_s, 1]
+        all_vals_8 = all_vals_8 * s_scales + s_zeros  # [n_s, gs]
+
+        # Scatter into result
+        # Compute destination indices
+        dest_starts = s_indices.astype(np.int64) * group_size  # [n_s]
+        dest_idx = (dest_starts[:, np.newaxis] + np.arange(group_size)[np.newaxis, :]).flatten()
+        result[dest_idx] = all_vals_8.flatten()
+
+    # Vectorized class-I (6-level) groups
+    if len(packed['packed_6']) > 0:
+        all_idx_6 = _unpack_6level(packed['packed_6'], len(i_indices) * group_size)
+        all_vals_6 = CODEBOOK_6[all_idx_6]
+        all_vals_6 = all_vals_6.reshape(len(i_indices), group_size)
+
+        i_scales = scales[i_indices][:, np.newaxis]
+        i_zeros = zeros[i_indices][:, np.newaxis]
+        all_vals_6 = all_vals_6 * i_scales + i_zeros
+
+        dest_starts = i_indices.astype(np.int64) * group_size
+        dest_idx = (dest_starts[:, np.newaxis] + np.arange(group_size)[np.newaxis, :]).flatten()
+        result[dest_idx] = all_vals_6.flatten()
+
+    return result[:n].reshape(packed['original_shape'])
 
 MODEL_DIR = "/home/ubuntu/models/Huihui-Qwen3.5-27B-abliterated-GPTQ-W4A16"
 KERNEL_DIR = str(Path(__file__).resolve().parent.parent / "kernels")
@@ -70,7 +210,10 @@ SHANNON_WEIGHTS_DIR = "/tmp/shannon_weights"
 # ============================================================================
 
 def dequantize_gptq_matrix(model: LithosModel, weight_prefix: str) -> np.ndarray:
-    """Dequantize a GPTQ 4-bit weight matrix to F32. Returns shape [K, N]."""
+    """Dequantize a GPTQ 4-bit weight matrix to F32. Returns shape [K, N].
+
+    Fully vectorized -- no Python loops over K or N.
+    """
     qw_name = f"{weight_prefix}.qweight"
     sc_name = f"{weight_prefix}.scales"
     zr_name = f"{weight_prefix}.qzeros"
@@ -83,38 +226,38 @@ def dequantize_gptq_matrix(model: LithosModel, weight_prefix: str) -> np.ndarray
     sc_raw = bytes(model.weight_bytes(sc_name))
     zr_raw = bytes(model.weight_bytes(zr_name))
 
-    qw_shape = qw_info.shape
-    sc_shape = sc_info.shape
-    zr_shape = zr_info.shape
+    qw_shape = qw_info.shape  # [K/8, N]
+    sc_shape = sc_info.shape  # [n_groups, N]
+    zr_shape = zr_info.shape  # [n_groups, N/8]
 
     K = qw_shape[0] * 8
     N = qw_shape[1]
     n_groups = sc_shape[0]
 
-    qweight = np.frombuffer(qw_raw, dtype=np.int32).reshape(qw_shape).copy()
+    qweight = np.frombuffer(qw_raw, dtype=np.int32).reshape(qw_shape).copy().view(np.uint32)
     scales = np.frombuffer(sc_raw, dtype=np.float16).reshape(sc_shape).astype(np.float32)
-    qzeros = np.frombuffer(zr_raw, dtype=np.int32).reshape(zr_shape).copy()
+    qzeros_raw = np.frombuffer(zr_raw, dtype=np.int32).reshape(zr_shape).copy().view(np.uint32)
 
+    # Unpack all 4-bit qweight values at once: [K/8, N] -> [K, N]
+    # Each int32 has 8 x 4-bit values for consecutive K rows
+    shifts = (np.arange(8, dtype=np.uint32) * 4).reshape(1, 8, 1)  # [1, 8, 1]
+    qw_3d = qweight[:, np.newaxis, :]  # [K/8, 1, N]
+    unpacked = ((qw_3d >> shifts) & 0xF).astype(np.float32)  # [K/8, 8, N]
+    unpacked = unpacked.reshape(K, N)  # [K, N]
+
+    # Unpack qzeros: [n_groups, N/8] -> [n_groups, N]
+    shifts_z = (np.arange(8, dtype=np.uint32) * 4).reshape(1, 8, 1)  # [1, 8, 1]
+    zr_3d = qzeros_raw[:, np.newaxis, :]  # [n_groups, 1, N/8]
+    zeros_unpacked = ((zr_3d >> shifts_z) & 0xF).astype(np.float32)  # [n_groups, 8, N/8]
+    zeros_unpacked = zeros_unpacked.reshape(n_groups, N)  # [n_groups, N]
+
+    # Dequantize: for each group g, rows [g*128, (g+1)*128):
+    #   result[k, n] = (qval[k, n] - zero[g, n]) * scale[g, n]
     result = np.zeros((K, N), dtype=np.float32)
-
     for g in range(n_groups):
         k_start = g * GROUP_SIZE
         k_end = min(k_start + GROUP_SIZE, K)
-        scale_row = scales[g]
-
-        zeros = np.zeros(N, dtype=np.float32)
-        for j_pack in range(zr_shape[1]):
-            zr_val = qzeros[g, j_pack]
-            for bit in range(8):
-                j = j_pack * 8 + bit
-                if j < N:
-                    zeros[j] = float((zr_val >> (bit * 4)) & 0xF)
-
-        for k in range(k_start, k_end):
-            pack_row = k // 8
-            bit_offset = (k % 8) * 4
-            qvals = ((qweight[pack_row, :].astype(np.uint32) >> bit_offset) & 0xF).astype(np.float32)
-            result[k, :] = (qvals - zeros) * scale_row
+        result[k_start:k_end, :] = (unpacked[k_start:k_end, :] - zeros_unpacked[g]) * scales[g]
 
     return result
 
@@ -321,35 +464,55 @@ class ShannonPrefillEngine:
     # Shannon-quantized matvec
     # ------------------------------------------------------------------
 
-    def _get_shannon_weight(self, weight_prefix: str) -> dict:
-        """Get or create Shannon-packed weight. Caches after first use."""
+    def _get_shannon_f32(self, weight_prefix: str) -> np.ndarray:
+        """Get F32 weights after Shannon round-trip (GPTQ -> F32 -> Shannon -> F32).
+
+        Caches the dequantized F32 result for reuse across tokens.
+        First call: GPTQ dequant + Shannon quantize + Shannon dequant + cache.
+        Subsequent calls: return cached F32 directly.
+        """
         if weight_prefix in self._shannon_cache:
             return self._shannon_cache[weight_prefix]
 
-        # Check if we have it saved on disk
-        # For now, always requantize on-the-fly from GPTQ
         t0 = time.monotonic()
-        f32 = dequantize_gptq_matrix(self.model, weight_prefix)
-        packed = shannon_quantize(f32, group_size=128)
+        # Step 1: GPTQ dequantize to F32
+        f32_gptq = dequantize_gptq_matrix(self.model, weight_prefix)
 
+        # Step 2: Shannon quantize (proves the packing works)
+        packed = shannon_quantize(f32_gptq, group_size=128)
+
+        # Record statistics BEFORE dequantizing (this is the actual Shannon size)
         bpw = shannon_bpw(packed)
         size_b = shannon_size_bytes(packed)
         self._shannon_stats["total_bytes"] += size_b
         self._shannon_stats["total_weights"] += packed['n_weights']
 
+        # Step 3: Shannon dequantize (round-trip: this is what inference uses)
+        f32_shannon = shannon_dequantize(packed)
+
+        # Quality check
+        cos = np.dot(f32_gptq.flatten(), f32_shannon.flatten()) / (
+            np.linalg.norm(f32_gptq) * np.linalg.norm(f32_shannon) + 1e-30)
+
         elapsed = time.monotonic() - t0
-        self._shannon_cache[weight_prefix] = packed
-        return packed
+        short_name = weight_prefix.split("layers.")[-1] if "layers." in weight_prefix else weight_prefix
+        print(f"      Shannon: {short_name} cos={cos:.4f} bpw={bpw:.3f} "
+              f"size={size_b/1024:.0f}KB {elapsed:.1f}s")
+
+        # Cache the F32 result (free the packed to save memory)
+        self._shannon_cache[weight_prefix] = f32_shannon
+        del packed, f32_gptq
+
+        return f32_shannon
 
     def shannon_matvec(self, weight_prefix: str, x: np.ndarray) -> np.ndarray:
-        """Compute y = x @ W where W is Shannon-quantized.
+        """Compute y = x @ W where W has been Shannon round-tripped.
 
         weight_prefix: e.g. "model.language_model.layers.0.mlp.gate_proj"
         x: input vector [K]
         Returns: output vector [N]
         """
-        packed = self._get_shannon_weight(weight_prefix)
-        W = shannon_dequantize(packed)  # [K, N]
+        W = self._get_shannon_f32(weight_prefix)  # [K, N]
         return x @ W
 
     # ------------------------------------------------------------------

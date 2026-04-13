@@ -78,34 +78,27 @@ def dequantize_gptq(model: LithosModel, weight_prefix: str) -> np.ndarray:
     N = qw_shape[1]
     n_groups = sc_shape[0]
 
-    # Convert to numpy
-    qweight = np.frombuffer(qw_raw, dtype=np.int32).reshape(qw_shape).copy()
+    # Convert to numpy -- fully vectorized dequantization
+    qweight = np.frombuffer(qw_raw, dtype=np.int32).reshape(qw_shape).copy().view(np.uint32)
     scales = np.frombuffer(sc_raw, dtype=np.float16).reshape(sc_shape).astype(np.float32)
-    qzeros = np.frombuffer(zr_raw, dtype=np.int32).reshape(zr_shape).copy()
+    qzeros_raw = np.frombuffer(zr_raw, dtype=np.int32).reshape(zr_shape).copy().view(np.uint32)
 
-    # Dequantize: vectorized over columns, iterate over K groups
+    # Unpack all 4-bit qweight values: [K/8, N] -> [K, N]
+    shifts = (np.arange(8, dtype=np.uint32) * 4).reshape(1, 8, 1)
+    qw_3d = qweight[:, np.newaxis, :]  # [K/8, 1, N]
+    unpacked = ((qw_3d >> shifts) & 0xF).astype(np.float32).reshape(K, N)
+
+    # Unpack qzeros: [n_groups, N/8] -> [n_groups, N]
+    shifts_z = (np.arange(8, dtype=np.uint32) * 4).reshape(1, 8, 1)
+    zr_3d = qzeros_raw[:, np.newaxis, :]
+    zeros_unpacked = ((zr_3d >> shifts_z) & 0xF).astype(np.float32).reshape(n_groups, N)
+
+    # Dequantize per group
     result = np.zeros((K, N), dtype=np.float32)
-
     for g in range(n_groups):
         k_start = g * GROUP_SIZE
         k_end = min(k_start + GROUP_SIZE, K)
-        scale_row = scales[g]  # [N]
-
-        # Extract zero points for this group
-        zeros = np.zeros(N, dtype=np.float32)
-        for j_pack in range(zr_shape[1]):
-            zr_val = qzeros[g, j_pack]
-            for bit in range(8):
-                j = j_pack * 8 + bit
-                if j < N:
-                    zeros[j] = float((zr_val >> (bit * 4)) & 0xF)
-
-        for k in range(k_start, k_end):
-            pack_row = k // 8
-            bit_offset = (k % 8) * 4
-            # Extract 4-bit values for all N columns at once
-            qvals = ((qweight[pack_row, :].astype(np.uint32) >> bit_offset) & 0xF).astype(np.float32)
-            result[k, :] = (qvals - zeros) * scale_row
+        result[k_start:k_end, :] = (unpacked[k_start:k_end, :] - zeros_unpacked[g]) * scales[g]
 
     return result
 

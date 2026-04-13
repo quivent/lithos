@@ -1,0 +1,51 @@
+\ reduce.li — Reduction operations for LLM inference
+\ Replaces: norm.ptx, sample.ptx
+\
+\ Two reduction flavors:
+\   1. RMSNorm: y[i] = x[i] * weight[i] * rsqrt( mean(x^2) + eps )
+\      - Reduce x^2 across the hidden dimension, then scale each element
+\   2. Sampling: argmax or softmax-sample over logits
+\      - Reduce to find max, then reduce to compute exp-sum
+\
+\ COMPILER LIMITATIONS:
+\   - No warp shuffle intrinsics (shfl.sync.bfly)
+\   - No shared memory for cross-warp reduction
+\   - No intrinsics: rsqrt, ex2.approx, rcp.approx
+\   - No loop construct
+\   - No scalar params (hidden_dim, eps)
+\   - No integer comparison for argmax
+\
+\ SOURCE OF TRUTH: This .li file defines the algorithms.
+\ The compiler should eventually generate the PTX below.
+\
+\ --- RMSNorm algorithm ---
+\
+\ fn rmsnorm x weight eps hidden_dim -> y
+\     each i
+\         \ Phase 1: compute sum of squares (warp reduction)
+\         lane = thread_id % 32
+\         sq = x [ i ] * x [ i ]
+\         sq = warp_reduce_sum(sq)         \ butterfly shuffle
+\         \ Phase 2: cross-warp reduction via shared memory
+\         mean_sq = sq / hidden_dim
+\         rscale = rsqrt(mean_sq + eps)
+\         \ Phase 3: scale each element
+\         y [ i ] = x [ i ] * weight [ i ] * rscale
+\
+\ --- Sample (argmax) algorithm ---
+\
+\ fn sample_argmax logits n_vocab -> token_id
+\     each i
+\         val = logits [ i ]
+\         max_val = warp_reduce_max(val)   \ butterfly shuffle with max
+\         \ cross-warp reduce via shared memory
+\         \ thread with max writes its index
+
+\ --- Lithos stub (compiles to a per-element placeholder) ---
+fn rmsnorm x weight -> y
+    each i
+        y [ i ] = x [ i ] * weight [ i ]
+
+fn sample_max logits -> result
+    each i
+        result [ i ] = logits [ i ]

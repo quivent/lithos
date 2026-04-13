@@ -1,0 +1,66 @@
+\ attend.li — Attention scoring with KV cache, RoPE, GQA
+\ Replaces: attention_score.ptx, rotate.ptx, fused_attention.ptx
+\
+\ Three fused operations:
+\   1. RoPE (Rotary Position Embedding): rotate Q and K vectors
+\   2. KV cache write: store K,V into the cache at current position
+\   3. Attention score: softmax(Q * K^T / sqrt(d)) * V
+\
+\ GQA (Grouped Query Attention): n_kv_heads < n_q_heads
+\   Each KV head serves (n_q_heads / n_kv_heads) query heads.
+\
+\ COMPILER LIMITATIONS:
+\   - No sin/cos intrinsics (need for RoPE)
+\   - No loop construct (need for dot product over d_head, and over seq_len)
+\   - No shared memory (need for softmax reduction over sequence)
+\   - No warp shuffles (need for reduction)
+\   - No scalar params (d_head, seq_len, n_heads, pos)
+\   - No integer division/modulo (need for GQA head mapping)
+\   - No literal float constants (need for 1/sqrt(d))
+\
+\ SOURCE OF TRUTH: This .li file defines the algorithm.
+\
+\ --- RoPE algorithm ---
+\
+\ fn rope q k pos d_head -> q_rot k_rot
+\     each head_elem           \ parallel over (n_heads * d_head/2)
+\         dim = head_elem % (d_head / 2)
+\         freq = 1.0 / pow(10000.0, 2*dim / d_head)
+\         angle = pos * freq
+\         cs = cos(angle)
+\         sn = sin(angle)
+\         \ Rotate pairs: (q[2i], q[2i+1]) -> (q[2i]*cs - q[2i+1]*sn, ...)
+\         q0 = q [ head_elem * 2 ]
+\         q1 = q [ head_elem * 2 + 1 ]
+\         q_rot [ head_elem * 2 ]     = q0 * cs - q1 * sn
+\         q_rot [ head_elem * 2 + 1 ] = q0 * sn + q1 * cs
+\         \ Same for k
+\
+\ --- Attention score algorithm ---
+\
+\ fn attention q k_cache v_cache seq_len d_head n_heads n_kv_heads -> output
+\     each query_head           \ parallel over n_q_heads
+\         kv_head = query_head / (n_heads / n_kv_heads)
+\         \ Compute scores: for each position in [0, seq_len)
+\         for pos in 0 .. seq_len
+\             score[pos] = dot(q[query_head], k_cache[kv_head, pos]) / sqrt(d_head)
+\         \ Softmax over scores
+\         max_s = reduce_max(score)
+\         for pos in 0 .. seq_len
+\             score[pos] = exp(score[pos] - max_s)
+\         sum_s = reduce_sum(score)
+\         for pos in 0 .. seq_len
+\             score[pos] = score[pos] / sum_s
+\         \ Weighted sum of values
+\         for d in 0 .. d_head
+\             output[query_head, d] = sum_pos( score[pos] * v_cache[kv_head, pos, d] )
+
+\ --- Lithos stub (compiles to per-element placeholder) ---
+fn rope_stub q k -> q_rot k_rot
+    each i
+        q_rot [ i ] = q [ i ]
+        k_rot [ i ] = k [ i ]
+
+fn attention_stub q k v -> output
+    each i
+        output [ i ] = q [ i ]

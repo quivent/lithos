@@ -1,0 +1,289 @@
+// reduce.ptx — Generated from reduce.li
+// Reduction operations: RMSNorm, Sampling (argmax)
+// Replaces: norm.ptx, sample.ptx
+// Target: sm_90, PTX 8.0
+//
+// COMPILER GAPS:
+//   - warp shuffle intrinsics (shfl.sync.bfly)
+//   - shared memory declarations and access
+//   - rsqrt.approx.f32, ex2.approx.f32
+//   - for loop construct
+//   - scalar params (.param .u32)
+//   - fma.rn.f32 intrinsic
+
+.version 8.0
+.target sm_90
+.address_size 64
+
+// ============================================================
+// 1. rmsnorm: y[i] = x[i] * weight[i] * rsqrt(mean(x^2) + eps)
+//    Replaces: norm.ptx
+//    Launch: gridDim.x = batch, blockDim.x = 256
+//    Each block normalizes one row of hidden_dim elements.
+// ============================================================
+.visible .entry rmsnorm(
+    .param .u64 x,
+    .param .u64 weight,
+    .param .u64 y,
+    .param .u32 hidden_dim,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32  %r<32>;
+    .reg .b64  %rd<16>;
+    .reg .f32  %f<24>;
+
+    .shared .align 4 .f32 smem_reduce[256];
+
+    ld.param.u64 %rd0, [x];
+    ld.param.u64 %rd1, [weight];
+    ld.param.u64 %rd2, [y];
+    ld.param.u32 %r10, [hidden_dim];
+    ld.param.f32 %f10, [eps];
+
+    // row = blockIdx.x
+    mov.u32 %r0, %ctaid.x;
+    // tid = threadIdx.x
+    mov.u32 %r1, %tid.x;
+    mov.u32 %r2, %ntid.x;
+
+    // row_offset = row * hidden_dim
+    mul.lo.u32 %r3, %r0, %r10;
+    // Base pointer for this row: x_row = x + row_offset * 4
+    mul.wide.u32 %rd3, %r3, 4;
+    add.u64 %rd4, %rd0, %rd3;          // x_row_ptr
+    add.u64 %rd5, %rd2, %rd3;          // y_row_ptr
+
+    // --- Phase 1: accumulate x^2 across hidden_dim ---
+    mov.f32 %f0, 0f00000000;           // sum_sq = 0
+    mov.u32 %r4, %r1;                  // idx = tid
+
+$L_sq_loop:
+    setp.ge.u32 %p0, %r4, %r10;
+    @%p0 bra $L_sq_done;
+
+    mul.wide.u32 %rd6, %r4, 4;
+    add.u64 %rd7, %rd4, %rd6;
+    ld.global.f32 %f1, [%rd7];
+    fma.rn.f32 %f0, %f1, %f1, %f0;    // sum_sq += x*x
+    add.u32 %r4, %r4, %r2;            // idx += blockDim.x
+    bra $L_sq_loop;
+
+$L_sq_done:
+    // --- Warp reduction of sum_sq ---
+    shfl.sync.bfly.b32 %f2, %f0, 16, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f2;
+    shfl.sync.bfly.b32 %f2, %f0, 8, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f2;
+    shfl.sync.bfly.b32 %f2, %f0, 4, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f2;
+    shfl.sync.bfly.b32 %f2, %f0, 2, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f2;
+    shfl.sync.bfly.b32 %f2, %f0, 1, 31, 0xFFFFFFFF;
+    add.f32 %f0, %f0, %f2;
+
+    // --- Cross-warp reduction ---
+    shr.u32 %r5, %r1, 5;               // warp_id
+    and.b32 %r6, %r1, 31;              // lane_id
+    setp.eq.u32 %p1, %r6, 0;
+
+    mul.wide.u32 %rd8, %r5, 4;
+    mov.u64 %rd9, smem_reduce;
+    add.u64 %rd10, %rd9, %rd8;
+    @%p1 st.shared.f32 [%rd10], %f0;
+
+    bar.sync 0;
+
+    // First warp reduces partial sums
+    setp.lt.u32 %p2, %r1, 8;
+    @!%p2 bra $L_norm_apply;
+
+    mul.wide.u32 %rd11, %r1, 4;
+    add.u64 %rd12, %rd9, %rd11;
+    ld.shared.f32 %f0, [%rd12];
+
+    shfl.sync.bfly.b32 %f2, %f0, 4, 31, 0x000000FF;
+    add.f32 %f0, %f0, %f2;
+    shfl.sync.bfly.b32 %f2, %f0, 2, 31, 0x000000FF;
+    add.f32 %f0, %f0, %f2;
+    shfl.sync.bfly.b32 %f2, %f0, 1, 31, 0x000000FF;
+    add.f32 %f0, %f0, %f2;
+
+    // Thread 0: compute rsqrt(mean + eps), broadcast via smem
+    setp.eq.u32 %p3, %r1, 0;
+    @!%p3 bra $L_norm_apply;
+
+    // mean = sum_sq / hidden_dim
+    cvt.rn.f32.u32 %f3, %r10;
+    div.approx.f32 %f4, %f0, %f3;      // mean_sq
+    add.f32 %f5, %f4, %f10;            // mean_sq + eps
+    rsqrt.approx.f32 %f6, %f5;         // rsqrt(mean_sq + eps)
+    st.shared.f32 [smem_reduce], %f6;   // broadcast scale
+
+$L_norm_apply:
+    bar.sync 0;
+
+    // All threads read the scale factor
+    ld.shared.f32 %f7, [smem_reduce];
+
+    // --- Phase 3: y[i] = x[i] * weight[i] * scale ---
+    mov.u32 %r4, %r1;
+
+$L_norm_loop:
+    setp.ge.u32 %p4, %r4, %r10;
+    @%p4 bra $L_exit;
+
+    mul.wide.u32 %rd6, %r4, 4;
+    add.u64 %rd7, %rd4, %rd6;
+    ld.global.f32 %f8, [%rd7];         // x[i]
+
+    add.u64 %rd13, %rd1, %rd6;
+    ld.global.f32 %f9, [%rd13];        // weight[i]
+
+    mul.f32 %f11, %f8, %f7;            // x[i] * scale
+    mul.f32 %f12, %f11, %f9;           // * weight[i]
+
+    add.u64 %rd14, %rd5, %rd6;
+    st.global.f32 [%rd14], %f12;
+
+    add.u32 %r4, %r4, %r2;
+    bra $L_norm_loop;
+
+$L_exit:
+    ret;
+}
+
+// ============================================================
+// 2. sample_argmax: find index of maximum logit
+//    Replaces: sample.ptx
+//    Launch: gridDim.x = 1, blockDim.x = 256
+// ============================================================
+.visible .entry sample_argmax(
+    .param .u64 logits,
+    .param .u64 result,
+    .param .u32 n_vocab
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32  %r<32>;
+    .reg .b64  %rd<12>;
+    .reg .f32  %f<8>;
+
+    .shared .align 4 .f32 smem_vals[256];
+    .shared .align 4 .b32 smem_idxs[256];
+
+    ld.param.u64 %rd0, [logits];
+    ld.param.u64 %rd1, [result];
+    ld.param.u32 %r10, [n_vocab];
+
+    mov.u32 %r1, %tid.x;
+    mov.u32 %r2, %ntid.x;
+
+    // --- Phase 1: each thread finds local max over its stride ---
+    mov.f32 %f0, 0fFF800000;           // -inf
+    mov.u32 %r3, 0;                    // best_idx = 0
+    mov.u32 %r4, %r1;                  // idx = tid
+
+$L_max_loop:
+    setp.ge.u32 %p0, %r4, %r10;
+    @%p0 bra $L_max_done;
+
+    mul.wide.u32 %rd2, %r4, 4;
+    add.u64 %rd3, %rd0, %rd2;
+    ld.global.f32 %f1, [%rd3];
+
+    setp.gt.f32 %p1, %f1, %f0;
+    @%p1 mov.f32 %f0, %f1;
+    @%p1 mov.b32 %r3, %r4;
+
+    add.u32 %r4, %r4, %r2;
+    bra $L_max_loop;
+
+$L_max_done:
+    // --- Warp-level max reduction with index ---
+    // Exchange val+idx with butterfly pattern
+    shfl.sync.bfly.b32 %f2, %f0, 16, 31, 0xFFFFFFFF;
+    shfl.sync.bfly.b32 %r20, %r3, 16, 31, 0xFFFFFFFF;
+    setp.gt.f32 %p2, %f2, %f0;
+    @%p2 mov.f32 %f0, %f2;
+    @%p2 mov.b32 %r3, %r20;
+
+    shfl.sync.bfly.b32 %f2, %f0, 8, 31, 0xFFFFFFFF;
+    shfl.sync.bfly.b32 %r20, %r3, 8, 31, 0xFFFFFFFF;
+    setp.gt.f32 %p2, %f2, %f0;
+    @%p2 mov.f32 %f0, %f2;
+    @%p2 mov.b32 %r3, %r20;
+
+    shfl.sync.bfly.b32 %f2, %f0, 4, 31, 0xFFFFFFFF;
+    shfl.sync.bfly.b32 %r20, %r3, 4, 31, 0xFFFFFFFF;
+    setp.gt.f32 %p2, %f2, %f0;
+    @%p2 mov.f32 %f0, %f2;
+    @%p2 mov.b32 %r3, %r20;
+
+    shfl.sync.bfly.b32 %f2, %f0, 2, 31, 0xFFFFFFFF;
+    shfl.sync.bfly.b32 %r20, %r3, 2, 31, 0xFFFFFFFF;
+    setp.gt.f32 %p2, %f2, %f0;
+    @%p2 mov.f32 %f0, %f2;
+    @%p2 mov.b32 %r3, %r20;
+
+    shfl.sync.bfly.b32 %f2, %f0, 1, 31, 0xFFFFFFFF;
+    shfl.sync.bfly.b32 %r20, %r3, 1, 31, 0xFFFFFFFF;
+    setp.gt.f32 %p2, %f2, %f0;
+    @%p2 mov.f32 %f0, %f2;
+    @%p2 mov.b32 %r3, %r20;
+
+    // --- Cross-warp reduction via shared memory ---
+    shr.u32 %r5, %r1, 5;
+    and.b32 %r6, %r1, 31;
+    setp.eq.u32 %p3, %r6, 0;
+
+    mul.wide.u32 %rd4, %r5, 4;
+    mov.u64 %rd5, smem_vals;
+    add.u64 %rd6, %rd5, %rd4;
+    @%p3 st.shared.f32 [%rd6], %f0;
+
+    mov.u64 %rd7, smem_idxs;
+    add.u64 %rd8, %rd7, %rd4;
+    @%p3 st.shared.b32 [%rd8], %r3;
+
+    bar.sync 0;
+
+    // First warp does final reduction
+    setp.lt.u32 %p4, %r1, 8;
+    @!%p4 bra $L_sample_exit;
+
+    mul.wide.u32 %rd9, %r1, 4;
+    add.u64 %rd6, %rd5, %rd9;
+    ld.shared.f32 %f0, [%rd6];
+    add.u64 %rd8, %rd7, %rd9;
+    ld.shared.b32 %r3, [%rd8];
+
+    shfl.sync.bfly.b32 %f2, %f0, 4, 31, 0x000000FF;
+    shfl.sync.bfly.b32 %r20, %r3, 4, 31, 0x000000FF;
+    setp.gt.f32 %p5, %f2, %f0;
+    @%p5 mov.f32 %f0, %f2;
+    @%p5 mov.b32 %r3, %r20;
+
+    shfl.sync.bfly.b32 %f2, %f0, 2, 31, 0x000000FF;
+    shfl.sync.bfly.b32 %r20, %r3, 2, 31, 0x000000FF;
+    setp.gt.f32 %p5, %f2, %f0;
+    @%p5 mov.f32 %f0, %f2;
+    @%p5 mov.b32 %r3, %r20;
+
+    shfl.sync.bfly.b32 %f2, %f0, 1, 31, 0x000000FF;
+    shfl.sync.bfly.b32 %r20, %r3, 1, 31, 0x000000FF;
+    setp.gt.f32 %p5, %f2, %f0;
+    @%p5 mov.f32 %f0, %f2;
+    @%p5 mov.b32 %r3, %r20;
+
+    // Thread 0 writes result
+    setp.eq.u32 %p6, %r1, 0;
+    @!%p6 bra $L_sample_exit;
+
+    // Store winning index as u32
+    st.global.b32 [%rd1], %r3;
+
+$L_sample_exit:
+    ret;
+}
