@@ -1,0 +1,13 @@
+{
+  "redirects": [
+    { "source": "/", "destination": "/docs/index.html", "permanent": false }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=300" }
+      ]
+    }
+  ]
+}
