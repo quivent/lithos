@@ -14,8 +14,8 @@ FOUNDATIONS   [████████] complete   language, kernels, grammar, 
 COMPILER      [██████░░] wired, not compiling   compiler.ls self-parse blocked
 BOOTSTRAP     [███░░░░░] smoke test works, parser gap blocks compiler.ls
 RUNTIME       [████░░░░] all .ls written, untested, cbuf0 register_count unknown
-HARDWARE      [██░░░░░░] GSP mostly asm, FSP not wired, QMD builder exists untested
-INTEGRATION   [░░░░░░░░] launcher.ls writing, not compiled, nothing executes end-to-end
+HARDWARE      [████░░░░] GSP boot wired (FSP done), QMD builder untested, cbuf0 probe pending
+INTEGRATION   [██░░░░░░] launcher.ls written (162 lines), not compiled, nothing executes end-to-end
 FIRST TOKEN   [░░░░░░░░] blocked on all above
 ```
 
@@ -123,11 +123,13 @@ None of these have been executed yet — the compiler must work first.
 [✓] poll_lockdown.s — PRIV_LOCKDOWN release polling
 [✓] rpc_channel.s — channel allocation via GSP RPC
 
-FSP subsystem drafted (~2800 LoC in GSP/fsp/) but:
-[ ] FSP not wired into GSP/boot.s (TODO stub at step 7)  ← BLOCKING
-[ ] BCR/FSP ordering inverted vs NVIDIA reference        ← verify then fix
+FSP subsystem wired:
+[✓] FSP wired into GSP/boot.s at step 6 (before BCR at step 7)
+[✓] BCR/FSP ordering fixed per NVIDIA reference
+[✓] fsp_queue_advance_head added to emem_xfer.s
+[✓] Stale .include directives removed from mctp/response/diag
 [ ] vfio-pci: not implemented (sysfs mmap only)
-[ ] register_count byte offset in cbuf0 unknown          ← needs differential probe
+[ ] register_count byte offset in cbuf0 unknown          ← probe dispatched
 ```
 
 ---
@@ -135,7 +137,7 @@ FSP subsystem drafted (~2800 LoC in GSP/fsp/) but:
 ## LAUNCHER INTEGRATION
 
 ```
-[ ] src/launcher.ls — writing now (W8 worker). Replaces src/launcher.s
+[✓] src/launcher.ls — 162 lines, replaces src/launcher.s
 [ ] Removes all 42 libcuda call sites
 [ ] Single dispatch per token (megakernel, not per-kernel)
 [ ] Tokenize + emit stubs (full tokenizer later)
@@ -184,7 +186,7 @@ FSP subsystem drafted (~2800 LoC in GSP/fsp/) but:
 
 1. **Bootstrap parser** — add expression parsing + composition syntax handling
 2. **compiler.ls self-consistency** — fix 8 internal grammar issues from Scout 2
-3. **FSP boot wiring** — connect `GSP/fsp/*.s` into `GSP/boot.s`
+3. ~~**FSP boot wiring**~~ — DONE (wired at step 6, BCR/FSP order fixed)
 4. **register_count probe** — differential probe for cbuf0 offset
 5. **First compile**: bootstrap parses compiler.ls → lithos-stage1
 6. **Self-compile**: lithos-stage1 compiles compiler.ls → lithos (fixed point)
