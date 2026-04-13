@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos &mdash; GPU Warp Scheduler</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 4.5rem; font-weight: 300; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Diagram */
+.diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.diagram .highlight { color: var(--text); }
+.diagram .accent { color: var(--accent); }
+.diagram .dim { color: var(--text-faint); }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="index.html">Home</a>
+  <a href="#what-it-does">What It Does</a>
+  <a href="#how-it-decides">How It Decides</a>
+  <a href="#what-lithos-controls">Lithos Controls</a>
+  <a href="#control-word">Control Word</a>
+  <a href="#why-it-matters">Why It Matters</a>
+  <a href="pytorch.html">Lithos vs PyTorch</a>
+  <a href="performance.html">Performance</a>
+  <a href="memory.html">Memory</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Warp Scheduler</h1>
+  <p>How the GPU picks which warp to run each cycle &mdash; and how Lithos influences the decision</p>
+</div>
+</header>
+
+<!-- What the Warp Scheduler Does -->
+<section id="what-it-does">
+<div class="container">
+<h2>What the Warp Scheduler Does</h2>
+
+<p>Each Streaming Multiprocessor (SM) on Hopper has <strong>4 warp schedulers</strong>, one per sub-partition. Every clock cycle, each scheduler picks one <em>ready</em> warp from its assigned set and issues one instruction from it.</p>
+
+<p>A warp is "ready" when two conditions are met: all source operands for its next instruction are available (no pending writes), and the functional unit the instruction needs (FMA, load/store, special function) is free.</p>
+
+<p>With 4 schedulers issuing independently, an SM can issue up to 4 instructions per cycle &mdash; one from each sub-partition. The schedulers do not coordinate with each other. Each operates on its own pool of resident warps.</p>
+
+</div>
+</section>
+
+<!-- How It Decides -->
+<section id="how-it-decides">
+<div class="container">
+<h2>How It Decides</h2>
+
+<h4>Scoreboard Tracking</h4>
+<p>Each register has a pending-write counter maintained by the hardware scoreboard. When an instruction writes to a register, the counter increments. When the write completes, it decrements. An instruction is eligible for issue only when <em>all</em> of its source registers have a pending-write count of zero.</p>
+
+<h4>Warp Selection Policy</h4>
+<p>Among eligible warps, the scheduler uses a selection policy to pick one. NVIDIA does not publish the exact algorithm. It is believed to be a form of greedy-then-round-robin: prefer warps that can issue to an idle functional unit, break ties with round-robin to ensure fairness.</p>
+
+<h4>The Failure Case: Stall</h4>
+<p>If <em>no</em> warp in a sub-partition is eligible &mdash; every warp is waiting on a memory load, a barrier, or a long-latency operation &mdash; the scheduler stalls. No instruction issues that cycle. This is the latency hiding failure case. It means there aren't enough independent warps to cover the latency of in-flight operations.</p>
+
+</div>
+</section>
+
+<!-- What Lithos Can Influence -->
+<section id="what-lithos-controls">
+<div class="container">
+<h2>What Lithos Can Influence</h2>
+
+<h4>1. Occupancy (Number of Resident Warps)</h4>
+<p>More resident warps give each scheduler more choices, improving the odds that at least one warp is ready every cycle. Occupancy is determined by register count per thread: fewer registers per thread means more threads (and therefore more warps) fit on the SM simultaneously. Lithos controls register count directly via <code>.maxnreg</code> declarations in PTX, rather than relying on compiler heuristics.</p>
+
+<h4>2. Instruction Mix</h4>
+<p>Interleaving memory loads with arithmetic gives the scheduler something to issue while loads are in flight. If a kernel issues 10 loads in a row, all warps quickly become blocked waiting on memory. Lithos patterns explicitly alternate <code>ld.global</code> with <code>fma</code> sequences &mdash; load a value, compute on a previous value, load the next, compute again. This keeps the scheduler fed.</p>
+
+<h4>3. Register Reuse Flags (SASS-level)</h4>
+<p>In SASS, bits [63:58] of the control word encode register reuse flags. These hint to the operand collector that a source register value will be reused by the next instruction, so it should be kept in the collector's local storage rather than re-read from the register file. This avoids register bank conflicts where two instructions need to read from the same bank simultaneously. Lithos SASS emitter sets these flags directly based on the kernel's register access pattern.</p>
+
+<h4>4. Stall Counts (SASS-level)</h4>
+<p>Bits [57:53] of the control word encode a minimum stall count: how many cycles the scheduler must wait before issuing the next instruction from this warp. Values range from 0 to 15 (5 bits, though practical values rarely exceed 15). <code>ptxas</code> sets these based on its dependency analysis. Lithos SASS emitter can override them &mdash; for example, inserting a stall of 0 when Lithos knows the next instruction has no true dependency, even if ptxas conservatively inserted a stall.</p>
+
+<h4>5. Yield Hints</h4>
+<p>Bit [52] of the control word is the yield hint. When set, it suggests the scheduler should prefer other warps over this one for subsequent issue slots. This is useful when a warp has just issued a long-latency global memory load &mdash; there's no point selecting it again until the load completes (typically 200-400 cycles on HBM). Setting yield lets other warps use those cycles productively.</p>
+
+<h4>6. Barrier Synchronization</h4>
+<p><code>bar.sync</code> forces all warps in a thread block to reach a synchronization point before any can proceed past it. This is necessary for shared memory patterns (write shared, sync, read shared) but expensive: the last warp to arrive unblocks all others, so any imbalance in arrival time is wasted cycles. Lithos controls barrier placement to minimize the synchronization surface &mdash; using barriers only where shared memory coherence requires it, not where the compiler defensively inserts them.</p>
+
+<h4>7. Warp-level Divergence</h4>
+<p>When threads in a warp take different branches, the scheduler must execute both paths sequentially, with inactive threads masked off. A warp that diverges into two paths takes twice as many cycles. Lithos patterns avoid divergence entirely by using predicated execution (<code>@p</code> instruction guards) instead of branches. Every thread executes every instruction; the predicate simply controls whether the result is written. No divergence, no wasted cycles.</p>
+
+<h4>8. Memory Access Patterns</h4>
+<p>Coalesced memory accesses &mdash; where all 32 threads in a warp access a contiguous 128-byte region &mdash; complete in a single memory transaction. Uncoalesced accesses split into multiple transactions, each with its own latency. Faster completion means the warp becomes eligible sooner, giving the scheduler more ready warps. Lithos patterns guarantee coalescing by construction: thread <code>i</code> always accesses element <code>base + i</code>, never <code>base + stride*i</code> with stride > 1.</p>
+
+</div>
+</section>
+
+<!-- The SASS Control Word -->
+<section id="control-word">
+<div class="container">
+<h2>The SASS Control Word &mdash; The Direct Interface</h2>
+
+<p>Every SASS instruction on Hopper is 16 bytes: an 8-byte instruction word and an 8-byte control word. The control word is the scheduler's per-instruction configuration. Here is the bit layout, derived from systematic probing documented in <code>sass/ENCODING.md</code>:</p>
+
+<div class="diagram"><span class="accent">Control Word (64 bits)</span>
+
+<span class="highlight">Bits [63:58]</span>  Register reuse cache flags (6 bits)
+               Which source operand values to cache for reuse by the next instruction.
+               Bit 58 = src1 reuse. Higher bits for src2/src3.
+
+<span class="highlight">Bits [57:53]</span>  Stall count (5 bits, 0-31 cycles)
+               Minimum cycles to wait before issuing the next instruction from this warp.
+
+<span class="highlight">Bit  [52]</span>     Yield hint
+               Suggest scheduler should prefer other warps after this instruction.
+
+<span class="highlight">Bits [51:49]</span>  Write barrier index (0-5, 7=none)
+               Scoreboard slot for tracking when this instruction's write completes.
+
+<span class="highlight">Bits [48:46]</span>  Read barrier index (0-5, 7=none)
+               Scoreboard slot for tracking when this instruction's read completes.
+
+<span class="highlight">Bits [45:42]</span>  Wait barrier mask
+               Which scoreboard barriers must complete before this instruction issues.
+
+<span class="highlight">Bits [41:0]</span>   Instruction-specific modifiers
+               Varies by opcode: rounding mode, negation, abs, saturation, etc.</div>
+
+<p>This is the mechanism. Every instruction carries its own scheduling hints, embedded in the binary. There is no separate scheduling pass or runtime decision for these parameters &mdash; they are baked into the cubin at compile time.</p>
+
+<p><code>ptxas</code> fills in the control word automatically based on its dependency analysis and heuristics. It does a reasonable job for general-purpose code. But it optimizes for the average case, not for a specific kernel's known memory access pattern and compute pipeline.</p>
+
+<p>Lithos SASS emitter fills them in deliberately. When Lithos knows a kernel streams sequentially through HBM with no reuse, it can set stall counts to exactly match the load-to-use latency. When it knows register allocation avoids bank conflicts, it can clear reuse flags that ptxas conservatively sets. When it knows a load will take 300+ cycles, it sets the yield hint so the scheduler doesn't waste cycles polling the warp.</p>
+
+</div>
+</section>
+
+<!-- Why This Matters for Inference -->
+<section id="why-it-matters">
+<div class="container">
+<h2>Why This Matters for Inference</h2>
+
+<p>At batch=1, the GPU is memory-bound. Every token generation reads the full model weights from HBM once. The compute (matrix-vector multiplies) takes far fewer cycles than the memory transfer. The scheduler's job reduces to one thing: keep warps cycling between "issue load" and "issue compute" fast enough that HBM bandwidth is saturated.</p>
+
+<p>If the scheduler makes bad choices &mdash; picks a warp that's still waiting on a load, issues to a functional unit that's busy, stalls because no warp is eligible &mdash; bandwidth utilization drops. Each wasted cycle is a cycle where HBM could have been streaming data but wasn't.</p>
+
+<p>The 13% HBM utilization measured in vLLM means the scheduler is failing 87% of the time. Either there aren't enough eligible warps (occupancy too low, or all warps blocked on the same long-latency event), or the kernel structure doesn't give the scheduler good options (loads bunched together, no compute to interleave, unnecessary barriers forcing serialization).</p>
+
+<p>Lithos attacks this from both directions. The kernel patterns are structured to maximize scheduler choice (interleaved loads and compute, high occupancy, no divergence, guaranteed coalescing). And the SASS emitter provides precise scheduling hints (stall counts, yield, reuse flags) tuned to the specific access pattern of each kernel, rather than relying on ptxas heuristics that don't account for the batch=1 streaming workload.</p>
+
+<p>The theoretical ceiling is 4 TB/s on GH200. Lithos has measured 3.59 TB/s (89.7%) on bandwidth benchmarks. The gap between 13% and 89.7% is the gap between generic scheduling and deliberate scheduling.</p>
+
+</div>
+</section>
+
+<!-- Footer -->
+<footer>
+<div class="container">
+  Lithos &mdash; Writing on silicon
+</div>
+</footer>
+
+</body>
+</html>
