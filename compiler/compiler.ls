@@ -129,7 +129,7 @@
 \\ TOK_STARSTARSTAR = 92 *** (matrix)
 \\
 \\ TOK_GOTO       = 93   goto (unconditional branch to label)
-\\ TOK_SYSCALL    = 94   syscall (ARM64 SVC #0 with register setup)
+\\ TOK_TRAP    = 94   trap (ARM64 SVC #0 with register setup)
 \\ TOK_CONTINUE   = 95   continue (loop continuation)
 \\ TOK_CONSTANT   = 96   constant (Forth-style: VALUE constant NAME)
 \\ TOK_DOLLAR     = 97   $ (register sigil: $0, $8, $TID_X)
@@ -144,7 +144,7 @@ buf tokens 262144
 var token_count 0
 
 \\ ============================================================================
-\\ ARM64 syscall numbers
+\\ ARM64 trap numbers
 \\ ============================================================================
 
 const SYS_READ      63
@@ -174,11 +174,11 @@ var arm64_pos 0
 
 arm64_emit32 val :
     \\ Write a 32-bit little-endian word at current position and advance by 4.
-    arm64_buf [ arm64_pos ] = val
-    arm64_pos = arm64_pos + 4
+    ← 32 arm64_buf + arm64_pos val
+    arm64_pos arm64_pos + 4
 
 arm64_reset :
-    arm64_pos = 0
+    arm64_pos 0
 
 \\ ============================================================
 \\ REGISTER CONSTANTS
@@ -245,27 +245,27 @@ const COND_AL  14
 
 \\ ADD Xd, Xn, Xm — 64-bit register add
 emit_add_reg rd rn rm :
-    val = 0x8B000000 | (rm << 16) | (rn << 5) | rd
+    val 0x8B000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ADD Xd, Xn, Xm, LSL #amount — shifted register add
 emit_add_reg_lsl rd rn rm amount :
-    val = 0x8B000000 | (rm << 16) | (amount << 10) | (rn << 5) | rd
+    val 0x8B000000 | (rm << 16) | (amount << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ SUB Xd, Xn, Xm — 64-bit register subtract
 emit_sub_reg rd rn rm :
-    val = 0xCB000000 | (rm << 16) | (rn << 5) | rd
+    val 0xCB000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ADDS Xd, Xn, Xm — add and set flags
 emit_adds_reg rd rn rm :
-    val = 0xAB000000 | (rm << 16) | (rn << 5) | rd
+    val 0xAB000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ SUBS Xd, Xn, Xm — subtract and set flags
 emit_subs_reg rd rn rm :
-    val = 0xEB000000 | (rm << 16) | (rn << 5) | rd
+    val 0xEB000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ CMP Xn, Xm — alias for SUBS XZR, Xn, Xm
@@ -278,27 +278,27 @@ emit_neg rd rm :
 
 \\ MUL Xd, Xn, Xm — 64-bit multiply
 emit_mul_reg rd rn rm :
-    val = 0x9B007C00 | (rm << 16) | (rn << 5) | rd
+    val 0x9B007C00 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ MADD Xd, Xn, Xm, Xa — multiply-add: Xd = Xa + Xn*Xm
 emit_madd rd rn rm ra :
-    val = 0x9B000000 | (rm << 16) | (ra << 10) | (rn << 5) | rd
+    val 0x9B000000 | (rm << 16) | (ra << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ MSUB Xd, Xn, Xm, Xa — multiply-subtract: Xd = Xa - Xn*Xm
 emit_msub rd rn rm ra :
-    val = 0x9B008000 | (rm << 16) | (ra << 10) | (rn << 5) | rd
+    val 0x9B008000 | (rm << 16) | (ra << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ SDIV Xd, Xn, Xm — signed divide
 emit_sdiv rd rn rm :
-    val = 0x9AC00C00 | (rm << 16) | (rn << 5) | rd
+    val 0x9AC00C00 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ UDIV Xd, Xn, Xm — unsigned divide
 emit_udiv rd rn rm :
-    val = 0x9AC00800 | (rm << 16) | (rn << 5) | rd
+    val 0x9AC00800 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ============================================================
@@ -307,27 +307,27 @@ emit_udiv rd rn rm :
 
 \\ ADD Xd, Xn, #imm12
 emit_add_imm rd rn imm :
-    val = 0x91000000 | (imm << 10) | (rn << 5) | rd
+    val 0x91000000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ADD Xd, Xn, #imm12, LSL #12
 emit_add_imm_lsl12 rd rn imm :
-    val = 0x91400000 | (imm << 10) | (rn << 5) | rd
+    val 0x91400000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ SUB Xd, Xn, #imm12
 emit_sub_imm rd rn imm :
-    val = 0xD1000000 | (imm << 10) | (rn << 5) | rd
+    val 0xD1000000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ADDS Xd, Xn, #imm12
 emit_adds_imm rd rn imm :
-    val = 0xB1000000 | (imm << 10) | (rn << 5) | rd
+    val 0xB1000000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ SUBS Xd, Xn, #imm12
 emit_subs_imm rd rn imm :
-    val = 0xF1000000 | (imm << 10) | (rn << 5) | rd
+    val 0xF1000000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ CMP Xn, #imm12
@@ -340,7 +340,7 @@ emit_cmn_imm rn imm :
 
 \\ MOV Xd, Xn — register move
 emit_mov rd rn :
-    val = 0xAA0003E0 | (rn << 16) | rd
+    val 0xAA0003E0 | (rn << 16) | rd
     arm64_emit32 val
 
 \\ ============================================================
@@ -349,22 +349,22 @@ emit_mov rd rn :
 
 \\ AND Xd, Xn, Xm
 emit_and_reg rd rn rm :
-    val = 0x8A000000 | (rm << 16) | (rn << 5) | rd
+    val 0x8A000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ORR Xd, Xn, Xm
 emit_orr_reg rd rn rm :
-    val = 0xAA000000 | (rm << 16) | (rn << 5) | rd
+    val 0xAA000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ EOR Xd, Xn, Xm
 emit_eor_reg rd rn rm :
-    val = 0xCA000000 | (rm << 16) | (rn << 5) | rd
+    val 0xCA000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ANDS Xd, Xn, Xm
 emit_ands_reg rd rn rm :
-    val = 0xEA000000 | (rm << 16) | (rn << 5) | rd
+    val 0xEA000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ TST Xn, Xm
@@ -373,7 +373,7 @@ emit_tst_reg rn rm :
 
 \\ MVN Xd, Xm
 emit_mvn rd rm :
-    val = 0xAA2003E0 | (rm << 16) | rd
+    val 0xAA2003E0 | (rm << 16) | rd
     arm64_emit32 val
 
 \\ ============================================================
@@ -382,17 +382,17 @@ emit_mvn rd rm :
 
 \\ AND Xd, Xn, #bitmask_imm — raw encoding
 emit_and_imm rd rn n immr imms :
-    val = 0x92000000 | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd
+    val 0x92000000 | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ORR Xd, Xn, #bitmask_imm — raw encoding
 emit_orr_imm rd rn n immr imms :
-    val = 0xB2000000 | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd
+    val 0xB2000000 | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ EOR Xd, Xn, #bitmask_imm — raw encoding
 emit_eor_imm rd rn n immr imms :
-    val = 0xD2000000 | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd
+    val 0xD2000000 | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ============================================================
@@ -401,34 +401,34 @@ emit_eor_imm rd rn n immr imms :
 
 \\ LSL Xd, Xn, Xm — variable
 emit_lsl_reg rd rn rm :
-    val = 0x9AC02000 | (rm << 16) | (rn << 5) | rd
+    val 0x9AC02000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ LSR Xd, Xn, Xm — variable
 emit_lsr_reg rd rn rm :
-    val = 0x9AC02400 | (rm << 16) | (rn << 5) | rd
+    val 0x9AC02400 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ASR Xd, Xn, Xm — variable
 emit_asr_reg rd rn rm :
-    val = 0x9AC02800 | (rm << 16) | (rn << 5) | rd
+    val 0x9AC02800 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ LSL Xd, Xn, #shift — immediate
 emit_lsl_imm rd rn shift :
-    immr = (64 - shift) & 63
-    imms = 63 - shift
-    val = 0xD3400000 | (immr << 16) | (imms << 10) | (rn << 5) | rd
+    immr (64 - shift) & 63
+    imms 63 - shift
+    val 0xD3400000 | (immr << 16) | (imms << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ LSR Xd, Xn, #shift — immediate
 emit_lsr_imm rd rn shift :
-    val = 0xD340FC00 | (shift << 16) | (rn << 5) | rd
+    val 0xD340FC00 | (shift << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ASR Xd, Xn, #shift — immediate
 emit_asr_imm rd rn shift :
-    val = 0x9340FC00 | (shift << 16) | (rn << 5) | rd
+    val 0x9340FC00 | (shift << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ============================================================
@@ -437,27 +437,27 @@ emit_asr_imm rd rn shift :
 
 \\ CSEL Xd, Xn, Xm, cond
 emit_csel rd rn rm cond :
-    val = 0x9A800000 | (rm << 16) | (cond << 12) | (rn << 5) | rd
+    val 0x9A800000 | (rm << 16) | (cond << 12) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ CSINC Xd, Xn, Xm, cond
 emit_csinc rd rn rm cond :
-    val = 0x9A800400 | (rm << 16) | (cond << 12) | (rn << 5) | rd
+    val 0x9A800400 | (rm << 16) | (cond << 12) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ CSET Xd, cond
 emit_cset rd cond :
-    inv = cond ^ 1
+    inv cond ^ 1
     emit_csinc rd XZR XZR inv
 
 \\ CSNEG Xd, Xn, Xm, cond
 emit_csneg rd rn rm cond :
-    val = 0xDA800400 | (rm << 16) | (cond << 12) | (rn << 5) | rd
+    val 0xDA800400 | (rm << 16) | (cond << 12) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ CNEG Xd, Xn, cond
 emit_cneg rd rn cond :
-    inv = cond ^ 1
+    inv cond ^ 1
     emit_csneg rd rn rn inv
 
 \\ ============================================================
@@ -466,25 +466,25 @@ emit_cneg rd rn cond :
 
 \\ MOVZ Xd, #imm16, LSL #(hw*16)
 emit_movz rd imm16 hw :
-    val = 0xD2800000 | (hw << 21) | (imm16 << 5) | rd
+    val 0xD2800000 | (hw << 21) | (imm16 << 5) | rd
     arm64_emit32 val
 
 \\ MOVK Xd, #imm16, LSL #(hw*16)
 emit_movk rd imm16 hw :
-    val = 0xF2800000 | (hw << 21) | (imm16 << 5) | rd
+    val 0xF2800000 | (hw << 21) | (imm16 << 5) | rd
     arm64_emit32 val
 
 \\ MOVN Xd, #imm16, LSL #(hw*16)
 emit_movn rd imm16 hw :
-    val = 0x92800000 | (hw << 21) | (imm16 << 5) | rd
+    val 0x92800000 | (hw << 21) | (imm16 << 5) | rd
     arm64_emit32 val
 
 \\ Helper: load a full 64-bit immediate into Xd
 emit_mov64 rd imm :
-    chunk0 = imm & 0xFFFF
-    chunk1 = (imm >> 16) & 0xFFFF
-    chunk2 = (imm >> 32) & 0xFFFF
-    chunk3 = (imm >> 48) & 0xFFFF
+    chunk0 imm & 0xFFFF
+    chunk1 (imm >> 16) & 0xFFFF
+    chunk2 (imm >> 32) & 0xFFFF
+    chunk3 (imm >> 48) & 0xFFFF
     emit_movz rd chunk0 0
     if chunk1 > 0
         emit_movk rd chunk1 1
@@ -499,123 +499,123 @@ emit_mov64 rd imm :
 
 \\ LDR Xt, [Xn, #imm] — 64-bit unsigned offset (scaled by 8)
 emit_ldr rd rn imm :
-    val = 0xF9400000 | ((imm / 8) << 10) | (rn << 5) | rd
+    val 0xF9400000 | ((imm / 8) << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ STR Xt, [Xn, #imm] — 64-bit unsigned offset (scaled by 8)
 emit_str rt rn imm :
-    val = 0xF9000000 | ((imm / 8) << 10) | (rn << 5) | rt
+    val 0xF9000000 | ((imm / 8) << 10) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ LDR Xt, [Xn, Xm] — 64-bit register offset
 emit_ldr_reg rd rn rm :
-    val = 0xF8606800 | (rm << 16) | (rn << 5) | rd
+    val 0xF8606800 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ STR Xt, [Xn, Xm] — 64-bit register offset
 emit_str_reg rt rn rm :
-    val = 0xF8206800 | (rm << 16) | (rn << 5) | rt
+    val 0xF8206800 | (rm << 16) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ LDR Wt, [Xn, #imm] — 32-bit unsigned offset (scaled by 4)
 emit_ldr_w rd rn imm :
-    val = 0xB9400000 | ((imm / 4) << 10) | (rn << 5) | rd
+    val 0xB9400000 | ((imm / 4) << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ STR Wt, [Xn, #imm] — 32-bit unsigned offset (scaled by 4)
 emit_str_w rt rn imm :
-    val = 0xB9000000 | ((imm / 4) << 10) | (rn << 5) | rt
+    val 0xB9000000 | ((imm / 4) << 10) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ LDRB Wt, [Xn, #imm] — byte load
 emit_ldrb rd rn imm :
-    val = 0x39400000 | (imm << 10) | (rn << 5) | rd
+    val 0x39400000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ STRB Wt, [Xn, #imm] — byte store
 emit_strb rt rn imm :
-    val = 0x39000000 | (imm << 10) | (rn << 5) | rt
+    val 0x39000000 | (imm << 10) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ LDRH Wt, [Xn, #imm] — halfword load (scaled by 2)
 emit_ldrh rd rn imm :
-    val = 0x79400000 | ((imm / 2) << 10) | (rn << 5) | rd
+    val 0x79400000 | ((imm / 2) << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ STRH Wt, [Xn, #imm] — halfword store (scaled by 2)
 emit_strh rt rn imm :
-    val = 0x79000000 | ((imm / 2) << 10) | (rn << 5) | rt
+    val 0x79000000 | ((imm / 2) << 10) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ LDRSB Xt, [Xn, #imm] — signed byte
 emit_ldrsb rd rn imm :
-    val = 0x39800000 | (imm << 10) | (rn << 5) | rd
+    val 0x39800000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ LDRSH Xt, [Xn, #imm] — signed halfword
 emit_ldrsh rd rn imm :
-    val = 0x79800000 | ((imm / 2) << 10) | (rn << 5) | rd
+    val 0x79800000 | ((imm / 2) << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ LDRSW Xt, [Xn, #imm] — signed word
 emit_ldrsw rd rn imm :
-    val = 0xB9800000 | ((imm / 4) << 10) | (rn << 5) | rd
+    val 0xB9800000 | ((imm / 4) << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 \\ LDP Xt1, Xt2, [Xn, #imm] — load pair
 emit_ldp rt1 rt2 rn imm :
-    imm7 = (imm / 8) & 0x7F
-    val = 0xA9400000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
+    imm7 (imm / 8) & 0x7F
+    val 0xA9400000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
     arm64_emit32 val
 
 \\ STP Xt1, Xt2, [Xn, #imm] — store pair
 emit_stp rt1 rt2 rn imm :
-    imm7 = (imm / 8) & 0x7F
-    val = 0xA9000000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
+    imm7 (imm / 8) & 0x7F
+    val 0xA9000000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
     arm64_emit32 val
 
 \\ LDP pre-indexed
 emit_ldp_pre rt1 rt2 rn imm :
-    imm7 = (imm / 8) & 0x7F
-    val = 0xA9C00000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
+    imm7 (imm / 8) & 0x7F
+    val 0xA9C00000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
     arm64_emit32 val
 
 \\ STP pre-indexed
 emit_stp_pre rt1 rt2 rn imm :
-    imm7 = (imm / 8) & 0x7F
-    val = 0xA9800000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
+    imm7 (imm / 8) & 0x7F
+    val 0xA9800000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
     arm64_emit32 val
 
 \\ LDP post-indexed
 emit_ldp_post rt1 rt2 rn imm :
-    imm7 = (imm / 8) & 0x7F
-    val = 0xA8C00000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
+    imm7 (imm / 8) & 0x7F
+    val 0xA8C00000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
     arm64_emit32 val
 
 \\ STP post-indexed
 emit_stp_post rt1 rt2 rn imm :
-    imm7 = (imm / 8) & 0x7F
-    val = 0xA8800000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
+    imm7 (imm / 8) & 0x7F
+    val 0xA8800000 | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1
     arm64_emit32 val
 
 \\ LDR Xt, [Xn, #simm9]! — pre-indexed load
 emit_ldr_pre rt rn simm :
-    val = 0xF8400C00 | ((simm & 0x1FF) << 12) | (rn << 5) | rt
+    val 0xF8400C00 | ((simm & 0x1FF) << 12) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ STR Xt, [Xn, #simm9]! — pre-indexed store
 emit_str_pre rt rn simm :
-    val = 0xF8000C00 | ((simm & 0x1FF) << 12) | (rn << 5) | rt
+    val 0xF8000C00 | ((simm & 0x1FF) << 12) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ LDR Xt, [Xn], #simm9 — post-indexed load
 emit_ldr_post rt rn simm :
-    val = 0xF8400400 | ((simm & 0x1FF) << 12) | (rn << 5) | rt
+    val 0xF8400400 | ((simm & 0x1FF) << 12) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ STR Xt, [Xn], #simm9 — post-indexed store
 emit_str_post rt rn simm :
-    val = 0xF8000400 | ((simm & 0x1FF) << 12) | (rn << 5) | rt
+    val 0xF8000400 | ((simm & 0x1FF) << 12) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ ============================================================
@@ -624,56 +624,56 @@ emit_str_post rt rn simm :
 
 \\ B offset — unconditional branch
 emit_b offset :
-    val = 0x14000000 | ((offset / 4) & 0x3FFFFFF)
+    val 0x14000000 | ((offset / 4) & 0x3FFFFFF)
     arm64_emit32 val
 
 \\ BL offset — branch with link
 emit_bl offset :
-    val = 0x94000000 | ((offset / 4) & 0x3FFFFFF)
+    val 0x94000000 | ((offset / 4) & 0x3FFFFFF)
     arm64_emit32 val
 
 \\ B.cond offset — conditional branch
 emit_bcond cond offset :
-    val = 0x54000000 | (((offset / 4) & 0x7FFFF) << 5) | cond
+    val 0x54000000 | (((offset / 4) & 0x7FFFF) << 5) | cond
     arm64_emit32 val
 
 \\ CBZ Xt, offset — branch if zero
 emit_cbz rt offset :
-    val = 0xB4000000 | (((offset / 4) & 0x7FFFF) << 5) | rt
+    val 0xB4000000 | (((offset / 4) & 0x7FFFF) << 5) | rt
     arm64_emit32 val
 
 \\ CBNZ Xt, offset — branch if not zero
 emit_cbnz rt offset :
-    val = 0xB5000000 | (((offset / 4) & 0x7FFFF) << 5) | rt
+    val 0xB5000000 | (((offset / 4) & 0x7FFFF) << 5) | rt
     arm64_emit32 val
 
 \\ TBZ Xt, #bit, offset — test bit and branch if zero
 emit_tbz rt bit offset :
-    b5 = (bit >> 5) & 1
-    b40 = bit & 0x1F
-    val = 0x36000000 | (b5 << 31) | (b40 << 19) | (((offset / 4) & 0x3FFF) << 5) | rt
+    b5 (bit >> 5) & 1
+    b40 bit & 0x1F
+    val 0x36000000 | (b5 << 31) | (b40 << 19) | (((offset / 4) & 0x3FFF) << 5) | rt
     arm64_emit32 val
 
 \\ TBNZ Xt, #bit, offset — test bit and branch if not zero
 emit_tbnz rt bit offset :
-    b5 = (bit >> 5) & 1
-    b40 = bit & 0x1F
-    val = 0x37000000 | (b5 << 31) | (b40 << 19) | (((offset / 4) & 0x3FFF) << 5) | rt
+    b5 (bit >> 5) & 1
+    b40 bit & 0x1F
+    val 0x37000000 | (b5 << 31) | (b40 << 19) | (((offset / 4) & 0x3FFF) << 5) | rt
     arm64_emit32 val
 
 \\ BR Xn — indirect jump
 emit_br rn :
-    val = 0xD61F0000 | (rn << 5)
+    val 0xD61F0000 | (rn << 5)
     arm64_emit32 val
 
 \\ BLR Xn — indirect call
 emit_blr rn :
-    val = 0xD63F0000 | (rn << 5)
+    val 0xD63F0000 | (rn << 5)
     arm64_emit32 val
 
 \\ RET {Xn}
 emit_ret rn :
-    val = 0xD65F0000 | (rn << 5)
+    val 0xD65F0000 | (rn << 5)
     arm64_emit32 val
 
 \\ RET — via LR
@@ -686,16 +686,16 @@ emit_ret_lr :
 
 \\ ADR Xd, offset
 emit_adr rd offset :
-    immlo = offset & 3
-    immhi = (offset >> 2) & 0x7FFFF
-    val = (immlo << 29) | 0x10000000 | (immhi << 5) | rd
+    immlo offset & 3
+    immhi (offset >> 2) & 0x7FFFF
+    val (immlo << 29) | 0x10000000 | (immhi << 5) | rd
     arm64_emit32 val
 
 \\ ADRP Xd, offset
 emit_adrp rd offset :
-    immlo = offset & 3
-    immhi = (offset >> 2) & 0x7FFFF
-    val = (immlo << 29) | 0x90000000 | (immhi << 5) | rd
+    immlo offset & 3
+    immhi (offset >> 2) & 0x7FFFF
+    val (immlo << 29) | 0x90000000 | (immhi << 5) | rd
     arm64_emit32 val
 
 \\ ============================================================
@@ -704,11 +704,11 @@ emit_adrp rd offset :
 
 \\ SVC #imm16
 emit_svc imm16 :
-    val = 0xD4000001 | (imm16 << 5)
+    val 0xD4000001 | (imm16 << 5)
     arm64_emit32 val
 
-\\ SVC #0 — Linux syscall
-emit_syscall :
+\\ SVC #0 — Linux trap
+emit_trap :
     emit_svc 0
 
 \\ NOP (ARM64)
@@ -733,7 +733,7 @@ emit_isb :
 
 \\ BRK #imm16
 emit_brk imm16 :
-    val = 0xD4200000 | (imm16 << 5)
+    val 0xD4200000 | (imm16 << 5)
     arm64_emit32 val
 
 \\ ============================================================
@@ -741,78 +741,81 @@ emit_brk imm16 :
 \\ ============================================================
 
 arm64_mark :
-    pos = arm64_pos
+    pos arm64_pos
 
 arm64_patch_bcond mark_pos :
-    offset = arm64_pos - mark_pos
-    imm19 = ((offset / 4) & 0x7FFFF) << 5
-    arm64_buf [ mark_pos ] = arm64_buf [ mark_pos ] | imm19
+    offset arm64_pos - mark_pos
+    imm19 ((offset / 4) & 0x7FFFF) << 5
+    old → 32 arm64_buf + mark_pos
+    ← 32 arm64_buf + mark_pos old | imm19
 
 arm64_patch_b mark_pos :
-    offset = arm64_pos - mark_pos
-    imm26 = (offset / 4) & 0x3FFFFFF
-    arm64_buf [ mark_pos ] = arm64_buf [ mark_pos ] | imm26
+    offset arm64_pos - mark_pos
+    imm26 (offset / 4) & 0x3FFFFFF
+    old → 32 arm64_buf + mark_pos
+    ← 32 arm64_buf + mark_pos old | imm26
 
 arm64_patch_cbz mark_pos :
-    offset = arm64_pos - mark_pos
-    imm19 = ((offset / 4) & 0x7FFFF) << 5
-    arm64_buf [ mark_pos ] = arm64_buf [ mark_pos ] | imm19
+    offset arm64_pos - mark_pos
+    imm19 ((offset / 4) & 0x7FFFF) << 5
+    old → 32 arm64_buf + mark_pos
+    ← 32 arm64_buf + mark_pos old | imm19
 
 emit_bcond_fwd cond :
-    mark = arm64_pos
+    mark arm64_pos
     emit_bcond cond 0
 
 emit_b_fwd :
-    mark = arm64_pos
+    mark arm64_pos
     emit_b 0
 
 emit_cbz_fwd rt :
-    mark = arm64_pos
+    mark arm64_pos
     emit_cbz rt 0
 
 emit_cbnz_fwd rt :
-    mark = arm64_pos
+    mark arm64_pos
     emit_cbnz rt 0
 
 \\ ============================================================
 \\ SYSCALL WRAPPERS
 \\ ============================================================
 
-emit_syscall_exit :
+emit_trap_exit :
     emit_movz X8 SYS_EXIT 0
-    emit_syscall
+    emit_trap
 
-emit_syscall_read :
+emit_trap_read :
     emit_movz X8 SYS_READ 0
-    emit_syscall
+    emit_trap
 
-emit_syscall_write :
+emit_trap_write :
     emit_movz X8 SYS_WRITE 0
-    emit_syscall
+    emit_trap
 
-emit_syscall_openat :
+emit_trap_openat :
     emit_movz X8 SYS_OPENAT 0
-    emit_syscall
+    emit_trap
 
-emit_syscall_close :
+emit_trap_close :
     emit_movz X8 SYS_CLOSE 0
-    emit_syscall
+    emit_trap
 
-emit_syscall_mmap :
+emit_trap_mmap :
     emit_movz X8 SYS_MMAP 0
-    emit_syscall
+    emit_trap
 
-emit_syscall_munmap :
+emit_trap_munmap :
     emit_movz X8 SYS_MUNMAP 0
-    emit_syscall
+    emit_trap
 
-emit_syscall_mprotect :
+emit_trap_mprotect :
     emit_movz X8 SYS_MPROTECT 0
-    emit_syscall
+    emit_trap
 
-emit_syscall_brk :
+emit_trap_brk :
     emit_movz X8 SYS_BRK 0
-    emit_syscall
+    emit_trap
 
 \\ ============================================================
 \\ FUNCTION PROLOGUE / EPILOGUE
@@ -845,67 +848,67 @@ emit_restore_pair r1 r2 offset :
 \\ ============================================================
 
 emit_add_w rd rn rm :
-    val = 0x0B000000 | (rm << 16) | (rn << 5) | rd
+    val 0x0B000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_sub_w rd rn rm :
-    val = 0x4B000000 | (rm << 16) | (rn << 5) | rd
+    val 0x4B000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_add_imm_w rd rn imm :
-    val = 0x11000000 | (imm << 10) | (rn << 5) | rd
+    val 0x11000000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_sub_imm_w rd rn imm :
-    val = 0x51000000 | (imm << 10) | (rn << 5) | rd
+    val 0x51000000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_subs_imm_w rd rn imm :
-    val = 0x71000000 | (imm << 10) | (rn << 5) | rd
+    val 0x71000000 | (imm << 10) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_cmp_imm_w rn imm :
     emit_subs_imm_w XZR rn imm
 
 emit_cmp_w rn rm :
-    val = 0x6B000000 | (rm << 16) | (rn << 5) | XZR
+    val 0x6B000000 | (rm << 16) | (rn << 5) | XZR
     arm64_emit32 val
 
 emit_mul_w rd rn rm :
-    val = 0x1B007C00 | (rm << 16) | (rn << 5) | rd
+    val 0x1B007C00 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_sdiv_w rd rn rm :
-    val = 0x1AC00C00 | (rm << 16) | (rn << 5) | rd
+    val 0x1AC00C00 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_udiv_w rd rn rm :
-    val = 0x1AC00800 | (rm << 16) | (rn << 5) | rd
+    val 0x1AC00800 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_and_w rd rn rm :
-    val = 0x0A000000 | (rm << 16) | (rn << 5) | rd
+    val 0x0A000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_orr_w rd rn rm :
-    val = 0x2A000000 | (rm << 16) | (rn << 5) | rd
+    val 0x2A000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_eor_w rd rn rm :
-    val = 0x4A000000 | (rm << 16) | (rn << 5) | rd
+    val 0x4A000000 | (rm << 16) | (rn << 5) | rd
     arm64_emit32 val
 
 emit_movz_w rd imm16 hw :
-    val = 0x52800000 | (hw << 21) | (imm16 << 5) | rd
+    val 0x52800000 | (hw << 21) | (imm16 << 5) | rd
     arm64_emit32 val
 
 emit_movk_w rd imm16 hw :
-    val = 0x72800000 | (hw << 21) | (imm16 << 5) | rd
+    val 0x72800000 | (hw << 21) | (imm16 << 5) | rd
     arm64_emit32 val
 
 emit_mov32 rd imm :
-    chunk0 = imm & 0xFFFF
-    chunk1 = (imm >> 16) & 0xFFFF
+    chunk0 imm & 0xFFFF
+    chunk1 (imm >> 16) & 0xFFFF
     emit_movz_w rd chunk0 0
     if chunk1 > 0
         emit_movk_w rd chunk1 1
@@ -915,23 +918,23 @@ emit_mov32 rd imm :
 \\ ============================================================
 
 emit_sxtw rd rn :
-    val = 0x93407C00 | (rn << 5) | rd
+    val 0x93407C00 | (rn << 5) | rd
     arm64_emit32 val
 
 emit_sxtb rd rn :
-    val = 0x93401C00 | (rn << 5) | rd
+    val 0x93401C00 | (rn << 5) | rd
     arm64_emit32 val
 
 emit_sxth rd rn :
-    val = 0x93403C00 | (rn << 5) | rd
+    val 0x93403C00 | (rn << 5) | rd
     arm64_emit32 val
 
 emit_uxtb rd rn :
-    val = 0x53001C00 | (rn << 5) | rd
+    val 0x53001C00 | (rn << 5) | rd
     arm64_emit32 val
 
 emit_uxth rd rn :
-    val = 0x53003C00 | (rn << 5) | rd
+    val 0x53003C00 | (rn << 5) | rd
     arm64_emit32 val
 
 \\ ============================================================
@@ -939,11 +942,11 @@ emit_uxth rd rn :
 \\ ============================================================
 
 emit_ldxr rt rn :
-    val = 0xC85F7C00 | (rn << 5) | rt
+    val 0xC85F7C00 | (rn << 5) | rt
     arm64_emit32 val
 
 emit_stxr rs rt rn :
-    val = 0xC8007C00 | (rs << 16) | (rn << 5) | rt
+    val 0xC8007C00 | (rs << 16) | (rn << 5) | rt
     arm64_emit32 val
 
 \\ ############################################################################
@@ -1762,299 +1765,299 @@ EIATTR_COOP_GROUP_MASK_REGIDS   0x29
 \\ ============================================================================
 
 emit_token type offset length :
-    idx = token_count * 3
-    tokens [ idx ] = type
-    idx1 = idx + 1
-    tokens [ idx1 ] = offset
-    idx2 = idx + 2
-    tokens [ idx2 ] = length
-    token_count = token_count + 1
+    idx token_count * 3
+    ← 32 tokens + idx type
+    idx1 idx + 1
+    ← 32 tokens + idx1 offset
+    idx2 idx + 2
+    ← 32 tokens + idx2 length
+    token_count token_count + 1
 
 \\ ============================================================================
 \\ Character classification
 \\ ============================================================================
 
 is_alpha c :
-    upper = c >= 65 & c <= 90
-    lower = c >= 97 & c <= 122
-    under = c == 95
-    result = upper | lower | under
+    upper c >= 65 & c <= 90
+    lower c >= 97 & c <= 122
+    under c == 95
+    result upper | lower | under
 
 is_digit c :
-    result = c >= 48 & c <= 57
+    result c >= 48 & c <= 57
 
 is_hex_digit c :
-    digit = c >= 48 & c <= 57
-    upper = c >= 65 & c <= 70
-    lower = c >= 97 & c <= 102
-    result = digit | upper | lower
+    digit c >= 48 & c <= 57
+    upper c >= 65 & c <= 70
+    lower c >= 97 & c <= 102
+    result digit | upper | lower
 
 is_alnum c :
-    alpha = is_alpha c
-    digit = is_digit c
-    result = alpha | digit
+    alpha is_alpha c
+    digit is_digit c
+    result alpha | digit
 
 is_space c :
-    sp = c == 32
-    tb = c == 9
-    result = sp | tb
+    sp c == 32
+    tb c == 9
+    result sp | tb
 
 is_newline c :
-    lf = c == 10
-    cr = c == 13
-    result = lf | cr
+    lf c == 10
+    cr c == 13
+    result lf | cr
 
 \\ ============================================================================
 \\ Token scanning helpers
 \\ ============================================================================
 
 scan_ident src pos end :
-    new_pos = pos
+    new_pos pos
     while new_pos < end
-        c = src [ new_pos ]          \\ BYTE LOAD: ldrb
-        alpha = is_alnum c
-        dot   = c == 46
-        angle_l = c == 60
-        angle_r = c == 62
-        eq    = c == 61
-        bang  = c == 33
-        ok = alpha | dot | angle_l | angle_r | eq | bang
+        c src [ new_pos ]          \\ BYTE LOAD: ldrb
+        alpha is_alnum c
+        dot c == 46
+        angle_l c == 60
+        angle_r c == 62
+        eq c == 61
+        bang c == 33
+        ok alpha | dot | angle_l | angle_r | eq | bang
         if ok == 0
             return
-        new_pos = new_pos + 1
+        new_pos new_pos + 1
 
 scan_number src pos end :
-    new_pos = pos
-    c = src [ new_pos ]
+    new_pos pos
+    c src [ new_pos ]
 
     if c == 48
         if new_pos + 1 < end
-            c2 = src [ new_pos + 1 ]
+            c2 src [ new_pos + 1 ]
             if c2 == 120 | c2 == 88
-                new_pos = new_pos + 2
+                new_pos new_pos + 2
                 while new_pos < end
-                    ch = src [ new_pos ]
-                    ok = is_hex_digit ch
+                    ch src [ new_pos ]
+                    ok is_hex_digit ch
                     if ok == 0
                         return
-                    new_pos = new_pos + 1
+                    new_pos new_pos + 1
                 return
 
     while new_pos < end
-        ch = src [ new_pos ]
-        digit = is_digit ch
-        dot   = ch == 46
-        ok = digit | dot
+        ch src [ new_pos ]
+        digit is_digit ch
+        dot ch == 46
+        ok digit | dot
         if ok == 0
             return
-        new_pos = new_pos + 1
+        new_pos new_pos + 1
 
 scan_to_eol src pos end :
-    new_pos = pos
+    new_pos pos
     while new_pos < end
-        c = src [ new_pos ]
-        nl = is_newline c
+        c src [ new_pos ]
+        nl is_newline c
         if nl
             return
-        new_pos = new_pos + 1
+        new_pos new_pos + 1
 
 \\ ============================================================================
 \\ Keyword matching
 \\ ============================================================================
 
 match_keyword src offset length :
-    tok_type = 5
+    tok_type 5
 
     if length == 2
-        b0 = src [ offset ]
-        b1 = src [ offset + 1 ]
+        b0 src [ offset ]
+        b1 src [ offset + 1 ]
         if b0 == 111 & b1 == 114         \\ 'or'
-            tok_type = 5
+            tok_type 5
             return
 
     if length == 3
-        b0 = src [ offset ]
-        b1 = src [ offset + 1 ]
-        b2 = src [ offset + 2 ]
+        b0 src [ offset ]
+        b1 src [ offset + 1 ]
+        b2 src [ offset + 2 ]
         if b0 == 102 & b1 == 111 & b2 == 114
-            tok_type = 16
+            tok_type 16
             return
         if b0 == 118 & b1 == 97 & b2 == 114
-            tok_type = 23
+            tok_type 23
             return
         if b0 == 98 & b1 == 117 & b2 == 102
-            tok_type = 24
+            tok_type 24
             return
         if b0 == 102 & b1 == 51 & b2 == 50
-            tok_type = 40
+            tok_type 40
             return
         if b0 == 117 & b1 == 51 & b2 == 50
-            tok_type = 41
+            tok_type 41
             return
         if b0 == 115 & b1 == 51 & b2 == 50
-            tok_type = 42
+            tok_type 42
             return
         if b0 == 102 & b1 == 49 & b2 == 54
-            tok_type = 43
+            tok_type 43
             return
         if b0 == 112 & b1 == 116 & b2 == 114
-            tok_type = 44
+            tok_type 44
             return
 
     if length == 4
-        b0 = src [ offset ]
-        b1 = src [ offset + 1 ]
-        b2 = src [ offset + 2 ]
-        b3 = src [ offset + 3 ]
+        b0 src [ offset ]
+        b1 src [ offset + 1 ]
+        b2 src [ offset + 2 ]
+        b3 src [ offset + 3 ]
         if b0 == 101 & b1 == 97 & b2 == 99 & b3 == 104
-            tok_type = 18
+            tok_type 18
             return
         if b0 == 101 & b1 == 108 & b2 == 115 & b3 == 101
-            tok_type = 14
+            tok_type 14
             return
         if b0 == 101 & b1 == 108 & b2 == 105 & b3 == 102
-            tok_type = 15
+            tok_type 15
             return
         if b0 == 118 & b1 == 111 & b2 == 105 & b3 == 100
-            tok_type = 45
+            tok_type 45
             return
         if b0 == 98 & b1 == 105 & b2 == 110 & b3 == 100
-            tok_type = 27
+            tok_type 27
             return
         if b0 == 101 & b1 == 120 & b2 == 105 & b3 == 116
-            tok_type = 34
+            tok_type 34
             return
         if b0 == 104 & b1 == 111 & b2 == 115 & b3 == 116
-            tok_type = 35
+            tok_type 35
             return
         \\ 'goto' -> 93
         if b0 == 103 & b1 == 111 & b2 == 116 & b3 == 111
-            tok_type = 93
+            tok_type 93
             return
 
     if length == 5
-        b0 = src [ offset ]
-        b1 = src [ offset + 1 ]
-        b2 = src [ offset + 2 ]
-        b3 = src [ offset + 3 ]
-        b4 = src [ offset + 4 ]
+        b0 src [ offset ]
+        b1 src [ offset + 1 ]
+        b2 src [ offset + 2 ]
+        b3 src [ offset + 3 ]
+        b4 src [ offset + 4 ]
         if b0 == 112 & b1 == 97 & b2 == 114 & b3 == 97 & b4 == 109
-            tok_type = 12
+            tok_type 12
             return
         if b0 == 119 & b1 == 104 & b2 == 105 & b3 == 108 & b4 == 101
-            tok_type = 20
+            tok_type 20
             return
         if b0 == 99 & b1 == 111 & b2 == 110 & b3 == 115 & b4 == 116
-            tok_type = 22
+            tok_type 22
             return
         if b0 == 108 & b1 == 97 & b2 == 121 & b3 == 101 & b4 == 114
-            tok_type = 26
+            tok_type 26
             return
         if b0 == 108 & b1 == 97 & b2 == 98 & b3 == 101 & b4 == 108
-            tok_type = 33
+            tok_type 33
             return
 
     if length == 6
-        b0 = src [ offset ]
-        b1 = src [ offset + 1 ]
-        b2 = src [ offset + 2 ]
-        b3 = src [ offset + 3 ]
-        b4 = src [ offset + 4 ]
-        b5 = src [ offset + 5 ]
+        b0 src [ offset ]
+        b1 src [ offset + 1 ]
+        b2 src [ offset + 2 ]
+        b3 src [ offset + 3 ]
+        b4 src [ offset + 4 ]
+        b5 src [ offset + 5 ]
         if b0 == 107 & b1 == 101 & b2 == 114 & b3 == 110 & b4 == 101 & b5 == 108
-            tok_type = 11
+            tok_type 11
             return
         if b0 == 115 & b1 == 116 & b2 == 114 & b3 == 105 & b4 == 100 & b5 == 101
-            tok_type = 19
+            tok_type 19
             return
         if b0 == 114 & b1 == 101 & b2 == 116 & b3 == 117 & b4 == 114 & b5 == 110
-            tok_type = 21
+            tok_type 21
             return
         if b0 == 119 & b1 == 101 & b2 == 105 & b3 == 103 & b4 == 104 & b5 == 116
-            tok_type = 25
+            tok_type 25
             return
         if b0 == 115 & b1 == 104 & b2 == 97 & b3 == 114 & b4 == 101 & b5 == 100
-            tok_type = 31
+            tok_type 31
             return
         if b0 == 101 & b1 == 110 & b2 == 100 & b3 == 102 & b4 == 111 & b5 == 114
-            tok_type = 17
+            tok_type 17
             return
 
     if length == 7
-        b0 = src [ offset ]
-        b1 = src [ offset + 1 ]
+        b0 src [ offset ]
+        b1 src [ offset + 1 ]
         if b0 == 114 & b1 == 117
-            b2 = src [ offset + 2 ]
-            b3 = src [ offset + 3 ]
-            b4 = src [ offset + 4 ]
-            b5 = src [ offset + 5 ]
-            b6 = src [ offset + 6 ]
+            b2 src [ offset + 2 ]
+            b3 src [ offset + 3 ]
+            b4 src [ offset + 4 ]
+            b5 src [ offset + 5 ]
+            b6 src [ offset + 6 ]
             if b2 == 110 & b3 == 116 & b4 == 105 & b5 == 109 & b6 == 101
-                tok_type = 28
+                tok_type 28
                 return
         if b0 == 98 & b1 == 97
-            b2 = src [ offset + 2 ]
-            b3 = src [ offset + 3 ]
-            b4 = src [ offset + 4 ]
-            b5 = src [ offset + 5 ]
-            b6 = src [ offset + 6 ]
+            b2 src [ offset + 2 ]
+            b3 src [ offset + 3 ]
+            b4 src [ offset + 4 ]
+            b5 src [ offset + 5 ]
+            b6 src [ offset + 6 ]
             if b2 == 114 & b3 == 114 & b4 == 105 & b5 == 101 & b6 == 114
-                tok_type = 32
+                tok_type 32
                 return
         if b0 == 112 & b1 == 114
-            b2 = src [ offset + 2 ]
-            b3 = src [ offset + 3 ]
-            b4 = src [ offset + 4 ]
-            b5 = src [ offset + 5 ]
-            b6 = src [ offset + 6 ]
+            b2 src [ offset + 2 ]
+            b3 src [ offset + 3 ]
+            b4 src [ offset + 4 ]
+            b5 src [ offset + 5 ]
+            b6 src [ offset + 6 ]
             if b2 == 111 & b3 == 106 & b4 == 101 & b5 == 99 & b6 == 116
-                tok_type = 30
+                tok_type 30
                 return
-        \\ 'syscall' -> 94
+        \\ 'trap' -> 94
         if b0 == 115 & b1 == 121
-            b2 = src [ offset + 2 ]
-            b3 = src [ offset + 3 ]
-            b4 = src [ offset + 4 ]
-            b5 = src [ offset + 5 ]
-            b6 = src [ offset + 6 ]
+            b2 src [ offset + 2 ]
+            b3 src [ offset + 3 ]
+            b4 src [ offset + 4 ]
+            b5 src [ offset + 5 ]
+            b6 src [ offset + 6 ]
             if b2 == 115 & b3 == 99 & b4 == 97 & b5 == 108 & b6 == 108
-                tok_type = 94
+                tok_type 94
                 return
 
     if length == 8
-        b0 = src [ offset ]
-        b1 = src [ offset + 1 ]
+        b0 src [ offset ]
+        b1 src [ offset + 1 ]
         if b0 == 116 & b1 == 101
-            b2 = src [ offset + 2 ]
-            b3 = src [ offset + 3 ]
-            b4 = src [ offset + 4 ]
-            b5 = src [ offset + 5 ]
-            b6 = src [ offset + 6 ]
-            b7 = src [ offset + 7 ]
+            b2 src [ offset + 2 ]
+            b3 src [ offset + 3 ]
+            b4 src [ offset + 4 ]
+            b5 src [ offset + 5 ]
+            b6 src [ offset + 6 ]
+            b7 src [ offset + 7 ]
             if b2 == 109 & b3 == 112 & b4 == 108 & b5 == 97 & b6 == 116 & b7 == 101
-                tok_type = 29
+                tok_type 29
                 return
         \\ 'constant' -> 96
         if b0 == 99 & b1 == 111
-            b2 = src [ offset + 2 ]
-            b3 = src [ offset + 3 ]
-            b4 = src [ offset + 4 ]
-            b5 = src [ offset + 5 ]
-            b6 = src [ offset + 6 ]
-            b7 = src [ offset + 7 ]
+            b2 src [ offset + 2 ]
+            b3 src [ offset + 3 ]
+            b4 src [ offset + 4 ]
+            b5 src [ offset + 5 ]
+            b6 src [ offset + 6 ]
+            b7 src [ offset + 7 ]
             if b2 == 110 & b3 == 115 & b4 == 116 & b5 == 97 & b6 == 110 & b7 == 116
-                tok_type = 96
+                tok_type 96
                 return
         \\ 'continue' -> 95
         if b0 == 99 & b1 == 111
-            b2 = src [ offset + 2 ]
-            b3 = src [ offset + 3 ]
-            b4 = src [ offset + 4 ]
-            b5 = src [ offset + 5 ]
-            b6 = src [ offset + 6 ]
-            b7 = src [ offset + 7 ]
+            b2 src [ offset + 2 ]
+            b3 src [ offset + 3 ]
+            b4 src [ offset + 4 ]
+            b5 src [ offset + 5 ]
+            b6 src [ offset + 6 ]
+            b7 src [ offset + 7 ]
             if b2 == 110 & b3 == 116 & b4 == 105 & b5 == 110 & b6 == 117 & b7 == 101
-                tok_type = 95
+                tok_type 95
                 return
 
 \\ ============================================================================
@@ -2062,269 +2065,269 @@ match_keyword src offset length :
 \\ ============================================================================
 
 classify_number src offset length :
-    tok_type = 3
-    i = 0
+    tok_type 3
+    i 0
     while i < length
-        c = src [ offset + i ]
+        c src [ offset + i ]
         if c == 46
-            tok_type = 4
+            tok_type 4
             return
-        i = i + 1
+        i i + 1
 
 \\ ============================================================================
 \\ Main lexer
 \\ ============================================================================
 
 lex src src_len :
-    pos = 0
-    token_count = 0
-    line_start = 1
+    pos 0
+    token_count 0
+    line_start 1
 
     while pos < src_len
-        c = src [ pos ]
+        c src [ pos ]
 
         if line_start
-            indent = 0
+            indent 0
             while pos < src_len
-                ic = src [ pos ]
+                ic src [ pos ]
                 if ic == 32
-                    indent = indent + 1
-                    pos = pos + 1
+                    indent indent + 1
+                    pos pos + 1
                 elif ic == 9
-                    indent = indent + 4
-                    pos = pos + 1
+                    indent indent + 4
+                    pos pos + 1
                 else
                     goto indent_done
             label indent_done
             emit_token 2 pos indent
-            line_start = 0
+            line_start 0
             if pos >= src_len
                 return
-            c = src [ pos ]
+            c src [ pos ]
 
         if c == 10
             emit_token 1 pos 1
-            pos = pos + 1
-            line_start = 1
+            pos pos + 1
+            line_start 1
             if pos < src_len
-                c2 = src [ pos ]
+                c2 src [ pos ]
                 if c2 == 13
-                    pos = pos + 1
+                    pos pos + 1
             continue
 
         if c == 13
             emit_token 1 pos 1
-            pos = pos + 1
-            line_start = 1
+            pos pos + 1
+            line_start 1
             if pos < src_len
-                c2 = src [ pos ]
+                c2 src [ pos ]
                 if c2 == 10
-                    pos = pos + 1
+                    pos pos + 1
             continue
 
         if c == 32 | c == 9
-            pos = pos + 1
+            pos pos + 1
             continue
 
         if c == 35
             emit_token 78 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
 
         if c == 92
             if pos + 1 < src_len
-                c2 = src [ pos + 1 ]
+                c2 src [ pos + 1 ]
                 if c2 == 92
-                    pos = scan_to_eol src pos src_len
+                    pos scan_to_eol src pos src_len
                     continue
 
-        digit = is_digit c
+        digit is_digit c
         if digit
-            start = pos
-            pos = scan_number src pos src_len
-            length = pos - start
-            num_type = classify_number src start length
+            start pos
+            pos scan_number src pos src_len
+            length pos - start
+            num_type classify_number src start length
             emit_token num_type start length
             continue
 
         if c == 45
             if pos + 1 < src_len
-                cnext = src [ pos + 1 ]
-                ndig = is_digit cnext
+                cnext src [ pos + 1 ]
+                ndig is_digit cnext
                 if ndig
-                    start = pos
-                    pos = pos + 1
-                    pos = scan_number src pos src_len
-                    length = pos - start
-                    num_type = classify_number src start length
+                    start pos
+                    pos pos + 1
+                    pos scan_number src pos src_len
+                    length pos - start
+                    num_type classify_number src start length
                     emit_token num_type start length
                     continue
 
-        alpha = is_alpha c
+        alpha is_alpha c
         if alpha
-            start = pos
-            pos = scan_ident src pos src_len
-            length = pos - start
-            kw = match_keyword src start length
+            start pos
+            pos scan_ident src pos src_len
+            length pos - start
+            kw match_keyword src start length
             emit_token kw start length
             continue
 
         if pos + 1 < src_len
-            cnext = src [ pos + 1 ]
+            cnext src [ pos + 1 ]
             if c == 61 & cnext == 61
                 emit_token 55 pos 2
-                pos = pos + 2
+                pos pos + 2
                 continue
             if c == 33 & cnext == 61
                 emit_token 56 pos 2
-                pos = pos + 2
+                pos pos + 2
                 continue
             if c == 60 & cnext == 61
                 emit_token 59 pos 2
-                pos = pos + 2
+                pos pos + 2
                 continue
             if c == 62 & cnext == 61
                 emit_token 60 pos 2
-                pos = pos + 2
+                pos pos + 2
                 continue
             if c == 60 & cnext == 60
                 emit_token 64 pos 2
-                pos = pos + 2
+                pos pos + 2
                 continue
             if c == 62 & cnext == 62
                 emit_token 65 pos 2
-                pos = pos + 2
+                pos pos + 2
                 continue
 
         \\ Multi-byte UTF-8 tokens
         if c == 0xE2
             if pos + 2 < src_len
-                b1 = src [ pos + 1 ]
-                b2 = src [ pos + 2 ]
+                b1 src [ pos + 1 ]
+                b2 src [ pos + 2 ]
                 if b1 == 0x86 & b2 == 0x92
                     emit_token 36 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
                 if b1 == 0x86 & b2 == 0x90
                     emit_token 37 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
                 if b1 == 0x86 & b2 == 0x91
                     emit_token 38 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
                 if b1 == 0x86 & b2 == 0x93
                     emit_token 39 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
                 if b1 == 0x96 & b2 == 0xB3
                     emit_token 76 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
                 if b1 == 0x96 & b2 == 0xBD
                     emit_token 77 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
                 if b1 == 0x88 & b2 == 0x9A
                     emit_token 79 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
                 if b1 == 0x89 & b2 == 0x85
                     emit_token 80 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
                 if b1 == 0x89 & b2 == 0xA1
                     emit_token 81 pos 3
-                    pos = pos + 3
+                    pos pos + 3
                     continue
         if c == 0xCE
             if pos + 1 < src_len
-                b1 = src [ pos + 1 ]
+                b1 src [ pos + 1 ]
                 if b1 == 0xA3
                     emit_token 75 pos 2
-                    pos = pos + 2
+                    pos pos + 2
                     continue
 
         \\ Single-character operators and punctuation
         if c == 43
             emit_token 50 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 45
             emit_token 51 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 42
             emit_token 52 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 47
             emit_token 53 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 61
             emit_token 54 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 60
             emit_token 57 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 62
             emit_token 58 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 38
             emit_token 61 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 124
             emit_token 62 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 94
             emit_token 63 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 91
             emit_token 67 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 93
             emit_token 68 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 40
             emit_token 69 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 41
             emit_token 70 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 44
             emit_token 71 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 58
             emit_token 72 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 46
             emit_token 73 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         if c == 64
             emit_token 74 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
         \\ $ -> TOK_DOLLAR (97)
         if c == 36
             emit_token 97 pos 1
-            pos = pos + 1
+            pos pos + 1
             continue
 
-        pos = pos + 1
+        pos pos + 1
 
     emit_token 0 pos 0
 
@@ -3282,10 +3285,10 @@ parse_stmt :
             emit_p_exit_gpu
         emit_p_ret_host
 
-    \\ TOK_SYSCALL (94)
+    \\ TOK_TRAP (94)
     if== t 94
         consume
-        parse_syscall_stmt
+        parse_trap_stmt
 
     \\ TOK_CONTINUE (95)
     if== t 95
@@ -3387,10 +3390,10 @@ parse_continue_stmt :
     arm64_emit32 0x14000000
 
 \\ ============================================================================
-\\ syscall handler
+\\ trap handler
 \\ ============================================================================
 
-parse_syscall_stmt :
+parse_trap_stmt :
     result_ptr tok_text_ptr
     result_len peek_length
     consume
@@ -3398,13 +3401,13 @@ parse_syscall_stmt :
     emit_mov64 X8 0
     emit_p_mov_reg X8 sysnum
     arg_idx 0
-    parse_syscall_args arg_idx
+    parse_trap_args arg_idx
     emit_svc 0
     rd alloc_rreg
     emit_mov rd X0
     sym_add result_ptr result_len 2 rd
 
-parse_syscall_args idx :
+parse_trap_args idx :
     t peek_type
     if== t 1
         idx
@@ -3414,7 +3417,7 @@ parse_syscall_args idx :
         idx
     val parse_expr
     emit_p_mov_reg idx val
-    parse_syscall_args idx + 1
+    parse_trap_args idx + 1
 
 \\ ============================================================================
 \\ constant handler (Forth-style: VALUE constant NAME)
@@ -3463,10 +3466,10 @@ parse_param :
     gpu_n_kparams n_kparams
 
 \\ ============================================================================
-\\ load_u / store_u magic identifier dispatch
+\\ memory load/store magic identifier dispatch
 \\ ============================================================================
 
-parse_load_u width :
+parse_mem_load width :
     result_ptr tok_text_ptr
     result_len peek_length
     consume
@@ -3475,7 +3478,7 @@ parse_load_u width :
     emit_p_load rd addr 0 width
     sym_add result_ptr result_len 2 rd
 
-parse_store_u width :
+parse_mem_store width :
     dest_ptr tok_text_ptr
     dest_len peek_length
     consume
@@ -3493,7 +3496,7 @@ parse_store_u width :
         emit_p_add addr base_reg offset_reg
         emit_p_store val_expr addr 0 width
 
-parse_load_u_idx width :
+parse_mem_load_idx width :
     base parse_expr
     idx_expr parse_expr
     elem_bytes width / 8
@@ -3507,7 +3510,7 @@ parse_load_u_idx width :
     emit_p_load rd addr 0 width
     rd
 
-parse_store_u8_at :
+parse_mem_store_at :
     buf_expr parse_expr
     off_expr parse_expr
     val_expr parse_expr
@@ -3644,7 +3647,7 @@ parse_ident_stmt :
     \\ Put token back
     tok_pos tok_pos - 1
 
-    \\ Check for load_u8 (7 chars)
+    \\ Check for mem_load 8 (7 chars)
     if== len 7
         c0 → 8 ptr 0
         if== c0 108
@@ -3653,10 +3656,10 @@ parse_ident_stmt :
                 c6 → 8 ptr 6
                 if== c6 56
                     consume
-                    parse_load_u 8
+                    parse_mem_load 8
                     1
 
-    \\ Check for load_u16/32/64 (8 chars)
+    \\ Check for mem_load 16/32/64 (8 chars)
     if== len 8
         c0 → 8 ptr 0
         if== c0 108
@@ -3667,18 +3670,18 @@ parse_ident_stmt :
                 consume
                 if== c6 49
                     if== c7 54
-                        parse_load_u 16
+                        parse_mem_load 16
                         1
                 if== c6 51
                     if== c7 50
-                        parse_load_u 32
+                        parse_mem_load 32
                         1
                 if== c6 54
                     if== c7 52
-                        parse_load_u 64
+                        parse_mem_load 64
                         1
 
-    \\ Check for store_u8 (8 chars)
+    \\ Check for mem_store 8 (8 chars)
     if== len 8
         c0 → 8 ptr 0
         if== c0 115
@@ -3687,10 +3690,10 @@ parse_ident_stmt :
                 c7 → 8 ptr 7
                 if== c7 56
                     consume
-                    parse_store_u 8
+                    parse_mem_store 8
                     1
 
-    \\ Check for store_u16/32/64 (9 chars)
+    \\ Check for mem_store 16/32/64 (9 chars)
     if== len 9
         c0 → 8 ptr 0
         if== c0 115
@@ -3701,18 +3704,18 @@ parse_ident_stmt :
                 consume
                 if== c7 49
                     if== c8 54
-                        parse_store_u 16
+                        parse_mem_store 16
                         1
                 if== c7 51
                     if== c8 50
-                        parse_store_u 32
+                        parse_mem_store 32
                         1
                 if== c7 54
                     if== c8 52
-                        parse_store_u 64
+                        parse_mem_store 64
                         1
 
-    \\ Check for load_u64_idx / load_u32_idx (12 chars)
+    \\ Check for mem_load 64_idx / mem_load 32_idx (12 chars)
     if== len 12
         c0 → 8 ptr 0
         if== c0 108
@@ -3723,19 +3726,19 @@ parse_ident_stmt :
                 consume
                 if== c7 54
                     if== c8 52
-                        parse_load_u_idx 64
+                        parse_mem_load_idx 64
                 if== c7 51
                     if== c8 50
-                        parse_load_u_idx 32
+                        parse_mem_load_idx 32
 
-    \\ Check for store_u8_at (11 chars)
+    \\ Check for mem_store 8_at (11 chars)
     if== len 11
         c0 → 8 ptr 0
         if== c0 115
             c8 → 8 ptr 8
             if== c8 97
                 consume
-                parse_store_u8_at
+                parse_mem_store_at
                 1
 
     \\ Check for 3-operand ops
@@ -4342,25 +4345,25 @@ lithos_parse tokens_ptr total source :
 \\ ============================================================
 
 sys_openat dirfd path flags mode :
-    syscall fd 56 dirfd path flags mode
+    trap fd 56 dirfd path flags mode
 
 sys_close fd :
-    syscall ret 57 fd
+    trap ret 57 fd
 
 sys_lseek fd offset whence :
-    syscall pos 62 fd offset whence
+    trap pos 62 fd offset whence
 
 sys_mmap addr length prot flags fd offset :
-    syscall ptr 222 addr length prot flags fd offset
+    trap ptr 222 addr length prot flags fd offset
 
 \\ ============================================================
 \\ st_open — Open and mmap a safetensors file
 \\ ============================================================
 
 st_open path :
-    fd = sys_openat -100 path 0 0
-    file_size = sys_lseek fd 0 2
-    base = sys_mmap 0 file_size 1 2 fd 0
+    fd sys_openat -100 path 0 0
+    file_size sys_lseek fd 0 2
+    base sys_mmap 0 file_size 1 2 fd 0
     sys_close fd
 
 \\ ============================================================
@@ -4368,81 +4371,81 @@ st_open path :
 \\ ============================================================
 
 read_u64_le ptr :
-    load_u64 val ptr
+    val → 64 ptr
 
 read_u32_le ptr :
-    load_u32 val ptr
+    val → 32 ptr
 
 \\ ============================================================
 \\ JSON SCANNER
 \\ ============================================================
 
 st_skip_ws ptr end :
-    pos = ptr
+    pos ptr
     loop_skip:
         if>= pos end
-            out = pos
+            out pos
             return
-        ch = load_u8 pos
+        ch → 8 pos
         if== ch 32
-            pos = pos + 1
+            pos pos + 1
             goto loop_skip
         if== ch 9
-            pos = pos + 1
+            pos pos + 1
             goto loop_skip
         if== ch 10
-            pos = pos + 1
+            pos pos + 1
             goto loop_skip
         if== ch 13
-            pos = pos + 1
+            pos pos + 1
             goto loop_skip
-        out = pos
+        out pos
 
 st_find_char ptr end ch :
-    pos = ptr
+    pos ptr
     loop_fc:
         if>= pos end
-            found = end
+            found end
             return
-        b = load_u8 pos
+        b → 8 pos
         if== b ch
-            found = pos
+            found pos
             return
-        pos = pos + 1
+        pos pos + 1
         goto loop_fc
 
 st_parse_quoted ptr end :
-    start = ptr + 1
-    close = st_find_char start end 34
-    name_start = start
-    name_len = close - start
+    start ptr + 1
+    close st_find_char start end 34
+    name_start start
+    name_len close - start
 
 st_parse_u64_dec ptr end :
-    val = 0
-    pos = ptr
+    val 0
+    pos ptr
     loop_num:
         if>= pos end
-            next = pos
+            next pos
             return
-        ch = load_u8 pos
+        ch → 8 pos
         if< ch 48
-            next = pos
+            next pos
             return
         if> ch 57
-            next = pos
+            next pos
             return
-        digit = ch - 48
-        val = val * 10 + digit
-        pos = pos + 1
+        digit ch - 48
+        val val * 10 + digit
+        pos pos + 1
         goto loop_num
 
 st_match_bytes a b n :
-    eq = 1
+    eq 1
     for i 0 n 1
-        ca = load_u8 (a + i)
-        cb = load_u8 (b + i)
+        ca → 8 (a + i)
+        cb → 8 (b + i)
         if!= ca cb
-            eq = 0
+            eq 0
             return
     endfor
 
@@ -4451,53 +4454,53 @@ st_match_bytes a b n :
 \\ ============================================================
 
 st_parse_dtype ptr len :
-    dtype = DTYPE_UNKNOWN
+    dtype DTYPE_UNKNOWN
     if== len 3
-        c0 = load_u8 ptr
-        c1 = load_u8 (ptr + 1)
-        c2 = load_u8 (ptr + 2)
+        c0 → 8 ptr
+        c1 → 8 (ptr + 1)
+        c2 → 8 (ptr + 2)
         if== c0 70
             if== c1 49
                 if== c2 54
-                    dtype = DTYPE_F16
+                    dtype DTYPE_F16
                     return
         if== c0 70
             if== c1 51
                 if== c2 50
-                    dtype = DTYPE_F32
+                    dtype DTYPE_F32
                     return
         if== c0 73
             if== c1 51
                 if== c2 50
-                    dtype = DTYPE_I32
+                    dtype DTYPE_I32
                     return
         if== c0 73
             if== c1 49
                 if== c2 54
-                    dtype = DTYPE_I16
+                    dtype DTYPE_I16
                     return
         if== c0 70
             if== c1 54
                 if== c2 52
-                    dtype = DTYPE_UNKNOWN
+                    dtype DTYPE_UNKNOWN
                     return
     if== len 4
-        c0 = load_u8 ptr
-        c1 = load_u8 (ptr + 1)
+        c0 → 8 ptr
+        c1 → 8 (ptr + 1)
         if== c0 66
             if== c1 70
-                dtype = DTYPE_BF16
+                dtype DTYPE_BF16
                 return
     if== len 2
-        c0 = load_u8 ptr
-        c1 = load_u8 (ptr + 1)
+        c0 → 8 ptr
+        c1 → 8 (ptr + 1)
         if== c0 73
             if== c1 56
-                dtype = DTYPE_I8
+                dtype DTYPE_I8
                 return
         if== c0 85
             if== c1 56
-                dtype = DTYPE_U8
+                dtype DTYPE_U8
                 return
 
 \\ ============================================================
@@ -4505,107 +4508,107 @@ st_parse_dtype ptr len :
 \\ ============================================================
 
 st_parse_descriptor ptr end :
-    dtype = DTYPE_UNKNOWN
-    shape0 = 0
-    shape1 = 0
-    off_start = 0
-    off_end = 0
-    pos = ptr
+    dtype DTYPE_UNKNOWN
+    shape0 0
+    shape1 0
+    off_start 0
+    off_end 0
+    pos ptr
 
     loop_desc:
-        pos = st_skip_ws pos end
+        pos st_skip_ws pos end
         if>= pos end
-            next = pos
+            next pos
             return
-        ch = load_u8 pos
+        ch → 8 pos
         if== ch 125
-            next = pos + 1
+            next pos + 1
             return
 
         if== ch 44
-            pos = pos + 1
+            pos pos + 1
             goto loop_desc
 
         if!= ch 34
-            pos = pos + 1
+            pos pos + 1
             goto loop_desc
 
-        key_start key_len = st_parse_quoted pos end
-        pos = key_start + key_len + 1
+        key_start key_len st_parse_quoted pos end
+        pos key_start + key_len + 1
 
-        pos = st_find_char pos end 58
-        pos = pos + 1
-        pos = st_skip_ws pos end
+        pos st_find_char pos end 58
+        pos pos + 1
+        pos st_skip_ws pos end
 
         if== key_len 5
-            k0 = load_u8 key_start
+            k0 → 8 key_start
             if== k0 100
-                pos = st_skip_ws pos end
-                val_start val_len = st_parse_quoted pos end
-                dtype = st_parse_dtype val_start val_len
-                pos = val_start + val_len + 1
+                pos st_skip_ws pos end
+                val_start val_len st_parse_quoted pos end
+                dtype st_parse_dtype val_start val_len
+                pos val_start + val_len + 1
                 goto loop_desc
 
         if== key_len 5
-            k0 = load_u8 key_start
+            k0 → 8 key_start
             if== k0 115
-                pos = st_find_char pos end 91
-                pos = pos + 1
-                pos = st_skip_ws pos end
-                peek = load_u8 pos
+                pos st_find_char pos end 91
+                pos pos + 1
+                pos st_skip_ws pos end
+                peek → 8 pos
                 if== peek 93
-                    pos = pos + 1
+                    pos pos + 1
                     goto loop_desc
-                shape0 next_pos = st_parse_u64_dec pos end
-                pos = next_pos
-                pos = st_skip_ws pos end
-                peek2 = load_u8 pos
+                shape0 next_pos st_parse_u64_dec pos end
+                pos next_pos
+                pos st_skip_ws pos end
+                peek2 → 8 pos
                 if== peek2 44
-                    pos = pos + 1
-                    pos = st_skip_ws pos end
-                    shape1 next_pos2 = st_parse_u64_dec pos end
-                    pos = next_pos2
-                pos = st_find_char pos end 93
-                pos = pos + 1
+                    pos pos + 1
+                    pos st_skip_ws pos end
+                    shape1 next_pos2 st_parse_u64_dec pos end
+                    pos next_pos2
+                pos st_find_char pos end 93
+                pos pos + 1
                 goto loop_desc
 
         if== key_len 12
-            k0 = load_u8 key_start
+            k0 → 8 key_start
             if== k0 100
-                pos = st_find_char pos end 91
-                pos = pos + 1
-                pos = st_skip_ws pos end
-                off_start next_pos = st_parse_u64_dec pos end
-                pos = next_pos
-                pos = st_find_char pos end 44
-                pos = pos + 1
-                pos = st_skip_ws pos end
-                off_end next_pos2 = st_parse_u64_dec pos end
-                pos = next_pos2
-                pos = st_find_char pos end 93
-                pos = pos + 1
+                pos st_find_char pos end 91
+                pos pos + 1
+                pos st_skip_ws pos end
+                off_start next_pos st_parse_u64_dec pos end
+                pos next_pos
+                pos st_find_char pos end 44
+                pos pos + 1
+                pos st_skip_ws pos end
+                off_end next_pos2 st_parse_u64_dec pos end
+                pos next_pos2
+                pos st_find_char pos end 93
+                pos pos + 1
                 goto loop_desc
 
-        depth = 0
+        depth 0
         loop_skip_val:
             if>= pos end
                 goto loop_desc
-            sv_ch = load_u8 pos
+            sv_ch → 8 pos
             if== sv_ch 123
-                depth = depth + 1
+                depth depth + 1
             if== sv_ch 91
-                depth = depth + 1
+                depth depth + 1
             if== sv_ch 125
                 if== depth 0
                     goto loop_desc
-                depth = depth - 1
+                depth depth - 1
             if== sv_ch 93
                 if> depth 0
-                    depth = depth - 1
+                    depth depth - 1
             if== sv_ch 44
                 if== depth 0
                     goto loop_desc
-            pos = pos + 1
+            pos pos + 1
             goto loop_skip_val
 
 \\ ============================================================
@@ -4613,85 +4616,85 @@ st_parse_descriptor ptr end :
 \\ ============================================================
 
 st_parse_header base file_size :
-    header_len = read_u64_le base
-    json_start = base + 8
-    json_end = base + 8 + header_len
-    data_base = json_end
+    header_len read_u64_le base
+    json_start base + 8
+    json_end base + 8 + header_len
+    data_base json_end
 
-    count = 0
+    count 0
 
-    pos = st_skip_ws json_start json_end
-    ch0 = load_u8 pos
+    pos st_skip_ws json_start json_end
+    ch0 → 8 pos
     if== ch0 123
-        pos = pos + 1
+        pos pos + 1
 
     loop_tensors:
-        pos = st_skip_ws pos json_end
+        pos st_skip_ws pos json_end
         if>= pos json_end
-            header_end = data_base
-            tensor_count = count
+            header_end data_base
+            tensor_count count
             return
 
-        tch = load_u8 pos
+        tch → 8 pos
         if== tch 125
-            header_end = data_base
-            tensor_count = count
+            header_end data_base
+            tensor_count count
             return
 
         if== tch 44
-            pos = pos + 1
+            pos pos + 1
             goto loop_tensors
 
         if!= tch 34
-            pos = pos + 1
+            pos pos + 1
             goto loop_tensors
 
-        tname_start tname_len = st_parse_quoted pos json_end
-        pos = tname_start + tname_len + 1
+        tname_start tname_len st_parse_quoted pos json_end
+        pos tname_start + tname_len + 1
 
         if== tname_len 12
-            m0 = load_u8 tname_start
-            m1 = load_u8 (tname_start + 1)
+            m0 → 8 tname_start
+            m1 → 8 (tname_start + 1)
             if== m0 95
                 if== m1 95
-                    pos = st_find_char pos json_end 123
-                    pos = pos + 1
-                    depth_m = 1
+                    pos st_find_char pos json_end 123
+                    pos pos + 1
+                    depth_m 1
                     loop_skip_meta:
                         if>= pos json_end
                             goto loop_tensors
-                        mc = load_u8 pos
+                        mc → 8 pos
                         if== mc 123
-                            depth_m = depth_m + 1
+                            depth_m depth_m + 1
                         if== mc 125
-                            depth_m = depth_m - 1
+                            depth_m depth_m - 1
                             if== depth_m 0
-                                pos = pos + 1
+                                pos pos + 1
                                 goto loop_tensors
-                        pos = pos + 1
+                        pos pos + 1
                         goto loop_skip_meta
 
-        pos = st_find_char pos json_end 58
-        pos = pos + 1
-        pos = st_skip_ws pos json_end
+        pos st_find_char pos json_end 58
+        pos pos + 1
+        pos st_skip_ws pos json_end
 
-        desc_ch = load_u8 pos
+        desc_ch → 8 pos
         if== desc_ch 123
-            pos = pos + 1
+            pos pos + 1
 
-        dtype shape0 shape1 off_start off_end pos = st_parse_descriptor pos json_end
+        dtype shape0 shape1 off_start off_end pos st_parse_descriptor pos json_end
 
         if< count ST_MAX_TENSORS
-            store_u64 tbl_name_ptr count tname_start
-            store_u32 tbl_name_len count tname_len
-            store_u32 tbl_dtype count dtype
-            store_u64 tbl_data_start count off_start
-            store_u64 tbl_data_end count off_end
-            store_u32 tbl_shape_0 count shape0
-            store_u32 tbl_shape_1 count shape1
-            data_ptr = data_base + off_start
-            store_u64 tbl_data_ptr count data_ptr
-            count = count + 1
+            ← 64 tbl_name_ptr + count * 8 tname_start
+            ← 32 tbl_name_len + count * 4 tname_len
+            ← 32 tbl_dtype + count * 4 dtype
+            ← 64 tbl_data_start + count * 8 off_start
+            ← 64 tbl_data_end + count * 8 off_end
+            ← 32 tbl_shape_0 + count * 4 shape0
+            ← 32 tbl_shape_1 + count * 4 shape1
+            data_ptr data_base + off_start
+            ← 64 tbl_data_ptr + count * 8 data_ptr
+            count count + 1
 
         goto loop_tensors
 
@@ -4700,26 +4703,26 @@ st_parse_header base file_size :
 \\ ============================================================
 
 st_find_tensor name name_len tensor_count :
-    data_ptr = 0
-    dtype = DTYPE_UNKNOWN
-    shape0 = 0
-    shape1 = 0
-    nbytes = 0
+    data_ptr 0
+    dtype DTYPE_UNKNOWN
+    shape0 0
+    shape1 0
+    nbytes 0
 
     for idx 0 tensor_count 1
-        entry_name = load_u64_idx tbl_name_ptr idx
-        entry_len  = load_u32_idx tbl_name_len idx
+        entry_name → 64 tbl_name_ptr + idx * 8
+        entry_len → 32 tbl_name_len + idx * 4
 
         if== entry_len name_len
-            eq = st_match_bytes name entry_name name_len
+            eq st_match_bytes name entry_name name_len
             if== eq 1
-                data_ptr = load_u64_idx tbl_data_ptr idx
-                dtype    = load_u32_idx tbl_dtype idx
-                shape0   = load_u32_idx tbl_shape_0 idx
-                shape1   = load_u32_idx tbl_shape_1 idx
-                off_s    = load_u64_idx tbl_data_start idx
-                off_e    = load_u64_idx tbl_data_end idx
-                nbytes   = off_e - off_s
+                data_ptr → 64 tbl_data_ptr + idx * 8
+                dtype → 32 tbl_dtype + idx * 4
+                shape0 → 32 tbl_shape_0 + idx * 4
+                shape1 → 32 tbl_shape_1 + idx * 4
+                off_s → 64 tbl_data_start + idx * 8
+                off_e → 64 tbl_data_end + idx * 8
+                nbytes off_e - off_s
                 return
     endfor
 
@@ -4728,15 +4731,15 @@ st_find_tensor name name_len tensor_count :
 \\ ============================================================
 
 st_close base file_size :
-    syscall ret 215 base file_size
+    trap ret 215 base file_size
 
 \\ ============================================================
 \\ st_load — One-call open + parse
 \\ ============================================================
 
 st_load path :
-    base file_size = st_open path
-    header_end tensor_count = st_parse_header base file_size
+    base file_size st_open path
+    header_end tensor_count st_parse_header base file_size
 
 \\ ############################################################################
 \\ ##                                                                        ##
@@ -4799,8 +4802,8 @@ cpad target :
         goto loop_pad
 
 calign n :
-    mask = n - 1
-    target = (cubin_pos + mask) & (mask ^ 4294967295)
+    mask n - 1
+    target (cubin_pos + mask) & (mask ^ 4294967295)
     cpad target
 
 \\ ============================================================
@@ -4808,14 +4811,14 @@ calign n :
 \\ ============================================================
 
 elf_put_u16 val off :
-    store_u8_at cubin_buf off (val & 255)
-    store_u8_at cubin_buf (off + 1) ((val >> 8) & 255)
+    ← 8 cubin_buf + off (val & 255)
+    ← 8 cubin_buf + (off + 1) ((val >> 8) & 255)
 
 elf_put_u32 val off :
-    store_u8_at cubin_buf off (val & 255)
-    store_u8_at cubin_buf (off + 1) ((val >> 8) & 255)
-    store_u8_at cubin_buf (off + 2) ((val >> 16) & 255)
-    store_u8_at cubin_buf (off + 3) ((val >> 24) & 255)
+    ← 8 cubin_buf + off (val & 255)
+    ← 8 cubin_buf + (off + 1) ((val >> 8) & 255)
+    ← 8 cubin_buf + (off + 2) ((val >> 16) & 255)
+    ← 8 cubin_buf + (off + 3) ((val >> 24) & 255)
 
 elf_put_u64 val off :
     elf_put_u32 (val & 4294967295) off
@@ -4827,7 +4830,7 @@ elf_put_u64 val off :
 
 elf_emit_str src len :
     for i 0 len 1
-        byte = load_u8 (src + i)
+        byte → 8 (src + i)
         cb_emit byte
     endfor
 
@@ -4836,7 +4839,7 @@ elf_emit_str src len :
 \\ ============================================================
 
 elf_init :
-    cubin_pos = 0
+    cubin_pos 0
 
 \\ ============================================================
 \\ elf_write_header
@@ -4928,10 +4931,10 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_write_header
 
     \\ .shstrtab (section 1)
-    shstrtab_off = cubin_pos
+    shstrtab_off cubin_pos
     cb_emit 0
 
-    SN_shstrtab = cubin_pos - shstrtab_off
+    SN_shstrtab cubin_pos - shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 104
@@ -4943,7 +4946,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_strtab = cubin_pos - shstrtab_off
+    SN_strtab cubin_pos - shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 116
@@ -4953,7 +4956,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_symtab = cubin_pos - shstrtab_off
+    SN_symtab cubin_pos - shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 121
@@ -4963,7 +4966,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_nvinfo = cubin_pos - shstrtab_off
+    SN_nvinfo cubin_pos - shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4974,7 +4977,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 111
     cb_emit 0
 
-    SN_nvinfo_k = cubin_pos - shstrtab_off
+    SN_nvinfo_k cubin_pos - shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4987,7 +4990,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_text = cubin_pos - shstrtab_off
+    SN_text cubin_pos - shstrtab_off
     cb_emit 46
     cb_emit 116
     cb_emit 101
@@ -4997,7 +5000,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_const0 = cubin_pos - shstrtab_off
+    SN_const0 cubin_pos - shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -5015,7 +5018,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_shared = cubin_pos - shstrtab_off
+    SN_shared cubin_pos - shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -5040,51 +5043,51 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 0
 
     calign 4
-    shstrtab_size = cubin_pos - shstrtab_off
+    shstrtab_size cubin_pos - shstrtab_off
 
     \\ .strtab (section 2)
-    strtab_off = cubin_pos
+    strtab_off cubin_pos
     cb_emit 0
     cb_emit 0
-    strsym_kernel = cubin_pos - strtab_off
+    strsym_kernel cubin_pos - strtab_off
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
-    strtab_size = cubin_pos - strtab_off
+    strtab_size cubin_pos - strtab_off
 
     \\ .symtab (section 3)
     calign 8
-    symtab_off = cubin_pos
+    symtab_off cubin_pos
     sym64_emit 0 0 0 0 0 0
     sym64_emit 0 3 0 5 0 0
     sym64_emit 0 3 0 8 0 0
-    sym_kernel_off = cubin_pos
+    sym_kernel_off cubin_pos
     sym64_emit strsym_kernel 18 16 5 0 0
-    symtab_size = cubin_pos - symtab_off
+    symtab_size cubin_pos - symtab_off
 
     \\ .nv.info (section 4)
     calign 4
-    nvinfo_off = cubin_pos
-    reg_val = reg_count
+    nvinfo_off cubin_pos
+    reg_val reg_count
     if< reg_val 8
-        reg_val = 8
+        reg_val 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
     nvi_sval_emit 0 3 EIATTR_FRAME_SIZE NVI_FMT_U32
     nvi_sval_emit 0 3 EIATTR_MIN_STACK_SIZE NVI_FMT_U32
-    nvinfo_size = cubin_pos - nvinfo_off
+    nvinfo_size cubin_pos - nvinfo_off
 
     \\ .nv.info.<kernel> (section 6)
     calign 4
-    nvinfo_k_off = cubin_pos
+    nvinfo_k_off cubin_pos
     nvi_u32_emit 128 EIATTR_CUDA_API_VERSION NVI_FMT_U32
 
     for pi 0 n_kparams 1
-        ordinal = n_kparams - 1 - pi
+        ordinal n_kparams - 1 - pi
         cb_emit 4
         cb_emit EIATTR_KPARAM_INFO
         cw_emit 12
         cd_emit 0
-        offset_ord = (ordinal * 8) << 16
-        offset_ord = offset_ord | ordinal
+        offset_ord (ordinal * 8) << 16
+        offset_ord offset_ord | ordinal
         cd_emit offset_ord
         cd_emit 2171904
     endfor
@@ -5112,7 +5115,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
         cb_emit EIATTR_COOP_GROUP_INSTR_OFFSETS
         cw_emit (gridsync_cnt * 4)
         for gi 0 gridsync_cnt 1
-            gs_off = load_u32 (gridsync_off_ptr + gi * 4)
+            gs_off → 32 (gridsync_off_ptr + gi * 4)
             cd_emit gs_off
         endfor
 
@@ -5121,7 +5124,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cw_emit 4
     cd_emit 256
 
-    param_bytes = n_kparams * 8
+    param_bytes n_kparams * 8
     cb_emit 3
     cb_emit EIATTR_CBANK_PARAM_SIZE
     cw_emit param_bytes
@@ -5130,7 +5133,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit EIATTR_PARAM_CBANK
     cw_emit 8
     cd_emit 2
-    cbank_val = (param_bytes << 16) | 528
+    cbank_val (param_bytes << 16) | 528
     cd_emit cbank_val
 
     cb_emit 4
@@ -5144,11 +5147,11 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
         cw_emit 4
         cd_emit smem_size
 
-    nvinfo_k_size = cubin_pos - nvinfo_k_off
+    nvinfo_k_size cubin_pos - nvinfo_k_off
 
     \\ .text.<kernel> (section 5)
     calign 128
-    text_off = cubin_pos
+    text_off cubin_pos
 
     if== code_size 0
         for zb 0 48 1
@@ -5156,25 +5159,25 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
         endfor
     else
         for ci 0 code_size 1
-            byte = load_u8 (code_buf + ci)
+            byte → 8 (code_buf + ci)
             cb_emit byte
         endfor
 
-    text_size = cubin_pos - text_off
+    text_size cubin_pos - text_off
     elf_put_u64 text_size (sym_kernel_off + 16)
 
     \\ .nv.constant0.<kernel>
     calign 4
-    const0_off = cubin_pos
-    const0_total = 528 + param_bytes
+    const0_off cubin_pos
+    const0_total 528 + param_bytes
     for c0i 0 const0_total 1
         cb_emit 0
     endfor
-    const0_size = cubin_pos - const0_off
+    const0_size cubin_pos - const0_off
 
     \\ Section headers (9 x 64)
     calign 64
-    shdrs_off = cubin_pos
+    shdrs_off cubin_pos
 
     shdr64_emit 0 0 0 0 0 0 0 0 0 0
     shdr64_emit SN_shstrtab SHT_STRTAB 0 0 shstrtab_off shstrtab_size 0 0 1 0
@@ -5199,23 +5202,23 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
 \\ ============================================================
 
 elf_save path :
-    syscall fd SYS_OPENAT -100 path 577 420
+    trap fd SYS_OPENAT -100 path 577 420
 
-    written = 0
-    remaining = cubin_pos
+    written 0
+    remaining cubin_pos
     loop_write:
         if<= remaining 0
             goto done_write
-        write_ptr = cubin_buf + written
-        syscall n SYS_WRITE fd write_ptr remaining
+        write_ptr cubin_buf + written
+        trap n SYS_WRITE fd write_ptr remaining
         if<= n 0
             goto done_write
-        written = written + n
-        remaining = remaining - n
+        written written + n
+        remaining remaining - n
         goto loop_write
 
     done_write:
-    syscall ret SYS_CLOSE fd
+    trap ret SYS_CLOSE fd
 
 \\ ============================================================
 \\ elf_write_cubin — Convenience: build ELF and write to file
@@ -5242,7 +5245,7 @@ elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count 
 \\ Uses cubin_buf/cubin_pos as output buffer (same as GPU ELF writer).
 
 elf_build_arm64 code_buf code_size :
-    cubin_pos = 0
+    cubin_pos 0
 
     \\ ELF header (64 bytes)
     \\ e_ident: 7f 45 4c 46 02 01 01 00 (ELF64 LE SYSV)
@@ -5301,7 +5304,7 @@ elf_build_arm64 code_buf code_size :
     \\ p_paddr = 0x400000
     cq_emit 0x400000
     \\ p_filesz = 120 + code_size (ehdr + phdr + code)
-    total_file = 120 + code_size
+    total_file 120 + code_size
     cq_emit total_file
     \\ p_memsz = total_file
     cq_emit total_file
@@ -5310,7 +5313,7 @@ elf_build_arm64 code_buf code_size :
 
     \\ Code section starts at offset 120 (0x78)
     for ci 0 code_size 1
-        byte = load_u8 (code_buf + ci)
+        byte → 8 (code_buf + ci)
         cb_emit byte
     endfor
 
@@ -5321,7 +5324,7 @@ elf_build_arm64 code_buf code_size :
 \\ ############################################################################
 
 \\ ============================================================
-\\ Host syscall helpers for main
+\\ Host trap helpers for main
 \\ ============================================================
 
 \\ mmap_file — open, get size via lseek, mmap, close fd
