@@ -21,7 +21,49 @@
   --blue: #6e8ed0;
   --red: #d06e6e;
   --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
 }
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
 
 html { font-size: 15px; scroll-behavior: smooth; }
 body {
@@ -177,6 +219,7 @@ footer {
   <a href="#why-it-matters">Why It Matters</a>
   <a href="pytorch.html">Lithos vs PyTorch</a>
   <a href="performance.html">Performance</a>
+  <a href="bandwidth.html">Bandwidth</a>
   <a href="memory.html">Memory</a>
   <a href="architecture.html">Architecture</a>
   <a href="kernels.html">Kernels</a>
@@ -196,7 +239,7 @@ footer {
 <div class="container">
 <h2>What the Warp Scheduler Does</h2>
 
-<p>Each Streaming Multiprocessor (SM) on Hopper has <strong>4 warp schedulers</strong>, one per sub-partition. Every clock cycle, each scheduler picks one <em>ready</em> warp from its assigned set and issues one instruction from it.</p>
+<p>Each Streaming Multiprocessor (SM) on Hopper has <strong>4 warp schedulers</strong>, one per sub-partition. Every clock <span class="term" data-term="Cycle">cycle</span> &mdash; one tick of the 1.83 GHz SM clock, about 0.55 nanoseconds &mdash; each scheduler picks one <em>ready</em> warp from its assigned set and issues one instruction from it.</p>
 
 <p>A warp is "ready" when two conditions are met: all source operands for its next instruction are available (no pending writes), and the functional unit the instruction needs (FMA, load/store, special function) is free.</p>
 
@@ -240,7 +283,7 @@ footer {
 <p>Bits [57:53] of the control word encode a minimum stall count: how many cycles the scheduler must wait before issuing the next instruction from this warp. Values range from 0 to 15 (5 bits, though practical values rarely exceed 15). <code>ptxas</code> sets these based on its dependency analysis. Lithos SASS emitter can override them &mdash; for example, inserting a stall of 0 when Lithos knows the next instruction has no true dependency, even if ptxas conservatively inserted a stall.</p>
 
 <h4>5. Yield Hints</h4>
-<p>Bit [52] of the control word is the yield hint. When set, it suggests the scheduler should prefer other warps over this one for subsequent issue slots. This is useful when a warp has just issued a long-latency global memory load &mdash; there's no point selecting it again until the load completes (typically 200-400 cycles on HBM). Setting yield lets other warps use those cycles productively.</p>
+<p>Bit [52] of the control word is the yield hint. When set, it suggests the scheduler should prefer other warps over this one for subsequent issue slots. This is useful when a warp has just issued a long-latency global memory load &mdash; there's no point selecting it again until the load completes (typically 200-400 GPU cycles on HBM, or ~110-220 ns end-to-end from <code>ld.global</code> issue to data in a register). Setting yield lets other warps use those cycles productively &mdash; up to 400 other instructions per sub-partition during a single HBM miss.</p>
 
 <h4>6. Barrier Synchronization</h4>
 <p><code>bar.sync</code> forces all warps in a thread block to reach a synchronization point before any can proceed past it. This is necessary for shared memory patterns (write shared, sync, read shared) but expensive: the last warp to arrive unblocks all others, so any imbalance in arrival time is wasted cycles. Lithos controls barrier placement to minimize the synchronization surface &mdash; using barriers only where shared memory coherence requires it, not where the compiler defensively inserts them.</p>
@@ -289,7 +332,7 @@ footer {
 
 <p><code>ptxas</code> fills in the control word automatically based on its dependency analysis and heuristics. It does a reasonable job for general-purpose code. But it optimizes for the average case, not for a specific kernel's known memory access pattern and compute pipeline.</p>
 
-<p>Lithos SASS emitter fills them in deliberately. When Lithos knows a kernel streams sequentially through HBM with no reuse, it can set stall counts to exactly match the load-to-use latency. When it knows register allocation avoids bank conflicts, it can clear reuse flags that ptxas conservatively sets. When it knows a load will take 300+ cycles, it sets the yield hint so the scheduler doesn't waste cycles polling the warp.</p>
+<p>Lithos SASS emitter fills them in deliberately. When Lithos knows a kernel streams sequentially through HBM with no reuse, it can set stall counts to exactly match the load-to-use latency. When it knows register allocation avoids bank conflicts, it can clear reuse flags that ptxas conservatively sets. When it knows a load will take 300+ cycles (~165+ ns), it sets the yield hint so the scheduler doesn't waste cycles polling the warp.</p>
 
 </div>
 </section>

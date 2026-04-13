@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Language Design &mdash; Lithos Syntax Proposal</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  --engine-lithos: #d4a053;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre;
+}
+
+/* Lithos syntax highlighting */
+pre.lithos .kw       { color: var(--accent); font-weight: 600; }
+pre.lithos .mnemonic { color: #c0c0d0; font-weight: 600; }
+pre.lithos .reg      { color: var(--green); }
+pre.lithos .type     { color: var(--blue); }
+pre.lithos .num      { color: var(--cyan); }
+pre.lithos .builtin  { color: var(--blue); }
+pre.lithos .pred     { color: var(--red); }
+pre.lithos .label    { color: var(--red); }
+pre.lithos .comment  { color: var(--text-dim); font-style: italic; }
+pre.lithos .punct    { color: var(--text-faint); }
+pre.lithos .arrow    { color: var(--accent); }
+
+ul.clean { list-style: none; padding: 0; color: var(--text-dim); font-size: 0.9rem; line-height: 1.75; }
+ul.clean li { padding-left: 1rem; position: relative; margin-bottom: 0.4rem; }
+ul.clean li::before { content: "-"; position: absolute; left: 0; color: var(--accent-dim); }
+ul.clean li strong { color: var(--text); }
+
+.decision {
+  background: var(--bg-raised);
+  border-left: 3px solid var(--accent);
+  padding: 1.5rem 1.8rem;
+  margin: 1.5rem 0;
+}
+.decision h3 { margin-top: 0; color: var(--accent); }
+
+.draft-banner {
+  background: var(--bg-raised);
+  border: 1px solid var(--accent-dim);
+  border-left: 3px solid var(--accent);
+  padding: 1rem 1.3rem;
+  margin: 1.5rem 0 2rem 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+.draft-banner strong { color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.78rem; display: block; margin-bottom: 0.3rem; }
+
+.example { margin-bottom: 2rem; }
+.example .ex-label {
+  display: inline-block;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  padding: 0.2rem 0.6rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.6rem;
+}
+.example .ex-caption { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 0.5rem; }
+
+.decisions-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+.decision-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-dim);
+  padding: 1rem 1.3rem;
+}
+.decision-card .dc-num {
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  margin-right: 0.6rem;
+}
+.decision-card .dc-title { font-weight: 600; color: var(--text); font-size: 0.95rem; }
+.decision-card p { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.4rem; margin-bottom: 0; }
+.decision-card code { color: var(--accent); background: var(--bg-code); padding: 0.05rem 0.3rem; font-size: 0.82rem; }
+
+.vocab-count {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1em;
+}
+
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design" class="active">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<header class="hero">
+<div class="container">
+  <h1>Language Design</h1>
+  <p>Draft syntax under review. Assembly-flavored. Literal PTX mnemonics.</p>
+</div>
+</header>
+
+<main class="container">
+
+<section id="status">
+<div class="draft-banner">
+  <strong>Draft Syntax Under Review</strong>
+  This page shows a preliminary proposal for Lithos surface syntax. It is <em>not</em> the way the language will be &mdash; it is the current shape on the table, awaiting review. Details will change. The examples below compile in your head, not yet in a compiler.
+</div>
+
+<p>The shape: assembly-flavored, space-separated, one instruction per line. Every mnemonic is a literal <a href="/glossary#PTX">PTX</a> mnemonic. No parentheses, no commas, no expression trees. The compiler assigns physical registers; the programmer writes meaningful names.</p>
+
+<p>Three worked examples follow, then twelve design decisions that fix the shape.</p>
+</section>
+
+<section id="examples">
+<h2>Examples</h2>
+
+<div class="example">
+<div class="ex-label">Example 1</div>
+<h3 style="margin-top:0.3rem;">Vector add</h3>
+<p class="ex-caption">The simplest useful kernel. Thread index, bounds check, three loads/stores, one add.</p>
+<pre class="lithos"><span class="kw">kernel</span> vadd  <span class="reg">a</span> <span class="punct">*</span><span class="type">f32</span>  <span class="reg">b</span> <span class="punct">*</span><span class="type">f32</span>  <span class="reg">c</span> <span class="punct">*</span><span class="type">f32</span>  <span class="reg">n</span> <span class="type">u32</span>
+    <span class="mnemonic">mov.u32</span>       <span class="reg">tid</span>     <span class="builtin">thread.x</span>
+    <span class="mnemonic">mad.lo.u32</span>    <span class="reg">tid</span>     <span class="builtin">block.x</span>  <span class="builtin">block.dim.x</span>  <span class="reg">tid</span>
+    <span class="mnemonic">setp.ge.u32</span>   <span class="reg">p0</span>      <span class="reg">tid</span>      <span class="reg">n</span>
+    <span class="pred">@p0</span> <span class="mnemonic">bra</span> <span class="label">done</span>
+
+    <span class="mnemonic">ld.global.f32</span> <span class="reg">x</span>  <span class="punct">[</span><span class="reg">a</span> <span class="punct">+</span> <span class="reg">tid</span><span class="punct">*</span><span class="num">4</span><span class="punct">]</span>
+    <span class="mnemonic">ld.global.f32</span> <span class="reg">y</span>  <span class="punct">[</span><span class="reg">b</span> <span class="punct">+</span> <span class="reg">tid</span><span class="punct">*</span><span class="num">4</span><span class="punct">]</span>
+    <span class="mnemonic">add.f32</span>       <span class="reg">z</span>  <span class="reg">x</span> <span class="reg">y</span>
+    <span class="mnemonic">st.global.f32</span> <span class="punct">[</span><span class="reg">c</span> <span class="punct">+</span> <span class="reg">tid</span><span class="punct">*</span><span class="num">4</span><span class="punct">]</span>  <span class="reg">z</span>
+
+    <span class="label">done:</span> <span class="mnemonic">exit</span></pre>
+</div>
+
+<div class="example">
+<div class="ex-label">Example 2</div>
+<h3 style="margin-top:0.3rem;">RMSNorm</h3>
+<p class="ex-caption">Compile-time constant, shared memory, warp-level reduction, mixed f16/f32, barrier, final cast-and-store.</p>
+<pre class="lithos"><span class="kw">kernel</span> rmsnorm  <span class="reg">x</span> <span class="punct">*</span><span class="type">f16</span>  <span class="reg">weight</span> <span class="punct">*</span><span class="type">f16</span>  <span class="reg">output</span> <span class="punct">*</span><span class="type">f16</span>  <span class="reg">eps</span> <span class="type">f32</span>
+    <span class="kw">const</span> <span class="reg">H</span> <span class="num">5120</span>
+    <span class="kw">shared</span> <span class="reg">sum</span> <span class="type">f32</span>
+
+    <span class="mnemonic">ld.global.f16</span> <span class="reg">v</span>         <span class="punct">[</span><span class="reg">x</span> <span class="punct">+</span> <span class="builtin">thread.x</span><span class="punct">*</span><span class="num">2</span><span class="punct">]</span>
+    <span class="mnemonic">cvt.f32.f16</span>   <span class="reg">vf</span>        <span class="reg">v</span>
+    <span class="mnemonic">mul.f32</span>       <span class="reg">sq</span>        <span class="reg">vf</span> <span class="reg">vf</span>
+
+    <span class="kw">warp_reduce_sum</span> <span class="reg">sq</span> <span class="arrow">-&gt;</span> <span class="reg">warp_total</span>
+    <span class="mnemonic">setp.eq.u32</span>   <span class="reg">p0</span>        <span class="builtin">thread.x</span> <span class="num">0</span>
+    <span class="pred">@p0</span> <span class="mnemonic">st.shared.f32</span> <span class="punct">[</span><span class="reg">sum</span><span class="punct">]</span> <span class="reg">warp_total</span>
+    <span class="mnemonic">barrier</span>
+
+    <span class="mnemonic">ld.shared.f32</span> <span class="reg">total</span>     <span class="punct">[</span><span class="reg">sum</span><span class="punct">]</span>
+    <span class="mnemonic">div.f32</span>       <span class="reg">mean</span>      <span class="reg">total</span>  <span class="reg">H</span>
+    <span class="mnemonic">add.f32</span>       <span class="reg">denom</span>     <span class="reg">mean</span>   <span class="reg">eps</span>
+    <span class="mnemonic">rsqrt.f32</span>     <span class="reg">scale</span>     <span class="reg">denom</span>
+
+    <span class="mnemonic">ld.global.f16</span> <span class="reg">w</span>         <span class="punct">[</span><span class="reg">weight</span> <span class="punct">+</span> <span class="builtin">thread.x</span><span class="punct">*</span><span class="num">2</span><span class="punct">]</span>
+    <span class="mnemonic">cvt.f32.f16</span>   <span class="reg">wf</span>        <span class="reg">w</span>
+    <span class="mnemonic">mul.f32</span>       <span class="reg">scaled</span>    <span class="reg">vf</span> <span class="reg">scale</span>
+    <span class="mnemonic">mul.f32</span>       <span class="reg">out</span>       <span class="reg">scaled</span> <span class="reg">wf</span>
+    <span class="mnemonic">cvt.f16.f32</span>   <span class="reg">out16</span>     <span class="reg">out</span>
+    <span class="mnemonic">st.global.f16</span> <span class="punct">[</span><span class="reg">output</span> <span class="punct">+</span> <span class="builtin">thread.x</span><span class="punct">*</span><span class="num">2</span><span class="punct">]</span>  <span class="reg">out16</span></pre>
+</div>
+
+<div class="example">
+<div class="ex-label">Example 3</div>
+<h3 style="margin-top:0.3rem;">Tensor core tile</h3>
+<p class="ex-caption">Shared/register declarations with shapes, a <code>for</code> loop, async copy with wait group, and a full-precision MMA mnemonic.</p>
+<pre class="lithos"><span class="kw">kernel</span> gemm_tile  <span class="reg">A</span> <span class="punct">*</span><span class="type">f16</span>  <span class="reg">B</span> <span class="punct">*</span><span class="type">f16</span>  <span class="reg">C</span> <span class="punct">*</span><span class="type">f32</span>
+    <span class="kw">const</span> <span class="reg">M</span> <span class="num">64</span>
+    <span class="kw">const</span> <span class="reg">N</span> <span class="num">64</span>
+    <span class="kw">const</span> <span class="reg">K</span> <span class="num">16</span>
+
+    <span class="kw">shared</span>   <span class="reg">at</span>  <span class="type">f16</span><span class="punct">[</span><span class="num">64</span><span class="punct">,</span> <span class="num">16</span><span class="punct">]</span>
+    <span class="kw">shared</span>   <span class="reg">bt</span>  <span class="type">f16</span><span class="punct">[</span><span class="num">16</span><span class="punct">,</span> <span class="num">64</span><span class="punct">]</span>
+    <span class="kw">register</span> <span class="reg">acc</span> <span class="type">f32</span><span class="punct">[</span><span class="num">32</span><span class="punct">]</span>
+
+    <span class="kw">for</span> <span class="reg">k</span> <span class="kw">in</span> <span class="num">0</span><span class="punct">..</span><span class="reg">K</span> <span class="kw">step</span> <span class="num">16</span>
+        <span class="mnemonic">cp.async.cg.shared.global</span> <span class="reg">at</span>  <span class="punct">[</span><span class="reg">A</span> <span class="punct">+</span> <span class="reg">k</span><span class="punct">*</span><span class="num">2</span><span class="punct">]</span>  <span class="num">1024</span>
+        <span class="mnemonic">cp.async.cg.shared.global</span> <span class="reg">bt</span>  <span class="punct">[</span><span class="reg">B</span> <span class="punct">+</span> <span class="reg">k</span><span class="punct">*</span><span class="num">2</span><span class="punct">]</span>  <span class="num">1024</span>
+        <span class="mnemonic">cp.async.wait_group</span> <span class="num">0</span>
+        <span class="mnemonic">barrier</span>
+
+        <span class="mnemonic">mma.sync.m16n8k16.f16.f32</span> <span class="reg">acc</span> <span class="reg">at</span> <span class="reg">bt</span>
+
+    <span class="kw">store_tile</span> <span class="reg">C</span> <span class="reg">acc</span></pre>
+</div>
+</section>
+
+<section id="decisions">
+<h2>Design Decisions</h2>
+<p>Twelve choices fix the shape. Each one is defensible in isolation; together they commit the language to staying within a hand's reach of PTX.</p>
+
+<div class="decisions-grid">
+
+<div class="decision-card">
+  <div><span class="dc-num">01</span><span class="dc-title">No parens, no commas</span></div>
+  <p>Parameters on the kernel line are space-separated. <code>kernel vadd  a *f32  b *f32  c *f32  n u32</code>. Double spaces between logical groups are a convention, not syntax &mdash; whitespace between tokens is whitespace.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">02</span><span class="dc-title">Literal PTX mnemonics</span></div>
+  <p>Every instruction name is the actual PTX mnemonic: <code>add.f32</code>, <code>ld.global.f32</code>, <code>setp.ge.u32</code>, <code>mad.lo.u32</code>. No renaming, no prettification. If you know PTX, you know Lithos.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">03</span><span class="dc-title">Named registers</span></div>
+  <p>The programmer writes meaningful names (<code>tid</code>, <code>x</code>, <code>y</code>, <code>z</code>, <code>scale</code>, <code>denom</code>). The compiler assigns physical registers. This is the one concession to readability that the PTX surface itself already makes.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">04</span><span class="dc-title">Destination first, sources after</span></div>
+  <p><code>add.f32  z  x y</code> means <em>z = x + y</em>. This matches PTX convention exactly. Every three-operand instruction reads the same way: result, then operands.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">05</span><span class="dc-title">Memory syntax</span></div>
+  <p><code>[a + tid*4]</code> for address computation. The compiler emits whatever address arithmetic the target needs &mdash; scaled indexing, separate <code>mad</code>, whatever. The source expresses intent; the emitter picks the encoding.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">06</span><span class="dc-title">Predication</span></div>
+  <p><code>@p0 bra done</code>. Same as PTX. A predicate register gates a single instruction. Inverted form <code>@!p0</code> behaves as expected.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">07</span><span class="dc-title">Labels</span></div>
+  <p><code>done:</code> marks a jump target. Bare identifier followed by a colon. The label lives on the same line as an instruction or on its own &mdash; either is fine.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">08</span><span class="dc-title">Compile-time constants</span></div>
+  <p><code>const H 5120</code>. The name is baked into the emitted code as an immediate. No runtime slot, no register pressure. Constants participate in arithmetic at compile time when possible.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">09</span><span class="dc-title">Memory spaces</span></div>
+  <p>Explicit keywords: <code>shared</code>, <code>register</code>. Pointer parameters are implicitly <code>global</code>. There is no "just memory" &mdash; every declaration names the space it lives in.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">10</span><span class="dc-title">Built-in globals</span></div>
+  <p><code>thread.x</code>, <code>block.x</code>, <code>block.dim.x</code>, <code>warp.id</code>, <code>lane.id</code>. Dotted names for the fixed vocabulary of GPU-provided identifiers. They read as data, not as function calls.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">11</span><span class="dc-title"><code>-&gt;</code> for non-PTX abstractions</span></div>
+  <p><code>warp_reduce_sum sq -&gt; warp_total</code>. The arrow marks a word that expands to more than one PTX instruction. When the thing you want doesn't map to a single mnemonic, the syntax reminds you of that at the call site.</p>
+</div>
+
+<div class="decision-card">
+  <div><span class="dc-num">12</span><span class="dc-title">Tensor core mnemonics stay full-length</span></div>
+  <p><code>mma.sync.m16n8k16.f16.f32</code>. The variant matters &mdash; the shape, the input type, the accumulator type are all part of the instruction's identity. Shortening the name would lose the information that makes the line meaningful.</p>
+</div>
+
+</div>
+</section>
+
+<section id="vocabulary">
+<h2>Vocabulary</h2>
+<p>Total surface size: <span class="vocab-count">~90 words</span>.</p>
+<p>That includes:</p>
+<ul class="clean">
+  <li><strong>Structure keywords</strong> &mdash; <code>kernel</code>, <code>const</code>, <code>shared</code>, <code>register</code>, <code>for</code>, <code>in</code>, <code>step</code></li>
+  <li><strong>PTX mnemonics</strong> &mdash; the subset needed for transformer inference (loads, stores, arithmetic, comparison, branch, cp.async, mma.sync, barrier, exit)</li>
+  <li><strong>Built-in identifiers</strong> &mdash; <code>thread.x</code>, <code>block.x</code>, <code>block.dim.x</code>, <code>warp.id</code>, <code>lane.id</code>, and a handful more</li>
+  <li><strong>Types</strong> &mdash; <code>f16</code>, <code>f32</code>, <code>u32</code>, <code>i32</code>, pointer forms (<code>*f32</code>), array shapes (<code>f16[64, 16]</code>)</li>
+</ul>
+<p>A human can learn the whole surface in an afternoon. An <a href="/glossary#LLM">LLM</a> can hold the whole surface in a system prompt.</p>
+</section>
+
+<section id="status-footer">
+<h2>Status</h2>
+<div class="decision">
+<h3>Draft, not finalized</h3>
+<p>This syntax is a proposal. It has not been ratified by running code through a compiler and discovering which parts hurt. Expect movement in:</p>
+<ul class="clean">
+  <li>How <code>-&gt;</code> abstractions are defined and composed</li>
+  <li>Array shape syntax inside <code>shared</code> and <code>register</code> declarations</li>
+  <li>Whether <code>for</code> loops are the right control-flow primitive or whether everything should be labels-and-branches like PTX itself</li>
+  <li>The exact spelling of built-in globals (<code>thread.x</code> vs <code>tid.x</code> vs <code>%tid.x</code>)</li>
+  <li>How immediate constants participate in address arithmetic vs operand lists</li>
+</ul>
+<p>Review comments welcome. The goal at this stage is to find the parts that read wrong before they are set in a parser.</p>
+</div>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+  Lithos &mdash; Writing on Silicon &middot; Language design, draft syntax under review
+</div>
+</footer>
+
+</body>
+</html>

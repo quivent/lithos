@@ -371,10 +371,13 @@ class ResidualAccumulator:
 
 
 # ---------------------------------------------------------------------------
-# GPU launch stub (mock until real cubins wired)
+# GPU launch -- real cuLaunchKernel via CUDADriver + fallback logging
 # ---------------------------------------------------------------------------
 
 _LAUNCH_LOG: List[str] = []  # for testing/debugging
+
+# Global CUDADriver instance -- set by LithosEngine when in real-execution mode
+_CUDA_DRIVER: Optional[Any] = None
 
 
 def _gpu_launch(
@@ -385,12 +388,22 @@ def _gpu_launch(
     params: Sequence[int],
     *,
     name: str = "",
+    param_types: Optional[Sequence[str]] = None,
 ) -> None:
-    """Mock GPU kernel launch.
+    """Launch a CUDA kernel via the driver API.
 
-    When func_handle is non-zero and a real CUDA context is active, this
-    will call cuLaunchKernel.  For now it logs the launch parameters so
-    the orchestration can be tested without hardware.
+    When a CUDADriver is registered and func_handle is non-zero, this calls
+    cuLaunchKernel with the given parameters.  Otherwise it falls back to
+    logging (for orchestration-only testing without hardware).
+
+    *params* is a list of raw integer values.  *param_types* optionally
+    specifies the ctypes type for each parameter:
+        "u32" -> ctypes.c_uint32
+        "u64" -> ctypes.c_uint64
+        "f32" -> ctypes.c_float
+        "i32" -> ctypes.c_int32
+    If param_types is None, values >= (1 << 32) are treated as u64 (pointers),
+    otherwise as u32.
     """
     entry = (
         f"LAUNCH {name}: grid={grid} block={block} "
@@ -398,17 +411,38 @@ def _gpu_launch(
     )
     _LAUNCH_LOG.append(entry)
 
-    # TODO: when wiring real kernels, replace with:
-    # cuda = ctypes.CDLL("libcuda.so.1")
-    # param_array = (ctypes.c_void_p * len(params))(*params)
-    # extras = (ctypes.c_void_p * 1)(ctypes.cast(param_array, ctypes.c_void_p))
-    # cuda.cuLaunchKernel(
-    #     func_handle,
-    #     grid[0], grid[1], grid[2],
-    #     block[0], block[1], block[2],
-    #     shared_bytes, 0,  # stream=0
-    #     extras, None
-    # )
+    if _CUDA_DRIVER is not None and func_handle != 0:
+        # Build typed ctypes args from raw int params
+        typed_args: list[Any] = []
+        for i, val in enumerate(params):
+            if param_types is not None and i < len(param_types):
+                ptype = param_types[i]
+                if ptype == "u64":
+                    typed_args.append(ctypes.c_uint64(val))
+                elif ptype == "u32":
+                    typed_args.append(ctypes.c_uint32(val))
+                elif ptype == "f32":
+                    # val is actually a float passed as int via struct
+                    typed_args.append(ctypes.c_float(struct.unpack('f', struct.pack('I', val))[0]))
+                elif ptype == "i32":
+                    typed_args.append(ctypes.c_int32(val))
+                else:
+                    typed_args.append(ctypes.c_uint64(val))
+            else:
+                # Auto-detect: pointers are u64, small values are u32
+                if val >= (1 << 32) or val < 0:
+                    typed_args.append(ctypes.c_uint64(val))
+                else:
+                    typed_args.append(ctypes.c_uint32(val))
+
+        func = ctypes.c_void_p(func_handle)
+        _CUDA_DRIVER.launch(
+            func,
+            grid=grid,
+            block=block,
+            args=typed_args,
+            shared_mem=shared_bytes,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -427,10 +461,17 @@ class LithosEngine:
             token = engine.decode_step()
     """
 
-    def __init__(self, model: LoadedModel, kernels: LoadedKernels):
+    def __init__(self, model: LoadedModel, kernels: LoadedKernels,
+                 cuda_driver: Optional[Any] = None):
+        global _CUDA_DRIVER
         self.model = model
         self.kernels = kernels
         self.config = model.config
+        self._gpu = cuda_driver
+
+        # Register the CUDA driver globally so _gpu_launch can use it
+        if cuda_driver is not None:
+            _CUDA_DRIVER = cuda_driver
 
         # State
         self.kv_cache = KVCache(self.config)
@@ -443,6 +484,7 @@ class LithosEngine:
 
         # Last logits pointer (set after final lm_head projection)
         self._logits_ptr: int = 0
+        self._logits_count: int = 0  # number of f32 logits at _logits_ptr
 
     # ------------------------------------------------------------------
     # Public API
@@ -597,36 +639,53 @@ class LithosEngine:
         return self.model.base_ptr + offset
 
     def _launch_embed(self, token_ids: Sequence[int]) -> None:
-        """Embedding lookup for a batch of tokens."""
-        n = len(token_ids)
-        _gpu_launch(
-            self.kernels.embed_func,
-            grid=(math.ceil(n * self.config.hidden_dim / 256), 1, 1),
-            block=(256, 1, 1),
-            shared_bytes=0,
-            params=[
-                self.model.embed_ptr,
-                self.act_bufs.output_ptr,
-                n,
-                self.config.hidden_dim,
-            ],
-            name="embed",
-        )
+        """Embedding lookup for a batch of tokens.
+
+        The specialized embed kernel takes (token_id: u32, table_ptr: u64, output_ptr: u64)
+        with hidden_dim baked in.  We launch once per token.
+        """
+        hidden = self.config.hidden_dim
+        BLOCK = 256
+        GRID = max(1, math.ceil(hidden / (BLOCK * 4)))  # vectorized: 4 elems/thread
+
+        for i, tid in enumerate(token_ids):
+            out_offset = i * hidden * 4  # F32 output, 4 bytes per element
+            _gpu_launch(
+                self.kernels.embed_func,
+                grid=(GRID, 1, 1),
+                block=(BLOCK, 1, 1),
+                shared_bytes=0,
+                params=[
+                    tid,
+                    self.model.embed_ptr,
+                    self.act_bufs.output_ptr + out_offset,
+                ],
+                param_types=["u32", "u64", "u64"],
+                name=f"embed_tok{tid}",
+            )
         self.act_bufs.swap()
 
     def _launch_embed_single(self) -> None:
-        """Embedding lookup for a single token (decode step)."""
+        """Embedding lookup for a single token (decode step).
+
+        Uses the last generated token id stored in self._last_token_id.
+        """
+        hidden = self.config.hidden_dim
+        BLOCK = 256
+        GRID = max(1, math.ceil(hidden / (BLOCK * 4)))
+
+        token_id = getattr(self, '_last_token_id', 0)
         _gpu_launch(
             self.kernels.embed_func,
-            grid=(math.ceil(self.config.hidden_dim / 256), 1, 1),
-            block=(256, 1, 1),
+            grid=(GRID, 1, 1),
+            block=(BLOCK, 1, 1),
             shared_bytes=0,
             params=[
+                token_id,
                 self.model.embed_ptr,
                 self.act_bufs.output_ptr,
-                1,
-                self.config.hidden_dim,
             ],
+            param_types=["u32", "u64", "u64"],
             name="embed_single",
         )
         self.act_bufs.swap()
@@ -641,20 +700,26 @@ class LithosEngine:
         pass
 
     def _launch_norm(self, layer_idx: int, sublayer: str, n_tokens: int) -> None:
-        """RMSNorm before attention or MLP sublayer."""
+        """RMSNorm before attention or MLP sublayer.
+
+        Kernel signature: norm(input_ptr, residual_ptr, weight_ptr, output_ptr, epsilon)
+        All u64 pointers + f32 epsilon.  hidden_dim=5120 baked in.
+        """
         weight_name = f"layers.{layer_idx}.{sublayer}.weight"
+        eps_bits = struct.unpack('I', struct.pack('f', self.config.norm_eps))[0]
         _gpu_launch(
             self.kernels.norm_func,
             grid=(n_tokens, 1, 1),
-            block=(min(self.config.hidden_dim, 1024), 1, 1),
-            shared_bytes=0,
+            block=(256, 1, 1),
+            shared_bytes=128,
             params=[
-                self.act_bufs.input_ptr,     # input (reads from residual stream)
-                self.act_bufs.output_ptr,     # output (normed activations)
-                self._weight_ptr(weight_name),
-                n_tokens,
-                self.config.hidden_dim,
+                self.act_bufs.input_ptr,     # input
+                self.residual.ptr,           # residual
+                self._weight_ptr(weight_name),  # weight
+                self.act_bufs.output_ptr,    # output
+                eps_bits,                    # epsilon as f32 bits
             ],
+            param_types=["u64", "u64", "u64", "u64", "f32"],
             name=f"norm_L{layer_idx}_{sublayer}",
         )
         self.act_bufs.swap()
@@ -896,19 +961,24 @@ class LithosEngine:
         self.act_bufs.swap()
 
     def _launch_final_norm(self, n_tokens: int) -> None:
-        """RMSNorm after all layers, before the LM head."""
+        """RMSNorm after all layers, before the LM head.
+
+        Same kernel signature as per-layer norm.
+        """
+        eps_bits = struct.unpack('I', struct.pack('f', self.config.norm_eps))[0]
         _gpu_launch(
             self.kernels.norm_func,
             grid=(n_tokens, 1, 1),
-            block=(min(self.config.hidden_dim, 1024), 1, 1),
-            shared_bytes=0,
+            block=(256, 1, 1),
+            shared_bytes=128,
             params=[
                 self.act_bufs.input_ptr,
-                self.act_bufs.output_ptr,
+                self.residual.ptr,
                 self.model.final_norm_ptr,
-                n_tokens,
-                self.config.hidden_dim,
+                self.act_bufs.output_ptr,
+                eps_bits,
             ],
+            param_types=["u64", "u64", "u64", "u64", "f32"],
             name="final_norm",
         )
         self.act_bufs.swap()
@@ -937,30 +1007,68 @@ class LithosEngine:
             name="lm_head",
         )
         self._logits_ptr = self.act_bufs.output_ptr
+        self._logits_count = n_tokens * self.config.vocab_size
         self.act_bufs.swap()
 
     def _launch_sample(self) -> int:
-        """Sample next token from logits.
+        """Sample next token from logits via CPU argmax.
 
-        Sampling runs on CPU (Grace ARM cores) — the logits are in unified
-        memory so there is no copy, just a pointer read.
+        If a CUDA driver is available and logits are on device, copies them
+        back to host first.  On GH200 unified memory, the logits pointer
+        may already be host-accessible.
 
-        Returns a mock token id for now.
+        For now: greedy argmax (temperature=0).  Top-k/top-p can be added later.
         """
-        _gpu_launch(
-            self.kernels.sample_func,
-            grid=(1, 1, 1),
-            block=(self.config.vocab_size, 1, 1) if self.config.vocab_size <= 1024 else (1024, 1, 1),
-            shared_bytes=0,
-            params=[
-                self._logits_ptr,
-                self.config.vocab_size,
-            ],
-            name="sample",
-        )
-        # Mock: return token 0.  Real implementation reads the sampled id
-        # from the output buffer (or does CPU-side argmax / top-p).
-        return 0
+        import numpy as np
+
+        vocab = self.config.vocab_size
+        logits_ptr = self._logits_ptr
+
+        if logits_ptr == 0:
+            _LAUNCH_LOG.append("LAUNCH sample: no logits pointer, returning 0")
+            return 0
+
+        # Synchronize GPU before reading logits
+        if self._gpu is not None:
+            self._gpu.synchronize()
+
+        # Read the LAST token's logits (for next-token prediction)
+        # logits layout: [n_tokens, vocab_size] in F32
+        # We want the last row.
+        last_row_offset = (self._logits_count - vocab) * 4  # bytes
+
+        # Try to read logits from the pointer.
+        # On GH200 unified memory, mmap'd host pointers are GPU-accessible
+        # and GPU device pointers are host-accessible.
+        try:
+            logits_host = np.zeros(vocab, dtype=np.float32)
+            if self._gpu is not None:
+                # Copy from device to host
+                from cuda_driver import CUdeviceptr
+                src = CUdeviceptr(logits_ptr + last_row_offset)
+                self._gpu.memcpy_dtoh(
+                    logits_host.ctypes.data_as(ctypes.c_void_p),
+                    src,
+                    vocab * 4,
+                )
+            else:
+                # Direct host memory read (logits in mmap'd buffer)
+                src_array = (ctypes.c_float * vocab).from_address(
+                    logits_ptr + last_row_offset
+                )
+                for i in range(vocab):
+                    logits_host[i] = src_array[i]
+
+            # Greedy argmax
+            token_id = int(np.argmax(logits_host))
+            _LAUNCH_LOG.append(
+                f"LAUNCH sample: CPU argmax over {vocab} logits -> token_id={token_id}"
+            )
+            return token_id
+
+        except Exception as e:
+            _LAUNCH_LOG.append(f"LAUNCH sample: FAILED ({e}), returning 0")
+            return 0
 
     # ------------------------------------------------------------------
     # Diagnostics

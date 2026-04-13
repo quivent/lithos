@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The <span class="term" data-term="Lithos">Lithos</span> Compiler &mdash; One Language, Three Backends</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+pre.forth .comment { color: var(--text-dim); }
+pre.forth .word { color: var(--text); }
+pre.forth .string { color: var(--accent); }
+pre.forth .number { color: var(--cyan); }
+pre.forth .stack { color: var(--text-dim); font-style: italic; }
+pre.forth .keyword { color: var(--accent); }
+pre.forth .def { color: #c0c0d0; font-weight: 600; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+.numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+
+.diagram-title { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.8rem; font-weight: 500; }
+
+/* Compile graph: source -> lex/parse/ast -> router -> 3 backends */
+.compile-flow { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; display: flex; flex-direction: column; gap: 0.4rem; align-items: center; }
+.compile-node { border: 1px solid var(--border); background: var(--bg-raised); padding: 0.6rem 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.84rem; color: var(--text); text-align: center; min-width: 12rem; }
+.compile-node.source { border-color: var(--accent-dim); color: var(--accent); }
+.compile-node.stage { }
+.compile-node.router { border-color: var(--accent); color: var(--accent); background: rgba(212, 160, 83, 0.06); }
+.compile-node .sub { display: block; color: var(--text-dim); font-size: 0.74rem; margin-top: 0.15rem; }
+.compile-arrow { width: 1px; height: 0.8rem; background: var(--border); }
+.compile-fork { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8rem; width: 100%; margin-top: 0.6rem; }
+.compile-target { border: 1px solid var(--accent-dim); background: var(--bg-raised); padding: 0.7rem 0.8rem; text-align: center; }
+.compile-target .name { color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; font-weight: 500; }
+.compile-target .what { color: var(--text-dim); font-size: 0.76rem; margin-top: 0.2rem; font-family: 'JetBrains Mono', monospace; }
+.compile-fork-rail { display: flex; justify-content: space-around; width: 100%; }
+.compile-fork-rail span { display: inline-block; width: 1px; height: 0.8rem; background: var(--border); }
+
+/* Host chain: vertical pipeline */
+.chain { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; display: flex; flex-direction: column; gap: 0; align-items: center; }
+.chain-node { border: 1px solid var(--accent-dim); background: var(--bg-raised); padding: 0.6rem 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.84rem; color: var(--accent); text-align: center; min-width: 18rem; }
+.chain-node .sub { display: block; color: var(--text-dim); font-size: 0.74rem; margin-top: 0.15rem; }
+.chain-edge { display: flex; flex-direction: column; align-items: center; padding: 0.35rem 0; color: var(--text); font-size: 0.76rem; font-family: 'JetBrains Mono', monospace; }
+.chain-edge::before { content: ''; display: block; width: 1px; height: 0.6rem; background: var(--border); margin-bottom: 0.25rem; }
+.chain-edge::after { content: '\2193'; color: var(--text-dim); margin-top: 0.1rem; }
+.chain-edge .verb { color: var(--cyan); }
+
+.decision {
+  background: var(--bg-raised);
+  border-left: 3px solid var(--accent);
+  padding: 1.5rem 1.8rem;
+  margin: 1.5rem 0;
+}
+.decision h3 { margin-top: 0; color: var(--accent); }
+
+.reject {
+  margin-bottom: 1.3rem;
+  padding-left: 1rem;
+  border-left: 2px solid var(--border);
+}
+.reject-name { color: var(--red); font-weight: 600; font-size: 0.95rem; letter-spacing: 0.03em; }
+.reject p { color: var(--text-dim); margin-top: 0.3rem; margin-bottom: 0; }
+
+ul.clean { list-style: none; padding: 0; color: var(--text-dim); font-size: 0.88rem; line-height: 1.75; }
+ul.clean li { padding-left: 1rem; position: relative; margin-bottom: 0.3rem; }
+ul.clean li::before { content: "-"; position: absolute; left: 0; color: var(--accent-dim); }
+ul.clean li strong { color: var(--text); }
+
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler" class="active">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<header class="hero">
+<div class="container">
+  <h1>The Lithos Compiler</h1>
+  <p>One language. Three backends. Written in <span class="term" data-term="Forth">Forth</span>.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Section 1: The Decision -->
+<section id="decision">
+<h2>The Decision</h2>
+
+<p><span class="term" data-term="Lithos">Lithos</span> is written in <span class="term" data-term="Forth">Forth</span>. Not Python. Not Rust. Not C. Not Gforth. <span class="term" data-term="Forth">Forth</span>.</p>
+
+<p>Specifically: <span class="term" data-term="Lithos">Lithos</span> source files are <span class="term" data-term="Forth">Forth</span> code. The <span class="term" data-term="Lithos">Lithos</span> compiler is also <span class="term" data-term="Forth">Forth</span> code. It runs on the existing <code>forth-bootstrap</code> &mdash; an ARM64 Linux assembly <span class="term" data-term="Forth">Forth</span> interpreter already in hand, <span class="numbers">4,831 lines</span> of ARM64 assembly at <code>/home/ubuntu/sixth/bootstrap/forth-bootstrap.s</code>. When <strong>Eighth</strong> self-hosts, the compiler compiles itself to a native ARM64 binary.</p>
+
+<p>The choice is ideological and practical.</p>
+
+<div class="decision">
+<h3>Ideological</h3>
+<p><span class="term" data-term="Lithos">Lithos</span> is <span class="term" data-term="Forth">Forth</span>-derived. The compiler <em>should</em> be <span class="term" data-term="Forth">Forth</span>. Writing it in any other language breaks the stack-machine thesis the language is built on. If the compiled surface is concatenative stack code, the compiler that emits it has no reason to be anything else.</p>
+</div>
+
+<div class="decision">
+<h3>Practical</h3>
+<p><span class="term" data-term="Forth">Forth</span> has no runtime, no garbage collector, no framework. A <span class="term" data-term="Forth">Forth</span> compiler binary is <span class="numbers">~60 KB</span>. Startup is instant. Memory footprint is kilobytes. There is no interpreter warm-up, no import graph, no dependency tree, no <code>venv</code>, no <code>Cargo.lock</code>.</p>
+</div>
+
+<div class="decision">
+<h3>Future</h3>
+<p>Eventually self-hosting &mdash; the <span class="term" data-term="Lithos">Lithos</span> compiler compiles itself. Zero external dependencies. The seed is a small ARM64 assembly file; everything above that is <span class="term" data-term="Forth">Forth</span>.</p>
+</div>
+</section>
+
+<!-- Section 2: Three Backends -->
+<section id="backends">
+<h2>Three Backends</h2>
+
+<p>Same language, three output formats:</p>
+
+<div class="compile-flow">
+  <div class="compile-node source"><span class="term" data-term="Lithos">lithos</span> source <span class="sub">.li</span></div>
+  <div class="compile-arrow"></div>
+  <div class="compile-node stage">Lexer &rarr; Parser &rarr; AST<span class="sub">stack-based IR</span></div>
+  <div class="compile-arrow"></div>
+  <div class="compile-node router">Backend Router<span class="sub">per-definition: <span class="term" data-term="Kernel">kernel</span> or host?</span></div>
+  <div class="compile-fork-rail"><span></span><span></span><span></span></div>
+  <div class="compile-fork">
+    <div class="compile-target"><div class="name"><span class="term" data-term="PTX">PTX</span></div><div class="what">GPU text</div></div>
+    <div class="compile-target"><div class="name"><span class="term" data-term="SASS">SASS</span></div><div class="what">GPU binary</div></div>
+    <div class="compile-target"><div class="name">ARM64</div><div class="what">CPU binary</div></div>
+  </div>
+</div>
+
+<h3><span class="term" data-term="PTX">PTX</span> backend</h3>
+<p>Emits human-readable <span class="term" data-term="PTX">PTX</span> text. The <span class="term" data-term="CUDA">CUDA</span> driver JITs to <span class="term" data-term="SASS">SASS</span> at load. Portable across NVIDIA GPUs. Slow compile step at first run &mdash; driver JIT takes <span class="numbers">100 ms &ndash; 2 s</span>. After that, the driver caches the result.</p>
+
+<h3><span class="term" data-term="SASS">SASS</span> backend</h3>
+<p>Emits <span class="term" data-term="cubin">cubin</span> binary directly. Skips the driver JIT. Loads in microseconds. <span class="term" data-term="Hopper">Hopper</span>-specific. Based on the reverse-engineered <span class="numbers">47-opcode</span> encoding. This is what eliminates the <code>ptxas</code> dependency entirely.</p>
+
+<h3>ARM64 backend</h3>
+<p>Emits ELF executables for the CPU-side orchestrator: the layer loop, <span class="term" data-term="KV Cache">KV cache</span> management, tokenization, sampling, and API server. Reuses Eighth's ARM64 encoding tables.</p>
+
+<p><strong>One compiler. One source language. Three outputs.</strong></p>
+</section>
+
+<!-- Section 3: Why Not Other Languages -->
+<section id="rejected">
+<h2>Why Not Other Languages</h2>
+
+<p class="small mb-1">Every alternative considered, and why it was rejected.</p>
+
+<div class="reject">
+<div class="reject-name">Python</div>
+<p>Wrong layer. Framework overhead, GIL, interpreter, the entire class of problem we are eliminating. Writing the compiler in Python is writing the problem into our solution. The thing <span class="term" data-term="Lithos">Lithos</span> exists to avoid cannot be the thing that builds <span class="term" data-term="Lithos">Lithos</span>.</p>
+</div>
+
+<div class="reject">
+<div class="reject-name">Rust</div>
+<p>Fast, yes. Native, yes. But introduces <code>cargo</code>, the borrow checker, a standard library &mdash; complexity that has nothing to do with compiling GPU kernels. A Rust <span class="term" data-term="Lithos">Lithos</span> compiler would spend more code on memory safety for its own AST than on emission. Wrong trade.</p>
+</div>
+
+<div class="reject">
+<div class="reject-name">C</div>
+<p>Would work. But C is prefix-and-infix. Our target languages (<span class="term" data-term="PTX">PTX</span>, <span class="term" data-term="SASS">SASS</span>, ARM64) are postfix assembly. <span class="term" data-term="Forth">Forth</span> matches the target semantics; C fights them. Writing a stack-based emitter in a non-stack language means hand-rolling the stack in every function.</p>
+</div>
+
+<div class="reject">
+<div class="reject-name">Gforth or other existing <span class="term" data-term="Forth">Forth</span></div>
+<p>Someone else's interpreter. Dependency. The entire point is zero external dependencies. If a third-party <span class="term" data-term="Forth">Forth</span> vanishes, breaks ABI, or gains a bug we cannot patch, the compiler breaks with it.</p>
+</div>
+
+<div class="reject">
+<div class="reject-name">Eighth (native ARM64 <span class="term" data-term="Forth">Forth</span> compiler)</div>
+<p>The right answer eventually &mdash; once Eighth self-hosts. Blocked right now on the forward-reference depth bug. When fixed, the <span class="term" data-term="Lithos">Lithos</span> compiler compiles through Eighth to a native binary. Until then: <code>forth-bootstrap</code> interprets.</p>
+</div>
+</section>
+
+<!-- Section 4: The Host Chain -->
+<section id="host-chain">
+<h2>The Host Chain</h2>
+
+<h3>Currently</h3>
+<div class="chain">
+  <div class="chain-node">ARM64 assembly<span class="sub"><span class="term" data-term="Forth">forth</span>-bootstrap.s &middot; 4,831 lines</span></div>
+  <div class="chain-edge"><span class="verb">as + ld</span></div>
+  <div class="chain-node"><span class="term" data-term="Forth">forth</span>-bootstrap binary<span class="sub">ARM64 ELF</span></div>
+  <div class="chain-edge"><span class="verb">interprets</span></div>
+  <div class="chain-node"><span class="term" data-term="Lithos">Lithos</span> compiler<span class="sub"><span class="term" data-term="Forth">Forth</span> source</span></div>
+  <div class="chain-edge"><span class="verb">compiles</span></div>
+  <div class="chain-node"><span class="term" data-term="PTX">PTX</span> / <span class="term" data-term="SASS">SASS</span> / ARM64 binaries</div>
+</div>
+
+<h3>Future (once Eighth self-hosts)</h3>
+<div class="chain">
+  <div class="chain-node">ARM64 assembly seed</div>
+  <div class="chain-edge"></div>
+  <div class="chain-node">Eighth compiler<span class="sub">native ARM64 binary</span></div>
+  <div class="chain-edge"><span class="verb">compiles</span></div>
+  <div class="chain-node"><span class="term" data-term="Lithos">Lithos</span> compiler<span class="sub">native ARM64 binary</span></div>
+  <div class="chain-edge"><span class="verb">compiles</span></div>
+  <div class="chain-node"><span class="term" data-term="PTX">PTX</span> / <span class="term" data-term="SASS">SASS</span> / ARM64 binaries</div>
+</div>
+
+<p>No Python anywhere. No Rust. No frameworks. Just a few small native binaries.</p>
+</section>
+
+<!-- Section 5: Language Surface -->
+<section id="surface">
+<h2>Language Surface</h2>
+
+<p>Stack-based, register-stack semantics &mdash; matching Eighth's <code>X0</code>&ndash;<code>X8</code> model extended to <span class="term" data-term="PTX">PTX</span> register pools (<code>%r</code>, <code>%rd</code>, <code>%f</code>). Same syntax. Same stack model. Different emitter based on context.</p>
+
+<h3>GPU <span class="term" data-term="Kernel">kernel</span> (&rarr; <span class="term" data-term="PTX">PTX</span>)</h3>
+<pre class="forth"><span class="keyword">kernel</span> <span class="def">vadd</span>
+    <span class="keyword">param:</span> a u64
+    <span class="keyword">param:</span> b u64
+    <span class="keyword">param:</span> c u64
+    <span class="keyword">param:</span> n u32
+
+    global-tid
+    dup n &gt;= <span class="keyword">if</span> exit <span class="keyword">then</span>
+    dup ld.global.f32 a
+    swap ld.global.f32 b
+    add.f32
+    st.global.f32 c
+<span class="keyword">;</span></pre>
+
+<p class="small">The parser sees <code>kernel</code> and routes every word inside to the <span class="term" data-term="PTX">PTX</span> emitter. Register allocation is explicit; memory spaces are explicit; the stack carries register IDs, not values.</p>
+
+<h3>Host code (&rarr; ARM64)</h3>
+<pre class="forth"><span class="keyword">host</span> <span class="def">main</span>
+    argc&gt;
+    <span class="number">1</span> argv slurp-file
+    model-load
+    engine-init
+    loop-forever
+<span class="keyword">;</span></pre>
+
+<p class="small">Same word syntax. The parser sees <code>host</code> and routes to the ARM64 emitter. Stack operations compile to <code>X0</code>&ndash;<code>X8</code> register stack manipulation; control flow compiles to <code>B.cond</code>/<code>BL</code>; I/O compiles to <code>SVC 0</code> syscalls.</p>
+
+<h3>Backend routing</h3>
+<p>The router is per-definition, not per-file. A single <code>.li</code> source can define several <code>kernel</code> words and several <code>host</code> words side by side. The host binary and the cubins it loads are built from the same source, and symbol names are shared &mdash; the host knows the kernels by the names they were defined under.</p>
+</section>
+
+<!-- Section 6: File Organization -->
+<section id="files">
+<h2>File Organization</h2>
+
+<pre><span style="color:var(--text-dim)">compiler/</span>
+&#x251c;&#x2500;&#x2500; lithos.fs          <span style="color:var(--text-dim)">Main entry point</span>
+&#x251c;&#x2500;&#x2500; lexer.fs           <span style="color:var(--text-dim)">Whitespace tokenizer (thin &mdash; Forth does this natively)</span>
+&#x251c;&#x2500;&#x2500; parser.fs          <span style="color:var(--text-dim)">Token dispatch table</span>
+&#x251c;&#x2500;&#x2500; emit-ptx.fs        <span style="color:var(--text-dim)">PTX text emission</span>
+&#x251c;&#x2500;&#x2500; emit-sass.fs       <span style="color:var(--text-dim)">SASS binary emission</span>
+&#x251c;&#x2500;&#x2500; emit-arm64.fs      <span style="color:var(--text-dim)">ARM64 machine code</span>
+&#x251c;&#x2500;&#x2500; cubin-wrap.fs      <span style="color:var(--text-dim)">Wraps SASS into cubin ELF</span>
+&#x2514;&#x2500;&#x2500; elf-wrap.fs        <span style="color:var(--text-dim)">Wraps ARM64 into executable ELF</span></pre>
+
+<table>
+<thead><tr><th>File</th><th>Role</th></tr></thead>
+<tbody>
+  <tr><td><code>lithos.fs</code></td><td>Argument parsing, file I/O, top-level dispatch to the backend router.</td></tr>
+  <tr><td><code>lexer.fs</code></td><td>Thin wrapper over <span class="term" data-term="Forth">Forth</span>'s native <code>parse-name</code>. <span class="term" data-term="Lithos">Lithos</span> source is already whitespace-delimited tokens &mdash; <span class="term" data-term="Forth">Forth</span>'s host loop already tokenizes.</td></tr>
+  <tr><td><code>parser.fs</code></td><td>Dispatch table mapping word &rarr; handler. <code>kernel</code>, <code>host</code>, <code>param:</code>, <code>if</code>, <code>then</code>, <code>;</code> are parser directives; everything else is emitted by the current backend.</td></tr>
+  <tr><td><code>emit-ptx.fs</code></td><td><span class="term" data-term="PTX">PTX</span> text emission. Register pool allocation (<code>%r</code>, <code>%rd</code>, <code>%f</code>). <span class="term" data-term="Kernel">Kernel</span> envelope (<code>.version</code>, <code>.target</code>, <code>.entry</code>).</td></tr>
+  <tr><td><code>emit-sass.fs</code></td><td>Raw 16-byte <span class="term" data-term="SASS">SASS</span> instruction emission. Opcode constants from the probe disassembly. No driver JIT.</td></tr>
+  <tr><td><code>emit-arm64.fs</code></td><td>ARM64 machine code. Reuses Eighth's instruction encoders. Stack-machine model on <code>X0</code>&ndash;<code>X8</code>.</td></tr>
+  <tr><td><code>cubin-wrap.fs</code></td><td>Wraps <span class="term" data-term="SASS">SASS</span> bytes into a <span class="term" data-term="cubin">cubin</span> ELF with the NVIDIA sections (<code>.text.&lt;kernel&gt;</code>, <code>.nv.info</code>, <code>.nv.constant0</code>) that <code>cuModuleLoadData</code> expects.</td></tr>
+  <tr><td><code>elf-wrap.fs</code></td><td>Wraps ARM64 bytes into a standard Linux executable ELF with <code>.text</code>, <code>.data</code>, a program header, and an entry point.</td></tr>
+</tbody>
+</table>
+
+<p class="mt-2">Total expected size: <span class="numbers">&lt; 3,000 lines of <span class="term" data-term="Forth">Forth</span></span>. Small enough to read end-to-end in an afternoon. Small enough that every dispatch decision, every emission, every byte of output is traceable to a line of source.</p>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

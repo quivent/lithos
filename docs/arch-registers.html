@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><span class="term" data-term="Lithos">Lithos</span> Registers &mdash; The <span class="term" data-term="Register File">Register File</span>, Banks, Reuse, <span class="term" data-term="Occupancy">Occupancy</span></title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f; --bg-raised: #10101a; --bg-code: #0e0e18;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --accent-dim: #a07830;
+  --cyan: #6ec8d0; --green: #7ec87e; --blue: #6e8ed0; --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.subnav { display: flex; gap: 16px; padding: 12px 32px; background: #141420; border-bottom: 1px solid #2a2a3a; font-size: 13px; overflow-x: auto; position: sticky; top: 36px; z-index: 99; }
+.subnav a { color: #a0a0a8; text-decoration: none; white-space: nowrap; }
+.subnav a:hover { color: #d4a053; text-decoration: none; }
+.subnav a.active { color: #d4a053; border-bottom: 2px solid #d4a053; padding-bottom: 10px; margin-bottom: -12px; }
+
+.hero { padding: 6rem 0 4rem 0; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 4.5rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem; }
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 { font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem; }
+h3 { font-size: 1rem; font-weight: 300; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0; }
+h4 { font-size: 0.9rem; font-weight: 600; color: var(--text); margin: 1.5rem 0 0.5rem 0; }
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.866rem; }
+code { color: var(--accent); }
+pre { background: var(--bg-code); border: 1px solid var(--border); padding: 1rem 1.2rem; overflow-x: auto; margin: 0.8rem 0 1.2rem 0; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.82rem; line-height: 1.55; color: var(--text); }
+
+table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.2rem 0; font-size: 0.88rem; }
+th { text-align: left; padding: 0.5rem 0.8rem; border-bottom: 2px solid var(--accent-dim); color: var(--accent); font-weight: 400; letter-spacing: 0.04em; white-space: nowrap; }
+td { padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td code { font-size: 0.82rem; color: var(--text); background: var(--bg-code); padding: 0.1rem 0.3rem; }
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+.diagram-title { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.8rem; font-weight: 500; }
+.diagram-label { font-size: 0.82rem; color: var(--text); margin: 1.2rem 0 0.5rem 0; font-weight: 500; }
+
+.regfile-card { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; }
+.regfile-total { text-align: center; font-family: 'JetBrains Mono', monospace; color: var(--text); font-size: 0.9rem; margin-bottom: 0.7rem; }
+.regfile-sm { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin-bottom: 1.6rem; }
+.regfile-subpart { border: 1px solid var(--green); background: rgba(126, 200, 126, 0.05); padding: 0.8rem 0.6rem; text-align: center; }
+.regfile-subpart .sp-name { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--text); margin-bottom: 0.2rem; }
+.regfile-subpart .sp-size { font-family: 'JetBrains Mono', monospace; font-size: 1rem; color: var(--green); font-weight: 500; }
+.regfile-subpart .sp-detail { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--text-dim); margin-top: 0.2rem; }
+.regfile-banks { border-top: 1px dashed var(--border); padding-top: 1rem; }
+.regfile-banks-caption { font-size: 0.82rem; color: var(--accent); margin-bottom: 0.6rem; font-family: 'JetBrains Mono', monospace; }
+.bank-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid var(--border); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
+.bank-head, .bank-cell { padding: 0.45rem 0.6rem; text-align: center; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.bank-grid > :nth-child(4n) { border-right: none; }
+.bank-head { background: var(--bg-raised); color: var(--cyan); font-weight: 500; }
+.bank-cell { color: var(--text); }
+.bank-cell.dim { color: var(--text-dim); }
+.bank-grid > :nth-last-child(-n+4) { border-bottom: none; }
+@media (max-width: 600px) { .regfile-sm { grid-template-columns: repeat(2, 1fr); } }
+
+footer { padding: 2rem 0; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 0.78rem; letter-spacing: 0.04em; }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture" class="active">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<!-- Architecture Subnav -->
+<div class="subnav">
+  <a href="/architecture">Pipeline</a>
+  <a href="/arch-gpu">GPU</a>
+  <a href="/sm-architecture">SM</a>
+  <a href="/arch-cores">Cores</a>
+  <a href="/arch-registers" class="active">Registers</a>
+  <a href="/warp-scheduler">Warp</a>
+  <a href="/memory">Memory</a>
+  <a href="/arch-kernel">Kernel</a>
+</div>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Registers</h1>
+  <p>The fastest memory in the system. Where the work actually happens.</p>
+</div>
+</header>
+
+<main class="container">
+
+<section>
+<h2>The File</h2>
+<p>256 KB of SRAM per <span class="term" data-term="SM">SM</span>, partitioned four ways &mdash; one 64 KB slice per sub-partition. Each slice holds 16,384 entries, each 32 bits wide. A register is named by index: <code>R0</code>, <code>R1</code>, ..., <code>R254</code>. <code>RZ</code> is the zero register.</p>
+
+<div class="diagram-title"><span class="term" data-term="Register File">Register file</span> layout per <span class="term" data-term="SM">SM</span></div>
+<div class="regfile-card">
+  <div class="regfile-total"><span class="term" data-term="SM">SM</span> register file &middot; <span style="color: var(--green);">256 KB total</span></div>
+  <div class="regfile-sm">
+    <div class="regfile-subpart">
+      <div class="sp-name">Sub-part 0</div>
+      <div class="sp-size">64 KB</div>
+      <div class="sp-detail">16,384 &times; 32b</div>
+    </div>
+    <div class="regfile-subpart">
+      <div class="sp-name">Sub-part 1</div>
+      <div class="sp-size">64 KB</div>
+      <div class="sp-detail">16,384 &times; 32b</div>
+    </div>
+    <div class="regfile-subpart">
+      <div class="sp-name">Sub-part 2</div>
+      <div class="sp-size">64 KB</div>
+      <div class="sp-detail">16,384 &times; 32b</div>
+    </div>
+    <div class="regfile-subpart">
+      <div class="sp-name">Sub-part 3</div>
+      <div class="sp-size">64 KB</div>
+      <div class="sp-detail">16,384 &times; 32b</div>
+    </div>
+  </div>
+  <div class="regfile-banks">
+    <div class="regfile-banks-caption">Per sub-partition = 16,384 entries, banked 4 ways</div>
+    <div class="bank-grid">
+      <div class="bank-head">Bank 0</div>
+      <div class="bank-head">Bank 1</div>
+      <div class="bank-head">Bank 2</div>
+      <div class="bank-head">Bank 3</div>
+      <div class="bank-cell">R0</div>
+      <div class="bank-cell">R1</div>
+      <div class="bank-cell">R2</div>
+      <div class="bank-cell">R3</div>
+      <div class="bank-cell">R4</div>
+      <div class="bank-cell">R5</div>
+      <div class="bank-cell">R6</div>
+      <div class="bank-cell">R7</div>
+      <div class="bank-cell">R8</div>
+      <div class="bank-cell">R9</div>
+      <div class="bank-cell">R10</div>
+      <div class="bank-cell">R11</div>
+      <div class="bank-cell dim">&hellip;</div>
+      <div class="bank-cell dim">&hellip;</div>
+      <div class="bank-cell dim">&hellip;</div>
+      <div class="bank-cell dim">&hellip;</div>
+    </div>
+  </div>
+</div>
+
+<p>On <span class="term" data-term="Hopper">Hopper</span> the <span class="term" data-term="Register File">register file</span> is notionally 4 banks wide on each sub-partition. Two operands can be read in one <span class="term" data-term="Cycle">cycle</span> (one tick of the 1.83 GHz SM clock, ~0.55 ns) without conflict if they land in different banks. Three-source instructions (<code>FFMA</code>, <code>IMAD</code>) that pick all three operands from the same bank incur a <span class="term" data-term="Bank Conflict">bank conflict</span> &mdash; one extra cycle per conflict.</p>
+</section>
+
+<section>
+<h2>Register Allocation</h2>
+<p>A <span class="term" data-term="Warp">warp</span> owns 32 register indices &mdash; one per lane. When <span class="term" data-term="SASS">SASS</span> writes <code>R5</code>, it is really 32 physical entries (one per lane in the <span class="term" data-term="Warp">warp</span>), at index 5 within that <span class="term" data-term="Warp">warp</span>'s register window.</p>
+
+<p>The maximum indices per thread is 255 (the sixth through eighth bits of a source operand select special registers). When the compiler says "this <span class="term" data-term="Kernel">kernel</span> uses 80 registers per thread", it means each <span class="term" data-term="Warp">warp</span> consumes 32 * 80 = 2,560 entries out of the 16,384 available in the sub-partition.</p>
+</section>
+
+<section>
+<h2>Bank Conflicts</h2>
+<p><span class="term" data-term="SASS">SASS</span> instructions encode up to 4 source operands. The <span class="term" data-term="Scoreboard">scoreboard</span> and operand-collector logic tries to read them in one cycle. If two sources map to the same bank with different addresses, one stalls &mdash; adding a cycle.</p>
+
+<p>Example:</p>
+<pre><code>FFMA R8, R0, R4, R12  // R0 bank 0, R4 bank 0, R12 bank 0  -> 2 conflicts
+FFMA R9, R1, R4, R13  // R1 bank 1, R4 bank 0, R13 bank 1  -> 0 conflicts</code></pre>
+
+<p>The compiler handles this by assigning destinations to interleave banks, but at high register pressure it runs out of options. <span class="term" data-term="Hopper">Hopper</span>'s <span class="term" data-term="SASS">SASS</span> also carries a <strong>reuse flag</strong>:</p>
+
+<pre><code>FFMA R8, R0<span style="color:var(--green)">.reuse</span>, R4, R12</code></pre>
+
+<p>The <code>.reuse</code> flag tells the operand collector to cache <code>R0</code> in an 8-entry operand reuse buffer, so the next instruction reading <code>R0</code> skips the <span class="term" data-term="Register File">register file</span> entirely &mdash; no bank access, no conflict. <span class="term" data-term="ptxas">ptxas</span> emits <code>.reuse</code> whenever a register is read by the next few instructions.</p>
+</section>
+
+<section>
+<h2>Occupancy Tradeoff</h2>
+<p>The sub-partition has 16,384 registers. Each resident <span class="term" data-term="Warp">warp</span> consumes <code>32 * registers_per_thread</code> of them. Max 16 warps per sub-partition. So the register count per thread is a hard cap on how many warps can live on an <span class="term" data-term="SM">SM</span> at once.</p>
+
+<table>
+<tr><th>Registers / thread</th><th>Warps / sub-part</th><th>Warps / <span class="term" data-term="SM">SM</span></th><th>Threads / <span class="term" data-term="SM">SM</span></th><th><span class="term" data-term="Occupancy">Occupancy</span></th></tr>
+<tr><td class="num">255</td><td class="num">2</td><td class="num">8</td><td class="num">256</td><td class="num">12.5%</td></tr>
+<tr><td class="num">128</td><td class="num">4</td><td class="num">16</td><td class="num">512</td><td class="num">25%</td></tr>
+<tr><td class="num">64</td><td class="num">8</td><td class="num">32</td><td class="num">1024</td><td class="num">50%</td></tr>
+<tr><td class="num">32</td><td class="num">16</td><td class="num">64</td><td class="num">2048</td><td class="num">100%</td></tr>
+<tr><td class="num">16</td><td class="num">16*</td><td class="num">64*</td><td class="num">2048</td><td class="num">100%</td></tr>
+</table>
+<p class="small">*Below 32 registers/thread, <span class="term" data-term="Warp">warp</span> count caps at 16 per sub-partition &mdash; not register-limited.</p>
+
+<p><span class="term" data-term="Occupancy">Occupancy</span> sounds like it should always be high, but it is a means not an end. What matters is whether the <span class="term" data-term="Warp">warp</span> scheduler has a ready <span class="term" data-term="Warp">warp</span> every cycle. For compute-bound kernels (tensor-core heavy), even 25% <span class="term" data-term="Occupancy">occupancy</span> can saturate. For memory-bound kernels, low <span class="term" data-term="Occupancy">occupancy</span> leaves the pipe unfed.</p>
+</section>
+
+<section>
+<h2>Fewer Threads, More Registers</h2>
+<p>Counter to intuition: for some memory-bound kernels, running fewer threads with more registers each is faster.</p>
+
+<p>Why? Two reasons:</p>
+<ol style="margin-left: 1.5rem; color: var(--text-dim);">
+  <li><strong>Larger tiles per thread.</strong> If each thread holds a 16x16 output tile in registers (256 registers), it performs 256 multiplies per memory load. Doubling threads while halving tile size doubles loads but quarters the compute-per-load ratio.</li>
+  <li><strong>Lower memory traffic.</strong> Weights loaded into registers are used many times. A smaller number of threads with bigger accumulator tiles re-reads fewer weights.</li>
+</ol>
+
+<p>CUTLASS GEMMs routinely ship with 128-160 registers per thread. <span class="term" data-term="CUDA">CUDA</span> cores sit at ~25% <span class="term" data-term="Occupancy">occupancy</span>. Tensor cores stay saturated because each <span class="term" data-term="Warp">warp</span> has enough accumulator registers to issue <code>wgmma</code> back-to-back without waiting.</p>
+
+<p><span class="term" data-term="Lithos">Lithos</span> kernels follow this: decode matmuls are tuned for register tile size first, thread count second. A Qwen 27B QKV projection uses 168 registers per thread at 8 warps per sub-partition &mdash; well below max <span class="term" data-term="Occupancy">occupancy</span>, well above peak throughput.</p>
+</section>
+
+<section>
+<h2>Spilling</h2>
+<p>If the compiler cannot fit a <span class="term" data-term="Kernel">kernel</span>'s live values in 255 registers, it spills to local memory &mdash; which is physically <span class="term" data-term="L1 Cache">L1</span> but is per-thread private. Spills are death. Every spill is a load from <span class="term" data-term="L1 Cache">L1</span> on the next read, ~30 cycles (~16 ns) minimum versus a 1-cycle register read, often contending with <span class="term" data-term="Shared Memory">shared memory</span> access. If the spill misses L1 and falls through to <span class="term" data-term="HBM">HBM</span>, each reload costs ~400 cycles (~220 ns at 1.83 GHz).</p>
+
+<p><span class="term" data-term="ptxas">ptxas</span> prints a warning when it spills:</p>
+<pre><code>ptxas info    : 128 bytes stack frame, 96 bytes spill stores, 112 bytes spill loads</code></pre>
+
+<p><span class="term" data-term="Lithos">Lithos</span> treats any spill as a bug &mdash; fix the <span class="term" data-term="Kernel">kernel</span>, reduce tile size, split the <span class="term" data-term="Kernel">kernel</span> in two, or use <code>__launch_bounds__</code> to give <span class="term" data-term="ptxas">ptxas</span> a tighter budget.</p>
+</section>
+
+<section>
+<h2>What Lithos Controls</h2>
+<ul style="margin-left: 1.5rem; color: var(--text-dim);">
+  <li><code>__launch_bounds__(128, 2)</code> &mdash; max 128 threads, min 2 blocks per <span class="term" data-term="SM">SM</span>. Forces <span class="term" data-term="ptxas">ptxas</span> to stay under 128 registers/thread.</li>
+  <li>Tile size choice in the <span class="term" data-term="Kernel">kernel</span> source &mdash; determines live register count.</li>
+  <li>Loop unroll depth &mdash; more unroll = more live values = more registers.</li>
+  <li>Explicit <code>.reuse</code> hints via inline <span class="term" data-term="SASS">SASS</span> for the tightest inner loops.</li>
+</ul>
+
+<p>The <span class="term" data-term="Register File">register file</span> is where the speed comes from. <span class="term" data-term="Lithos">Lithos</span> writes kernels to keep the hot operands there, stream the rest through <span class="term" data-term="L1 Cache">L1</span>, and never let <span class="term" data-term="ptxas">ptxas</span> spill.</p>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

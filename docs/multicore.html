@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multicore &mdash; The 72 <span class="term" data-term="Grace">Grace</span> Cores Next to the GPU</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3.5rem; font-weight: 300; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+.diagram-title { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.8rem; font-weight: 500; }
+
+/* Coherence diagram */
+.coherence { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; }
+.coherence-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+.coherence-side { border: 1px solid var(--border); background: var(--bg-raised); padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.coherence-side.cpu { border-color: var(--green); }
+.coherence-side.gpu { border-color: var(--blue); }
+.coherence-side h5 { margin: 0 0 0.2rem 0; font-size: 0.88rem; letter-spacing: 0.04em; text-align: center; }
+.coherence-side.cpu h5 { color: var(--green); }
+.coherence-side.gpu h5 { color: var(--blue); }
+.coherence-cell { padding: 0.45rem 0.6rem; background: var(--bg); border: 1px solid var(--border); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; text-align: center; color: var(--text); }
+.coherence-cell.accent { color: var(--accent); border-color: var(--accent-dim); }
+.coherence-link { margin-top: 1.3rem; padding: 0.8rem 1rem; border: 1px solid var(--accent); background: rgba(212, 160, 83, 0.06); text-align: center; }
+.coherence-link .hi { color: var(--accent); font-weight: 500; font-family: 'JetBrains Mono', monospace; font-size: 0.88rem; }
+.coherence-link .sub { color: var(--text-dim); font-size: 0.82rem; margin-top: 0.2rem; }
+@media (max-width: 650px) { .coherence-sides { grid-template-columns: 1fr; } }
+
+/* Pipeline timeline */
+.pipeline { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; overflow-x: auto; }
+.pipeline-header { display: grid; grid-template-columns: 10rem repeat(4, 1fr); gap: 0.4rem; font-size: 0.74rem; color: var(--text-faint); font-family: 'JetBrains Mono', monospace; margin-bottom: 0.6rem; padding-bottom: 0.4rem; border-bottom: 1px dashed var(--border); }
+.pipeline-header .time-arrow { grid-column: 2 / -1; text-align: left; }
+.pipeline-row { display: grid; grid-template-columns: 10rem repeat(4, 1fr); gap: 0.4rem; padding: 0.25rem 0; align-items: center; }
+.pipeline-row.wide { grid-template-columns: 10rem 1fr; }
+.pipeline-tag { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; padding-right: 0.6rem; }
+.pipeline-tag.gpu { color: var(--blue); }
+.pipeline-tag.cpu { color: var(--green); }
+.pipeline-slot { border: 1px solid var(--border); background: var(--bg-raised); padding: 0.35rem 0.5rem; font-family: 'JetBrains Mono', monospace; font-size: 0.76rem; text-align: center; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipeline-slot.gpu { border-color: var(--blue); color: var(--blue); background: rgba(110, 142, 208, 0.06); }
+.pipeline-slot.cpu { border-color: var(--green); color: var(--green); background: rgba(126, 200, 126, 0.05); }
+.pipeline-span { border: 1px solid var(--green); color: var(--green); background: rgba(126, 200, 126, 0.05); padding: 0.35rem 0.7rem; font-family: 'JetBrains Mono', monospace; font-size: 0.76rem; }
+
+ul.clean { list-style: none; padding: 0; color: var(--text-dim); font-size: 0.92rem; line-height: 1.75; }
+ul.clean li { padding-left: 1rem; position: relative; margin-bottom: 0.4rem; }
+ul.clean li::before { content: "-"; position: absolute; left: 0; color: var(--accent-dim); }
+ul.clean li strong { color: var(--text); }
+
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1rem 0; }
+@media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+.comparison > div { background: var(--bg-raised); border: 1px solid var(--border); padding: 1.5rem; }
+.comparison > div h4 { margin-top: 0; color: var(--accent); }
+
+.numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+
+.callout {
+  background: var(--bg-raised);
+  border-left: 3px solid var(--accent);
+  padding: 1.2rem 1.6rem;
+  margin: 1.5rem 0;
+}
+.callout strong { color: var(--text); }
+
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore" class="active">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<header class="hero">
+<div class="container">
+  <h1>Multicore</h1>
+  <p>The 72 <span class="term" data-term="Grace">Grace</span> cores are part of the machine.</p>
+</div>
+</header>
+
+<main class="container">
+
+<section id="premise">
+<h2>The Premise</h2>
+<p>The <span class="term" data-term="GH200">GH200</span> is not a GPU with a CPU bolted on for I/O. It is a coherent compute package: one <span class="term" data-term="Hopper">Hopper</span> die with <span class="numbers">132 SMs</span>, and one <span class="term" data-term="Grace">Grace</span> die with <span class="numbers">72 ARM Neoverse V2 cores</span>, connected by <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> at <span class="numbers">900 GB/s bidirectional</span> in a single cache-coherent address space.</p>
+
+<p>A single-threaded orchestrator wastes <span class="numbers">71</span> cores. Every idle cycle is work the GPU could be fed, a request tokenized, a sample taken, a KV slot rotated. Single-threaded design is legacy thinking &mdash; an accident of CPython's GIL, not a property of the hardware.</p>
+
+<div class="callout">
+<strong>The GPU is one compute unit. The CPU is 72 compute units.</strong> <span class="term" data-term="Lithos">Lithos</span> treats them as peers sharing memory, not as a master-slave relationship where the CPU exists only to launch kernels.
+</div>
+</section>
+
+<section id="grace">
+<h2>What the 72 Grace Cores Actually Are</h2>
+
+<p>The <span class="term" data-term="Grace">Grace</span> CPU on <span class="term" data-term="GH200">GH200</span> is not a throttled companion processor. It is a full server-class ARM64 CPU on the same package as the GPU.</p>
+
+<table>
+<thead><tr><th>Property</th><th>Value</th></tr></thead>
+<tbody>
+  <tr><td>Architecture</td><td>ARM Neoverse V2 (Armv9-A)</td></tr>
+  <tr><td>Cores</td><td class="num">72</td></tr>
+  <tr><td>Base clock</td><td class="num">~3.1&ndash;3.4 GHz</td></tr>
+  <tr><td>ISA</td><td>ARM64 (AArch64), SVE2 up to 128-bit vectors, NEON</td></tr>
+  <tr><td><span class="term" data-term="L1 Cache">L1 cache</span> per core</td><td class="num">64 KB I + 64 KB D</td></tr>
+  <tr><td><span class="term" data-term="L2 Cache">L2 cache</span> per core</td><td class="num">1 MB private</td></tr>
+  <tr><td>L3 cache</td><td class="num">117 MB shared</td></tr>
+  <tr><td><span class="term" data-term="LPDDR5X">LPDDR5X</span> memory</td><td class="num">480 GB at ~500 GB/s</td></tr>
+  <tr><td>Link to <span class="term" data-term="Hopper">Hopper</span></td><td><span class="term" data-term="NVLink-C2C">NVLink-C2C</span>, 900 GB/s bidirectional, coherent</td></tr>
+</tbody>
+</table>
+
+<p>Each core rivals a top-end x86 core. SVE2 handles tokenization, sampling, and JSON parsing at <span class="term" data-term="HBM">HBM</span> rates; the 117 MB L3 keeps request metadata on-chip across threads.</p>
+</section>
+
+<section id="coherence">
+<h2>Memory Coherence: NVLink-C2C Makes Them Peers</h2>
+
+<p>On discrete GPUs, CPU and GPU memory are separate pools. Data moves through <code>cudaMemcpy</code>, DMA, and PCIe. CPU pointers are meaningless to the GPU and vice versa.</p>
+
+<p><span class="term" data-term="GH200">GH200</span> extends the GPU's cache coherence protocol across the chiplet boundary via <span class="term" data-term="NVLink-C2C">NVLink-C2C</span>. A CPU <code>mmap</code> pointer is valid on the GPU; a GPU kernel's write is immediately visible to any <span class="term" data-term="Grace">Grace</span> core. One address space, hardware coherence.</p>
+
+<div class="coherence">
+  <div class="coherence-sides">
+    <div class="coherence-side cpu">
+      <h5><span class="term" data-term="Grace">GRACE</span> CPU &middot; 72 cores</h5>
+      <div class="coherence-cell">ARM cores &times; 72</div>
+      <div class="coherence-cell">L3: 117 MB</div>
+      <div class="coherence-cell accent"><span class="term" data-term="LPDDR5X">LPDDR5X</span> 480 GB @ ~500 GB/s</div>
+    </div>
+    <div class="coherence-side gpu">
+      <h5><span class="term" data-term="Hopper">HOPPER</span> GPU &middot; 132 SMs</h5>
+      <div class="coherence-cell">SMs &times; 132</div>
+      <div class="coherence-cell"><span class="term" data-term="L2 Cache">L2</span>: 50 MB</div>
+      <div class="coherence-cell accent"><span class="term" data-term="HBM3e">HBM3e</span> 96 GB @ 4.0 TB/s</div>
+    </div>
+  </div>
+  <div class="coherence-link">
+    <div class="hi"><span class="term" data-term="NVLink-C2C">NVLink-C2C</span> &middot; 900 GB/s bidir, coherent</div>
+    <div class="sub">One address space. Pointers cross the link without marshalling.</div>
+  </div>
+</div>
+
+<p><span class="term" data-term="Lithos">Lithos</span> treats them as peers. Tokenizer writes into the buffer the GPU reads; GPU writes logits into the buffer the sampler reads. Orchestration is pointer passing.</p>
+</section>
+
+<section id="pipeline">
+<h2>The Pipeline Model</h2>
+
+<p>A conventional loop is serial: tokenize &rarr; forward &rarr; sample &rarr; emit &rarr; repeat. GPU idle during CPU work and vice versa. Neither saturated.</p>
+
+<p><span class="term" data-term="Lithos">Lithos</span> pipelines the loop. At any instant, different <span class="term" data-term="Grace">Grace</span> cores and the GPU are working on different tokens of different requests:</p>
+
+<div class="pipeline">
+  <div class="pipeline-header">
+    <div></div>
+    <div class="time-arrow">time &rarr;</div>
+  </div>
+  <div class="pipeline-row">
+    <div class="pipeline-tag gpu">GPU</div>
+    <div class="pipeline-slot gpu">fwd(N)</div>
+    <div class="pipeline-slot gpu">fwd(N+1)</div>
+    <div class="pipeline-slot gpu">fwd(N+2)</div>
+    <div class="pipeline-slot gpu">fwd(N+3)</div>
+  </div>
+  <div class="pipeline-row">
+    <div class="pipeline-tag cpu">CPU core 0</div>
+    <div class="pipeline-slot cpu">prep N+1</div>
+    <div class="pipeline-slot cpu">prep N+2</div>
+    <div class="pipeline-slot cpu">prep N+3</div>
+    <div class="pipeline-slot cpu">prep N+4</div>
+  </div>
+  <div class="pipeline-row">
+    <div class="pipeline-tag cpu">CPU core 1</div>
+    <div class="pipeline-slot cpu">sample</div>
+    <div class="pipeline-slot cpu">sample</div>
+    <div class="pipeline-slot cpu">sample</div>
+    <div class="pipeline-slot cpu">sample</div>
+  </div>
+  <div class="pipeline-row">
+    <div class="pipeline-tag cpu">CPU core 2</div>
+    <div class="pipeline-slot cpu">KV rotate</div>
+    <div class="pipeline-slot cpu">KV rotate</div>
+    <div class="pipeline-slot cpu">KV rotate</div>
+    <div class="pipeline-slot cpu">KV rotate</div>
+  </div>
+  <div class="pipeline-row">
+    <div class="pipeline-tag cpu">CPU core 3</div>
+    <div class="pipeline-slot cpu">stream</div>
+    <div class="pipeline-slot cpu">stream</div>
+    <div class="pipeline-slot cpu">stream</div>
+    <div class="pipeline-slot cpu">stream</div>
+  </div>
+  <div class="pipeline-row wide">
+    <div class="pipeline-tag cpu">CPU cores 4..71</div>
+    <div class="pipeline-span">request R2, R3, R4 orchestrators &middot; speculative draft verification &middot; background compilation</div>
+  </div>
+</div>
+
+<p>The GPU is never waiting for the CPU. The CPU is never waiting for the GPU. Per-token wall time approaches the GPU's forward-pass time plus the <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> latency for the handoff (nanoseconds), not the sum of every serial stage.</p>
+
+<h3>Stages and where they run</h3>
+<table>
+<thead><tr><th>Stage</th><th>Where</th><th>Why</th></tr></thead>
+<tbody>
+  <tr><td>Tokenization (BPE)</td><td>CPU core</td><td>Sequential byte-pair merges; branch-heavy; not a matmul</td></tr>
+  <tr><td>Request scheduling</td><td>CPU core</td><td>Decisions over small state; needs ns-scale response</td></tr>
+  <tr><td>I/O &amp; response streaming</td><td>CPU core</td><td>Sockets, HTTP framing, backpressure &mdash; pure I/O</td></tr>
+  <tr><td>Prefill GEMM</td><td>GPU</td><td>Large matmul, tensor-core dense</td></tr>
+  <tr><td>Decode forward pass</td><td>GPU</td><td>Memory-bandwidth-bound reduction across weights</td></tr>
+  <tr><td>Sampling (argmax, top-k, top-p)</td><td>CPU core</td><td>Small vocab sort; <span class="numbers">50&ndash;200 &#xB5;s</span> on <span class="term" data-term="Grace">Grace</span>, cheaper than launching a <span class="term" data-term="Kernel">kernel</span></td></tr>
+  <tr><td><span class="term" data-term="KV Cache">KV cache</span> rotation / eviction</td><td>CPU core</td><td>Pointer bookkeeping over coherent memory</td></tr>
+  <tr><td>Speculative draft</td><td>CPU core(s)</td><td>Small draft model runs well on SVE2; CPU drafts, GPU verifies</td></tr>
+  <tr><td>Speculative verification</td><td>GPU</td><td>Parallel verification of <em>k</em> draft tokens in one batch</td></tr>
+  <tr><td><span class="term" data-term="Kernel">Kernel</span> compilation (startup)</td><td>CPU cores (fan-out)</td><td><span class="term" data-term="Forth">Forth</span> emission + <span class="term" data-term="ptxas">ptxas</span> JIT, one <span class="term" data-term="Kernel">kernel</span> per core</td></tr>
+  <tr><td>Model loading (shards)</td><td>CPU cores (fan-out)</td><td><span class="term" data-term="mmap">mmap</span> + JSON header parse per shard</td></tr>
+  <tr><td><span class="term" data-term="SASS">SASS</span> probe / reverse-engineering</td><td>CPU cores (fan-out)</td><td>Independent probe kernels compile in parallel</td></tr>
+</tbody>
+</table>
+
+<p class="callout"><strong>Rule of thumb.</strong> GPU for matmuls and parallel reductions; CPU for anything sequential, scheduling, I/O, sampling, tokenization, and state management. The boundary is not CPU=slow vs GPU=fast &mdash; both are fast at different shapes of work.</p>
+</section>
+
+<section id="request-parallel">
+<h2>Request-Level Parallelism</h2>
+
+<p>Each request gets its own CPU orchestrator thread owning token stream, <span class="term" data-term="KV Cache">KV cache</span> slots, sampling params, streaming connection. With <span class="numbers">72</span> cores, tens of in-flight requests each get a dedicated core with cycles to spare.</p>
+
+<p>All threads share the cubins (<span class="numbers">132 KB</span>) and weights (mmapped, read-only). Sharing is free on the coherent fabric &mdash; no marshalling, no copies.</p>
+
+<p>Requests serialize at the GPU via stream ordering, but with in-flight batching, multiple requests share the forward pass; between passes, their CPU work runs in parallel.</p>
+</section>
+
+<section id="spec-decode">
+<h2>Speculative Decoding: CPU Drafts, GPU Verifies</h2>
+
+<p>Speculative decoding drafts tokens with a small model and verifies them in a single parallel pass of the big model. The traditional split puts both on the GPU, competing for tensor cores.</p>
+
+<p>On <span class="term" data-term="GH200">GH200</span>, the draft belongs on the CPU. Draft is sequential by nature (token N+1 depends on N) and small enough that <span class="term" data-term="LPDDR5X">LPDDR5X</span> bandwidth suffices. The big model verifies <span class="numbers">k</span> draft tokens as a batch in one forward pass.</p>
+
+<p>Handoff is a pointer on the coherent fabric. Draft writes <span class="numbers">k</span> token IDs into a shared buffer; GPU reads without copy.</p>
+</section>
+
+<section id="why-others-cant">
+<h2>Why Frameworks Like vLLM Can't Easily Do This</h2>
+
+<p>Python's GIL serializes bytecode process-wide. Tokenization, scheduling, sampling, streaming all contend for one lock. 72 cores, one running Python at a time.</p>
+
+<p>Workarounds, none clean:</p>
+<ul class="clean">
+  <li><strong>Multiple processes.</strong> Per-process GIL at the cost of the shared address space &mdash; marshalling or duplication. Coherent memory defeated.</li>
+  <li><strong>C extensions.</strong> <code>nogil</code> C code releases the GIL for one call, but the scheduler and orchestrator stay in Python.</li>
+  <li><strong>asyncio.</strong> Single-threaded cooperative concurrency. Any CPU work blocks all coroutines.</li>
+  <li><strong>Python 3.13 free-threaded.</strong> Immature for production, significant single-thread penalty.</li>
+</ul>
+
+<p>Result: vLLM, TensorRT-LLM's Python bindings, and every Python-hosted engine runs single-threaded host. 71 <span class="term" data-term="Grace">Grace</span> cores are wallpaper.</p>
+
+<p><span class="term" data-term="Lithos">Lithos</span> is <span class="term" data-term="Forth">Forth</span>/Rust. No GIL, real threads on every core.</p>
+</section>
+
+<section id="measured">
+<h2>What This Buys in Practice</h2>
+<ul class="clean">
+  <li><strong>Startup time is max, not sum.</strong> 7 kernels that each take <span class="numbers">40&ndash;92 ms</span> to compile finish in <span class="numbers">92 ms</span> wall-clock, not <span class="numbers">~500 ms</span>. The 4 shard files of an <span class="numbers">18 GB</span> model <span class="term" data-term="mmap">mmap</span> and parse concurrently in a single slow-shard's time.</li>
+  <li><strong>GPU utilization rises.</strong> The GPU is not waiting on tokenization, sampling, or KV bookkeeping &mdash; those are happening on other cores in parallel with the next forward pass. Batch=1 bandwidth utilization can climb toward <span class="numbers">70%+</span> because the gap between kernels is filled by overlapped CPU work, not by an idle CPU running Python.</li>
+  <li><strong>Request throughput scales with cores, not with orchestrator rate.</strong> Ten concurrent requests means ten orchestrator threads, each fully parallel with the others until they meet at the GPU.</li>
+  <li><strong>Speculative decoding becomes cheap.</strong> The draft runs on cores the GPU wasn't using anyway. Acceptance checks happen in the shared buffer.</li>
+</ul>
+</section>
+
+<section id="closing">
+<h2>Closing</h2>
+<p>The <span class="term" data-term="GH200">GH200</span> is a two-compute-unit machine where one unit happens to be <span class="numbers">132</span> SMs and the other happens to be <span class="numbers">72</span> ARM cores. They share memory, share cache coherence, and share a thermal envelope. Treating the CPU as a scheduler that exists to launch kernels leaves most of the machine unused.</p>
+<p><span class="term" data-term="Lithos">Lithos</span> is designed for what the hardware actually is: a peer-to-peer system with a fast coherent link between a wide parallel accelerator and a wide multicore host. The language compiles kernels that run on the GPU; the host fans out across every <span class="term" data-term="Grace">Grace</span> core it can reach. Single-threaded design is the exception, not the default.</p>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

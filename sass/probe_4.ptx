@@ -1,0 +1,57 @@
+.version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry probe_tensor(
+    .param .u64 param_out
+)
+{
+    .reg .b32 %r<20>;
+    .reg .f32 %f<10>;
+    .reg .u64 %rd<4>;
+
+    .shared .align 32 .b8 smem[4096];
+
+    ld.param.u64 %rd0, [param_out];
+
+    // Init shared memory
+    mov.u32 %r0, 0;
+    st.shared.b32 [smem], %r0;
+    st.shared.b32 [smem+4], %r0;
+    st.shared.b32 [smem+8], %r0;
+    st.shared.b32 [smem+12], %r0;
+    st.shared.b32 [smem+16], %r0;
+    st.shared.b32 [smem+20], %r0;
+    st.shared.b32 [smem+24], %r0;
+    st.shared.b32 [smem+28], %r0;
+
+    bar.sync 0;
+
+    // LDMATRIX - load matrix from shared memory
+    // ldmatrix.sync.aligned.x4.m8n8.shared.b16
+    mov.u32 %r10, smem;
+    ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%r1, %r2, %r3, %r4}, [%r10];
+
+    // mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+    // A: 4 registers (f16), B: 2 registers (f16), C: 4 registers (f32), D: 4 registers (f32)
+    mov.f32 %f0, 0f00000000;
+    mov.f32 %f1, 0f00000000;
+    mov.f32 %f2, 0f00000000;
+    mov.f32 %f3, 0f00000000;
+    // r1-r4 are A matrix (f16x2 packed), r5-r6 are B
+    mov.b32 %r5, 0;
+    mov.b32 %r6, 0;
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%f0, %f1, %f2, %f3},
+        {%r1, %r2, %r3, %r4},
+        {%r5, %r6},
+        {%f0, %f1, %f2, %f3};
+
+    // Store results
+    st.global.f32 [%rd0], %f0;
+    st.global.f32 [%rd0+4], %f1;
+    st.global.f32 [%rd0+8], %f2;
+    st.global.f32 [%rd0+12], %f3;
+
+    ret;
+}

@@ -21,7 +21,49 @@
   --blue: #6e8ed0;
   --red: #d06e6e;
   --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
 }
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
 
 html { font-size: 15px; scroll-behavior: smooth; }
 body {
@@ -551,6 +593,7 @@ footer {
   <a href="#stack-comparison">Stacks</a>
   <a href="pytorch.html">Lithos vs PyTorch</a>
   <a href="performance.html">Performance</a>
+  <a href="bandwidth.html">Bandwidth</a>
   <a href="memory.html">Memory Deep Dive</a>
   <a href="kernels.html">Kernels</a>
   <a href="warp-scheduler.html">Warp Scheduler</a>
@@ -583,7 +626,7 @@ footer {
     <span class="flow-box">mmap()</span>
     <span class="flow-arrow">&rarr;</span>
     <span class="flow-box green">weight pointers</span>
-    <span class="flow-label">zero-copy, no cudaMalloc</span>
+    <span class="flow-label">zero-copy, no <span class="term" data-term="cudaMalloc">cudaMalloc</span></span>
   </div>
 </div>
 
@@ -793,7 +836,7 @@ footer {
     <div class="pipeline-down">&darr;</div>
     <div class="pipeline-step"><span class="step-box">cuModuleLoadData</span></div>
     <div class="pipeline-down">&darr;</div>
-    <div class="pipeline-step"><span class="step-box highlight">cuLaunchKernel</span></div>
+    <div class="pipeline-step"><span class="step-box highlight"><span class="term" data-term="cuLaunchKernel">cuLaunchKernel</span></span></div>
     <div class="pipeline-metric">
       <span class="label">Steps: </span><span class="value">3</span><br>
       <span class="label">Time: </span><span class="value">~1 second</span><br>
@@ -812,7 +855,7 @@ footer {
     <div class="pipeline-down">&darr;</div>
     <div class="pipeline-step"><span class="step-box">cuModuleLoadData</span></div>
     <div class="pipeline-down">&darr;</div>
-    <div class="pipeline-step"><span class="step-box highlight">cuLaunchKernel</span></div>
+    <div class="pipeline-step"><span class="step-box highlight"><span class="term" data-term="cuLaunchKernel">cuLaunchKernel</span></span></div>
     <div style="height: 2.2rem;"></div>
     <div class="pipeline-metric">
       <span class="label">Steps: </span><span class="value">2</span><br>
@@ -1015,10 +1058,10 @@ footer {
       </div>
       <div class="stack-layer waste">
         <span class="name">Python (PyTorch)</span>
-        <span class="detail">tensor ops, autograd graph</span>
+        <span class="detail">tensor ops, <span class="term" data-term="Autograd">autograd</span> graph</span>
       </div>
       <div class="stack-layer waste">
-        <span class="name">ATen / C++ dispatcher</span>
+        <span class="name"><span class="term" data-term="ATen">ATen</span> / C++ dispatcher</span>
         <span class="detail">operator dispatch</span>
       </div>
       <div class="stack-layer waste">
@@ -1027,11 +1070,11 @@ footer {
       </div>
       <div class="stack-layer waste">
         <span class="name">CUDA Runtime</span>
-        <span class="detail">cudaMalloc, streams</span>
+        <span class="detail"><span class="term" data-term="cudaMalloc">cudaMalloc</span>, streams</span>
       </div>
       <div class="stack-layer essential">
         <span class="name">CUDA Driver</span>
-        <span class="detail">cuLaunchKernel</span>
+        <span class="detail"><span class="term" data-term="cuLaunchKernel">cuLaunchKernel</span></span>
       </div>
       <div class="stack-layer essential">
         <span class="name">GPU Hardware</span>
@@ -1055,7 +1098,7 @@ footer {
       </div>
       <div class="stack-layer essential">
         <span class="name">CUDA Driver</span>
-        <span class="detail">cuLaunchKernel</span>
+        <span class="detail"><span class="term" data-term="cuLaunchKernel">cuLaunchKernel</span></span>
       </div>
       <div class="stack-layer essential">
         <span class="name">GPU Hardware</span>
@@ -1088,7 +1131,7 @@ footer {
     <td class="num">20&ndash;100 &micro;s/op</td>
   </tr>
   <tr>
-    <td>ATen dispatcher</td>
+    <td><span class="term" data-term="ATen">ATen</span> dispatcher</td>
     <td>Virtual dispatch, dtype/device checks, schema matching</td>
     <td class="num">5&ndash;15 &micro;s/op</td>
   </tr>
@@ -1099,7 +1142,7 @@ footer {
   </tr>
   <tr>
     <td>CUDA Runtime</td>
-    <td>cudaMalloc pool, stream sync, error checking</td>
+    <td><span class="term" data-term="cudaMalloc">cudaMalloc</span> pool, stream sync, error checking</td>
     <td class="num">5&ndash;30 &micro;s/call</td>
   </tr>
 </table>

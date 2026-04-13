@@ -1,0 +1,45 @@
+.version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry probe_half(
+    .param .u64 param_out
+)
+{
+    .reg .b32 %r<10>;
+    .reg .u64 %rd<4>;
+
+    ld.param.u64 %rd0, [param_out];
+
+    // Load packed f16x2 values
+    ld.global.b32 %r0, [%rd0];
+    ld.global.b32 %r1, [%rd0+4];
+    ld.global.b32 %r2, [%rd0+8];
+
+    // HADD2 - packed half add
+    {
+        .reg .f16x2 %h<10>;
+        mov.b32 %h0, %r0;
+        mov.b32 %h1, %r1;
+        mov.b32 %h2, %r2;
+
+        // HADD2
+        add.f16x2 %h3, %h0, %h1;
+
+        // HMUL2
+        mul.f16x2 %h4, %h0, %h1;
+
+        // HFMA2
+        fma.rn.f16x2 %h5, %h0, %h1, %h2;
+
+        mov.b32 %r3, %h3;
+        mov.b32 %r4, %h4;
+        mov.b32 %r5, %h5;
+    }
+
+    st.global.b32 [%rd0+12], %r3;
+    st.global.b32 [%rd0+16], %r4;
+    st.global.b32 [%rd0+20], %r5;
+
+    ret;
+}

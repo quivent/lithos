@@ -11,24 +11,34 @@ variable ptx-pos  0 ptx-pos !
 
 : ptx-reset  0 ptx-pos ! ;
 : ptx+  ( addr u -- )  \ append string to ptx buffer
-  ptx-buf ptx-pos @ + swap move  ptx-pos +! ;
+  dup >r  ptx-buf ptx-pos @ + swap move  r> ptx-pos +! ;
 : ptx-c  ( c -- )  ptx-buf ptx-pos @ + c!  1 ptx-pos +! ;
 : ptx-nl  10 ptx-c ;
 : ptx$  ( -- addr u )  ptx-buf ptx-pos @ ;
 
 \ Number to decimal string (for immediates)
 create num-buf 32 allot
+\ Convert non-negative integer to decimal string in num-buf.
+\ Returns ( addr u ) pointing into num-buf. Writes at num-buf[31] downward.
+variable ptx-num-len
 : ptx-num  ( n -- addr u )
-  dup 0< if  num-buf [char] - swap c!  negate  1
-  else 0 then
-  swap dup 0= if  drop num-buf over + [char] 0 swap c!  1+
-  else
-    num-buf 31 +  swap
-    begin dup 0> while
-      dup 10 mod [char] 0 + rot dup >r c!  r> 1-  swap 10 / swap
-    repeat drop
-    num-buf 31 + over - swap 1+ swap
-  then ;
+  0 ptx-num-len !
+  dup 0= if
+    drop
+    [char] 0 num-buf 31 + c!
+    num-buf 31 + 1 exit
+  then
+  num-buf 32 +   \ pointer after last slot
+  swap           ( ptr n )
+  begin dup 0> while
+    10 /mod                     ( ptr rem quot )
+    swap [char] 0 +             ( ptr quot digit )
+    rot 1- tuck c!              ( quot ptr' )   \ ptr decremented, digit stored
+    1 ptx-num-len +!
+    swap                        ( ptr' quot )
+  repeat
+  drop                          ( ptr-first-digit )
+  ptx-num-len @ ;
 
 \ ============================================================
 \ PTX HEADER

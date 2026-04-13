@@ -1,0 +1,36 @@
+.version 8.0
+.target sm_90
+.address_size 64
+
+.visible .entry probe_immediate(
+    .param .u64 param_out
+)
+{
+    .reg .f32 %f<20>;
+    .reg .u64 %rd<4>;
+
+    ld.param.u64 %rd0, [param_out];
+
+    // Load a value
+    ld.global.f32 %f0, [%rd0];
+
+    // FADD with different float immediates
+    add.f32 %f1, %f0, 0f3F800000;   // + 1.0
+    add.f32 %f2, %f0, 0f40000000;   // + 2.0
+    add.f32 %f3, %f0, 0f3F000000;   // + 0.5
+    add.f32 %f4, %f0, 0fBF800000;   // + (-1.0)
+    add.f32 %f5, %f0, 0f00000000;   // + 0.0
+    add.f32 %f6, %f0, 0f42480000;   // + 50.0
+    add.f32 %f7, %f0, 0f3E800000;   // + 0.25
+
+    // Store all
+    st.global.f32 [%rd0+4], %f1;
+    st.global.f32 [%rd0+8], %f2;
+    st.global.f32 [%rd0+12], %f3;
+    st.global.f32 [%rd0+16], %f4;
+    st.global.f32 [%rd0+20], %f5;
+    st.global.f32 [%rd0+24], %f6;
+    st.global.f32 [%rd0+28], %f7;
+
+    ret;
+}

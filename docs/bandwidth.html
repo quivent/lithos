@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bandwidth Utilization &mdash; The Only Number That Matters at Batch=1</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+}
+
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+
+.engine { font-weight: 500; }
+.engine-lithos    { color: var(--engine-lithos); }
+.engine-tensorrt  { color: var(--engine-tensorrt); }
+.engine-vllm      { color: var(--engine-vllm); }
+.engine-pytorch   { color: var(--engine-pytorch); }
+
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+.pitfall { color: var(--red); }
+.numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.92em; }
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3.2rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+  line-height: 1.1;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Callout block */
+.callout {
+  background: var(--bg-raised);
+  border-left: 3px solid var(--accent);
+  padding: 1rem 1.2rem;
+  margin: 1.2rem 0;
+}
+.callout.warn { border-left-color: var(--red); }
+.callout.note { border-left-color: var(--blue); }
+
+/* Bandwidth chart */
+.bwchart { margin: 1.5rem 0 1.8rem 0; }
+.bwchart .row {
+  display: grid;
+  grid-template-columns: 220px 1fr 140px;
+  gap: 0.8rem;
+  align-items: center;
+  padding: 0.35rem 0;
+  font-size: 0.86rem;
+}
+.bwchart .label { color: var(--text-dim); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.8rem; }
+.bwchart .bar {
+  height: 18px; background: var(--bg-code);
+  border: 1px solid var(--border); position: relative; overflow: hidden;
+}
+.bwchart .fill { height: 100%; }
+.bwchart .fill.peak      { background: var(--text-faint); }
+.bwchart .fill.copy      { background: var(--cyan); }
+.bwchart .fill.lithos    { background: var(--accent); }
+.bwchart .fill.vllm-burst{ background: var(--engine-vllm); opacity: 0.8; }
+.bwchart .fill.vllm-avg  { background: var(--red); }
+.bwchart .val { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; text-align: right; }
+
+@media (max-width: 700px) {
+  .bwchart .row { grid-template-columns: 140px 1fr 110px; gap: 0.5rem; }
+}
+
+/* Math box */
+.mathbox {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.84rem;
+  line-height: 1.7;
+  color: var(--text);
+}
+.mathbox .op { color: var(--text-dim); }
+.mathbox .res { color: var(--accent); }
+.mathbox .cy { color: var(--cyan); }
+
+/* Timeline visual */
+.timeline {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.78rem;
+  line-height: 1.7;
+}
+.timeline .tl-label { color: var(--text-dim); display: inline-block; width: 110px; }
+.timeline .tl-bar { display: inline-block; vertical-align: middle; height: 12px; margin-right: 1px; }
+.timeline .tl-active { background: var(--accent); }
+.timeline .tl-idle { background: var(--red); opacity: 0.35; }
+.timeline .tl-vllm-active { background: var(--engine-vllm); }
+
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="index.html">Home</a>
+  <a href="pytorch.html">Lithos vs PyTorch</a>
+  <a href="performance.html">Performance</a>
+  <a href="bandwidth.html" class="active">Bandwidth</a>
+  <a href="multicore.html">Multicore</a>
+  <a href="memory.html">Memory</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+  <a href="warp-scheduler.html">Warp Scheduler</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Bandwidth Utilization</h1>
+  <p>HBM utilization as the governing constraint at batch=1.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Thesis -->
+<section id="thesis">
+<h2>Claim</h2>
+
+<p>At batch=1 decode, a transformer reads every weight in the model to produce one token. Compute is not the bottleneck; tensor cores are underutilized. Throughput is set by <span class="term" data-term="HBM">HBM</span> bandwidth &mdash; the fraction of the <span class="numbers">4 TB/s</span> peak consumed by useful weight traffic.</p>
+
+<p><span class="engine engine-vllm">vLLM</span> on this <span class="term" data-term="GH200">GH200</span> at batch=1 sustains <span class="numbers">13% of peak</span> (effective <span class="numbers">~520 GB/s</span>). <span class="engine engine-lithos">Lithos</span> targets <span class="speedup">&gt;70%</span> (<span class="numbers">&gt;2.8 TB/s</span>). A device-to-device copy benchmark on the same hardware measured <span class="numbers">3.59 TB/s</span>, <span class="speedup">90%</span> of the <span class="numbers">4 TB/s</span> theoretical peak &mdash; establishing the hardware ceiling.</p>
+
+<div class="callout">
+<p>The gap between sustained bandwidth during a kernel and time-averaged bandwidth across a forward pass is the inter-kernel gap. The HBM controller is idle for the remaining <span class="numbers">87%</span> while CPU-side dispatch proceeds.</p>
+</div>
+</section>
+
+<!-- Definition -->
+<section id="definition">
+<h2>Defining Bandwidth Utilization Precisely</h2>
+
+<p>"Bandwidth utilization" covers two distinct measurements. Both are reported; Lithos targets the second.</p>
+
+<h3>Sustained utilization (during active reads)</h3>
+<p>While a <span class="term" data-term="Kernel">kernel</span> is executing and its <span class="term" data-term="Warp">warps</span> are issuing <code>LDG</code> instructions, sustained utilization measures the fraction of peak the <span class="term" data-term="HBM">HBM</span> bus delivers. Well-tuned kernels &mdash; <span class="engine engine-vllm">vLLM</span>'s individual kernels, <span class="engine engine-cublas">cuBLAS</span>, <span class="term" data-term="FlashAttention">FlashAttention</span> &mdash; reach <span class="numbers">80%+</span>.</p>
+
+<h3>Time-averaged utilization (over wall time)</h3>
+<p>Total bytes transferred divided by total elapsed time, including gaps between kernels. This number sets tok/s. <span class="engine engine-vllm">vLLM</span> lands at <span class="numbers">13%</span> here.</p>
+
+<div class="callout note">
+<p>A <span class="term" data-term="Kernel">kernel</span> can sustain <span class="term" data-term="HBM">HBM</span> at <span class="numbers">80%</span> while the program averages <span class="numbers">13%</span>: <span class="numbers">80% &times; 16% duty cycle &asymp; 13%</span>.</p>
+</div>
+</section>
+
+<!-- Arithmetic -->
+<section id="arithmetic">
+<h2>The Arithmetic</h2>
+
+<p>The arithmetic reduces to bytes per token divided by bandwidth. For <span class="term" data-term="DeltaNet">Qwen 3.5 27B</span> at <span class="term" data-term="W4A16">W4A16</span> decode, batch=1:</p>
+
+<h3>Bytes read per token</h3>
+
+<p>Each token requires one sweep over every weight. No reuse across tokens. Bytes per token equals total weight bytes traversed through <span class="term" data-term="HBM">HBM</span> per forward pass.</p>
+
+<table>
+<tr><th>Source</th><th>Shape / note</th><th class="num">Bytes</th></tr>
+<tr><td>Embedding lookup</td><td>one row of <code>[vocab &times; 5120]</code> in <span class="term" data-term="BF16">BF16</span></td><td class="num">~10 KB</td></tr>
+<tr><td>Attention, full-attn layer (&times;16)</td><td>Q,K,V,O projections &mdash; W4 packed</td><td class="num">~47 MB / layer</td></tr>
+<tr><td><span class="term" data-term="DeltaNet">DeltaNet</span> layer (&times;48)</td><td>state-update weights + gates, W4</td><td class="num">~50 MB / layer</td></tr>
+<tr><td>MLP block per layer (&times;64)</td><td>gate + up + down, W4 packed</td><td class="num">~134 MB / layer</td></tr>
+<tr><td>Norms, biases, scales</td><td>FP16, rounded into the above</td><td class="num">&lt;1%</td></tr>
+<tr><td><strong>Total per token</strong></td><td><strong>every parameter, every layer</strong></td><td class="num"><strong>~8 GB</strong></td></tr>
+</table>
+
+<p>Roughly: <span class="numbers">~134 MB &times; 64 &asymp; 8.6 GB</span> for the MLPs alone (they dominate), plus <span class="numbers">~0.7 GB</span> for attention layers, plus <span class="numbers">~2.4 GB</span> for <span class="term" data-term="DeltaNet">DeltaNet</span>. Minus shared/tied weights and sparse activations, net <span class="numbers">~8 GB</span> per token through the <span class="term" data-term="HBM">HBM</span> bus.</p>
+
+<h3>The ceiling</h3>
+
+<div class="mathbox">
+<div><span class="op">Theoretical peak</span>  = <span class="cy">4 TB/s</span></div>
+<div><span class="op">Measured copy peak</span> = <span class="cy">3.59 TB/s</span>  <span class="op">(90% of theoretical)</span></div>
+<div><span class="op">Bytes per token</span>   = <span class="cy">8 GB</span></div>
+<div>&nbsp;</div>
+<div><span class="op">Ceiling at theoretical peak:</span></div>
+<div>&nbsp;&nbsp;8 GB / 4000 GB/s = <span class="res">2.00 ms/tok</span> &rArr; <span class="res">500 tok/s</span></div>
+<div>&nbsp;</div>
+<div><span class="op">Ceiling at measured copy:</span></div>
+<div>&nbsp;&nbsp;8 GB / 3590 GB/s = <span class="res">2.23 ms/tok</span> &rArr; <span class="res">449 tok/s</span></div>
+</div>
+
+<p><span class="numbers">~449 tok/s at batch=1</span> is the HBM bandwidth ceiling on this <span class="term" data-term="GH200">GH200</span>. Crossing it requires changing the problem: speculative decoding, lower-bit quantization, or batching.</p>
+</section>
+
+<!-- Reconcile -->
+<section id="reconcile">
+<h2>Reconciling 13% vs 35.8%</h2>
+
+<p>Two measurements of the same run yield different numbers because they measure different things.</p>
+
+<p><span class="engine engine-vllm">vLLM</span> on this <span class="term" data-term="GH200">GH200</span> achieves <span class="numbers">179 tok/s</span> at batch=1.</p>
+
+<div class="mathbox">
+<div><span class="op">Wall time per token:</span>   1 / 179 = <span class="cy">5.58 ms</span></div>
+<div><span class="op">Bytes moved per token:</span>  <span class="cy">8 GB</span></div>
+<div>&nbsp;</div>
+<div><span class="op">Effective bandwidth (avg):</span></div>
+<div>&nbsp;&nbsp;8 GB / 5.58 ms = <span class="res">1.43 TB/s</span></div>
+<div>&nbsp;&nbsp;1.43 / 3.59 = <span class="res">39.8%</span>  <span class="op">of measured peak</span></div>
+<div>&nbsp;&nbsp;1.43 / 4.00 = <span class="res">35.8%</span>  <span class="op">of theoretical peak</span></div>
+</div>
+
+<p>The <span class="numbers">13%</span> figure is the profiler estimate. The GPU profiler samples memory bandwidth across wall time, counting only cycles during which <span class="term" data-term="HBM">HBM</span> controllers are actively servicing requests. Between kernels &mdash; dispatch gap, scheduler idle, scoreboard drain, <span class="term" data-term="CUDA graph">CUDA graph</span> node boundary &mdash; the controller reports zero.</p>
+
+<p>The profiler sees:</p>
+<ul style="margin-left: 1.4rem; color: var(--text-dim); margin-bottom: 1rem;">
+  <li>Kernel executing, reading hard: ~80% of peak sustained, for ~13% of wall time.</li>
+  <li>Between kernels, GPU idle: 0% of peak, for ~87% of wall time.</li>
+  <li>Time-weighted average: 80% &times; 0.13 &asymp; <span class="numbers">10&ndash;13%</span>.</li>
+</ul>
+
+<p>The bytes/time estimator gives <span class="numbers">35.8%</span>, which dictates tok/s. The profiler's number reports the duty cycle. The bytes/time number reports distance from the physical ceiling. Lithos targets the bytes/time number at <span class="numbers">&gt;70%</span>.</p>
+
+<div class="callout warn">
+<p><span class="engine engine-vllm">vLLM</span>'s individual kernels reach <span class="numbers">~80%</span> sustained bandwidth. The <span class="numbers">87%</span> idle time between kernels is the dominant cost.</p>
+</div>
+</section>
+
+<!-- Why vLLM is below the ceiling -->
+<section id="why-below">
+<h2>Why <span class="engine engine-vllm">vLLM</span> Is Below the Ceiling</h2>
+
+<p>The per-token budget of <span class="numbers">5.58 ms</span> breaks down roughly as follows. Several of these costs overlap via <span class="term" data-term="CUDA graph">CUDA graphs</span>, but not perfectly.</p>
+
+<table>
+<tr><th>Cost</th><th>Calculation</th><th class="num">Scheduled</th></tr>
+<tr><td>Actual memory reads (useful work)</td><td>8 GB / 3.59 TB/s</td><td class="num">~2.23 ms</td></tr>
+<tr><td>Kernel launch overhead</td><td>~3000 launches &times; 1&ndash;5 &micro;s</td><td class="num">3&ndash;15 ms</td></tr>
+<tr><td>Inter-kernel hardware gaps</td><td>scoreboard drain, scheduler handoff</td><td class="num">5&ndash;15 ms</td></tr>
+<tr><td>Python / <span class="engine engine-pytorch">PyTorch</span> dispatch</td><td>3000 ops &times; 1&ndash;10 &micro;s</td><td class="num">3&ndash;30 ms</td></tr>
+<tr><td><strong>Net after CUDA graph overlap</strong></td><td><strong>observed</strong></td><td class="num"><strong>~5.58 ms</strong></td></tr>
+</table>
+
+<p>The memory system actually moves data for <span class="numbers">~2.2 ms</span> of the <span class="numbers">5.58 ms</span> wall-clock token budget. For the remaining <span class="numbers">~3.4 ms</span>, the HBM controller is ready to deliver weights but no <span class="term" data-term="Warp">warp</span> has issued an <code>LDG</code>. The GPU is waiting for the next kernel.</p>
+
+<div class="timeline">
+<div><span class="tl-label"><span class="engine engine-vllm">vLLM</span></span>
+  <span class="tl-bar tl-vllm-active" style="width: 48px;"></span><span class="tl-bar tl-idle" style="width: 72px;"></span><span class="tl-bar tl-vllm-active" style="width: 40px;"></span><span class="tl-bar tl-idle" style="width: 80px;"></span><span class="tl-bar tl-vllm-active" style="width: 44px;"></span><span class="tl-bar tl-idle" style="width: 76px;"></span><span class="tl-bar tl-vllm-active" style="width: 38px;"></span><span class="tl-bar tl-idle" style="width: 70px;"></span>
+  &nbsp;<span style="color: var(--text-dim);">5.58 ms</span></div>
+<div style="margin-top: 0.5rem;"><span class="tl-label"><span class="engine engine-lithos">Lithos</span></span>
+  <span class="tl-bar tl-active" style="width: 540px;"></span><span class="tl-bar tl-idle" style="width: 42px;"></span>
+  &nbsp;<span style="color: var(--text-dim);">~2.4 ms</span></div>
+<div style="color: var(--text-faint); margin-top: 0.5rem; font-size: 0.72rem;">Purple/orange = HBM actively delivering weights. Red = idle between kernels.</div>
+</div>
+</section>
+
+<!-- How Lithos closes the gap -->
+<section id="lithos-plan">
+<h2>How <span class="engine engine-lithos">Lithos</span> Closes the Gap</h2>
+
+<p>The path to <span class="numbers">&gt;70%</span> utilization is mechanical: remove overhead at each layer of the stack.</p>
+
+<h3>Four decisions</h3>
+
+<div style="margin-bottom: 1rem;">
+  <h4>1. Fused kernels: <span class="numbers">~47x</span> fewer launches</h4>
+  <p><span class="numbers">3000</span> launches become <span class="numbers">64</span> layer-kernels, or fewer with cross-layer fusion. Launch overhead collapses from <span class="numbers">30+ ms scheduled</span> to <span class="numbers">&lt;1 ms</span>. See the Fusion section on the <a href="performance.html">Performance</a> page for the mechanism.</p>
+</div>
+
+<div style="margin-bottom: 1rem;">
+  <h4>2. No Python in the path</h4>
+  <p>The inference loop is Forth-compiled native code calling <code>cuLaunchKernel</code> directly. Dispatcher overhead: zero. No tensor objects, no <span class="term" data-term="Autograd">autograd</span> guards, no backend selection.</p>
+</div>
+
+<div style="margin-bottom: 1rem;">
+  <h4>3. No <span class="term" data-term="CUDA graph">CUDA graph</span> capture needed</h4>
+  <p><span class="term" data-term="CUDA graph">CUDA graphs</span> exist to amortize the cost of launching many small kernels. The fused <span class="engine engine-lithos">Lithos</span> kernels <em>are</em> the graph. Nothing to capture.</p>
+</div>
+
+<div style="margin-bottom: 1rem;">
+  <h4>4. Pre-computed launch parameters</h4>
+  <p>Grid dims, block dims, argument pointers, shared memory sizing &mdash; all baked at kernel generation time. At dispatch there's no arithmetic, just a pointer to a pre-assembled <code>cuLaunchKernel</code> argument block.</p>
+</div>
+
+<h3>Target breakdown at 2.8 TB/s effective</h3>
+
+<div class="mathbox">
+<div><span class="op">Memory reads (physics-limited):</span> <span class="res">~2.23 ms</span></div>
+<div><span class="op">Launch overhead:</span>              64 &times; 2.3 &micro;s = <span class="res">~150 &micro;s</span></div>
+<div><span class="op">Dispatch overhead:</span>            <span class="res">~0 ms</span>  <span class="op">(native code)</span></div>
+<div>&nbsp;</div>
+<div><span class="op">Total per token:</span>              <span class="res">~2.4 ms</span></div>
+<div><span class="op">Token rate:</span>                   <span class="res">~415 tok/s</span></div>
+<div><span class="op">Bandwidth utilization:</span>        <span class="res">8 GB / 2.4 ms = 3.33 TB/s</span></div>
+<div><span class="op">vs measured peak:</span>             <span class="res">93% of 3.59 TB/s</span></div>
+<div><span class="op">vs theoretical peak:</span>          <span class="res">83% of 4.00 TB/s</span></div>
+</div>
+
+<p>The <span class="numbers">&gt;70%</span> target leaves margin below the <span class="numbers">~90%</span> hardware ceiling. HBM row activation, refresh, and bank conflicts account for the gap between <span class="numbers">90%</span> and <span class="numbers">100%</span>.</p>
+</section>
+
+<!-- Empirical -->
+<section id="empirical">
+<h2>Empirical Measurement</h2>
+
+<p>A memcpy benchmark isolates <span class="term" data-term="HBM">HBM</span> bandwidth from compute and synchronization. On this <span class="term" data-term="GH200">GH200</span>:</p>
+
+<div class="bwchart">
+  <div class="row">
+    <div class="label">Theoretical peak</div>
+    <div class="bar"><div class="fill peak" style="width: 100%;"></div></div>
+    <div class="val">4.00 TB/s</div>
+  </div>
+  <div class="row">
+    <div class="label">Measured copy (D2D)</div>
+    <div class="bar"><div class="fill copy" style="width: 89.75%;"></div></div>
+    <div class="val">3.59 TB/s (90%)</div>
+  </div>
+  <div class="row">
+    <div class="label"><span class="engine engine-lithos">Lithos</span> target</div>
+    <div class="bar"><div class="fill lithos" style="width: 70%;"></div></div>
+    <div class="val">2.80 TB/s (70%)</div>
+  </div>
+  <div class="row">
+    <div class="label"><span class="engine engine-vllm">vLLM</span> during kernel exec</div>
+    <div class="bar"><div class="fill vllm-burst" style="width: 52.5%;"></div></div>
+    <div class="val">~2.1 TB/s (~53%)</div>
+  </div>
+  <div class="row">
+    <div class="label"><span class="engine engine-vllm">vLLM</span> time-averaged</div>
+    <div class="bar"><div class="fill vllm-avg" style="width: 13%;"></div></div>
+    <div class="val">0.52 TB/s (13%)</div>
+  </div>
+</div>
+
+<p>The copy benchmark at <span class="numbers">3.59 TB/s</span> shows the hardware delivers <span class="numbers">90%</span> of its rated peak when no framework, dispatcher, or per-op kernel layer is involved. The gap between <span class="numbers">13%</span> and <span class="numbers">90%</span> is software overhead.</p>
+
+<p><span class="engine engine-lithos">Lithos</span>'s <span class="numbers">70%</span> target sits below the <span class="numbers">90%</span> copy ceiling to account for decode work that is not pure weight streaming: norms, rotary embeddings, softmax, and gate/up/down sequencing.</p>
+</section>
+
+<!-- Hard truth -->
+<section id="hard-truth">
+<h2>Summary</h2>
+
+<p>Batch=1 inference is memory-bandwidth bound. Each token reads every weight once and performs a small amount of compute per weight. Tensor core throughput, clock speed, and occupancy are not the constraint.</p>
+
+<p>Reducing wall-time per token requires reducing GPU idle time between kernels: <span class="engine engine-pytorch">PyTorch</span> dispatcher resolution, Python interpreter steps, CUDA runtime argument validation, and <span class="term" data-term="CUDA graph">CUDA graph</span> node boundaries all contribute idle HBM cycles.</p>
+
+<p>Each layer of abstraction between the model and the silicon contributes idle <span class="term" data-term="HBM">HBM</span> cycles. <span class="engine engine-lithos">Lithos</span>'s approach is to remove those layers.</p>
+
+<div class="callout">
+<p>At <span class="numbers">70%</span> sustained bandwidth, <span class="engine engine-lithos">Lithos</span> would run at <span class="speedup">~2.3x</span> <span class="engine engine-vllm">vLLM</span>'s measured throughput on the same hardware. The delta comes from reduced idle time between kernels, not from kernel-level optimization.</p>
+</div>
+</section>
+
+<!-- See also -->
+<section id="see-also">
+<h2>See Also</h2>
+<ul style="margin-left: 1.4rem; color: var(--text-dim); line-height: 2;">
+  <li><a href="performance.html">Performance</a> &mdash; how kernel fusion works mechanically; this page explains <em>why</em> it matters.</li>
+  <li><a href="memory.html">Memory</a> &mdash; the <span class="term" data-term="HBM">HBM</span> / <span class="term" data-term="LPDDR5X">LPDDR5X</span> hierarchy on <span class="term" data-term="GH200">GH200</span>.</li>
+  <li><a href="pytorch.html">Lithos vs PyTorch</a> &mdash; where the <span class="numbers">3000</span> kernel launches come from.</li>
+  <li><a href="architecture.html">Architecture</a> &mdash; the end-to-end pipeline that keeps HBM saturated.</li>
+</ul>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

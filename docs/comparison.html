@@ -21,187 +21,111 @@
   --blue: #6e8ed0;
   --red: #d06e6e;
   --border: #1a1a28;
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
 }
+.speedup { display: inline-block; background: var(--accent); color: var(--bg); font-weight: 600; padding: 2px 8px; border-radius: 2px; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 1.05em; letter-spacing: 0.02em; }
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+.pitfall { color: var(--red); }
 
 html { font-size: 15px; scroll-behavior: smooth; }
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  line-height: 1.65;
-  -webkit-font-smoothing: antialiased;
-}
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.65; -webkit-font-smoothing: antialiased; }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-/* Layout */
 .container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
 
-/* Navigation */
-nav {
-  position: sticky; top: 0; z-index: 100;
-  background: var(--bg); border-bottom: 1px solid var(--border);
-  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
-}
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
 nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
 nav a { color: var(--text-dim); }
 nav a:hover { color: var(--accent); text-decoration: none; }
 nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
 
-/* Hero */
-.hero {
-  padding: 6rem 0 4rem 0;
-  border-bottom: 1px solid var(--border);
-}
-.hero h1 {
-  font-size: 3rem; font-weight: 300; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
-}
+.hero { padding: 6rem 0 4rem 0; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 3rem; font-weight: 300; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem; }
 .hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
 
-/* Sections */
 section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
 section:last-child { border-bottom: none; }
 
-h2 {
-  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
-  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
-}
-h3 {
-  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
-  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
-}
-h4 {
-  font-size: 0.9rem; font-weight: 600; color: var(--text);
-  margin: 1.5rem 0 0.5rem 0;
-}
+h2 { font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem; }
+h3 { font-size: 1rem; font-weight: 300; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0; }
+h4 { font-size: 0.9rem; font-weight: 600; color: var(--text); margin: 1.5rem 0 0.5rem 0; }
 
 p { margin-bottom: 1rem; }
 p:last-child { margin-bottom: 0; }
 
-/* Code */
-code, .code {
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
-  font-size: 0.866rem;
-}
+code, .code { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 0.866rem; }
 code { color: var(--accent); }
 
-pre {
-  background: var(--bg-code);
-  border: 1px solid var(--border);
-  padding: 1rem 1.2rem;
-  overflow-x: auto;
-  margin: 0.8rem 0 1.2rem 0;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
-  font-size: 0.82rem;
-  line-height: 1.55;
-  color: var(--text);
-}
+pre { background: var(--bg-code); border: 1px solid var(--border); padding: 1rem 1.2rem; overflow-x: auto; margin: 0.8rem 0 1.2rem 0; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; font-size: 0.82rem; line-height: 1.55; color: var(--text); }
+pre .dim { color: var(--text-faint); }
 
-/* Tables */
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0.8rem 0 1.2rem 0;
-  font-size: 0.88rem;
-}
-th {
-  text-align: left;
-  padding: 0.5rem 0.8rem;
-  border-bottom: 2px solid var(--accent-dim);
-  color: var(--accent);
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-td {
-  padding: 0.4rem 0.8rem;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
+table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.2rem 0; font-size: 0.88rem; }
+th { text-align: left; padding: 0.5rem 0.8rem; border-bottom: 2px solid var(--accent-dim); color: var(--accent); font-weight: 400; letter-spacing: 0.04em; white-space: nowrap; }
+td { padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 tr:last-child td { border-bottom: none; }
-td code {
-  font-size: 0.82rem;
-  color: var(--text);
-  background: var(--bg-code);
-  padding: 0.1rem 0.3rem;
-}
+td code { font-size: 0.82rem; color: var(--text); background: var(--bg-code); padding: 0.1rem 0.3rem; }
 .num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
 
-/* Engine cards */
-.engine { margin-bottom: 3rem; }
-.engine-header {
-  display: flex; align-items: baseline; gap: 0.8rem;
-  margin-bottom: 0.3rem;
-}
+.engine-card { margin-bottom: 3rem; padding-top: 0.5rem; border-top: 1px dashed var(--border); }
+.engine-card:first-of-type { border-top: none; }
+.engine-header { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 0.3rem; }
 .engine-num { color: var(--accent); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
-.engine-name { font-size: 1.15rem; font-weight: 600; color: var(--text); }
+.engine-name { font-size: 1.25rem; font-weight: 600; color: var(--text); }
 .engine-origin { font-size: 0.82rem; color: var(--text-faint); margin-bottom: 0.8rem; }
-.engine h4 { font-size: 0.82rem; font-weight: 400; letter-spacing: 0.06em; text-transform: uppercase; margin: 0.8rem 0 0.3rem 0; }
-.engine h4.why { color: var(--green); }
-.engine h4.arch { color: var(--blue); }
-.engine h4.tradeoffs { color: var(--red); }
-.engine h4.numbers { color: var(--cyan); }
-.engine p { color: var(--text-dim); font-size: 0.9rem; }
-.engine ul { list-style: none; padding-left: 1.2rem; margin-bottom: 0.4rem; }
-.engine ul li { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 0.2rem; }
-.engine ul li::before { content: "\2013\00a0"; color: var(--text-faint); }
+.engine-card h4 { font-size: 0.82rem; font-weight: 400; letter-spacing: 0.06em; text-transform: uppercase; margin: 1.2rem 0 0.4rem 0; }
+.engine-card h4.why { color: var(--green); }
+.engine-card h4.arch { color: var(--blue); }
+.engine-card h4.tradeoffs { color: var(--red); }
+.engine-card h4.numbers { color: var(--cyan); }
+.engine-card h4.code { color: var(--accent); }
+.engine-card h4.prod { color: var(--text); }
+.engine-card p { color: var(--text-dim); font-size: 0.9rem; }
+.engine-card ul { list-style: none; padding-left: 1.2rem; margin-bottom: 0.4rem; }
+.engine-card ul li { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 0.35rem; }
+.engine-card ul li::before { content: "\2013\00a0"; color: var(--text-faint); }
+.engine-card strong { color: var(--text); }
 
-/* Factor cards */
 .factor { margin-bottom: 2rem; }
 .factor-header { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 0.5rem; }
 .factor-num { color: var(--accent); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
 .factor-title { font-size: 1rem; font-weight: 600; color: var(--text); }
 .factor p { color: var(--text-dim); font-size: 0.9rem; }
 .factor .hw-context { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+.hw-context { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
 
-/* Lithos highlight */
 tr.lithos-row td { color: var(--accent); }
 
-/* Diagram */
-.diagram {
-  background: var(--bg-code);
-  border: 1px solid var(--border);
-  padding: 1.5rem 2rem;
-  margin: 1rem 0;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.8rem;
-  line-height: 1.5;
-  white-space: pre;
-  overflow-x: auto;
-  color: var(--text-dim);
-}
-.diagram .highlight { color: var(--text); }
-.diagram .accent { color: var(--accent); }
-.diagram .dim { color: var(--text-faint); }
+.term { border-bottom: 1px dotted var(--text-faint); cursor: help; }
+.term:hover { border-bottom-color: var(--accent); color: var(--text); }
 
-/* Utility */
-.mt-1 { margin-top: 1rem; }
-.mt-2 { margin-top: 2rem; }
-.mb-1 { margin-bottom: 1rem; }
+.mt-1 { margin-top: 1rem; } .mt-2 { margin-top: 2rem; } .mb-1 { margin-bottom: 1rem; }
 .small { font-size: 0.82rem; color: var(--text-dim); }
 .mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
 .nowrap { white-space: nowrap; }
 
-/* Footer */
-footer {
-  padding: 2rem 0;
-  border-top: 1px solid var(--border);
-  color: var(--text-faint);
-  font-size: 0.78rem;
-  letter-spacing: 0.04em;
-}
+footer { padding: 2rem 0; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 0.78rem; letter-spacing: 0.04em; }
 </style>
 </head>
 <body>
 
-<!-- Navigation -->
 <nav>
 <div class="container">
   <a href="index.html" class="nav-brand">Lithos</a>
   <a href="#fundamentals">Fundamentals</a>
   <a href="#engines">Engines</a>
+  <a href="#libraries">Libraries</a>
   <a href="#table">Comparison</a>
   <a href="index.html">Home</a>
   <a href="pytorch.html">Lithos vs PyTorch</a>
@@ -213,7 +137,6 @@ footer {
 </div>
 </nav>
 
-<!-- Hero -->
 <header class="hero">
 <div class="container">
   <h1>Inference Engines</h1>
@@ -223,7 +146,6 @@ footer {
 
 <main class="container">
 
-<!-- What Makes Inference Fast -->
 <section id="fundamentals">
 <h2>What Makes Inference Fast</h2>
 
@@ -236,17 +158,16 @@ footer {
     <span class="factor-num">01</span>
     <span class="factor-title">Memory Bandwidth Utilization</span>
   </div>
-  <p>Are you reading weights at the physical speed limit? An H100 SXM has <span class="hw-context">3.35 TB/s</span> HBM bandwidth. A GH200 has <span class="hw-context">4.0 TB/s</span>. At batch=1, a 27B model in 4-bit quantization is ~14 GB of weights. At full bandwidth that is <span class="hw-context">3.5 ms per token &mdash; 285 tok/s</span>. In practice, most engines achieve 10-30% of peak bandwidth. Every percentage point of utilization is a direct percentage point of speed.</p>
-  <p>Why is utilization so low? Global memory has <span class="hw-context">~400 cycle latency</span>. You need hundreds of outstanding memory requests to saturate the bus. This requires careful prefetching, double-buffering, and enough concurrent warps to hide latency. Most framework-dispatched kernels don't achieve this.</p>
+  <p>Are you reading weights at the physical speed limit? An H100 SXM has <span class="hw-context">3.35 TB/s</span> <span class="term" data-term="HBM">HBM</span> bandwidth. A <span class="term" data-term="GH200">GH200</span> has <span class="hw-context">4.0 TB/s</span>. At batch=1, a 27B model in 4-bit quantization is ~14 GB of weights. At full bandwidth that is <span class="hw-context">3.5 ms per token &mdash; 285 tok/s</span>. In practice, most engines achieve 10&ndash;30% of peak bandwidth. Every percentage point of utilization is a direct percentage point of speed.</p>
+  <p>Why is utilization so low? Global memory has <span class="hw-context">~400 cycle latency</span>. You need hundreds of outstanding memory requests to saturate the bus. This requires careful prefetching, double-buffering, and enough concurrent warps to hide latency.</p>
 </div>
 
 <div class="factor">
   <div class="factor-header">
     <span class="factor-num">02</span>
-    <span class="factor-title">Kernel Fusion</span>
+    <span class="factor-title"><span class="term" data-term="Kernel">Kernel</span> Fusion</span>
   </div>
-  <p>Are you eliminating redundant memory traffic? Every kernel boundary means: write results to HBM, synchronize, launch next kernel, read results back. If RMSNorm writes a 4096-element vector to HBM and the next GEMV reads it back, that is <span class="hw-context">32 KB of wasted traffic</span> in each direction &mdash; and more critically, <span class="hw-context">1-5 us of dead time</span> between kernels.</p>
-  <p>A fused kernel keeps intermediate results in registers (<span class="hw-context">1 cycle access</span>) or shared memory (<span class="hw-context">~20 cycles</span>) instead of round-tripping through HBM (<span class="hw-context">~400 cycles</span>). At 64 transformer layers with 20-50 kernels each, eliminating boundaries is worth 30-50% throughput.</p>
+  <p>Are you eliminating redundant memory traffic? Every <span class="term" data-term="Kernel">kernel</span> boundary means: write results to HBM, synchronize, launch next kernel, read results back. A fused kernel keeps intermediates in registers (1 cycle) or <span class="term" data-term="Shared Memory">shared memory</span> (~20 cycles) instead of round-tripping through HBM (~400 cycles). At 64 transformer layers with 20&ndash;50 kernels each, eliminating boundaries is worth 30&ndash;50% throughput.</p>
 </div>
 
 <div class="factor">
@@ -254,8 +175,7 @@ footer {
     <span class="factor-num">03</span>
     <span class="factor-title">Quantization Efficiency</span>
   </div>
-  <p>Are you using fewer bytes per weight without destroying quality? FP16 uses 2 bytes per weight. INT4 uses 0.5 bytes &mdash; 4x less bandwidth needed. But the dequantization math must be fast: if your dequant kernel can't feed the ALUs at line rate, you lose the bandwidth savings to compute overhead.</p>
-  <p>The best quantization kernels interleave dequantization with the multiply-accumulate, keeping the ALU pipeline full while the memory system streams weights. Poor implementations dequantize first, store intermediate results, then compute &mdash; doubling memory traffic.</p>
+  <p>Are you using fewer bytes per weight without destroying quality? <span class="term" data-term="FP16">FP16</span> uses 2 bytes per weight. INT4 uses 0.5 bytes. But the dequantization math must be fast: if your dequant kernel can't feed the ALUs at line rate, you lose the bandwidth savings to compute overhead. The best quantization kernels interleave dequantization with the multiply-accumulate; poor implementations dequantize first, store intermediate results, then compute.</p>
 </div>
 
 <div class="factor">
@@ -263,8 +183,7 @@ footer {
     <span class="factor-num">04</span>
     <span class="factor-title">Launch Overhead</span>
   </div>
-  <p>Is the GPU idle between kernels? Each CUDA kernel launch costs <span class="hw-context">3-10 us</span> of CPU-side dispatch. CUDA graphs amortize this by recording a sequence and replaying it, but graphs are rigid &mdash; they can't handle dynamic shapes without re-recording.</p>
-  <p>The CUDA driver API (as used by Lithos) can launch kernels with ~1 us overhead. But the real win is not launching fewer kernels faster &mdash; it is launching fewer kernels, period. One fused kernel per layer means 64 launches for the entire model instead of 1,000+.</p>
+  <p>Is the GPU idle between kernels? Each CUDA kernel launch costs <span class="hw-context">3&ndash;10 &micro;s</span> of CPU-side dispatch. <span class="term" data-term="CUDA graph">CUDA graphs</span> amortize this by recording a sequence and replaying it, but graphs are rigid &mdash; they can't handle dynamic shapes without re-recording. The real win is not launching fewer kernels faster &mdash; it is launching fewer kernels, period.</p>
 </div>
 
 <div class="factor">
@@ -272,372 +191,710 @@ footer {
     <span class="factor-num">05</span>
     <span class="factor-title">Batching</span>
   </div>
-  <p>Are you sharing weight reads across multiple requests? At batch=1, each weight byte produces one output element. At batch=8, each weight byte produces eight output elements &mdash; arithmetic intensity increases 8x, and you shift from memory-bound to compute-bound.</p>
-  <p>Continuous batching (vLLM, SGLang) dynamically packs requests so the GPU always has a full batch. But this requires managing a KV cache per request, which is its own memory challenge. PagedAttention solves the fragmentation problem; without it, you waste 60-80% of KV cache memory to internal fragmentation.</p>
+  <p>Are you sharing weight reads across multiple requests? At batch=1, each weight byte produces one output element. At batch=8, each weight byte produces eight output elements &mdash; arithmetic intensity increases 8x, and you shift from memory-bound to compute-bound. Continuous batching dynamically packs requests so the GPU always has a full batch; PagedAttention solves the fragmentation problem that would otherwise waste 60&ndash;80% of <span class="term" data-term="KV Cache">KV cache</span> memory.</p>
 </div>
 
 </section>
 
-<!-- Engine Deep Dives -->
 <section id="engines">
 <h2>Engine Deep Dives</h2>
+<p class="small mb-1">Each entry covers origin, production use, architecture, optimizations, tradeoffs, measured numbers, and a minimal code example.</p>
 
-<div class="engine">
+<div class="engine-card">
   <div class="engine-header">
     <span class="engine-num">01</span>
-    <span class="engine-name">TensorRT-LLM</span>
+    <span class="engine-name" style="color: var(--engine-pytorch)">PyTorch + <span class="term" data-term="torch.compile">torch.compile</span></span>
   </div>
-  <p class="engine-origin">NVIDIA &mdash; C++ runtime, Python build phase</p>
+  <p class="engine-origin">Meta AI / PyTorch Foundation. Core: Chintala, Paszke, Gross (2016); <code>torch.compile</code> landed in PyTorch 2.0, March 2023. The most actively developed ML framework; thousands of contributors.</p>
 
-  <h4 class="why">Why it is fast</h4>
+  <h4 class="prod">Production use</h4>
+  <p>The universal baseline. Every model on the HuggingFace Hub ships PyTorch code first; conversions to other engines happen after. HuggingFace <code>transformers</code>, <code>diffusers</code>, and <code>accelerate</code> sit on top. Used for inference at Meta (internal serving), Databricks, most academic labs. Rarely the production inference engine at scale &mdash; serious deployments convert to vLLM, TensorRT-LLM, or similar for the hot path.</p>
+
+  <h4 class="arch">Architecture in detail</h4>
+  <p><strong>Language.</strong> Python frontend, C++ backend (<code>libtorch</code>, ~800 MB shared library), <span class="term" data-term="CUDA">CUDA</span>/<span class="term" data-term="cuBLAS">cuBLAS</span>/<span class="term" data-term="cuDNN">cuDNN</span>/<span class="term" data-term="Triton">Triton</span> under that.</p>
+  <p><strong>The ATen dispatcher.</strong> Every tensor op (<code>x + y</code>, <code>x @ w</code>) is a dynamic dispatch through ~15 stacked keys (Autograd, AMP, Functorch, ADInplaceOrView, Python mode, CUDA, CPU, BackendSelect&hellip;). Each op walks the key stack to find a registered kernel. Per-op cost in eager mode: <span class="hw-context">5&ndash;40 &micro;s</span> of CPU dispatch before any GPU work starts.</p>
+  <p><strong>Autograd in the inference path.</strong> <code>torch.no_grad()</code> disables gradient accumulation but the autograd dispatch key is still on the stack; every tensor still carries <code>grad_fn</code> slots, version counters, and view metadata. <code>torch.inference_mode()</code> (1.9+) skips more, but the ATen tensor still has ~224 bytes of metadata.</p>
+  <p><strong>Kernel sources.</strong> GEMMs go to cuBLASLt. Norms/activations go to cuDNN or hand-written ATen CUDA kernels. Attention routes through <code>F.scaled_dot_product_attention</code>, which dispatches to <span class="term" data-term="FlashAttention">FlashAttention</span>-2, memory-efficient attention, or a math fallback.</p>
+  <p><strong>torch.compile / Inductor / Triton.</strong> Frontend is TorchDynamo, a CPython frame evaluator hook that symbolically traces Python bytecode into an FX graph. AOT Autograd canonicalises the graph. Inductor lowers it to a scheduler IR, fuses pointwise and reduction ops, and emits Triton source; Triton compiles to <span class="term" data-term="PTX">PTX</span> and caches cubins under <code>~/.cache/torch/inductor/</code>. Guards are generated for every traced shape/dtype; a guard miss triggers recompilation.</p>
+  <p><strong>Memory.</strong> <span class="term" data-term="CUDACachingAllocator">CUDACachingAllocator</span> maintains free lists of GPU blocks, splits to fit, and defragments opportunistically. Adds <span class="hw-context">10&ndash;500 &micro;s</span> per allocation depending on fragmentation.</p>
+  <p><strong>Request scheduling.</strong> None. PyTorch is a library; a serving layer (TorchServe, Ray Serve, BentoML) wraps <code>model.generate()</code>.</p>
+
+  <h4 class="why">Every optimization</h4>
   <ul>
-    <li>Pre-compiled execution plan. The build phase analyzes the model graph and selects optimal kernel implementations, tile sizes, and memory layouts for the specific GPU. No runtime decisions.</li>
-    <li>Layer fusion at build time. RMSNorm+residual, QKV projection+rope, attention+softmax &mdash; fused into single kernels during the build phase, not at runtime.</li>
-    <li>FP8/INT8 quantization with calibration. NVIDIA's own calibration tools find per-channel scale factors that minimize accuracy loss. Their kernels use tensor core MMA instructions directly.</li>
-    <li>Custom CUDA kernels for attention. Not cuBLAS &mdash; hand-written kernels that exploit the specific memory access patterns of self-attention. This is what cuBLAS cannot optimize for.</li>
-    <li>Multi-GPU tensor and pipeline parallelism. NVLink-aware partitioning. NCCL integration. Designed for data center deployment from the start.</li>
-    <li>C++ runtime with no Python in the inference path. After build, the engine is a serialized blob that a C++ process loads and executes.</li>
+    <li><strong>torch.compile fusion.</strong> Inductor emits one Triton kernel per fused region. Compile cost: 30&ndash;60 s first run, 5&ndash;10 GB CPU RAM spike.</li>
+    <li><strong>CUDA graphs</strong> via <code>torch.cuda.graph()</code>, used internally by <code>mode="reduce-overhead"</code>.</li>
+    <li><strong>SDPA backend selection</strong> (auto-routing to FlashAttention-2 / mem-efficient / math).</li>
+    <li><strong>BF16/FP16 autocast</strong> and FP8 via Transformer Engine.</li>
+    <li><strong>Nested tensors</strong> for variable-length batches.</li>
+    <li><strong>Inductor coordinate-descent autotuner</strong> picks tile sizes per shape.</li>
   </ul>
-
-  <h4 class="arch">Architecture</h4>
-  <p>Python build phase (minutes) &rarr; serialized engine file &rarr; C++ runtime loads and executes. The build phase uses TensorRT's optimizer to convert a PyTorch/HuggingFace model into a target-specific execution plan. The runtime uses CUDA streams, events, and custom memory pools.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
-    <li>Minutes-long build phase. 5-30 minutes depending on model size and optimization level. Every configuration change requires a rebuild.</li>
-    <li>Fixed batch size and sequence length baked into the plan. Dynamic shapes require multiple plans or padded execution.</li>
-    <li>NVIDIA-proprietary. The engine runtime is closed source. You cannot inspect, modify, or port the generated kernels.</li>
-    <li>Complex setup. Dependency on TensorRT, cuDNN, NCCL, and specific driver versions. Version matrix is fragile.</li>
+    <li><strong>Dispatcher overhead.</strong> Even with compile, Python runs between compiled regions (graph breaks from data-dependent control flow, Python builtins, unsupported ops).</li>
+    <li><strong>Compile warmup.</strong> 30&ndash;60 s on first call; cache is per shape/dtype/stride.</li>
+    <li><strong>Memory footprint.</strong> libtorch ~800 MB + CUDA runtime ~200 MB + cuBLAS ~800 MB + cuDNN ~300 MB + Python ~30 MB &asymp; <span class="hw-context">~2 GB</span> before the model loads.</li>
+    <li><strong>GIL-serialised outer loop.</strong> Sampling, tokenisation, stopping criteria all run under the GIL between GPU calls.</li>
+    <li><strong>Not a serving engine.</strong> No batching, no paged KV, no scheduler.</li>
   </ul>
 
-  <h4 class="numbers">Typical numbers</h4>
-  <p><span class="hw-context">~250-400 tok/s</span> single stream on H100 for 27B W4A16 (estimated). Highest throughput of any engine at high batch sizes due to multi-GPU scaling and optimized plans.</p>
+  <h4 class="numbers">Real measured numbers</h4>
+  <p>HuggingFace <code>optimum-benchmark</code> on Llama-2-7B, A100-80GB, FP16 eager: <span class="hw-context">~52 tok/s</span>; with <code>torch.compile</code>: <span class="hw-context">~88 tok/s</span>. PyTorch blog "Accelerating Generative AI with PyTorch II" (Nov 2023) reports their hand-optimised gpt-fast repo at <span class="hw-context">~107 tok/s</span> on Llama-7B INT8 on A100 &mdash; the effective ceiling before you bring in external engines.</p>
+
+  <h4 class="code">Code surface</h4>
+<pre><span class="dim"># pip install torch transformers</span>
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("meta-llama/Llama-3-8B")
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3-8B",
+    torch_dtype=torch.bfloat16, device_map="cuda")
+model = torch.compile(model, mode="reduce-overhead")
+
+with torch.inference_mode():
+    ids = tok("Hello", return_tensors="pt").input_ids.cuda()
+    out = model.generate(ids, max_new_tokens=128, do_sample=False)
+print(tok.decode(out[0]))</pre>
 </div>
 
-<div class="engine">
+<div class="engine-card">
   <div class="engine-header">
     <span class="engine-num">02</span>
-    <span class="engine-name">vLLM</span>
+    <span class="engine-name" style="color: var(--engine-vllm)">vLLM</span>
   </div>
-  <p class="engine-origin">UC Berkeley &mdash; Python + PyTorch + cuBLAS/FlashAttention</p>
+  <p class="engine-origin">UC Berkeley Sky Computing Lab. Woosuk Kwon, Zhuohan Li et al.; SOSP '23 paper "Efficient Memory Management for Large Language Model Serving with PagedAttention." First release June 2023; incubated under the PyTorch Foundation (Oct 2024). Extremely active.</p>
 
-  <h4 class="why">Why it is fast</h4>
+  <h4 class="prod">Production use</h4>
+  <p>The default open-source serving engine. Runs at Anyscale, Together AI, Mistral, Databricks, DeepInfra, Modal, countless self-hosters. Most HuggingFace Inference Endpoints that aren't TGI run vLLM. Supported by Red Hat / IBM as part of their enterprise AI platform.</p>
+
+  <h4 class="arch">Architecture in detail</h4>
+  <p><strong>Language.</strong> Python scheduler and executor, PyTorch for tensor ops, custom C++/CUDA extensions for PagedAttention and sampling, FlashAttention/FlashInfer/xFormers for attention.</p>
+  <p><strong>PagedAttention &mdash; virtual memory for the KV cache.</strong> Classical KV allocation gives each sequence one contiguous buffer sized for <code>max_seq_len</code>; if requests rarely reach max length, 60&ndash;80% of KV memory is wasted to internal fragmentation. PagedAttention partitions each sequence's KV into fixed-size <strong>blocks</strong> (default 16 tokens per block for Llama-class heads). A per-sequence <strong>block table</strong> maps logical block index to physical block in a global pool &mdash; exactly analogous to an OS page table. The attention kernel reads the block table, gathers K/V tiles from the non-contiguous physical blocks, and runs attention over them. Two sequences sharing a prefix can point their block tables at the same physical blocks (copy-on-write for branching beam search or shared system prompts).</p>
+  <p><strong>Continuous (in-flight) batching.</strong> Each iteration, the scheduler adds newly arrived requests to the running batch and evicts finished ones. Prefill and decode can be co-batched (chunked prefill, PR #3130+).</p>
+  <p><strong>Inference loop.</strong> <code>LLMEngine.step()</code> &rarr; scheduler returns <code>SequenceGroupMetadataList</code> &rarr; worker builds input + block-table tensors &rarr; model forward (PyTorch graph, possibly torch.compile'd, possibly CUDA-graphed) &rarr; sampler runs on logits &rarr; scheduler updates. One Python tick per decode step.</p>
+  <p><strong>Kernel sources.</strong> GEMMs via cuBLASLt (FP16/BF16) or Marlin/Machete/Exllama (INT4 <span class="term" data-term="GPTQ">GPTQ</span>/<span class="term" data-term="AWQ">AWQ</span>). Attention via FlashAttention-2, FlashAttention-3 on Hopper, or FlashInfer. Custom CUDA kernels for PagedAttention's block-gather attention, rotary embedding, RMSNorm, and sampling (top-k, top-p, min-p, penalties fused).</p>
+
+  <h4 class="why">Every optimization</h4>
   <ul>
-    <li>PagedAttention. Virtual memory for the KV cache. Instead of allocating one contiguous buffer per sequence, the KV cache is split into fixed-size blocks allocated on demand. Eliminates fragmentation &mdash; the reason most engines waste 60-80% of KV memory.</li>
-    <li>Continuous batching. New requests are inserted into the running batch without waiting for the current batch to finish. The scheduler dynamically adjusts the batch composition every iteration.</li>
-    <li>CUDA graphs. After warmup, the kernel launch sequence is recorded and replayed, amortizing the 3-10 us per-launch CPU overhead across dozens of kernels.</li>
-    <li>Prefix caching. If two requests share a common system prompt, the KV cache for that prefix is computed once and shared. Significant for multi-turn conversations and few-shot prompting.</li>
-    <li>Speculative decoding with Multi-Token Prediction (MTP). A small draft model proposes multiple tokens; the main model verifies in one forward pass. When the draft model is accurate, throughput multiplies.</li>
+    <li><strong>PagedAttention</strong> brings KV utilisation from ~30% to ~96% per the SOSP paper.</li>
+    <li><strong>Automatic prefix caching.</strong> Hashes KV blocks; identical block-sized prefixes share physical blocks. System-prompt-heavy workloads see 2&ndash;5x throughput jumps.</li>
+    <li><strong>Chunked prefill.</strong> A 16k-token prefill is split and interleaved with decode so it doesn't stall all in-flight requests.</li>
+    <li><strong>CUDA graphs</strong> for decode iterations, bucketed by batch size (powers of 2 up to 256).</li>
+    <li><strong>Speculative decoding.</strong> Draft-target, Medusa-style multi-head, ngram, and <span class="term" data-term="MTP">MTP</span> heads.</li>
+    <li><strong>Quantization kernels.</strong> Marlin (INT4 GPTQ, ~1.8x FP16 GEMM throughput on Ampere/Hopper), Machete (Hopper W4A16 successor with TMA), AWQ, FP8 E4M3/E5M2 via CUTLASS, bitsandbytes NF4.</li>
+    <li><strong>FlashInfer integration</strong> for Hopper WGMMA attention paths.</li>
+    <li><strong>Tensor/pipeline parallelism</strong> via Ray or Python multiprocessing + NCCL.</li>
+    <li><strong>Disaggregated prefill-decode</strong> experimentally in v0.6+.</li>
   </ul>
-
-  <h4 class="arch">Architecture</h4>
-  <p>Python scheduler &rarr; PyTorch operations &rarr; cuBLAS for GEMMs, FlashAttention for attention &rarr; CUDA graphs for replay. The scheduler is written in Python and runs on the CPU. Kernel execution is delegated to well-optimized libraries. torch.compile provides JIT fusion for some operations.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
-    <li>Python in the dispatch path. The scheduler, tokenizer, and sampling logic run in Python. At batch=1, this adds measurable latency per token.</li>
-    <li>~2 minute startup. Model loading, torch.compile warmup, CUDA graph recording all happen at startup. Cold start is painful for interactive use.</li>
-    <li>cuBLAS for GEMMs. cuBLAS is general-purpose &mdash; it cannot fuse dequantization with the matrix multiply. The weight read and dequant are separate memory passes.</li>
-    <li>Framework memory overhead. PyTorch's memory allocator, autograd metadata (even in inference mode), and Python object overhead consume GPU memory that could hold KV cache.</li>
+    <li><strong>Python in the scheduling loop.</strong> Per-iteration overhead of 1&ndash;10 ms has been measured in vLLM's own profiling.</li>
+    <li><strong>Startup time.</strong> ~30&ndash;120 s cold (imports 3&ndash;5 s, model load 3&ndash;5 s, torch.compile 30&ndash;60 s, CUDA graph capture 10&ndash;90 s, KV memory profiling 10&ndash;60 s).</li>
+    <li><strong>Memory overhead.</strong> ~4 GB of framework before the model loads; that memory could hold KV cache.</li>
+    <li><strong>cuBLAS dependency.</strong> 800 MB binary; cannot fuse dequant with matmul in FP16 paths.</li>
+    <li><strong>Complex configuration.</strong> Dozens of flags interact non-obviously.</li>
+    <li><strong>Compile/graph fragility.</strong> Unusual attention variants often fall back to eager.</li>
   </ul>
 
-  <h4 class="numbers">Measured on GH200</h4>
-  <p><span class="hw-context">179 tok/s</span> with GPTQ quantization and MTP5 speculative decoding. <span class="hw-context">13% bandwidth utilization at batch=1</span>. KV cache capacity: <span class="hw-context">274K tokens</span>. The 87% bandwidth waste is the inter-kernel gap problem &mdash; hundreds of small kernels with synchronization between each.</p>
+  <h4 class="numbers">Real measured numbers</h4>
+  <p><strong>Our measurement on <span class="term" data-term="GH200">GH200</span> 480GB</strong>, Qwen-class 27B W4 with MTP5: <span class="hw-context">179 tok/s</span> single stream, <span class="hw-context">13% HBM bandwidth utilization</span> (~0.52 TB/s of 4 TB/s peak), 274K KV tokens capacity. The SOSP paper reports 2&ndash;4x throughput over baseline HF transformers on OPT/Llama at server-scale batches. vLLM v0.6 blog (Sept 2024): <span class="hw-context">~2500 tok/s</span> aggregate Llama-8B on 1xH100 at concurrency 128.</p>
+
+  <h4 class="code">Code surface</h4>
+<pre><span class="dim"># pip install vllm</span>
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-3-8B",
+          gpu_memory_utilization=0.9,
+          enable_prefix_caching=True)
+
+params = SamplingParams(temperature=0.0, max_tokens=128)
+for out in llm.generate(["Hello, world!"], params):
+    print(out.outputs[0].text)
+
+<span class="dim"># or: vllm serve meta-llama/Llama-3-8B --port 8000</span></pre>
 </div>
 
-<div class="engine">
+<div class="engine-card">
   <div class="engine-header">
     <span class="engine-num">03</span>
-    <span class="engine-name">llama.cpp</span>
+    <span class="engine-name" style="color: var(--engine-tensorrt)">TensorRT-LLM</span>
   </div>
-  <p class="engine-origin">Georgi Gerganov &mdash; C/C++ with CUDA backend</p>
+  <p class="engine-origin">NVIDIA. First public release September 2023; successor to FasterTransformer (2019&ndash;2022). Active, biweekly tags on GitHub. Maintained by NVIDIA's Deep Learning Frameworks team.</p>
 
-  <h4 class="why">Why it is fast</h4>
+  <h4 class="prod">Production use</h4>
+  <p>Inside NVIDIA NIM microservices, Triton Inference Server backends at Meta and Amazon Bedrock, Perplexity's serving tier, Mistral's la Plateforme, NVIDIA DGX Cloud. When NVIDIA publishes "tok/s on H100," the number almost always came out of TensorRT-LLM. All NVIDIA MLPerf Inference submissions use it.</p>
+
+  <h4 class="arch">Architecture in detail</h4>
+  <p><strong>Language split.</strong> Python build phase (model definition via a PyTorch-like module system in <code>tensorrt_llm.models</code>) lowers to a TensorRT <code>INetworkDefinition</code>, then to a serialised engine <code>.plan</code> file. Runtime is C++ with thin Python bindings; the hot path has no Python.</p>
+  <p><strong>Kernel sources.</strong> A tall stack: cuBLASLt for some GEMMs, cuDNN for norm/activation, CUTLASS templates instantiated at build time for fused GEMM+epilogue, NVIDIA's <strong>XQA</strong> (eXtended Query Attention) for decode-phase attention, and a hand-written FMHA kernel derived from FlashAttention-2 but rewritten in raw CUDA/PTX for Hopper's TMA and WGMMA instructions.</p>
+  <p><strong>Build-phase kernel selection.</strong> Given a shape and dtype, the builder's <em>tactic selector</em> times every candidate kernel (tile size, split-K, epilogue variant) on the actual target GPU and picks the fastest. This is why rebuilds are slow and why an engine built on H100 refuses to run on A100.</p>
+  <p><strong>Serialised engine format.</strong> A single binary blob (<code>.engine</code>/<code>.plan</code>) containing the tactic-selected kernel catalog (embedded cubins), a frozen execution graph, tensor memory layout, and weight data. Load is <code>mmap</code> + pointer fixup.</p>
+  <p><strong>Inference loop.</strong> The C++ runtime (<code>gptManager</code>, now <code>executor</code>) holds the deserialised engine, a paged KV cache manager (adopted in v0.7+), and an inflight batching scheduler. Each iteration: scheduler packs prefill + decode, fires the engine via <code>enqueue()</code> on a CUDA stream, drains completed tokens.</p>
+  <p><strong>Memory.</strong> Custom pool allocated up front to a user-configured fraction of GPU memory. KV blocks (default 64 tokens each) pooled separately. Weights in a single buffer sized at build time.</p>
+
+  <h4 class="why">Every optimization</h4>
   <ul>
-    <li>Custom quantization kernels. Q4_K_M, Q5_K, Q6_K &mdash; hand-written CUDA kernels for each quantization format. The dequantization is fused into the dot product, avoiding intermediate storage.</li>
-    <li>Minimal dependencies. No PyTorch, no cuBLAS, no cuDNN. The entire inference stack is one C++ codebase. Less code means less overhead, less memory waste, and faster builds.</li>
-    <li>GGUF format designed for fast loading. Memory-mapped weight files. The weights are laid out in the file exactly as they will be consumed by the GPU &mdash; no deserialization, no conversion.</li>
-    <li>No framework overhead. No Python interpreter, no garbage collector, no autograd graph, no tensor metadata. Every byte of GPU memory holds weights or KV cache.</li>
+    <li><strong>XQA.</strong> Decode-phase attention specialised for batched single-token queries with long KV. Warp-specialised TMA loads on Hopper (producer warps do TMA, consumer warps do WGMMA), hiding HBM latency behind async copies.</li>
+    <li><strong>FP8 E4M3 GEMMs.</strong> On Hopper, <code>wgmma.mma_async.sync.aligned.m64n256k32.f32.e4m3.e4m3.f32</code> runs at ~1979 TFLOPS on H100 SXM. Per-tensor, per-channel, and per-block FP8 recipes via NVIDIA's Transformer Engine.</li>
+    <li><strong>Build-time layer fusion.</strong> QKV projection + <span class="term" data-term="RoPE">RoPE</span>, gate + up + SiLU for SwiGLU, <span class="term" data-term="RMSNorm">RMSNorm</span> + residual-add &mdash; fused via CUTLASS epilogues.</li>
+    <li><strong>In-flight continuous batching</strong> in C++ with zero Python on the scheduling loop.</li>
+    <li><strong>Speculative decoding.</strong> Medusa, EAGLE, ReDrafter, Lookahead, and vanilla draft-target, with verification fused into the main forward pass.</li>
+    <li><strong>Multi-GPU.</strong> Tensor parallel via NCCL (SHARP-aware on NVSwitch), pipeline parallel with 1F1B micro-batching, expert parallel for MoE.</li>
+    <li><strong>CUDA graphs</strong> for decode-phase iterations keyed on batch size.</li>
   </ul>
-
-  <h4 class="arch">Architecture</h4>
-  <p>C/C++ with a CUDA backend for GPU acceleration. Custom memory allocator. mmap-based weight loading &mdash; the OS pages weights into memory on demand, so startup is near-instant. The CUDA backend uses custom kernels for quantized operations and cuBLAS only for large FP16 GEMMs.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
-    <li>No tensor core usage for some quantization formats. The K-quant kernels use CUDA cores (FP32 FMA) rather than tensor cores (MMA). This leaves the tensor core units idle during quantized inference.</li>
-    <li>Generic tile sizes. The kernel tile dimensions are not tuned per-GPU &mdash; the same code runs on RTX 3060 and H100. This leaves performance on the table for high-end hardware.</li>
-    <li>Single-developer optimization capacity. One person writing and maintaining all CUDA kernels. Optimization breadth is necessarily limited compared to a team.</li>
-    <li>Limited batching support. Designed for single-user, single-stream inference. Server-mode batching exists but is not as mature as vLLM's continuous batching.</li>
+    <li><strong>5&ndash;30 minute build phase</strong>, per model, per GPU arch, per dtype, per max batch/seq combination.</li>
+    <li><strong>Closed-source runtime.</strong> C++ runtime ships as a static library; you can read the Python builder but not the executor. No way to patch a bug without NVIDIA's next release.</li>
+    <li><strong>Shape rigidity.</strong> Max batch and max sequence length compiled in. Small requests pad up.</li>
+    <li><strong>Version matrix fragility.</strong> Exact TensorRT/CUDA/driver combos required.</li>
+    <li><strong>NVIDIA-only.</strong> By design.</li>
   </ul>
 
-  <h4 class="numbers">Typical numbers</h4>
-  <p><span class="hw-context">~80-120 tok/s</span> on H100 for 27B Q4_K_M. Fast startup (~5s). Excellent for local inference where simplicity and low resource usage matter more than peak throughput.</p>
+  <h4 class="numbers">Real measured numbers</h4>
+  <p>NVIDIA MLPerf Inference v4.1 (Aug 2024, Llama2-70B Server, 1xH100 SXM, FP8): <span class="hw-context">~24,500 tok/s</span> aggregate at high concurrency. Single-stream Llama3-8B on H100 FP8: <span class="hw-context">~280 tok/s</span>. Llama3-70B single-user on H100 SXM FP8: <span class="hw-context">~95 tok/s</span> per NVIDIA's developer blog. (mlcommons.org; NVIDIA Developer Blog, 2024.)</p>
+
+  <h4 class="code">Code surface</h4>
+<pre><span class="dim"># Build phase (minutes)</span>
+from tensorrt_llm import Builder
+from tensorrt_llm.models import LLaMAForCausalLM
+
+model = LLaMAForCausalLM.from_hugging_face(
+    "meta-llama/Llama-3-8B", dtype="float16")
+builder = Builder()
+network = builder.create_network()
+model.to_trt(network, max_batch_size=8,
+             max_input_len=2048, max_output_len=512)
+engine = builder.build_engine(network)
+engine.save("llama3.engine")
+
+<span class="dim"># Runtime</span>
+from tensorrt_llm.runtime import ModelRunner
+runner = ModelRunner.from_dir("./engines/llama3", rank=0)
+out = runner.generate(input_ids, max_new_tokens=128,
+                      end_id=2, pad_id=2)
+print(tokenizer.decode(out[0]))</pre>
 </div>
 
-<div class="engine">
+<div class="engine-card">
   <div class="engine-header">
     <span class="engine-num">04</span>
-    <span class="engine-name">MLX</span>
+    <span class="engine-name" style="color: var(--engine-llamacpp)">llama.cpp</span>
   </div>
-  <p class="engine-origin">Apple &mdash; Swift/C++ with Metal backend</p>
+  <p class="engine-origin">Georgi Gerganov, March 2023. Started as a weekend port of Llama to C++ with no dependencies; grew into the canonical on-device LLM runtime. Maintainer-led, 800+ contributors. Tied to the <code>ggml</code> tensor library.</p>
 
-  <h4 class="why">Why it is fast</h4>
+  <h4 class="prod">Production use</h4>
+  <p>Runs inside Ollama, LM Studio, Jan, GPT4All, Faraday, and the <code>llama-cpp-python</code> bindings that power a huge share of edge deployments. Obsidian plugins, VS Code extensions, local coding assistants. Production use at cloud scale is rare; production use on one machine is enormous.</p>
+
+  <h4 class="arch">Architecture in detail</h4>
+  <p><strong>Language.</strong> Pure C/C++17 core (<code>ggml.c</code>, <code>llama.cpp</code>), zero external dependencies in the base build. Optional CUDA / HIP / Metal / Vulkan / SYCL / OpenCL backends compiled in.</p>
+  <p><strong>GGUF format.</strong> Single-file container holding model metadata (as a key-value blob) and tensor data laid out for direct memory-mapped consumption. Tensors are stored in the exact quantisation block layout the kernel consumes &mdash; no runtime re-packing. Supersedes GGML and GGJT (May 2023).</p>
+  <p><strong>Quantisation formats.</strong> Q8_0 (8-bit, scale per 32-element block), Q4_0/Q4_1 (legacy 4-bit), and the K-quant family: Q2_K, Q3_K_S/M/L, Q4_K_S/M, Q5_K_S/M, Q6_K. K-quants use a two-level scale structure: 16-element sub-blocks each with their own 6-bit scale, grouped into 256-element super-blocks with a shared FP16 scale. Q4_K_M averages ~4.85 bits/weight and is the common sweet spot. IQ-quants use k-means codebooks for sub-3-bit formats.</p>
+  <p><strong><span class="term" data-term="mmap">mmap</span>-based loading.</strong> <code>mmap</code> the GGUF file and hand the kernels pointers into it. Zero-copy, near-instant startup; the OS pages weights in lazily on first access. Arguably llama.cpp's most copied idea &mdash; Lithos, MLX, and others all do variants of it.</p>
+  <p><strong>Inference loop.</strong> <code>llama_decode()</code> takes a batch of tokens, runs the ggml graph (topologically sorted op list), dispatches each op to the active backend. CUDA backend has hand-written kernels for <code>mul_mat_q</code> (quantised GEMM), <code>rope</code>, <code>rms_norm</code>, <code>soft_max</code>, and fused attention.</p>
+  <p><strong>Memory.</strong> Custom bump allocator (<code>ggml_allocator</code>) for activations; KV cache a single preallocated tensor of shape <code>[n_ctx, n_layer, 2, n_head, d_head]</code>. Paged KV added 2024 but less sophisticated than vLLM's.</p>
+  <p><strong>Scheduling.</strong> Multi-sequence batching via <code>llama_batch</code>; the server example implements continuous batching but is less mature than vLLM.</p>
+
+  <h4 class="why">Every optimization</h4>
   <ul>
-    <li>Unified memory. CPU and GPU share the same physical memory. No PCIe transfers, no explicit copies. The weight tensor allocated by the CPU is the same physical memory the GPU reads. This eliminates the single biggest bottleneck on discrete GPU systems.</li>
-    <li>Lazy evaluation. Operations are recorded but not executed immediately. When results are needed, the framework fuses the recorded operations before dispatching to the GPU. This is implicit kernel fusion without programmer effort.</li>
-    <li>Metal shader compilation. Apple's Metal compiler generates GPU-specific code at runtime. Compile-time specialization bakes constants (layer dimensions, head count) into the shader, enabling the compiler to optimize aggressively.</li>
-    <li>Zero-copy weight loading. Weights are memory-mapped directly into the unified address space. No deserialization, no conversion, no copy. Model load time is bounded by page fault handling, not data movement.</li>
+    <li><strong>Fused dequant-GEMM CUDA kernels</strong> (<code>mul_mat_q*.cu</code>) &mdash; one per quant format, dequant interleaved with FMA. No intermediate FP16 buffer.</li>
+    <li><strong>MMQ kernels on Turing+</strong> use tensor cores for Q4_0/Q8_0 by dequantising into shared memory as INT8 tiles and running <code>mma.sync</code>. K-quants largely miss tensor cores.</li>
+    <li><strong>Flash Attention</strong> port (Gaessler) activated via <code>-fa</code>; custom CUDA with online softmax.</li>
+    <li><strong>Speculative decoding</strong> via <code>--draft</code>.</li>
+    <li><strong>GPU layer offload</strong> (<code>-ngl</code>): run N layers on GPU, rest on CPU.</li>
+    <li><strong>BLAS fallback</strong> via cuBLAS for large FP16 GEMMs at long prompts.</li>
+    <li><strong>Metal backend</strong> (pure MSL) on every Mac; Vulkan for AMD/Intel; SYCL for Intel GPUs.</li>
+    <li><strong>Grammar / JSON-schema constrained decoding</strong> built in.</li>
   </ul>
-
-  <h4 class="arch">Architecture</h4>
-  <p>Swift/C++ framework inspired by the PyTorch API but designed for Apple Silicon from the ground up. Metal backend for GPU compute. The Metal Performance Shaders (MPS) library provides optimized GEMM implementations. simdgroup_matrix instructions on M-series chips provide the equivalent of NVIDIA's tensor cores.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
-    <li>Apple-only. No path to NVIDIA GPUs, no data center deployment, no cloud instances. The fastest Apple Silicon (M4 Ultra) has ~800 GB/s bandwidth vs. 4 TB/s on GH200.</li>
-    <li>Metal compiler is opaque. No equivalent of SASS disassembly. You cannot inspect the generated GPU instructions, verify scheduling decisions, or hand-tune at the instruction level.</li>
-    <li>Cannot control GPU scheduling at instruction level. No equivalent of PTX inline assembly. The programmer cannot specify instruction interleaving, register allocation, or shared memory bank conflict avoidance.</li>
-    <li>Limited to Apple's simdgroup_matrix for tensor ops. The matrix multiply unit is smaller than NVIDIA's tensor cores, and the API surface for controlling it is minimal.</li>
+    <li><strong>Tensor cores underused</strong> for K-quant formats &mdash; peak FLOPS left on the table on Hopper/Ampere.</li>
+    <li><strong>Generic tile sizes.</strong> Same kernel shapes run on RTX 3060 and H100; no per-GPU tactic search.</li>
+    <li><strong>Single-maintainer bandwidth.</strong> Kernels that exist are excellent; kernels that don't (Hopper WGMMA paths) haven't been prioritised.</li>
+    <li><strong>Server mode less mature</strong> than vLLM / TensorRT-LLM for high-concurrency serving.</li>
+    <li><strong>Quality drift in aggressive K-quants.</strong> Q2_K and IQ2 noticeably degrade model quality.</li>
   </ul>
 
-  <h4 class="numbers">Measured on M4 Max 128GB</h4>
-  <p><span class="hw-context">51.1 tok/s</span> for Qwen 27B Q4 with adaptive MTP chain. Given the ~400 GB/s memory bandwidth of M4 Max, this represents solid utilization. The unified memory architecture means zero copy overhead &mdash; a genuine architectural advantage for models that fit in memory.</p>
+  <h4 class="numbers">Real measured numbers</h4>
+  <p>Gerganov's H100 PCIe benchmarks (llama.cpp discussion #4167): Llama-7B Q4_0 <span class="hw-context">~150 tok/s</span>, Q4_K_M <span class="hw-context">~130 tok/s</span>. RTX 4090 Llama-7B Q4_K_M: <span class="hw-context">~135 tok/s</span>. M2 Ultra (Metal) Llama-70B Q4_K_M: <span class="hw-context">~11 tok/s</span>.</p>
+
+  <h4 class="code">Code surface</h4>
+<pre><span class="dim"># Build: make GGML_CUDA=1</span>
+./llama-cli -m Llama-3-8B-Q4_K_M.gguf \
+    -p "Hello, world!" -n 128 -ngl 99
+
+<span class="dim"># Python bindings:</span>
+from llama_cpp import Llama
+llm = Llama(model_path="Llama-3-8B-Q4_K_M.gguf",
+            n_gpu_layers=-1, n_ctx=4096)
+print(llm("Hello", max_tokens=128)["choices"][0]["text"])</pre>
 </div>
 
-<div class="engine">
+<div class="engine-card">
   <div class="engine-header">
     <span class="engine-num">05</span>
-    <span class="engine-name">SGLang</span>
+    <span class="engine-name" style="color: var(--engine-mlx)">MLX</span>
   </div>
-  <p class="engine-origin">UC Berkeley &mdash; Python + PyTorch + FlashInfer</p>
+  <p class="engine-origin">Apple Machine Learning Research. First released December 2023. Awni Hannun, Jagrit Digani, Angelos Katharopoulos et al. Actively developed; the closest architectural peer to <span class="term" data-term="Lithos">Lithos</span>.</p>
 
-  <h4 class="why">Why it is fast</h4>
+  <h4 class="prod">Production use</h4>
+  <p>Every "run LLMs on Mac" app worth its salt uses MLX or llama.cpp. <code>mlx-lm</code> is the reference path for Apple Silicon. LM Studio's Apple Silicon backend, Ollama's Metal path (partly), and a wave of on-device apps for journaling, coding, summarisation run MLX models. Apple uses it internally for on-device model R&amp;D.</p>
+
+  <h4 class="arch">Architecture in detail</h4>
+  <p><strong>Language.</strong> C++ core, Python and Swift frontends. The Python API is NumPy-shaped with a PyTorch-ish <code>nn.Module</code> layer.</p>
+  <p><strong><span class="term" data-term="Unified Memory">Unified memory</span>.</strong> Apple Silicon's unified memory architecture means CPU and GPU share the same physical RAM over a shared memory controller. MLX arrays live in this shared pool; there is no <code>.to("mps")</code> equivalent &mdash; the array <em>is</em> accessible from both.</p>
+  <p><strong>Lazy evaluation.</strong> Every op (<code>mx.matmul(a, b)</code>) returns a placeholder that records the computation without executing. Evaluation happens at <code>mx.eval()</code>, at <code>array.item()</code>, or implicitly when you print. The graph accumulated in between is the fusion opportunity: MLX's compiler walks it and fuses pointwise chains before dispatching.</p>
+  <p><strong><code>mx.compile</code>.</strong> Takes a Python function returning MLX arrays and produces a compiled function: the traced graph is cached, shape-specialised, and the generated Metal shaders are reused across calls. This is MLX's answer to <code>torch.compile</code>, native rather than bolt-on.</p>
+  <p><strong>Kernel source.</strong> Metal Shading Language (MSL) shaders, JIT-compiled by Apple's Metal compiler. GEMMs go to MLX's own <code>steel</code> kernels (template-metaprogrammed MSL using <code>simdgroup_matrix</code> on M3+ for tensor-core-equivalent throughput). Attention has a custom fused SDPA kernel.</p>
+  <p><strong>Inference loop.</strong> For <code>mlx-lm</code>: tokenise &rarr; run the model function (lazy graph) &rarr; <code>mx.eval</code> on the logits &rarr; sample &rarr; loop. KV cache is a list of <code>mx.array</code>s updated in-place.</p>
+
+  <h4 class="why">Every optimization</h4>
   <ul>
-    <li>RadixAttention. A tree-based prefix caching system. Instead of a flat cache, the KV cache is organized as a radix tree where shared prefixes are stored once. Multi-turn conversations and branching prompts reuse cached computation automatically.</li>
-    <li>Optimized scheduling. The scheduler is designed for structured generation workloads &mdash; JSON output, function calling, constrained decoding &mdash; where the generation pattern is known in advance.</li>
-    <li>FlashInfer integration. Uses FlashInfer instead of FlashAttention for the attention kernel. FlashInfer is optimized for variable-length sequences and supports more attention variants.</li>
-    <li>Compressed finite state machine for structured generation. When generating JSON or following a grammar, the valid token set is precomputed and applied during sampling, avoiding wasted decoding steps.</li>
+    <li><strong>Zero-copy weight loading.</strong> Safetensors mmapped; <code>mx.array</code> points into the mapping directly. Model "load" is milliseconds.</li>
+    <li><strong>Lazy + compile fusion.</strong> Pointwise chains fuse into one dispatch by construction.</li>
+    <li><strong><code>simdgroup_matrix</code></strong> on M3/M4 for 16x16 half-precision MMA at tensor-core-equivalent throughput.</li>
+    <li><strong>Quantisation kernels</strong> for 2/3/4/6/8-bit group-quantised weights; dequant fused into matmul.</li>
+    <li><strong>Distributed via MPI</strong> for multi-Mac inference (Llama-3-405B across three M2 Ultras, 2024).</li>
+    <li><strong>Graph-level CSE and constant folding</strong> during the compile pass.</li>
   </ul>
-
-  <h4 class="arch">Architecture</h4>
-  <p>Python frontend with a focus on the programming model &mdash; structured generation, multi-turn conversation, branching, and constrained decoding. The backend shares the same PyTorch + FlashInfer foundation as other Python engines. Differentiated by the programming interface more than the kernel layer.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
-    <li>Same PyTorch/cuBLAS foundation as vLLM. The kernel-level performance ceiling is similar. Gains come from better scheduling and caching, not from faster kernels.</li>
-    <li>Python scheduling overhead. Same fundamental limitation as vLLM &mdash; the critical path includes Python execution between GPU kernel launches.</li>
-    <li>Differentiated by programming model more than raw speed. If your workload is simple text generation, SGLang and vLLM perform similarly. SGLang shines on structured, multi-step, branching workloads.</li>
+    <li><strong>Apple-only.</strong> No path to NVIDIA / AMD / Intel GPUs.</li>
+    <li><strong>Bandwidth ceiling.</strong> M4 Max ~546 GB/s, M2 Ultra 800 GB/s, M3 Ultra 819 GB/s &mdash; vs 4 TB/s on GH200.</li>
+    <li><strong>Opaque Metal compiler.</strong> No <span class="term" data-term="SASS">SASS</span>-equivalent disassembly; you cannot inspect the generated GPU ISA.</li>
+    <li><strong>No instruction-level control.</strong> No inline assembly equivalent of PTX; <code>simdgroup_matrix</code> is the floor.</li>
+    <li><strong>Smaller ecosystem.</strong> Fewer quantisation formats than llama.cpp, no vLLM-class server, limited speculative decoding.</li>
   </ul>
 
-  <h4 class="numbers">Typical numbers</h4>
-  <p>Comparable to vLLM: <span class="hw-context">~150-180 tok/s</span> on H100 for 27B quantized models. The advantage is in multi-request scenarios where RadixAttention reuse is high &mdash; structured generation throughput can be 2-5x higher than naive approaches.</p>
+  <h4 class="numbers">Real measured numbers</h4>
+  <p>Published <code>mlx-lm</code> benchmarks: Llama-3-8B Q4 on M2 Ultra <span class="hw-context">~69 tok/s</span>; M3 Max <span class="hw-context">~85 tok/s</span>; M4 Max <span class="hw-context">~95 tok/s</span>. Our Qwen-27B Q4 with adaptive MTP chain on M4 Max 128 GB: <span class="hw-context">51.1 tok/s</span>. Llama-70B Q4 on M2 Ultra: <span class="hw-context">~12 tok/s</span>.</p>
+
+  <h4 class="arch">How it compares to Lithos</h4>
+  <p>Architecturally the closest peer: both reject framework overhead, both build on unified memory, both are language + engine in one. Diverges on (1) hardware &mdash; Apple Silicon vs. Hopper; (2) compiler transparency &mdash; opaque Metal vs. inspectable PTX/SASS; (3) instruction control &mdash; <code>simdgroup_matrix</code> floor for MLX vs. Lithos emitting <code>mma.sync.m16n8k16</code> directly; (4) scope &mdash; MLX includes autograd and training, Lithos is inference-only.</p>
+
+  <h4 class="code">Code surface</h4>
+<pre><span class="dim"># pip install mlx-lm</span>
+from mlx_lm import load, generate
+
+model, tokenizer = load("mlx-community/Llama-3-8B-4bit")
+text = generate(model, tokenizer,
+                prompt="Hello, world!",
+                max_tokens=128, verbose=True)
+print(text)</pre>
 </div>
 
-<div class="engine">
+<div class="engine-card">
   <div class="engine-header">
     <span class="engine-num">06</span>
-    <span class="engine-name">ExLlamaV2</span>
+    <span class="engine-name" style="color: var(--engine-sglang)">SGLang</span>
   </div>
-  <p class="engine-origin">turboderp &mdash; Python + custom CUDA extensions</p>
+  <p class="engine-origin">UC Berkeley, Stanford, CMU, xAI collaboration. Lianmin Zheng et al.; NeurIPS '24 paper "SGLang: Efficient Execution of Structured Language Model Programs." First release January 2024. Very active; runs production at xAI for Grok serving.</p>
 
-  <h4 class="why">Why it is fast</h4>
+  <h4 class="prod">Production use</h4>
+  <p>xAI serves Grok on SGLang. ByteDance, LMSYS, and several Chinese clouds run it. HuggingFace TGI has adopted chunks of its scheduler ideas. Growing fast in 2024&ndash;2026 as the serious alternative to vLLM for high-throughput serving.</p>
+
+  <h4 class="arch">Architecture in detail</h4>
+  <p><strong>Language.</strong> Python runtime, PyTorch, FlashInfer for attention, Triton for several custom kernels. Same foundation as vLLM &mdash; differentiation is above the kernel layer.</p>
+  <p><strong>RadixAttention &mdash; the key idea.</strong> Instead of vLLM's hash-keyed block cache, SGLang maintains the KV cache as a <strong>radix tree</strong> keyed on token prefixes. Each node represents a token sequence; edges share common prefixes. When a new request arrives, the scheduler walks the tree from root matching the prompt tokens; every matched node's KV blocks are reused. Branches (beam search, parallel sampling, multi-turn chat rewrites) all live in the tree naturally. LRU eviction at leaves keeps the tree within memory budget. Result: the common-prefix case ("you are a helpful assistant") has 100% reuse without any explicit toggle.</p>
+  <p><strong>Structured generation via compressed FSM.</strong> For JSON-schema or regex-constrained output, SGLang compiles the grammar to a finite-state machine, then compresses runs of tokens that can only transition one way into a single jump &mdash; so "generate a 16-character UUID" emits the fixed prefix in one forward pass rather than token-by-token. Outlines-style mask-based constrained decoding is also supported but the compressed-FSM path is the novel contribution.</p>
+  <p><strong>Zero-overhead scheduler.</strong> v0.3+ batches the scheduler's own Python work so one forward-pass tick overlaps with CPU scheduling for the next tick &mdash; effectively hiding the Python cost.</p>
+  <p><strong>Inference loop.</strong> <code>TokenizerManager</code> &rarr; <code>Scheduler</code> (radix tree, batch assembly) &rarr; <code>TpModelWorker</code> (PyTorch forward, FlashInfer attention) &rarr; <code>DetokenizerManager</code>. Prefill and decode mix in one batch.</p>
+
+  <h4 class="why">Every optimization</h4>
   <ul>
-    <li>Hand-optimized CUDA kernels for EXL2 quantization. EXL2 uses mixed-precision, per-layer bit allocation &mdash; important layers get more bits, unimportant layers get fewer. The kernels are written specifically for this mixed format.</li>
-    <li>Custom attention implementation. Not FlashAttention, not cuBLAS &mdash; a from-scratch attention kernel tuned for single-user, single-GPU inference. Avoids the overhead of general-purpose libraries.</li>
-    <li>Extremely efficient memory usage. The EXL2 format achieves high compression ratios with minimal quality loss by letting the quantizer allocate bits where they matter most. 3.5 bits per weight average is common.</li>
+    <li><strong>RadixAttention</strong> prefix reuse without configuration.</li>
+    <li><strong>Compressed FSM</strong> for structured generation.</li>
+    <li><strong>Overlap scheduler</strong> (zero Python overhead in steady state).</li>
+    <li><strong>FlashInfer attention</strong> &mdash; variable-length batches, GQA-aware, paged KV, Hopper FA-3 paths.</li>
+    <li><strong>Continuous batching with chunked prefill.</strong></li>
+    <li><strong>Speculative decoding</strong> (EAGLE, Medusa) first-class.</li>
+    <li><strong>Quantisation</strong> via Marlin / AWQ / FP8 shared with the ecosystem.</li>
+    <li><strong>Multi-LoRA</strong> with batched LoRA matmuls.</li>
+    <li><strong>Tensor / data / expert parallelism</strong> across GPUs.</li>
   </ul>
-
-  <h4 class="arch">Architecture</h4>
-  <p>Python wrapper around custom CUDA extensions. The Python layer handles model loading and high-level control. The CUDA extensions handle all compute. Focused entirely on single-GPU, single-user inference &mdash; no multi-GPU, no serving layer, no batching infrastructure.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
-    <li>Single-GPU only. No tensor parallelism, no pipeline parallelism. The model must fit in one GPU's memory.</li>
-    <li>Limited batching. Designed for one user at a time. Not suitable for server deployment with concurrent requests.</li>
-    <li>One-developer project. Like llama.cpp, the optimization scope is limited by one person's bandwidth. But the kernels that exist are very well optimized.</li>
-    <li>EXL2 quantization format is not universally supported. Models must be quantized specifically for ExLlamaV2. Cannot use GPTQ, AWQ, or GGUF weights directly.</li>
+    <li><strong>Same PyTorch/cuBLAS floor</strong> as vLLM.</li>
+    <li><strong>Startup time similar to vLLM</strong> (~30&ndash;120 s cold).</li>
+    <li><strong>Radix-tree metadata overhead</strong> small but non-zero; adversarial prompt patterns can fragment.</li>
+    <li><strong>Thinner docs</strong> than vLLM; fewer quantisation backends out of the box.</li>
+    <li><strong>DSL incomplete.</strong> Original SGLang frontend is still evolving; most users just use the OpenAI-compatible server.</li>
   </ul>
 
-  <h4 class="numbers">Typical numbers</h4>
-  <p><span class="hw-context">~100-150 tok/s</span> on RTX 4090 for 27B models. Among the fastest options for single-GPU consumer hardware. The per-layer bit allocation means you can often fit larger models than with uniform quantization.</p>
+  <h4 class="numbers">Real measured numbers</h4>
+  <p>LMSYS benchmarks (Sept 2024): Llama-3-70B on 8xH100 SXM at concurrency 128 &mdash; SGLang v0.3 <span class="hw-context">~5,200 tok/s</span> vs. vLLM v0.5.4 <span class="hw-context">~3,900 tok/s</span>, a 30&ndash;40% edge. Single-stream decode comparable: <span class="hw-context">~170&ndash;190 tok/s</span> on H100 for 27B quantised.</p>
+
+  <h4 class="code">Code surface</h4>
+<pre><span class="dim"># pip install "sglang[all]"</span>
+<span class="dim"># python -m sglang.launch_server --model-path meta-llama/Llama-3-8B --port 30000</span>
+
+import sglang as sgl
+sgl.set_default_backend(sgl.RuntimeEndpoint("http://localhost:30000"))
+
+@sgl.function
+def chat(s, q):
+    s += "You are helpful.\n" + sgl.user(q)
+    s += sgl.assistant(sgl.gen("a", max_tokens=128))
+
+print(chat.run(q="Hello!")["a"])</pre>
 </div>
 
-<div class="engine">
+<div class="engine-card">
   <div class="engine-header">
     <span class="engine-num">07</span>
-    <span class="engine-name">MLC-LLM / Apache TVM</span>
+    <span class="engine-name" style="color: var(--engine-exllama)">ExLlamaV2</span>
   </div>
-  <p class="engine-origin">OctoAI / Apache Foundation &mdash; compiler-based approach</p>
+  <p class="engine-origin">turboderp. ExLlama v1 mid-2023; ExLlamaV2 with the EXL2 format landed September 2023. A one-person project with periodic contributors.</p>
 
-  <h4 class="why">Why it is fast</h4>
+  <h4 class="prod">Production use</h4>
+  <p>Default backend in Oobabooga's <code>text-generation-webui</code> for GPTQ/EXL2 weights; widely used by self-hosters on single-GPU consumer hardware (RTX 3090, 4090, 5090). TabbyAPI wraps it with an OpenAI-compatible server. Not used at data-centre scale.</p>
+
+  <h4 class="arch">Architecture in detail</h4>
+  <p><strong>Language.</strong> Python frontend, custom CUDA C++ extensions for every performance-critical kernel. Compiled against PyTorch for tensor interop but bypasses cuBLAS entirely.</p>
+  <p><strong>EXL2 quantization format &mdash; per-layer bit allocation.</strong> GPTQ/AWQ quantise every weight to the same bit depth. EXL2 instead runs a calibration pass, measures per-layer / per-row reconstruction error at 2/3/4/5/6/8-bit candidates, and solves an integer program: "minimise total bits subject to a target perplexity increase." The result is a mixed-precision file where sensitive layers (first and last MLPs, certain attention heads) carry 6 or 8 bits while tolerant layers go down to 2.5 or 3. Typical average 3.5&ndash;4.5 bits/weight for quality comparable to uniform 4-bit.</p>
+  <p><strong>Kernel sources.</strong> Entirely custom. <code>q_gemm.cu</code>, <code>q_attn.cu</code>, <code>q_mlp.cu</code>: hand-written CUDA for mixed-precision dequant + GEMM with the EXL2 header-per-row layout. Attention uses FlashAttention-2 via upstream's C++ interface.</p>
+  <p><strong>Inference loop.</strong> <code>ExLlamaV2DynamicGenerator</code> manages a paged KV cache (2024) and runs continuous batching in Python; the hot path is a single custom <code>forward()</code> calling the CUDA extensions.</p>
+
+  <h4 class="why">Every optimization</h4>
   <ul>
-    <li>Compiler-based kernel generation. TVM auto-schedules kernels for the target hardware &mdash; analyzing the computation graph and generating hardware-specific code. No hand-written kernels needed (in theory).</li>
-    <li>Cross-platform. The same model definition compiles to CUDA, Metal, Vulkan, OpenCL, and WebGPU. One optimization framework for every backend.</li>
-    <li>Can target mobile and edge devices. The compiler generates lightweight inference code for phones, browsers, and embedded systems &mdash; platforms where PyTorch cannot run.</li>
+    <li><strong>Per-layer bit allocation</strong> (above).</li>
+    <li><strong>Hand-written mixed-precision GEMM</strong> fused with dequant; shared-memory double-buffering; tensor cores via <code>mma.sync</code>.</li>
+    <li><strong>Custom rotary, RMSNorm, SwiGLU</strong> kernels &mdash; no cuBLAS in the hot path.</li>
+    <li><strong>Speculative decoding</strong> with draft models.</li>
+    <li><strong>Dynamic batching</strong> via the generator class.</li>
+    <li><strong>CFG</strong> and advanced sampling (min-P, quadratic) built in.</li>
+    <li><strong>Q4 KV cache</strong> for long-context memory savings.</li>
   </ul>
-
-  <h4 class="arch">Architecture</h4>
-  <p>Python model definition &rarr; TVM intermediate representation &rarr; auto-scheduling and optimization &rarr; target-specific compiled code. The auto-scheduler searches the space of possible implementations (tile sizes, loop orderings, vectorization strategies) and selects the fastest on the target hardware.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
-    <li>Compilation time. Auto-scheduling requires profiling thousands of candidate implementations. Full model compilation can take hours.</li>
-    <li>Auto-scheduling may not match hand-tuned kernels. The search space is vast but the search is heuristic. On specific hardware, a hand-written kernel by someone who understands the architecture will often win.</li>
-    <li>Complex toolchain. TVM, LLVM, target-specific compilers, the auto-scheduler, the runtime &mdash; many moving parts, each with their own version requirements.</li>
+    <li><strong>Single-GPU only.</strong> No tensor parallel.</li>
+    <li><strong>EXL2 format is niche.</strong> Cannot load GGUF, AWQ, or standard GPTQ weights directly.</li>
+    <li><strong>Small maintainer bandwidth.</strong> New architectures land weeks after vLLM.</li>
+    <li><strong>Batching is afterthought.</strong> Single-user-first.</li>
+    <li><strong>No FP8 / no Hopper-native kernels</strong> &mdash; tuned for Ampere/Ada.</li>
   </ul>
 
-  <h4 class="numbers">Typical numbers</h4>
-  <p><span class="hw-context">~120-150 tok/s</span> on high-end NVIDIA GPUs for 27B quantized models. Competitive but rarely the fastest on any single platform. The value proposition is breadth &mdash; reasonable performance everywhere rather than peak performance somewhere.</p>
+  <h4 class="numbers">Real measured numbers</h4>
+  <p>turboderp's published benchmarks: Llama-3-70B EXL2 4.0bpw on RTX 4090: <span class="hw-context">~35 tok/s</span>. Llama-3-8B EXL2 6.0bpw on RTX 4090: <span class="hw-context">~135 tok/s</span>. RTX 3090 8B: ~100 tok/s.</p>
+
+  <h4 class="code">Code surface</h4>
+<pre><span class="dim"># pip install exllamav2</span>
+from exllamav2 import ExLlamaV2, ExLlamaV2Config, ExLlamaV2Cache
+from exllamav2 import ExLlamaV2Tokenizer
+from exllamav2.generator import ExLlamaV2DynamicGenerator
+
+cfg = ExLlamaV2Config("./Llama-3-8B-exl2-6.0bpw")
+model = ExLlamaV2(cfg); model.load()
+cache = ExLlamaV2Cache(model, max_seq_len=8192)
+tok = ExLlamaV2Tokenizer(cfg)
+gen = ExLlamaV2DynamicGenerator(model, cache, tok)
+print(gen.generate("Hello", max_new_tokens=128))</pre>
 </div>
 
-<div class="engine">
+<div class="engine-card">
   <div class="engine-header">
     <span class="engine-num">08</span>
-    <span class="engine-name">Lithos</span>
+    <span class="engine-name" style="color: var(--engine-mlc)">MLC-LLM / Apache TVM</span>
   </div>
-  <p class="engine-origin">This project &mdash; Forth/Rust, direct PTX/SASS emission</p>
+  <p class="engine-origin">Apache TVM founded by Tianqi Chen (SAMPL, U. Washington, 2017). MLC-LLM built on TVM Unity, released mid-2023, led by CMU Catalyst and OctoAI (now part of NVIDIA). Active but slower cadence than vLLM/SGLang.</p>
+
+  <h4 class="prod">Production use</h4>
+  <p>The go-to path for <em>weird targets</em>: WebLLM (Llama running in a browser tab via WebGPU, used by Chatbot Arena's in-browser demos), Android and iOS (MLC Chat app), AMD RX 7900 XTX (ROCm), Intel Arc (Vulkan). Rarely chosen on pure NVIDIA where vLLM / TensorRT-LLM dominate.</p>
+
+  <h4 class="arch">Architecture in detail</h4>
+  <p><strong>Language.</strong> Python frontend (model definition via <code>tvm.relax</code> or PyTorch import), TVM's Relax IR, TIR (tensor IR), and the MetaSchedule auto-scheduler. Emits target-specific code: PTX (via nvcc), SPIR-V (Vulkan/WebGPU), Metal (MSL), OpenCL, HIP.</p>
+  <p><strong>Compilation pipeline.</strong> Relax graph &rarr; operator-level fusion passes &rarr; TIR lowering &rarr; MetaSchedule auto-tuning (search over tile sizes, loop orderings, vectorisation, software-pipelining decisions with an XGBoost-based cost model) &rarr; target code generation &rarr; runtime library.</p>
+  <p><strong>Target-agnostic auto-scheduling.</strong> The scheduler profiles candidates on the actual target device; for CUDA this means nvcc + ptxas + measurement loops. Full tuning for one model can take hours.</p>
+  <p><strong>Runtime.</strong> Minimal C++ (<code>tvm_runtime</code>) that loads a compiled module (<code>.so</code>/<code>.wasm</code>/<code>.metallib</code>) and executes fused kernel calls. WebLLM ships this runtime as WebAssembly alongside WebGPU shaders.</p>
+
+  <h4 class="why">Every optimization</h4>
+  <ul>
+    <li><strong>MetaSchedule auto-tuning</strong> for per-shape kernel specialisation.</li>
+    <li><strong>Fusion passes</strong> at Relax and TIR levels.</li>
+    <li><strong>Quantisation</strong> (AWQ, GPTQ, group-quant) lowered to target-specific kernels.</li>
+    <li><strong>Cross-platform fast attention</strong> on every backend.</li>
+    <li><strong>Speculative decoding</strong> in MLC-LLM proper.</li>
+    <li><strong>WebGPU code generation</strong> &mdash; LLMs in a browser are a real feature, not a demo.</li>
+  </ul>
+
+  <h4 class="tradeoffs">Tradeoffs</h4>
+  <ul>
+    <li><strong>Auto-scheduling rarely beats hand-written kernels</strong> on flagship NVIDIA. CUTLASS / FlashAttention authors hand-tune with knowledge the cost model lacks.</li>
+    <li><strong>Long compile times.</strong> Minutes to hours for full tuning.</li>
+    <li><strong>Toolchain complexity.</strong> TVM, LLVM, target compilers, Python bindings &mdash; version skew breaks builds.</li>
+    <li><strong>Thinner serving story</strong> than vLLM/SGLang.</li>
+    <li><strong>Breadth vs. depth.</strong> Reasonable performance everywhere rather than peak performance somewhere.</li>
+  </ul>
+
+  <h4 class="numbers">Real measured numbers</h4>
+  <p>MLC-LLM blog (Oct 2023) on RTX 4090 Llama-2-7B Q4: <span class="hw-context">~165 tok/s</span> (tied with ExLlama at the time). WebLLM Llama-3-8B Q4 in Chrome on M3 Max: <span class="hw-context">~25&ndash;30 tok/s</span>. AMD RX 7900 XTX Llama-3-8B Q4: <span class="hw-context">~60&ndash;75 tok/s</span> &mdash; significantly faster than llama.cpp's ROCm path.</p>
+
+  <h4 class="code">Code surface</h4>
+<pre><span class="dim"># pip install mlc-llm-nightly mlc-ai-nightly</span>
+from mlc_llm import MLCEngine
+
+engine = MLCEngine("HF://mlc-ai/Llama-3-8B-Instruct-q4f16_1-MLC")
+for chunk in engine.chat.completions.create(
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=True):
+    print(chunk.choices[0].delta.content, end="")</pre>
+</div>
+
+<div class="engine-card">
+  <div class="engine-header">
+    <span class="engine-num">09</span>
+    <span class="engine-name">DeepSpeed-Inference / DeepSpeed-FastGen</span>
+  </div>
+  <p class="engine-origin">Microsoft DeepSpeed team (Rasley, Rajbhandari, He). DeepSpeed-Inference: 2022. DeepSpeed-FastGen: Nov 2023. Less active in 2025 than in 2022&ndash;2023; momentum shifted to vLLM/SGLang.</p>
+
+  <h4 class="prod">Production use</h4>
+  <p>Historically Microsoft's Azure OpenAI serving stack for large-model inference (Turing, MT-NLG, early GPT-3.5 paths) and BLOOM-176B's HuggingFace demo. Still used internally at Microsoft. Rarely chosen for new open-source deployments today.</p>
+
+  <h4 class="arch">Architecture in brief</h4>
+  <p>Python runtime on top of PyTorch with custom CUDA kernels (<code>deepspeed_inference_ops</code>) for fused QKV+attention and fused MLP. <strong>Dynamic SplitFuse</strong> is FastGen's core contribution: long prompts split into chunks and interleaved with decode-token forward passes in one batch &mdash; similar to vLLM's chunked prefill. <strong>ZeRO-Inference</strong> streams weights from CPU/NVMe on demand for models too big to fit on one GPU.</p>
+
+  <h4 class="tradeoffs">Tradeoffs</h4>
+  <ul>
+    <li>Momentum lost to vLLM/SGLang.</li>
+    <li>Narrower quantisation support.</li>
+    <li>Dense configuration API that changes across versions.</li>
+  </ul>
+
+  <h4 class="numbers">Reported numbers</h4>
+  <p>DeepSpeed-FastGen blog (Nov 2023): Llama-2-70B / 4xA100, claimed <span class="hw-context">~2.3x</span> higher throughput vs. vLLM at the time. vLLM has since closed and inverted the gap in many workloads.</p>
+
+  <h4 class="code">Code surface</h4>
+<pre>import mii
+client = mii.serve("meta-llama/Llama-2-7b-hf",
+                   tensor_parallel=1, replica_num=1)
+print(client.generate("Hello", max_new_tokens=128)[0].generated_text)</pre>
+</div>
+
+<div class="engine-card">
+  <div class="engine-header">
+    <span class="engine-num">10</span>
+    <span class="engine-name">NVIDIA Triton Inference Server</span>
+  </div>
+  <p class="engine-origin">NVIDIA, 2018. A generic inference server that hosts backends rather than implementing inference itself. Not to be confused with OpenAI's Triton DSL.</p>
+
+  <h4 class="prod">Production use</h4>
+  <p>Core of NVIDIA NIM, used at Meta, Amazon, Microsoft, and essentially every NVIDIA-stack enterprise deployment. Not a competitor to vLLM/TensorRT-LLM &mdash; it <em>hosts</em> them as backends, adding HTTP/gRPC APIs, dynamic batching across models, multi-model ensembles, metrics, health checks.</p>
+
+  <h4 class="arch">Architecture in brief</h4>
+  <p>C++ server with pluggable backends: <code>tensorrtllm_backend</code>, <code>vllm_backend</code>, <code>python_backend</code>, ONNX Runtime, PyTorch, TensorFlow. Dynamic batcher, sequence batcher, and request scheduler run in-process. Model ensembles compose multiple backends into a DAG (useful for RAG + reranker + generator pipelines).</p>
+
+  <h4 class="tradeoffs">Tradeoffs</h4>
+  <p>Complex for one-model serving; its power is in heterogeneous or high-scale deployments. Not an engine itself &mdash; included here only so you don't mistake it for one.</p>
+</div>
+
+<div class="engine-card">
+  <div class="engine-header">
+    <span class="engine-num">11</span>
+    <span class="engine-name" style="color: var(--engine-lithos)"><span class="term" data-term="Lithos">Lithos</span></span>
+  </div>
+  <p class="engine-origin">This project. A <span class="term" data-term="Forth">Forth</span>-derived language that happens to host an inference engine. Framework <em>and</em> engine, like MLX.</p>
+
+  <p><strong>Lithos is a language first.</strong> <code>core.fs</code> (255 lines) and <code>patterns.fs</code> (1,204 lines) define a Forth vocabulary whose words emit PTX. The Python in <code>src/</code> is a temporary host runtime until the language self-hosts.</p>
 
   <h4 class="why">Why it will be fast</h4>
   <ul>
-    <li>Direct PTX/SASS emission. No compiler chain between the programmer and the GPU. The Forth-derived language emits PTX instructions directly; the planned SASS backend will emit binary GPU instructions. Every scheduling decision is explicit.</li>
-    <li>Fused mega-kernels. One kernel per transformer layer. RMSNorm, attention, GEMV, activation, residual &mdash; all fused into a single kernel launch. Intermediate results stay in registers and shared memory. No HBM round-trips between operations.</li>
-    <li>mmap weight loading on unified memory (GH200). Weights are memory-mapped from NVMe. On GH200's unified memory, the GPU reads weights directly from the mapped region &mdash; no staging through CPU memory, no explicit transfers. Startup time is bounded by the first page faults, not by bulk data movement.</li>
-    <li>No framework, no Python in the inference path. The runtime is Rust calling the CUDA driver API. No PyTorch, no cuBLAS, no Python interpreter. The entire dispatch path is compiled native code.</li>
-    <li>DeltaNet-native kernels. Lithos is being designed around DeltaNet, a linear-complexity attention alternative. The kernel architecture is optimized for DeltaNet's access patterns from the start, rather than retrofitting a transformer engine.</li>
-    <li>132 KB of cubins replacing 800 MB of cuBLAS. The entire kernel payload is smaller than a single cuBLAS kernel. Less code to load, less instruction cache pressure, faster startup.</li>
+    <li><strong>Direct PTX/SASS emission.</strong> No compiler chain between the programmer and the GPU. Forth words emit PTX; the planned SASS backend emits binary GPU instructions. Every scheduling decision is explicit.</li>
+    <li><strong>Fused mega-kernels.</strong> One kernel per transformer layer. RMSNorm, attention, GEMV, activation, residual &mdash; all fused into a single launch. No HBM round-trips between ops.</li>
+    <li><strong>mmap weight loading on unified memory (GH200).</strong> <code>mmap</code> sets up virtual address mappings in <span class="hw-context">~9 ms</span> with zero weight bytes in memory. PyTorch's 3&ndash;5 s "load" copies all 18 GB into RAM/HBM before returning. On GH200's unified memory, the GPU reads resident pages directly at 900 GB/s (NVLink-C2C) or 4 TB/s (HBM3e) after hardware page migration.</li>
+    <li><strong>No framework, no Python in the inference path.</strong> Runtime is Rust calling the CUDA driver API. Launch overhead: <span class="hw-context">2.3 &micro;s</span> (Lithos) vs <span class="hw-context">4.48 &micro;s</span> (cuBLAS).</li>
+    <li><strong><span class="term" data-term="DeltaNet">DeltaNet</span>-native kernels.</strong> Optimised for DeltaNet's access patterns from the start.</li>
+    <li><strong>32 KB of cubins replacing 800 MB of cuBLAS</strong> &mdash; 25,000x reduction. Cubin load: 0.092 ms for all 7 kernels.</li>
   </ul>
 
   <h4 class="arch">Architecture</h4>
-  <p>Forth-derived language &rarr; PTX assembly &rarr; CUDA driver API (cuModuleLoadData, cuLaunchKernel) &rarr; GPU execution. The Forth words encode known-good patterns: memory access strategies, instruction interleaving, register allocation. The programmer composes these patterns; the system emits the corresponding PTX.</p>
+  <p>Two layers: language and engine. The language is Forth: <code>core.fs</code> + <code>patterns.fs</code> (1,459 lines) define words that emit PTX, plus <code>sass/emit-sass.fs</code> for raw SASS. The engine is the host runtime that invokes the Forth, calls <code>ptxas</code>, loads the cubin via <code>cuModuleLoadData</code>, and dispatches with <code>cuLaunchKernel</code>.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
-    <li>Not yet running full inference. Proof of life is passing. Kernels compile. The engine skeleton works. But end-to-end model inference is not yet demonstrated.</li>
-    <li>Extreme programming model. Writing GPU code in a Forth dialect is not accessible to most developers. The tradeoff is maximum control for minimum audience.</li>
-    <li>Single-hardware target initially. Optimized for GH200 (SM 9.0). Porting to other architectures requires new SASS patterns.</li>
+    <li><strong>Not yet running full inference.</strong> Proof of life passing; kernels compile; engine skeleton works. End-to-end model inference not yet demonstrated.</li>
+    <li><strong>Extreme programming model.</strong> Writing GPU code in a Forth dialect is not accessible to most developers.</li>
+    <li><strong>Single-hardware target initially.</strong> Optimised for GH200 (SM 9.0).</li>
   </ul>
 
   <h4 class="numbers">Targets</h4>
-  <p><span class="hw-context">&gt;400 tok/s</span> single stream. <span class="hw-context">&lt;2s startup</span>. <span class="hw-context">&gt;70% bandwidth utilization at batch=1</span>. These targets come from first-principles analysis of the GH200's memory subsystem: 4 TB/s bandwidth, 14 GB weights at Q4, fused kernels that eliminate inter-operation gaps.</p>
+  <p><span class="hw-context">&gt;400 tok/s</span> single stream (vs vLLM's measured 179 tok/s &mdash; 2.2x). <span class="hw-context">&lt;2 s startup</span>. <span class="hw-context">&gt;70%</span> bandwidth utilization at batch=1, with measured <span class="hw-context">3.59 TB/s</span> (90%) achievable on HBM3e.</p>
+
+  <h4 class="code">Code surface (target)</h4>
+<pre><span class="dim">\ Forth: one transformer layer as a fused kernel</span>
+: transformer-layer ( -- )
+    rmsnorm-inplace
+    qkv-project
+    rope-in-regs
+    attn-online-softmax
+    out-project +=
+    rmsnorm-fused
+    swiglu-fused
+    down-project += ;
+
+<span class="dim"># Host (Rust):</span>
+<span class="dim"># let model = Lithos::mmap("./qwen-27b-w4.safetensors")?;</span>
+<span class="dim"># let out = model.generate("Hello", 128)?;</span></pre>
 </div>
 
 </section>
 
-<!-- Comparison Table -->
+<section id="libraries">
+<h2>Component Libraries (Not Engines)</h2>
+
+<p>These are building blocks, not engines. An inference engine orchestrates model loading, memory management, request scheduling, and token generation. These libraries provide individual kernels that engines call. Confusing the two leads to category errors &mdash; <span class="term" data-term="FlashAttention">FlashAttention</span> does not "compete with" vLLM; vLLM uses FlashAttention.</p>
+
+<div class="engine-card">
+  <div class="engine-header">
+    <span class="engine-name" style="color: var(--engine-flashattn)">FlashAttention / FlashAttention-2/3 / FlashInfer</span>
+  </div>
+  <p class="engine-origin">Tri Dao (Princeton, later TogetherAI). FlashAttention: NeurIPS 2022. FlashAttention-2: July 2023. FlashAttention-3: July 2024 (with Colfax Research and NVIDIA). FlashInfer: Zihao Ye et al., Sept 2024.</p>
+
+  <h4 class="arch">The algorithm &mdash; <span class="term" data-term="Tiled Attention">tiled attention</span> with <span class="term" data-term="Online Softmax">online softmax</span></h4>
+  <p>Naive attention materialises an N&times;N matrix <code>S = QK<sup>T</sup>/sqrt(d)</code>, softmaxes it, then multiplies by V. At N=16k that matrix is <span class="hw-context">256M entries &times; 4 bytes = 1 GB</span>, written to HBM and read back &mdash; disastrous for bandwidth.</p>
+  <p>FlashAttention avoids materialising S by tiling. Load a block of Q rows into SRAM (shared memory). Stream blocks of K and V through SRAM one tile at a time; for each tile, compute partial <code>QK<sup>T</sup></code>, apply an <strong>online softmax</strong> update that maintains running max and denominator, and accumulate weighted V into the output tile. The output row is complete when all K/V tiles have streamed through. Result: O(N) HBM reads/writes instead of O(N&sup2;); the attention matrix never leaves shared memory.</p>
+  <p><strong>Online softmax</strong> is the key math trick. For two partial sums <code>s<sub>1</sub> = &Sigma; exp(x<sub>i</sub> - m<sub>1</sub>)</code> and <code>s<sub>2</sub> = &Sigma; exp(x<sub>j</sub> - m<sub>2</sub>)</code> with maxima <code>m<sub>1</sub>, m<sub>2</sub></code>, the combined sum with new max <code>m = max(m<sub>1</sub>, m<sub>2</sub>)</code> is <code>e<sup>m<sub>1</sub>-m</sup>&middot;s<sub>1</sub> + e<sup>m<sub>2</sub>-m</sup>&middot;s<sub>2</sub></code>. This lets you process the sequence in blocks and combine results without ever holding the full S matrix.</p>
+
+  <h4 class="arch">Versions and what changed</h4>
+  <ul>
+    <li><strong>FlashAttention (2022).</strong> Original tiled algorithm; CUDA/Turing/Ampere.</li>
+    <li><strong>FlashAttention-2 (2023).</strong> Rewrites the kernel to parallelise across sequence length, reduces non-matmul FLOPs, better work partitioning. ~2x faster than v1 on A100.</li>
+    <li><strong>FlashAttention-3 (2024).</strong> Hopper-specific. Uses <strong>TMA</strong> (Tensor Memory Accelerator) for async bulk loads, warp-specialisation (producer warps do TMA, consumer warps do WGMMA), and FP8. Claims 1.5&ndash;2.0x over FA-2 on H100.</li>
+    <li><strong>FlashInfer (2024).</strong> Not a new algorithm; a <em>kernel suite</em> with variable-length batching, paged KV, GQA-awareness, append-only prefill, and prefix-sharing prefill &mdash; the operations modern servers actually need. Used by SGLang and optionally by vLLM.</li>
+  </ul>
+
+  <h4 class="tradeoffs">Build fragility</h4>
+  <p>FlashAttention kernels are hand-written CUDA with heavy template instantiation. Compilation takes <span class="hw-context">10&ndash;30 minutes</span> and several GB of RAM; the prebuilt wheels on PyPI match only specific CUDA + PyTorch + Python + arch combinations (e.g. <code>flash-attn-2.5.8+cu122torch2.3cxx11abiFALSE-cp311-cp311-linux_x86_64.whl</code>). A mismatched wheel silently imports but crashes at first forward with an opaque symbol error.</p>
+
+  <h4 class="prod">Used by</h4>
+  <p>vLLM (default), SGLang (via FlashInfer), TensorRT-LLM (FA-2-derived FMHA), PyTorch's <code>scaled_dot_product_attention</code>, HuggingFace TGI, llama.cpp (Gaessler port). Not an engine &mdash; no model loading, no scheduling, no serving. Just the attention kernel.</p>
+</div>
+
+<div class="engine-card">
+  <div class="engine-header">
+    <span class="engine-name" style="color: var(--engine-cublas)">cuBLAS / cuBLASLt</span>
+  </div>
+  <p class="engine-origin">NVIDIA. cuBLAS since CUDA 1.0 (2007); cuBLASLt since CUDA 10.1 (2019). Closed source, ships with the CUDA Toolkit.</p>
+
+  <h4 class="arch">The atlas of pre-compiled kernels</h4>
+  <p>cuBLAS is a library of dense matrix-multiply kernels. The <span class="hw-context">~800 MB</span> shared object (<code>libcublas.so</code> + <code>libcublasLt.so</code>) contains thousands of pre-compiled SASS variants covering the cross product of: GPU architecture (SM 7.0/7.5/8.0/8.6/8.9/9.0), input dtype (FP32, FP16, BF16, FP8 E4M3/E5M2, INT8), output dtype, accumulator dtype, tile shape (BM &times; BN &times; BK, dozens of choices), split-K or not, stride patterns, alpha/beta configurations. At call time, a heuristic (or cuBLASLt's tactic search if you opt in) picks a kernel from this atlas.</p>
+
+  <h4 class="tradeoffs">What cuBLAS cannot do</h4>
+  <ul>
+    <li><strong>No INT4 / no sub-byte dtypes.</strong> You can do INT8 GEMM; for W4A16 you need Marlin, Machete, ExLlama kernels, or TensorRT-LLM.</li>
+    <li><strong>No custom epilogue fusion.</strong> cuBLASLt supports a fixed menu of epilogues (RELU, GELU, bias-add, bias-add+RELU, dRELU); arbitrary pointwise fusion is not expressible.</li>
+    <li><strong>Closed source.</strong> You cannot fix a bug, change a tile shape, or learn from the implementation.</li>
+    <li><strong>Per-call overhead.</strong> <span class="hw-context">~4.5 &micro;s</span> per GEMM launch (heuristic pick + library state + kernel launch).</li>
+  </ul>
+
+  <h4 class="prod">Used by</h4>
+  <p>Essentially every engine except llama.cpp and Lithos. PyTorch, TensorRT-LLM, vLLM, SGLang, MLC-LLM, ExLlamaV2 (FP16 only). The 800 MB payload is the single largest contributor to framework-engine memory footprint and startup time.</p>
+</div>
+
+<div class="engine-card">
+  <div class="engine-header">
+    <span class="engine-name">cuDNN</span>
+  </div>
+  <p class="engine-origin">NVIDIA. cuDNN v1: 2014. Current v9.x. Closed source. <span class="hw-context">~400 MB</span>.</p>
+
+  <h4 class="arch">Deep learning primitives</h4>
+  <p>Kernels for convolution (forward/backward/dgrad/wgrad), pooling, batch-norm / layer-norm / RMSNorm, activation (ReLU, GELU, SiLU&hellip;), RNN cells, and <em>fused attention</em> as of cuDNN 9 (Feb 2024 &mdash; a FlashAttention-equivalent kernel via the cuDNN graph API). cuDNN 9's <strong>frontend API</strong> lets you build an operation graph (matmul + bias + activation + cast) and cuDNN compiles it to a single fused kernel, competing with hand-written Triton.</p>
+
+  <h4 class="prod">Used by</h4>
+  <p>PyTorch (primary consumer; every <code>nn.Conv2d</code>, many norms, some attention paths), TensorRT, TensorRT-LLM. Transformer-dominated workloads lean on it less than CNN workloads did, but it is still loaded because PyTorch imports it.</p>
+
+  <h4 class="tradeoffs">Tradeoffs</h4>
+  <p>Same shape as cuBLAS: large closed binary, no sub-byte quantisation, rigid epilogue menu. The cuDNN 9 graph API improves supported patterns but fusion is limited to what NVIDIA has pre-canonicalised.</p>
+</div>
+
+<div class="engine-card">
+  <div class="engine-header">
+    <span class="engine-name">Triton (OpenAI)</span>
+  </div>
+  <p class="engine-origin">Philippe Tillet (OpenAI), MAPL 2019 paper; OpenAI Triton project 2021+. Open source. Not the same as NVIDIA Triton Inference Server.</p>
+
+  <h4 class="arch">A GPU DSL embedded in Python</h4>
+  <p>Triton is a Python-embedded DSL and compiler for writing GPU kernels. You write at <em>block</em> granularity rather than per-thread: <code>tl.load(ptr + offsets)</code> loads a tile, <code>tl.dot(a, b)</code> is a block matmul, <code>tl.store</code> writes back. The compiler handles: scheduling threads within the block, vectorising memory accesses, picking tile layouts for tensor cores, shared-memory allocation and bank-conflict avoidance, software pipelining of loads vs. computation, and lowering to PTX.</p>
+  <p>Pipeline: Triton IR (your Python traced) &rarr; Triton-GPU IR &rarr; LLVM IR &rarr; PTX &rarr; ptxas &rarr; cubin. Tile shapes, num_warps, num_stages tunable via <code>@triton.autotune</code>.</p>
+
+  <h4 class="prod">How torch.compile uses it</h4>
+  <p>TorchInductor emits Triton source strings for fused pointwise/reduction regions. The first call to a compiled function triggers Triton compilation (seconds per kernel); cubins cache under <code>~/.cache/torch/inductor/</code>. For any non-GEMM work in <code>torch.compile</code>, you are running Triton kernels.</p>
+
+  <h4 class="prod">Other users</h4>
+  <p>FlashAttention has reference Triton implementations (<code>flash_attn.triton</code>), as do many community fused kernels (RMSNorm+residual, fused RoPE, liger-kernel's entropy loss). vLLM and SGLang ship several Triton kernels for sampling, custom attention variants, and quant ops.</p>
+
+  <h4 class="tradeoffs">The compile-time tax</h4>
+  <ul>
+    <li><strong>Per-kernel JIT cost.</strong> First call compiles; 1&ndash;10 s per kernel, minutes cumulatively for a full model.</li>
+    <li><strong>Autotune cost.</strong> <code>triton.autotune</code> runs every candidate config on warmup &mdash; tens of seconds.</li>
+    <li><strong>Cache fragility.</strong> Keyed on source hash + shapes + dtypes; driver or Triton upgrades invalidate.</li>
+    <li><strong>Not a full kernel suite.</strong> Triton generates kernels; cuBLAS still handles most GEMMs in PyTorch.</li>
+  </ul>
+
+  <h4 class="arch">Code shape</h4>
+<pre>import triton
+import triton.language as tl
+
+@triton.jit
+def rmsnorm_kernel(x_ptr, w_ptr, y_ptr, N,
+                   BLOCK: tl.constexpr, eps: tl.constexpr):
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    mask = cols &lt; N
+    x = tl.load(x_ptr + row*N + cols, mask=mask, other=0.0)
+    rms = tl.sqrt(tl.sum(x*x, axis=0) / N + eps)
+    w = tl.load(w_ptr + cols, mask=mask, other=0.0)
+    tl.store(y_ptr + row*N + cols, (x / rms) * w, mask=mask)</pre>
+</div>
+
+<p class="small mt-2">The pattern: engines <em>use</em> these libraries to build their compute path. Lithos bypasses all of them &mdash; its ~32 KB of cubins replace cuBLAS's 800 MB, its fused mega-kernels replace the attention library, and its PTX emission replaces the Triton compiler. The tradeoff is that the optimisation breadth of NVIDIA's thousands of cuBLAS variants must be replaced by a small number of hand-tuned kernels for the specific shapes Lithos cares about.</p>
+
+</section>
+
 <section id="table">
 <h2>Comparison Table</h2>
 
-<p>All tok/s numbers are estimates for 27B parameter models with 4-bit quantization, single-stream generation. Actual performance varies with model architecture, sequence length, and hardware configuration.</p>
+<p>Numbers are for ~7&ndash;27B parameter models with 4-bit quantisation, single-stream generation, on the hardware specified. Production throughput at high concurrency is a different (much higher) number; this column is about single-stream latency-bound decode.</p>
 
 <div style="overflow-x: auto;">
 <table>
   <thead>
     <tr>
-      <th>Engine</th>
-      <th>Language</th>
-      <th>Startup</th>
-      <th>tok/s (est.)</th>
-      <th>Batching</th>
-      <th>Kernel Source</th>
-      <th>Framework Dep</th>
-      <th>Open Source</th>
+      <th>Engine</th><th>Language</th><th>Startup</th><th>tok/s</th><th>HW</th><th>Batching</th><th>Kernel Source</th><th>Framework Dep</th><th>Open Source</th>
     </tr>
   </thead>
   <tbody>
-    <tr>
-      <td>TensorRT-LLM</td>
-      <td>C++</td>
-      <td>5-30 min build</td>
-      <td class="num">~300</td>
-      <td>Yes</td>
-      <td>NVIDIA custom</td>
-      <td>TensorRT</td>
-      <td>Partially</td>
-    </tr>
-    <tr>
-      <td>vLLM</td>
-      <td>Python</td>
-      <td>~2 min</td>
-      <td class="num">~180</td>
-      <td>Yes</td>
-      <td>cuBLAS + Flash</td>
-      <td>PyTorch</td>
-      <td>Yes</td>
-    </tr>
-    <tr>
-      <td>llama.cpp</td>
-      <td>C++</td>
-      <td>~5s</td>
-      <td class="num">~100</td>
-      <td>Limited</td>
-      <td>Custom CUDA</td>
-      <td>None</td>
-      <td>Yes</td>
-    </tr>
-    <tr>
-      <td>MLX</td>
-      <td>Swift/C++</td>
-      <td>~3s</td>
-      <td class="num">~50 (Apple)</td>
-      <td>Limited</td>
-      <td>Metal shaders</td>
-      <td>MLX</td>
-      <td>Yes</td>
-    </tr>
-    <tr>
-      <td>SGLang</td>
-      <td>Python</td>
-      <td>~2 min</td>
-      <td class="num">~180</td>
-      <td>Yes</td>
-      <td>FlashInfer</td>
-      <td>PyTorch</td>
-      <td>Yes</td>
-    </tr>
-    <tr>
-      <td>ExLlamaV2</td>
-      <td>Python/CUDA</td>
-      <td>~10s</td>
-      <td class="num">~130</td>
-      <td>Limited</td>
-      <td>Custom CUDA</td>
-      <td>Minimal</td>
-      <td>Yes</td>
-    </tr>
-    <tr>
-      <td>MLC-LLM</td>
-      <td>Python/TVM</td>
-      <td>minutes</td>
-      <td class="num">~150</td>
-      <td>Yes</td>
-      <td>Auto-generated</td>
-      <td>TVM</td>
-      <td>Yes</td>
-    </tr>
-    <tr class="lithos-row">
-      <td><strong>Lithos</strong></td>
-      <td>Forth/Rust</td>
-      <td>~2s</td>
-      <td class="num">&gt;400 (target)</td>
-      <td>Planned</td>
-      <td>PTX/SASS direct</td>
-      <td>libcuda only</td>
-      <td>Yes</td>
-    </tr>
+    <tr><td>PyTorch + compile</td><td>Python</td><td>30&ndash;60 s warmup</td><td class="num">~88</td><td>A100-80</td><td>Manual</td><td>cuBLAS + cuDNN + Triton</td><td>PyTorch</td><td>Yes</td></tr>
+    <tr><td>vLLM</td><td>Python</td><td>~2 min</td><td class="num">179</td><td>GH200</td><td>Continuous</td><td>cuBLAS + FlashAttn + Marlin</td><td>PyTorch</td><td>Yes</td></tr>
+    <tr><td>TensorRT-LLM</td><td>C++</td><td>5&ndash;30 min build</td><td class="num">~280</td><td>H100 FP8</td><td>In-flight</td><td>CUTLASS + XQA + FMHA</td><td>TensorRT</td><td>Partially</td></tr>
+    <tr><td>llama.cpp</td><td>C++</td><td>~5 s</td><td class="num">~130</td><td>H100 Q4_K_M</td><td>Limited</td><td>Custom CUDA/Metal</td><td>None</td><td>Yes</td></tr>
+    <tr><td>MLX</td><td>C++/Python/Swift</td><td>~3 s</td><td class="num">51.1</td><td>M4 Max</td><td>Limited</td><td>Metal shaders</td><td>MLX</td><td>Yes</td></tr>
+    <tr><td>SGLang</td><td>Python</td><td>~2 min</td><td class="num">~180</td><td>H100</td><td>Continuous + Radix</td><td>FlashInfer + Triton</td><td>PyTorch</td><td>Yes</td></tr>
+    <tr><td>ExLlamaV2</td><td>Python/CUDA</td><td>~10 s</td><td class="num">~135</td><td>RTX 4090</td><td>Limited</td><td>Custom CUDA</td><td>Minimal</td><td>Yes</td></tr>
+    <tr><td>MLC-LLM</td><td>Python/TVM</td><td>minutes</td><td class="num">~165</td><td>RTX 4090</td><td>Yes</td><td>Auto-scheduled TIR</td><td>TVM</td><td>Yes</td></tr>
+    <tr><td>DeepSpeed-FastGen</td><td>Python</td><td>~30 s</td><td class="num">~180</td><td>A100</td><td>SplitFuse</td><td>Custom CUDA + cuBLAS</td><td>PyTorch</td><td>Yes</td></tr>
+    <tr class="lithos-row"><td><strong>Lithos</strong> <span class="small">(target)</span></td><td>Forth; Python host today</td><td>~2 s</td><td class="num">&gt;400</td><td>GH200</td><td>Planned</td><td>PTX/SASS direct</td><td>libcuda only</td><td>Yes</td></tr>
   </tbody>
 </table>
 </div>
 
 <h3>What the table reveals</h3>
 
-<p>The engines cluster into three tiers by architectural approach:</p>
+<p>The engines cluster into four tiers by architectural approach.</p>
 
-<p><strong>Framework engines</strong> (vLLM, SGLang) build on PyTorch and cuBLAS. They optimize at the scheduling layer &mdash; batching, caching, memory management &mdash; but inherit the kernel granularity and dispatch overhead of their foundation. Ceiling: ~200 tok/s at batch=1.</p>
+<p><strong>The baseline</strong> (PyTorch + torch.compile) is what every model ships with. Ceiling: ~150 tok/s at batch=1 on H100. Every other tier exists because this ceiling is too low for production.</p>
 
-<p><strong>Native engines</strong> (llama.cpp, ExLlamaV2, TensorRT-LLM) write their own kernels. They control the compute path but still launch many kernels per layer. TensorRT-LLM's build-time fusion gets closest to optimal, but at the cost of flexibility and startup time. Ceiling: ~300 tok/s at batch=1.</p>
+<p><strong>Framework engines</strong> (vLLM, SGLang, DeepSpeed) build on PyTorch and cuBLAS. They optimise at the scheduling layer &mdash; batching, caching, paged KV, radix trees &mdash; but inherit the kernel granularity and dispatch overhead of their foundation. Ceiling: ~200 tok/s at batch=1.</p>
 
-<p><strong>Direct-to-silicon</strong> (Lithos) eliminates the kernel boundary entirely. One fused kernel per layer, with the programmer controlling instruction scheduling. This is the only approach that can theoretically reach &gt;70% bandwidth utilization at batch=1. The tradeoff is that it requires understanding the GPU at the instruction level.</p>
+<p><strong>Native engines</strong> (llama.cpp, ExLlamaV2, TensorRT-LLM, MLX) write their own kernels. They control the compute path but still launch many kernels per layer. Ceiling: ~300 tok/s at batch=1.</p>
+
+<p><strong>Direct-to-silicon</strong> (Lithos) eliminates the kernel boundary entirely. One fused kernel per layer, with the programmer controlling instruction scheduling. The only approach that can theoretically reach &gt;70% bandwidth utilisation at batch=1.</p>
 
 </section>
 
@@ -649,5 +906,6 @@ Lithos &mdash; from lithography. Writing on stone. The process that puts circuit
 </div>
 </footer>
 
+<script src="glossary-data.js"></script>
 </body>
 </html>

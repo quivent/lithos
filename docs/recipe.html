@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The <span class="term" data-term="Kernel">Kernel</span> Recipe &mdash; How config.json Becomes Cubins</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav a.active { color: var(--accent); }
+
+/* Subnav */
+.subnav {
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  background: var(--bg-raised);
+}
+.subnav .container { display: flex; gap: 1.4rem; flex-wrap: wrap; align-items: center; }
+.subnav a { color: var(--text-faint); }
+.subnav a:hover { color: var(--accent); text-decoration: none; }
+.subnav a.active { color: var(--accent); }
+.subnav .subnav-label { color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.7rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero .subtitle {
+  color: var(--text-dim); font-size: 1rem; letter-spacing: 0.04em;
+  text-transform: none;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* JSON syntax highlighting */
+pre.json .key { color: var(--accent); }
+pre.json .string { color: var(--green); }
+pre.json .number { color: var(--cyan); }
+pre.json .punct { color: var(--text-faint); }
+pre.json .comment { color: var(--text-dim); font-style: italic; }
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.5rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+tr.total td { border-top: 2px solid var(--accent-dim); font-weight: 600; color: var(--text); }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+td.count { text-align: right; font-family: 'JetBrains Mono', monospace; color: var(--cyan); }
+
+/* Rule cards */
+.rule { margin-bottom: 2rem; }
+.rule-header { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 0.5rem; }
+.rule-num { color: var(--accent); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
+.rule-title { font-size: 1rem; font-weight: 600; color: var(--text); }
+.rule p { color: var(--text-dim); }
+.rule .numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+
+/* Kernel lists */
+ul.kernel-list { list-style: none; padding: 0; margin: 0.8rem 0; }
+ul.kernel-list li { color: var(--text-dim); font-size: 0.92rem; margin-bottom: 0.5rem; padding-left: 1.2rem; position: relative; }
+ul.kernel-list li::before { content: "\2014"; position: absolute; left: 0; color: var(--text-faint); }
+ul.kernel-list li strong { color: var(--text); }
+ul.kernel-list li code { font-size: 0.82rem; }
+
+/* Ordered steps */
+ol.steps { list-style: none; counter-reset: step; padding: 0; margin: 1rem 0; }
+ol.steps li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 2.4rem;
+  margin-bottom: 0.8rem;
+  color: var(--text-dim);
+}
+ol.steps li::before {
+  content: counter(step, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+ol.steps li strong { color: var(--text); }
+ol.steps li .numbers { color: var(--cyan); font-family: 'JetBrains Mono', monospace; font-size: 0.84rem; }
+
+/* Callout */
+.callout {
+  background: var(--bg-code);
+  border-left: 2px solid var(--accent);
+  padding: 1rem 1.2rem;
+  margin: 1.2rem 0;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+.callout strong { color: var(--accent); }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.nowrap { white-space: nowrap; }
+.cyan { color: var(--cyan); }
+.green { color: var(--green); }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/kernels" class="active">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<!-- Kernels Subnav -->
+<div class="subnav">
+<div class="container">
+  <span class="subnav-label">Kernels:</span>
+  <a href="/kernels">Overview</a>
+  <a href="/recipe" class="active">The Recipe</a>
+</div>
+</div>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>The Kernel Recipe</h1>
+  <p class="subtitle">How <code>config.json</code> becomes cubins.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Section 1: The Recipe Book -->
+<section id="recipe-book">
+<h2>The Recipe Book Is config.json</h2>
+
+<p>Every model ships with a <code>config.json</code>. <span class="term" data-term="Lithos">Lithos</span> reads it and derives exactly which kernels are needed.</p>
+
+<p>Qwen 3.5-27B:</p>
+
+<pre class="json"><span class="punct">{</span>
+  <span class="key">"num_hidden_layers"</span><span class="punct">:</span> <span class="number">64</span><span class="punct">,</span>
+  <span class="key">"hidden_size"</span><span class="punct">:</span> <span class="number">5120</span><span class="punct">,</span>
+  <span class="key">"num_attention_heads"</span><span class="punct">:</span> <span class="number">24</span><span class="punct">,</span>
+  <span class="key">"num_key_value_heads"</span><span class="punct">:</span> <span class="number">4</span><span class="punct">,</span>
+  <span class="key">"head_dim"</span><span class="punct">:</span> <span class="number">256</span><span class="punct">,</span>
+  <span class="key">"intermediate_size"</span><span class="punct">:</span> <span class="number">17408</span><span class="punct">,</span>
+  <span class="key">"vocab_size"</span><span class="punct">:</span> <span class="number">248320</span><span class="punct">,</span>
+  <span class="key">"layer_types"</span><span class="punct">:</span> <span class="punct">[</span>
+    <span class="string">"linear_attention"</span><span class="punct">,</span> <span class="string">"linear_attention"</span><span class="punct">,</span> <span class="string">"linear_attention"</span><span class="punct">,</span> <span class="string">"full_attention"</span><span class="punct">,</span>
+    <span class="comment">... (repeats 16 times)</span>
+  <span class="punct">],</span>
+  <span class="key">"quantization_config"</span><span class="punct">:</span> <span class="punct">{</span>
+    <span class="key">"quant_method"</span><span class="punct">:</span> <span class="string">"gptq"</span><span class="punct">,</span>
+    <span class="key">"bits"</span><span class="punct">:</span> <span class="number">4</span><span class="punct">,</span>
+    <span class="key">"group_size"</span><span class="punct">:</span> <span class="number">128</span>
+  <span class="punct">}</span>
+<span class="punct">}</span></pre>
+
+<p>Every field is a compile-time constant in some <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="Kernel">kernel</span> &mdash; baked into the <span class="term" data-term="PTX">PTX</span> before <code>ptxas</code> runs. No runtime dispatch reads these values.</p>
+
+</section>
+
+<!-- Section 2: Derivation Rules -->
+<section id="derivation-rules">
+<h2>The Derivation Rules</h2>
+
+<p>Four rules. Applied mechanically. No heuristics, no tuning knobs.</p>
+
+<div class="rule">
+<div class="rule-header">
+  <span class="rule-num">RULE 01</span>
+  <span class="rule-title">Every model needs three kernels regardless of architecture.</span>
+</div>
+<ul class="kernel-list">
+  <li><strong>EMBED</strong> &mdash; sized <span class="numbers">(vocab_size, hidden_size) = (248320, 5120)</span></li>
+  <li><strong>NORM</strong> &mdash; sized <span class="numbers">(hidden_size) = (5120)</span></li>
+  <li><strong>SAMPLE</strong> &mdash; sized <span class="numbers">(vocab_size) = (248320)</span></li>
+</ul>
+</div>
+
+<div class="rule">
+<div class="rule-header">
+  <span class="rule-num">RULE 02</span>
+  <span class="rule-title">Projections are derived from the model's dimensions.</span>
+</div>
+<p>For each unique <code>(input_dim, output_dim)</code> pair that appears in the model, emit one <code>PROJECTION</code> <span class="term" data-term="Kernel">kernel</span>. Shapes that repeat &mdash; like K and V &mdash; share a single <span class="term" data-term="cubin">cubin</span>.</p>
+
+<h4>If any layer is <code>full_attention</code>:</h4>
+<ul class="kernel-list">
+  <li><strong>Q projection</strong>: <span class="numbers">(hidden, num_heads &times; head_dim) = (5120, 6144)</span></li>
+  <li><strong>K projection</strong>: <span class="numbers">(hidden, num_kv_heads &times; head_dim) = (5120, 1024)</span></li>
+  <li><strong>V projection</strong>: <span class="numbers">(hidden, num_kv_heads &times; head_dim) = (5120, 1024)</span> &mdash; same shape as K, shares <span class="term" data-term="Kernel">kernel</span></li>
+  <li><strong>O projection</strong>: <span class="numbers">(num_heads &times; head_dim, hidden) = (6144, 5120)</span></li>
+</ul>
+
+<h4>Every layer has MLP:</h4>
+<ul class="kernel-list">
+  <li><strong>Gate</strong>: <span class="numbers">(hidden, intermediate) = (5120, 17408)</span></li>
+  <li><strong>Up</strong>: <span class="numbers">(hidden, intermediate) = (5120, 17408)</span> &mdash; same shape as gate, shares <span class="term" data-term="Kernel">kernel</span></li>
+  <li><strong>Down</strong>: <span class="numbers">(intermediate, hidden) = (17408, 5120)</span></li>
+</ul>
+
+<p>Unique projection shapes for Qwen: <span class="numbers">(5120, 1024)</span>, <span class="numbers">(5120, 6144)</span>, <span class="numbers">(5120, 17408)</span>, <span class="numbers">(6144, 5120)</span>, <span class="numbers">(17408, 5120)</span> &mdash; <strong class="cyan">5 projection variants</strong>.</p>
+</div>
+
+<div class="rule">
+<div class="rule-header">
+  <span class="rule-num">RULE 03</span>
+  <span class="rule-title">Architecture-specific kernels.</span>
+</div>
+
+<h4>If any layer is <code>full_attention</code>:</h4>
+<ul class="kernel-list">
+  <li><strong>ATTENTION-SCORE</strong> &mdash; <span class="numbers">(head_dim, num_kv_heads, <span class="term" data-term="GQA">GQA</span> ratio)</span></li>
+  <li><strong>ROTATE</strong> &mdash; <span class="numbers">(head_dim, partial_rotary_factor)</span></li>
+</ul>
+
+<h4>If any layer is <code>linear_attention</code> (<span class="term" data-term="DeltaNet">DeltaNet</span>):</h4>
+<ul class="kernel-list">
+  <li><strong>RECURRENCE</strong> &mdash; <span class="numbers">(num_kv_heads, key_dim, value_dim)</span></li>
+  <li><strong><span class="term" data-term="Conv1D">CONV1D</span></strong> &mdash; <span class="numbers">(conv_kernel_dim, channels)</span></li>
+  <li><strong>STATE-CHECKPOINT</strong> &mdash; <span class="numbers">(state size per layer)</span></li>
+</ul>
+</div>
+
+<div class="rule">
+<div class="rule-header">
+  <span class="rule-num">RULE 04</span>
+  <span class="rule-title">Quantization fuses.</span>
+</div>
+<p>If <code>quantization_config.quant_method</code> is <code>gptq</code> or <code>awq</code>:</p>
+<ul class="kernel-list">
+  <li><strong>DEQUANTIZE</strong> is fused into <strong>PROJECTION</strong> &mdash; no separate <span class="term" data-term="Kernel">kernel</span>, just a different <code>PROJECTION</code> variant.</li>
+  <li>Parameters: <span class="numbers">bits = 4</span>, <span class="numbers">group_size = 128</span>.</li>
+</ul>
+</div>
+
+</section>
+
+<!-- Section 3: The Count -->
+<section id="the-count">
+<h2>Total for Qwen 3.5-27B: 11 Kernels</h2>
+
+<table>
+<tr><th><span class="term" data-term="Kernel">Kernel</span></th><th>Size parameters</th><th style="text-align: right;">Count</th></tr>
+<tr><td><code>EMBED</code></td><td>vocab=<span class="mono cyan">248320</span>, hidden=<span class="mono cyan">5120</span></td><td class="count">1</td></tr>
+<tr><td><code>NORM</code></td><td>hidden=<span class="mono cyan">5120</span></td><td class="count">1</td></tr>
+<tr><td><code>SAMPLE</code></td><td>vocab=<span class="mono cyan">248320</span></td><td class="count">1</td></tr>
+<tr><td><code>PROJECTION 5120&times;1024</code></td><td>K/V projection</td><td class="count">1</td></tr>
+<tr><td><code>PROJECTION 5120&times;6144</code></td><td>Q projection</td><td class="count">1</td></tr>
+<tr><td><code>PROJECTION 5120&times;17408</code></td><td>Gate/Up projection</td><td class="count">1</td></tr>
+<tr><td><code>PROJECTION 6144&times;5120</code></td><td>O projection</td><td class="count">1</td></tr>
+<tr><td><code>PROJECTION 17408&times;5120</code></td><td>Down projection</td><td class="count">1</td></tr>
+<tr><td><code>ATTENTION-SCORE</code></td><td>head_dim=<span class="mono cyan">256</span>, <span class="term" data-term="GQA">GQA</span> ratio=<span class="mono cyan">6</span></td><td class="count">1</td></tr>
+<tr><td><code>ROTATE</code></td><td>head_dim=<span class="mono cyan">256</span>, partial=<span class="mono cyan">0.25</span></td><td class="count">1</td></tr>
+<tr><td><code>RECURRENCE</code></td><td>16 heads, 128 dims</td><td class="count">1</td></tr>
+<tr class="total"><td><strong>Total</strong></td><td></td><td class="count"><strong>11</strong></td></tr>
+</table>
+
+<p class="mt-1">For a different model, different count.</p>
+<ul class="kernel-list">
+  <li><strong>LLaMA 70B</strong>: different dimensions, different count. Pure full attention &mdash; no <code>RECURRENCE</code>, no <code>CONV1D</code>.</li>
+  <li><strong>Mixtral with MoE</strong>: add a <code>ROUTING</code> <span class="term" data-term="Kernel">kernel</span> for the expert gate.</li>
+  <li><strong>Mamba</strong>: more <code>RECURRENCE</code> variants, no <code>ATTENTION-SCORE</code> at all.</li>
+</ul>
+
+</section>
+
+<!-- Section 4: When Does This Happen -->
+<section id="when">
+<h2>When Does This Happen?</h2>
+
+<p>At startup, once per model:</p>
+
+<ol class="steps">
+  <li>Load <code>config.json</code> &mdash; <span class="numbers">~1 ms</span>.</li>
+  <li>Derive the <span class="term" data-term="Kernel">kernel</span> list from the four rules above &mdash; <strong>instant</strong>.</li>
+  <li>Check the cache. Cache key = hash of the config.json subset that affects <span class="term" data-term="Kernel">kernel</span> code.</li>
+  <li>If cached: load cubins from disk &mdash; <span class="numbers">0.6 ms for all 11</span>.</li>
+  <li>If not cached: generate <span class="term" data-term="PTX">PTX</span>, compile via <code>ptxas</code>, cache the cubins &mdash; <span class="numbers">~92 ms</span>.</li>
+</ol>
+
+<h3>Step 5b &mdash; <span class="term" data-term="SASS">SASS</span> Emission Path (future / experimental)</h3>
+
+<p>Instead of emitting <span class="term" data-term="PTX">PTX</span> and letting <code>ptxas</code> compile it, <span class="term" data-term="Lithos">Lithos</span> can emit <strong><span class="term" data-term="SASS">SASS</span></strong> binary directly &mdash; the driver JIT is skipped entirely.</p>
+
+<ol class="steps">
+  <li><span class="term" data-term="Lithos">Lithos</span> compiler emits <strong><span class="term" data-term="SASS">SASS</span> bytes</strong> &mdash; <span class="numbers">16 bytes per instruction</span> (8-byte opcode + 8-byte control word).</li>
+  <li>Wrap <span class="term" data-term="SASS">SASS</span> in a <span class="term" data-term="cubin">cubin</span> ELF with the required NVIDIA metadata sections &mdash; <code>.nv.info</code>, <code>.nv.constant0</code>, etc.</li>
+  <li>Write <span class="term" data-term="cubin">cubin</span> to disk or pass directly to <code>cuModuleLoadData</code> &mdash; the driver loads it as-is, no JIT step.</li>
+</ol>
+
+<h4>Time savings</h4>
+<table>
+<tr><th>Path</th><th>Per <span class="term" data-term="Kernel">kernel</span></th><th style="text-align: right;">11 kernels</th></tr>
+<tr><td><span class="term" data-term="PTX">PTX</span> &rarr; <code>ptxas</code></td><td><span class="numbers">~8.4 ms</span> to compile</td><td class="count"><span class="numbers">~92 ms</span></td></tr>
+<tr><td><span class="term" data-term="SASS">SASS</span> direct</td><td><span class="numbers">microseconds</span> (just byte emission)</td><td class="count"><span class="numbers">&lt; 1 ms</span></td></tr>
+<tr class="total"><td><strong>Speedup</strong></td><td></td><td class="count"><strong>~1000&times;</strong></td></tr>
+</table>
+
+<h4>Why we'd do this</h4>
+<ul class="kernel-list">
+  <li><strong>Instant recompilation</strong> &mdash; change a constant, regenerate a <span class="term" data-term="Kernel">kernel</span>, load in microseconds instead of waiting for <code>ptxas</code>.</li>
+  <li><strong>Full scheduling control</strong> &mdash; set stall counts and <span class="term" data-term="Register reuse flags">register reuse flags</span> deliberately instead of whatever <code>ptxas</code>'s heuristics pick.</li>
+  <li><strong>No dependency on <code>ptxas</code></strong> &mdash; the compiler that lives inside the NVIDIA driver.</li>
+</ul>
+
+<h4>Why we don't yet</h4>
+<ul class="kernel-list">
+  <li><code>ptxas</code> does useful work: instruction scheduling, register allocation, <span class="term" data-term="Bank Conflict">bank conflict</span> avoidance.</li>
+  <li>The scheduling control <span class="term" data-term="Lithos">Lithos</span> would add requires knowing <span class="term" data-term="Hopper">Hopper</span>'s pipeline depths, dual-issue rules, and register bank layout &mdash; reverse engineered so far but not exhaustive.</li>
+  <li>Current status: <span class="numbers">47 opcodes</span> mapped, memory-op control words still being probed.</li>
+</ul>
+
+<h4>When we'd use it</h4>
+<ul class="kernel-list">
+  <li>After we've benchmarked <span class="term" data-term="PTX">PTX</span> output and know exactly where the <code>ptxas</code> schedule is suboptimal for our specific kernels.</li>
+  <li>Once the memory-op control words are fully characterized (in progress).</li>
+  <li>For the inner loops of the hottest kernels &mdash; <strong>PROJECTION</strong> tensor-core loop, <strong><span class="term" data-term="DeltaNet">DELTANET</span></strong> recurrence.</li>
+</ul>
+
+<div class="callout">
+<strong>At inference time: no recipe work.</strong> Kernels match the model's dimensions after startup. Every token runs the same set. The per-matmul dispatch path present in other engines is absent here.
+</div>
+
+</section>
+
+<!-- Section 5: Different Model, Different Recipe -->
+<section id="different-model">
+<h2>Different Model &rarr; Different Recipe &rarr; Different Cubins</h2>
+
+<p>The cache is keyed by the subset of config that affects <span class="term" data-term="Kernel">kernel</span> code &mdash; dimensions, <code>layer_types</code>, quantization. Everything else is irrelevant to the <span class="term" data-term="cubin">cubin</span>.</p>
+
+<ul class="kernel-list">
+  <li>Change the <strong>prompt</strong>? Same cubins.</li>
+  <li>Change the <strong>model weights</strong> (same architecture)? Same cubins.</li>
+  <li>Switch <strong>architectures</strong> (Qwen &rarr; LLaMA)? New cubins.</li>
+  <li>Change <strong>quantization</strong> (<span class="term" data-term="FP16">FP16</span> &rarr; <span class="term" data-term="GPTQ">GPTQ</span>-4bit)? New cubins &mdash; the <code>PROJECTION</code> kernels now dequantize inline.</li>
+</ul>
+
+<p>The hash is deterministic. Two machines reading the same <code>config.json</code> derive the same cache key and produce bit-identical cubins. The recipe is the config; the config is the recipe.</p>
+
+<p class="mt-2">Compiling for a specific model moves the dimensions from runtime data into the kernel code itself.</p>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

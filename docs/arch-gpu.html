@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><span class="term" data-term="Lithos">Lithos</span> GPU &mdash; The <span class="term" data-term="GH200">GH200</span> From 30,000 Feet</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.subnav { display: flex; gap: 16px; padding: 12px 32px; background: #141420; border-bottom: 1px solid #2a2a3a; font-size: 13px; overflow-x: auto; position: sticky; top: 36px; z-index: 99; }
+.subnav a { color: #a0a0a8; text-decoration: none; white-space: nowrap; }
+.subnav a:hover { color: #d4a053; text-decoration: none; }
+.subnav a.active { color: #d4a053; border-bottom: 2px solid #d4a053; padding-bottom: 10px; margin-bottom: -12px; }
+
+.hero { padding: 6rem 0 4rem 0; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 4.5rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem; }
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 { font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem; }
+h3 { font-size: 1rem; font-weight: 300; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0; }
+h4 { font-size: 0.9rem; font-weight: 600; color: var(--text); margin: 1.5rem 0 0.5rem 0; }
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.866rem; }
+code { color: var(--accent); }
+pre { background: var(--bg-code); border: 1px solid var(--border); padding: 1rem 1.2rem; overflow-x: auto; margin: 0.8rem 0 1.2rem 0; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.82rem; line-height: 1.55; color: var(--text); }
+
+table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.2rem 0; font-size: 0.88rem; }
+th { text-align: left; padding: 0.5rem 0.8rem; border-bottom: 2px solid var(--accent-dim); color: var(--accent); font-weight: 400; letter-spacing: 0.04em; white-space: nowrap; }
+td { padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td code { font-size: 0.82rem; color: var(--text); background: var(--bg-code); padding: 0.1rem 0.3rem; }
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+.diagram-title { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.8rem; font-weight: 500; }
+
+/* GH200 chip diagram */
+.chip-diagram { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.chip-cpu { border: 1px solid var(--accent-dim); background: rgba(212, 160, 83, 0.04); padding: 1rem 1.2rem; text-align: center; }
+.chip-cpu h4 { color: var(--text); margin: 0 0 0.3rem 0; font-size: 0.95rem; }
+.chip-cpu .chip-specs { color: var(--text-dim); font-size: 0.82rem; font-family: 'JetBrains Mono', monospace; }
+.chip-link { text-align: center; color: var(--accent); font-size: 0.78rem; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.04em; padding: 0.2rem; }
+.chip-link::before, .chip-link::after { content: ''; display: block; width: 1px; height: 0.6rem; background: var(--border); margin: 0 auto; }
+.chip-gpu { border: 1px solid var(--accent-dim); background: rgba(212, 160, 83, 0.04); padding: 1rem 1.2rem; }
+.chip-gpu h4 { color: var(--text); margin: 0 0 0.8rem 0; font-size: 0.95rem; text-align: center; }
+.chip-gpu-grid { display: grid; grid-template-columns: auto 1fr auto; gap: 0.8rem; align-items: stretch; }
+.chip-hbm-col { display: flex; flex-direction: column; gap: 0.35rem; }
+.chip-hbm { border: 1px solid var(--border); background: var(--bg-raised); padding: 0.4rem 0.6rem; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 0.76rem; color: var(--cyan); min-width: 5rem; }
+.chip-hbm .label { color: var(--text-dim); font-size: 0.7rem; display: block; }
+.chip-core-stack { display: flex; flex-direction: column; gap: 0.5rem; justify-content: space-between; }
+.chip-sm-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
+.chip-sm { border: 1px solid var(--green); background: rgba(126, 200, 126, 0.05); padding: 0.5rem; text-align: center; color: var(--green); font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; }
+.chip-l2 { border: 1px solid var(--accent); background: rgba(212, 160, 83, 0.08); padding: 0.6rem; text-align: center; color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; }
+.chip-total { text-align: center; color: var(--text-dim); font-size: 0.78rem; font-family: 'JetBrains Mono', monospace; padding-top: 0.3rem; border-top: 1px dashed var(--border); }
+
+/* Data flow path */
+.path-flow { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; }
+.path-step { display: grid; grid-template-columns: 11rem 1fr; gap: 1.2rem; padding: 0.6rem 0.8rem; align-items: baseline; border-left: 2px solid var(--border); }
+.path-step.source { border-left-color: var(--text-dim); }
+.path-step.mem { border-left-color: var(--cyan); }
+.path-step.reg { border-left-color: var(--green); }
+.path-step.compute { border-left-color: var(--accent); }
+.path-step-tier { font-family: 'JetBrains Mono', monospace; font-size: 0.86rem; color: var(--text); font-weight: 500; }
+.path-step.mem .path-step-tier { color: var(--cyan); }
+.path-step.reg .path-step-tier { color: var(--green); }
+.path-step.compute .path-step-tier { color: var(--accent); }
+.path-step-spec { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--text-dim); }
+.path-transition { padding: 0.15rem 0 0.15rem 0.8rem; margin-left: 0; border-left: 2px dashed var(--border); font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: var(--text-faint); }
+@media (max-width: 600px) {
+  .path-step { grid-template-columns: 1fr; gap: 0.2rem; }
+  .chip-gpu-grid { grid-template-columns: 1fr; }
+}
+
+footer { padding: 2rem 0; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 0.78rem; letter-spacing: 0.04em; }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture" class="active">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<!-- Architecture Subnav -->
+<div class="subnav">
+  <a href="/architecture">Pipeline</a>
+  <a href="/arch-gpu" class="active">GPU</a>
+  <a href="/sm-architecture">SM</a>
+  <a href="/arch-cores">Cores</a>
+  <a href="/arch-registers">Registers</a>
+  <a href="/warp-scheduler">Warp</a>
+  <a href="/memory">Memory</a>
+  <a href="/arch-kernel">Kernel</a>
+</div>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>GH200</h1>
+  <p>The whole die. 132 SMs, 50 MB of <span class="term" data-term="L2 Cache">L2</span>, six <span class="term" data-term="HBM3e">HBM3e</span> stacks, one <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> to <span class="term" data-term="Grace">Grace</span>.</p>
+</div>
+</header>
+
+<main class="container">
+
+<section>
+<h2>The Chip</h2>
+<p><span class="term" data-term="GH200">GH200</span> is two chips fused together. A <span class="term" data-term="Hopper">Hopper</span> GPU (GH100-class silicon) and a <span class="term" data-term="Grace">Grace</span> CPU, connected by <span class="term" data-term="NVLink-C2C">NVLink-C2C</span>. The GPU is what <span class="term" data-term="Lithos">Lithos</span> writes on. The CPU is an assistant: fast path for long KV, slow path for everything that isn't a tensor.</p>
+
+<div class="diagram-title"><span class="term" data-term="GH200">GH200</span> <span class="term" data-term="Grace">Grace</span> <span class="term" data-term="Hopper">Hopper</span> Superchip</div>
+<div class="chip-diagram">
+  <div class="chip-cpu">
+    <h4><span class="term" data-term="Grace">Grace</span> CPU (Neoverse V2)</h4>
+    <div class="chip-specs">72 Arm cores &middot; 480 GB <span class="term" data-term="LPDDR5X">LPDDR5X</span> @ 512 GB/s</div>
+  </div>
+  <div class="chip-link">&#x2195; <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> &middot; 900 GB/s coherent</div>
+  <div class="chip-gpu">
+    <h4><span class="term" data-term="Hopper">Hopper</span> GPU (GH100)</h4>
+    <div class="chip-gpu-grid">
+      <div class="chip-hbm-col">
+        <div class="chip-hbm">16 GB<span class="label"><span class="term" data-term="HBM3e">HBM3e</span></span></div>
+        <div class="chip-hbm">16 GB<span class="label"><span class="term" data-term="HBM3e">HBM3e</span></span></div>
+        <div class="chip-hbm">16 GB<span class="label"><span class="term" data-term="HBM3e">HBM3e</span></span></div>
+      </div>
+      <div class="chip-core-stack">
+        <div class="chip-sm-row">
+          <div class="chip-sm"><span class="term" data-term="SM">SM</span> &times; 33</div>
+          <div class="chip-sm"><span class="term" data-term="SM">SM</span> &times; 33</div>
+          <div class="chip-sm"><span class="term" data-term="SM">SM</span> &times; 33</div>
+          <div class="chip-sm"><span class="term" data-term="SM">SM</span> &times; 33</div>
+        </div>
+        <div class="chip-l2"><span class="term" data-term="L2 Cache">L2 cache</span> &middot; 50 MB</div>
+      </div>
+      <div class="chip-hbm-col">
+        <div class="chip-hbm">16 GB<span class="label"><span class="term" data-term="HBM3e">HBM3e</span></span></div>
+        <div class="chip-hbm">16 GB<span class="label"><span class="term" data-term="HBM3e">HBM3e</span></span></div>
+        <div class="chip-hbm">16 GB<span class="label"><span class="term" data-term="HBM3e">HBM3e</span></span></div>
+      </div>
+    </div>
+    <div class="chip-total">Total <span class="term" data-term="HBM">HBM</span>: 96 GB @ 4 TB/s &middot; 132 SMs total</div>
+  </div>
+</div>
+</section>
+
+<section>
+<h2>132 SMs</h2>
+<p>Each Streaming Multiprocessor is the unit of execution. 132 of them on the die, arranged in GPCs (GPU Processing Clusters) and TPCs (Texture Processing Clusters), though from a <span class="term" data-term="Kernel">kernel</span>'s point of view that hierarchy is invisible. What matters is: 132 independent engines, each running up to 64 warps concurrently.</p>
+
+<table>
+<tr><th>Scope</th><th>Count</th><th>Per unit</th><th>Aggregate</th></tr>
+<tr><td><span class="term" data-term="SM">SM</span></td><td class="num">132</td><td>1</td><td class="num">132</td></tr>
+<tr><td>Sub-partitions</td><td class="num">4 per <span class="term" data-term="SM">SM</span></td><td>&mdash;</td><td class="num">528</td></tr>
+<tr><td><span class="term" data-term="CUDA">CUDA</span> cores (<span class="term" data-term="FP32">FP32</span>)</td><td class="num">128 per <span class="term" data-term="SM">SM</span></td><td>&mdash;</td><td class="num">16,896</td></tr>
+<tr><td>Tensor cores (Gen 4)</td><td class="num">4 per <span class="term" data-term="SM">SM</span></td><td>&mdash;</td><td class="num">528</td></tr>
+<tr><td><span class="term" data-term="Register File">Register file</span></td><td class="num">256 KB per <span class="term" data-term="SM">SM</span></td><td>&mdash;</td><td class="num">33 MB total</td></tr>
+<tr><td>Shared mem / <span class="term" data-term="L1 Cache">L1</span></td><td class="num">228 KB per <span class="term" data-term="SM">SM</span></td><td>&mdash;</td><td class="num">~30 MB total</td></tr>
+<tr><td>Max threads resident</td><td class="num">2048 per <span class="term" data-term="SM">SM</span></td><td>&mdash;</td><td class="num">270,336</td></tr>
+</table>
+
+<p>Every <span class="term" data-term="SM">SM</span> is identical. The compiler does not care which <span class="term" data-term="SM">SM</span> a block lands on &mdash; the hardware's Compute Work Distributor picks. <span class="term" data-term="Lithos">Lithos</span> does not target SMs by index; it targets the count.</p>
+</section>
+
+<section>
+<h2>50 MB L2</h2>
+<p>The <span class="term" data-term="L2 Cache">L2 cache</span> sits between all SMs and <span class="term" data-term="HBM">HBM</span>. Every byte read from <span class="term" data-term="HBM">HBM</span> passes through it; every byte written ends up there first. It is split into two partitions, each serving one half of the die, but the GPU presents it as a single coherent cache. Hit latency is ~260 cycles. Miss latency goes out to <span class="term" data-term="HBM">HBM</span> &mdash; ~500 ns.</p>
+
+<p>50 MB is large enough to hold the full <span class="term" data-term="KV Cache">KV cache</span> for a short context, or all the weights of a small model, or one activation tensor for a 70B forward pass. <span class="term" data-term="Lithos">Lithos</span> uses it as the primary working set: if a tensor fits in <span class="term" data-term="L2 Cache">L2</span> and gets reused across kernels, it never touches <span class="term" data-term="HBM">HBM</span> twice.</p>
+
+<table>
+<tr><th>Level</th><th>Size</th><th>Bandwidth</th><th>Latency</th></tr>
+<tr><td>Register</td><td class="num">256 KB / <span class="term" data-term="SM">SM</span></td><td class="num">~150 TB/s</td><td class="num">1 cycle</td></tr>
+<tr><td><span class="term" data-term="L1 Cache">L1</span> / Shared</td><td class="num">228 KB / <span class="term" data-term="SM">SM</span></td><td class="num">~33 TB/s</td><td class="num">~30 cycles</td></tr>
+<tr><td><span class="term" data-term="L2 Cache">L2</span></td><td class="num">50 MB</td><td class="num">~12 TB/s</td><td class="num">~260 cycles</td></tr>
+<tr><td><span class="term" data-term="HBM3e">HBM3e</span></td><td class="num">96 GB</td><td class="num">4.0 TB/s</td><td class="num">~500 ns</td></tr>
+<tr><td><span class="term" data-term="LPDDR5X">LPDDR5X</span> (via C2C)</td><td class="num">480 GB</td><td class="num">512 GB/s</td><td class="num">~1.5 us</td></tr>
+</table>
+</section>
+
+<section>
+<h2>6 HBM3e Stacks</h2>
+<p>Six stacks of High Bandwidth Memory 3e, each 16 GB, each delivering about 670 GB/s. Aggregate 96 GB at 4 TB/s. They sit on the edges of the die on a silicon interposer; signal distance is sub-millimeter. This is where model weights live after <span class="term" data-term="mmap">mmap</span>. This is where the <span class="term" data-term="KV Cache">KV cache</span> lives when it's hot.</p>
+
+<p><span class="term" data-term="HBM">HBM</span> bandwidth is the hard ceiling on memory-bound kernels. A decode step reading 20 GB of weights can finish no faster than 20 / 4000 = 5 ms. Everything in <span class="term" data-term="Lithos">Lithos</span> downstream of that arithmetic is about hitting that ceiling, not beating it.</p>
+</section>
+
+<section>
+<h2>NVLink-C2C</h2>
+<p>900 GB/s of coherent bandwidth between <span class="term" data-term="Grace">Grace</span> and <span class="term" data-term="Hopper">Hopper</span>. Cache-coherent. Unified virtual address space. A pointer allocated on the CPU is dereferenceable from the GPU and vice versa; the hardware moves the page where it needs to go.</p>
+
+<p>This is what makes the 480 GB of <span class="term" data-term="LPDDR5X">LPDDR5X</span> usable as GPU memory. A pointer into <span class="term" data-term="LPDDR5X">LPDDR5X</span> dereferenced from an <span class="term" data-term="SM">SM</span> triggers a page fault (first touch) or a remote load over C2C (subsequent). At 512 GB/s from the <span class="term" data-term="LPDDR5X">LPDDR5X</span> side, it is <span class="speedup">8x</span> slower than <span class="term" data-term="HBM">HBM</span> &mdash; but 300 GB/s remains <span class="speedup">30x</span> faster than an SSD page-in. The cold <span class="term" data-term="KV Cache">KV cache</span> lives here.</p>
+</section>
+
+<section>
+<h2>Data Flow</h2>
+<p>A single <span class="term" data-term="FP16">fp16</span> weight being multiplied by an activation takes this path:</p>
+
+<div class="diagram-title">Path of a weight from disk to <span class="term" data-term="FMA">FMA</span></div>
+<div class="path-flow">
+  <div class="path-step source">
+    <div class="path-step-tier"><span class="term" data-term="Safetensors">safetensors</span></div>
+    <div class="path-step-spec">NVMe SSD &middot; 5 GB/s</div>
+  </div>
+  <div class="path-transition"><span class="term" data-term="mmap">mmap</span>() &mdash; no copy, virtual mapping only</div>
+  <div class="path-step source">
+    <div class="path-step-tier">page cache</div>
+    <div class="path-step-spec"><span class="term" data-term="LPDDR5X">LPDDR5X</span> &middot; lazy fault on first access</div>
+  </div>
+  <div class="path-transition">cudaMemAdvise(SetReadMostly) or first-touch migration</div>
+  <div class="path-step mem">
+    <div class="path-step-tier"><span class="term" data-term="HBM3e">HBM3e</span></div>
+    <div class="path-step-spec">96 GB &middot; 4 TB/s &middot; sits here for the run</div>
+  </div>
+  <div class="path-transition">LDG.128 over memory interconnect</div>
+  <div class="path-step mem">
+    <div class="path-step-tier"><span class="term" data-term="L2 Cache">L2</span></div>
+    <div class="path-step-spec">50 MB &middot; ~12 TB/s &middot; caches for reuse across kernels</div>
+  </div>
+  <div class="path-transition">LDG / ldmatrix / cp.async</div>
+  <div class="path-step mem">
+    <div class="path-step-tier"><span class="term" data-term="L1 Cache">L1</span> / Shared</div>
+    <div class="path-step-spec">228 KB &middot; ~33 TB/s &middot; staging for tile</div>
+  </div>
+  <div class="path-transition">LDS, ldmatrix.sync</div>
+  <div class="path-step reg">
+    <div class="path-step-tier">Registers</div>
+    <div class="path-step-spec">256 KB &middot; ~150 TB/s &middot; 1-cycle &middot; operands</div>
+  </div>
+  <div class="path-transition">issue</div>
+  <div class="path-step compute">
+    <div class="path-step-tier">HMMA.16816</div>
+    <div class="path-step-spec"><span class="term" data-term="Tensor Core">tensor core</span> (one of 528) &middot; the <span class="term" data-term="FMA">FMA</span></div>
+  </div>
+</div>
+
+<p><span class="term" data-term="Lithos">Lithos</span> places tensors so that most accesses stop at <span class="term" data-term="L2 Cache">L2</span> or <span class="term" data-term="L1 Cache">L1</span>. Weights read once from <span class="term" data-term="HBM">HBM</span>; activations stay in registers; <span class="term" data-term="KV Cache">KV cache</span> streams from <span class="term" data-term="HBM">HBM</span> or <span class="term" data-term="LPDDR5X">LPDDR5X</span> but never copies.</p>
+</section>
+
+<section>
+<h2>What Lithos Sees</h2>
+<p>The pieces above are not abstractions. They are what the code targets:</p>
+<ul style="margin-left: 1.5rem; color: var(--text-dim);">
+  <li><code>gridDim</code> is chosen so that blocks saturate 132 SMs.</li>
+  <li>Block size is chosen so that <code>registers_per_thread * threads &lt;= 65536</code> per <span class="term" data-term="SM">SM</span>.</li>
+  <li>Tile size is chosen so that input + output + weights fit in 228 KB <span class="term" data-term="Shared Memory">shared memory</span>.</li>
+  <li>Access pattern is chosen so that 128-byte <span class="term" data-term="L2 Cache">L2</span> lines are fully consumed.</li>
+  <li><span class="term" data-term="KV Cache">KV cache</span> is placed in <span class="term" data-term="HBM">HBM</span> or <span class="term" data-term="LPDDR5X">LPDDR5X</span> based on age; both are pointers.</li>
+</ul>
+<p>There is no <span class="term" data-term="cudaMalloc">cudaMalloc</span>, no <span class="term" data-term="cudaMemcpy">cudaMemcpy</span>, no stream synchronization except at the token boundary. The GPU is one large memory system with compute bolted on.</p>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

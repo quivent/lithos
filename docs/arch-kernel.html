@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="Kernel">Kernel</span> &mdash; Anatomy of a <span class="term" data-term="cubin">cubin</span>, How a Launch Happens</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f; --bg-raised: #10101a; --bg-code: #0e0e18;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --accent-dim: #a07830;
+  --cyan: #6ec8d0; --green: #7ec87e; --blue: #6e8ed0; --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.subnav { display: flex; gap: 16px; padding: 12px 32px; background: #141420; border-bottom: 1px solid #2a2a3a; font-size: 13px; overflow-x: auto; position: sticky; top: 36px; z-index: 99; }
+.subnav a { color: #a0a0a8; text-decoration: none; white-space: nowrap; }
+.subnav a:hover { color: #d4a053; text-decoration: none; }
+.subnav a.active { color: #d4a053; border-bottom: 2px solid #d4a053; padding-bottom: 10px; margin-bottom: -12px; }
+
+.hero { padding: 6rem 0 4rem 0; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 4.5rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem; }
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 { font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem; }
+h3 { font-size: 1rem; font-weight: 300; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0; }
+h4 { font-size: 0.9rem; font-weight: 600; color: var(--text); margin: 1.5rem 0 0.5rem 0; }
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.866rem; }
+code { color: var(--accent); }
+pre { background: var(--bg-code); border: 1px solid var(--border); padding: 1rem 1.2rem; overflow-x: auto; margin: 0.8rem 0 1.2rem 0; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.82rem; line-height: 1.55; color: var(--text); }
+
+pre.sass-asm .mnemonic { color: #c0c0d0; font-weight: 600; }
+pre.sass-asm .register { color: var(--green); }
+pre.sass-asm .hex { color: var(--cyan); }
+pre.sass-asm .label { color: var(--text-dim); }
+
+table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.2rem 0; font-size: 0.88rem; }
+th { text-align: left; padding: 0.5rem 0.8rem; border-bottom: 2px solid var(--accent-dim); color: var(--accent); font-weight: 400; letter-spacing: 0.04em; white-space: nowrap; }
+td { padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td code { font-size: 0.82rem; color: var(--text); background: var(--bg-code); padding: 0.1rem 0.3rem; }
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+.diagram-title { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.8rem; font-weight: 500; }
+
+/* Launch path */
+.launch-path { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; display: flex; flex-direction: column; gap: 0; }
+.launch-stage { border: 1px solid var(--border); background: var(--bg-raised); padding: 0.9rem 1.1rem; }
+.launch-stage h5 { margin: 0 0 0.4rem 0; color: var(--accent); font-size: 0.88rem; font-weight: 500; letter-spacing: 0.02em; }
+.launch-stage ul { margin: 0; padding-left: 1.1rem; color: var(--text-dim); font-size: 0.82rem; line-height: 1.6; }
+.launch-stage ul li code { color: var(--accent); font-size: 0.78rem; background: var(--bg); padding: 0 0.2rem; }
+.launch-bridge { display: flex; justify-content: center; align-items: center; padding: 0.5rem 0; color: var(--text-faint); font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; gap: 0.6rem; }
+.launch-bridge::before, .launch-bridge::after { content: ''; width: 2rem; height: 1px; background: var(--border); }
+
+/* Block lifetime timeline */
+.lifetime { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; }
+.lifetime-row { display: grid; grid-template-columns: 6rem 1fr; gap: 1rem; padding: 0.5rem 0; border-left: 2px solid var(--accent-dim); padding-left: 1rem; margin-left: 0.3rem; position: relative; }
+.lifetime-row::before { content: ''; position: absolute; left: -5px; top: 0.9rem; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.lifetime-row.running::before { background: var(--green); }
+.lifetime-time { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--cyan); font-weight: 500; }
+.lifetime-event { font-size: 0.84rem; color: var(--text-dim); }
+.lifetime-event.big { color: var(--text); font-weight: 500; }
+@media (max-width: 600px) { .lifetime-row { grid-template-columns: 1fr; } }
+
+footer { padding: 2rem 0; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 0.78rem; letter-spacing: 0.04em; }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture" class="active">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<!-- Architecture Subnav -->
+<div class="subnav">
+  <a href="/architecture">Pipeline</a>
+  <a href="/arch-gpu">GPU</a>
+  <a href="/sm-architecture">SM</a>
+  <a href="/arch-cores">Cores</a>
+  <a href="/arch-registers">Registers</a>
+  <a href="/warp-scheduler">Warp</a>
+  <a href="/memory">Memory</a>
+  <a href="/arch-kernel" class="active">Kernel</a>
+</div>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Kernel</h1>
+  <p>Anatomy of a <span class="term" data-term="cubin">cubin</span>. Launch to completion. The life of a <span class="term" data-term="Thread Block">thread block</span>.</p>
+</div>
+</header>
+
+<main class="container">
+
+<section>
+<h2>What a Kernel Is</h2>
+<p>A <span class="term" data-term="Kernel">kernel</span> is a function compiled for the GPU, packaged in an ELF file (the <span class="term" data-term="cubin">cubin</span>), stored as a symbol in a module. At launch it is replicated across a <span class="term" data-term="Grid">grid</span> of thread blocks; each block gets its coordinates in <code>blockIdx</code>, each thread its coordinates in <code>threadIdx</code>. Same code, different indices, parallel execution.</p>
+
+<p>The <span class="term" data-term="Kernel">kernel</span> is identified by a <code>CUfunction</code> handle. That handle points into a <span class="term" data-term="cubin">cubin</span> loaded into GPU memory. Every invocation via <code>cuLaunchKernel</code> reads the same code.</p>
+</section>
+
+<section>
+<h2>The Cubin File</h2>
+<p>A <span class="term" data-term="cubin">cubin</span> is a standard ELF for <code>e_machine = EM_CUDA</code>. It has sections like any other ELF, plus some NVIDIA-specific ones.</p>
+
+<pre><code>$ readelf -S qwen_decode.cubin
+
+[Nr] Name                   Type           Addr     Off    Size   Flg
+[ 1] .shstrtab              STRTAB         0        40     ...
+[ 2] .strtab                STRTAB         0        ..
+[ 3] .symtab                SYMTAB         0        ..
+[ 4] <span style="color:var(--accent)">.nv.info</span>               LOPROC+0       0        ..     ..
+[ 5] <span style="color:var(--accent)">.nv.info.decode_kern</span>   LOPROC+0       0        ..     ..
+[ 6] <span style="color:var(--accent)">.nv.constant0.decode</span>   PROGBITS       0        ..     360    A
+[ 7] <span style="color:var(--accent)">.nv.callgraph</span>          LOPROC+0       0        ..
+[ 8] <span style="color:var(--accent)">.text.decode_kern</span>      PROGBITS       0        ..     2560   AX
+[ 9] <span style="color:var(--accent)">.nv.shared.decode_ker</span>  NOBITS         0        ..     49152  WA
+[10] <span style="color:var(--accent)">.rel.nv.constant0</span>      REL            0        ..</code></pre>
+
+<table>
+<tr><th>Section</th><th>What it holds</th></tr>
+<tr><td><code>.text.KERNEL</code></td><td><span class="term" data-term="SASS">SASS</span> bytes. Every instruction is 16 bytes on <span class="term" data-term="Hopper">Hopper</span>.</td></tr>
+<tr><td><code>.nv.info</code></td><td>Module-level metadata: <span class="term" data-term="SM">SM</span> target, <span class="term" data-term="PTX">PTX</span> version.</td></tr>
+<tr><td><code>.nv.info.KERNEL</code></td><td>Per-<span class="term" data-term="Kernel">kernel</span>: register count, barriers, exit hints, param map.</td></tr>
+<tr><td><code>.nv.constant0.KERNEL</code></td><td>Parameter buffer layout. At launch, the driver copies <span class="term" data-term="Kernel">kernel</span> args here.</td></tr>
+<tr><td><code>.nv.shared.KERNEL</code></td><td>Reserved <span class="term" data-term="Shared Memory">shared memory</span> allocation (NOBITS, allocated per block at launch).</td></tr>
+<tr><td><code>.nv.callgraph</code></td><td>Call-graph hints for indirect functions (unused for self-contained decode kernels).</td></tr>
+</table>
+</section>
+
+<section>
+<h2>Metadata &mdash; What the Driver Needs</h2>
+<p>Before a <span class="term" data-term="Kernel">kernel</span> can launch, the driver asks the <span class="term" data-term="cubin">cubin</span> four questions. The answers are in <code>.nv.info.KERNEL</code>:</p>
+
+<table>
+<tr><th>Attribute</th><th>Example</th><th>Used for</th></tr>
+<tr><td><code>EIATTR_REGCOUNT</code></td><td>168</td><td><span class="term" data-term="Occupancy">Occupancy</span> calc &mdash; how many warps fit per <span class="term" data-term="SM">SM</span></td></tr>
+<tr><td><code>EIATTR_MAX_THREADS</code></td><td>128</td><td>Upper bound on <code>blockDim</code></td></tr>
+<tr><td><code>EIATTR_SHARED_SIZE</code></td><td>49152</td><td>Static shared alloc per block</td></tr>
+<tr><td><code>EIATTR_PARAM_CBANK</code></td><td>c[0][0x160..0x210]</td><td>Where args live in constant bank 0</td></tr>
+<tr><td><code>EIATTR_KPARAM_INFO</code></td><td>{offset, size, ordinal}</td><td>Per-argument layout</td></tr>
+<tr><td><code>EIATTR_EXIT_INSTR_OFFSETS</code></td><td>[0x28c0]</td><td>Where <code>EXIT</code> lives (for debuggers)</td></tr>
+<tr><td><code>EIATTR_SM_ARCH</code></td><td>sm_90a</td><td>Target arch &mdash; must match runtime</td></tr>
+</table>
+
+<p><span class="term" data-term="Lithos">Lithos</span> generates cubins directly (no <code>nvcc</code> round-trip). The assembler emits these attributes as part of the module write. <code>cuModuleLoad</code> parses them once; every <code>cuLaunchKernel</code> thereafter is metadata-free.</p>
+</section>
+
+<section>
+<h2>The SASS Inside</h2>
+<p>First 20 instructions of one of our QKV-projection decode kernels, disassembled with <code>cuobjdump</code>:</p>
+
+<pre class="sass-asm"><span class="label">    /*0000*/</span>   <span class="mnemonic">LDC</span>        <span class="register">R1</span>,   c[<span class="hex">0x0</span>][<span class="hex">0x28</span>]         <span class="label">; stack pointer</span>
+<span class="label">    /*0010*/</span>   <span class="mnemonic">S2R</span>        <span class="register">R0</span>,   SR_TID.X                <span class="label">; threadIdx.x</span>
+<span class="label">    /*0020*/</span>   <span class="mnemonic">S2R</span>        <span class="register">R3</span>,   SR_CTAID.X              <span class="label">; blockIdx.x</span>
+<span class="label">    /*0030*/</span>   <span class="mnemonic">IMAD.WIDE</span>  <span class="register">R2</span>,   <span class="register">R3</span>, c[<span class="hex">0x0</span>][<span class="hex">0x0</span>], <span class="register">R0</span>   <span class="label">; tid_x + bid_x * blk_x</span>
+<span class="label">    /*0040*/</span>   <span class="mnemonic">ULDC.64</span>    <span class="register">UR4</span>,  c[<span class="hex">0x0</span>][<span class="hex">0x160</span>]        <span class="label">; load weight ptr</span>
+<span class="label">    /*0050*/</span>   <span class="mnemonic">ULDC.64</span>    <span class="register">UR6</span>,  c[<span class="hex">0x0</span>][<span class="hex">0x168</span>]        <span class="label">; load input ptr</span>
+<span class="label">    /*0060*/</span>   <span class="mnemonic">SHF.L.U32</span>  <span class="register">R4</span>,   <span class="register">R2</span>, <span class="hex">0x5</span>, <span class="register">RZ</span>            <span class="label">; row offset * 32</span>
+<span class="label">    /*0070*/</span>   <span class="mnemonic">IMAD.WIDE</span>  <span class="register">R6</span>,   <span class="register">R4</span>, <span class="hex">0x10</span>, <span class="register">UR6</span>          <span class="label">; input + offset</span>
+<span class="label">    /*0080*/</span>   <span class="mnemonic">LDG.E.128</span>  <span class="register">R8</span>,   [<span class="register">R6</span>]                   <span class="label">; load input tile</span>
+<span class="label">    /*0090*/</span>   <span class="mnemonic">LDG.E.128</span>  <span class="register">R12</span>,  [<span class="register">R6</span>+<span class="hex">0x10</span>]              <span class="label">; load input tile +1</span>
+<span class="label">    /*00a0*/</span>   <span class="mnemonic">CP.ASYNC.BULK.TENSOR.2D</span>  [<span class="register">R10</span>], [<span class="register">UR4</span>]     <span class="label">; TMA weight load</span>
+<span class="label">    /*00b0*/</span>   <span class="mnemonic">BAR.SYNC</span>   <span class="hex">0x0</span>                             <span class="label">; block-wide barrier</span>
+<span class="label">    /*00c0*/</span>   <span class="mnemonic">LDSM.16.M88.4</span> <span class="register">R16</span>, [<span class="register">R24</span>]                  <span class="label">; ldmatrix for mma</span>
+<span class="label">    /*00d0*/</span>   <span class="mnemonic">LDSM.16.M88.4</span> <span class="register">R20</span>, [<span class="register">R24</span>+<span class="hex">0x800</span>]             <span class="label">; next tile</span>
+<span class="label">    /*00e0*/</span>   <span class="mnemonic">WGMMA.M64N128K16.F16</span>  <span class="register">R32</span>, <span class="register">R16</span>, <span class="register">R20</span>, <span class="register">R32</span>
+<span class="label">    /*00f0*/</span>   <span class="mnemonic">WGMMA.M64N128K16.F16</span>  <span class="register">R32</span>, <span class="register">R16</span>, <span class="register">R20</span>, <span class="register">R32</span>
+<span class="label">    /*0100*/</span>   <span class="mnemonic">WGMMA.COMMIT_GROUP</span>
+<span class="label">    /*0110*/</span>   <span class="mnemonic">WGMMA.WAIT_GROUP</span>  <span class="hex">0x0</span>
+<span class="label">    /*0120*/</span>   <span class="mnemonic">STG.E.128</span>  [<span class="register">R26</span>], <span class="register">R32</span>                     <span class="label">; write output tile</span>
+<span class="label">    /*0130*/</span>   <span class="mnemonic">EXIT</span>
+</pre>
+
+<p>Every line is 128 bits on the wire. The low 64 bits are the opcode and operands; the high 64 bits carry the control info &mdash; reuse flags, wait-count, stall cycles, yield hints.</p>
+</section>
+
+<section>
+<h2>cuLaunchKernel</h2>
+<p>What happens when the host issues <code>cuLaunchKernel(func, grid, block, args, shared, stream)</code>:</p>
+
+<div class="diagram-title">Launch path &mdash; CPU to first <span class="term" data-term="SASS">SASS</span> instruction</div>
+<div class="launch-path">
+  <div class="launch-stage">
+    <h5>1. Host thread (CPU)</h5>
+    <ul>
+      <li>driver assembles a launch descriptor</li>
+      <li>serializes args into <code>.nv.constant0</code> layout</li>
+      <li>writes the descriptor into the stream's command buffer</li>
+      <li>rings the doorbell &mdash; a single MMIO write to a GPU-mapped page</li>
+    </ul>
+  </div>
+  <div class="launch-bridge">C2C / PCIe &darr;</div>
+  <div class="launch-stage">
+    <h5>2. GPU Host Interface (GHI)</h5>
+    <ul>
+      <li>reads the doorbell</li>
+      <li>DMA-pulls the command buffer entry</li>
+      <li>validates and queues on the GPU's Copy Engine / CE stream</li>
+    </ul>
+  </div>
+  <div class="launch-bridge">&darr;</div>
+  <div class="launch-stage">
+    <h5>3. Compute Work Distributor (CWD)</h5>
+    <ul>
+      <li>inspects <code>gridDim</code>, <code>blockDim</code>, resource reqs (R, shmem)</li>
+      <li>walks the 132 SMs, finds ones with capacity</li>
+      <li>hands each <span class="term" data-term="SM">SM</span> a block (with its <code>blockIdx</code>)</li>
+    </ul>
+  </div>
+  <div class="launch-bridge">&darr;</div>
+  <div class="launch-stage">
+    <h5>4. <span class="term" data-term="SM">SM</span> receives a block</h5>
+    <ul>
+      <li>allocates register slice, shared mem, <span class="term" data-term="Warp">warp</span> slots</li>
+      <li>loads <code>.nv.constant0</code> contents into the constant bank</li>
+      <li>dispatches warps to the 4 sub-partitions</li>
+      <li>first <span class="term" data-term="Warp">warp</span> runs <code>LDC R1, c[0x0][0x28]</code> &mdash; execution begins</li>
+    </ul>
+  </div>
+</div>
+
+<p>From doorbell to first instruction: typically 2-5 us on <span class="term" data-term="GH200">GH200</span>. For long-running kernels the launch cost is irrelevant; for a 40 us decode <span class="term" data-term="Kernel">kernel</span> it is meaningful &mdash; which is why <span class="term" data-term="Lithos">Lithos</span> uses graph capture, persistent kernels, and co-operative launches to eliminate it where possible.</p>
+</section>
+
+<section>
+<h2>Life of a Block</h2>
+<p>A <span class="term" data-term="Thread Block">thread block</span> is born when the CWD assigns it to an <span class="term" data-term="SM">SM</span>. It runs until every thread in it hits <code>EXIT</code>. It never migrates. It never pauses (beyond <span class="term" data-term="Warp">warp</span> scheduling within the block). When it finishes, the <span class="term" data-term="SM">SM</span> retires its resources and asks the CWD for the next block.</p>
+
+<div class="diagram-title">Block lifetime on one <span class="term" data-term="SM">SM</span></div>
+<div class="lifetime">
+  <div class="lifetime-row">
+    <div class="lifetime-time">t=0</div>
+    <div class="lifetime-event">CWD picks <span class="term" data-term="SM">SM</span> 17 for block (5, 2).</div>
+  </div>
+  <div class="lifetime-row">
+    <div class="lifetime-time">t + ~100ns</div>
+    <div class="lifetime-event"><span class="term" data-term="SM">SM</span> 17 reserves: 128 threads &times; 168 regs = 21,504 reg entries, 49,152 B <span class="term" data-term="Shared Memory">shared memory</span>, 4 <span class="term" data-term="Warp">warp</span> slots on sub-part 0.</div>
+  </div>
+  <div class="lifetime-row">
+    <div class="lifetime-time">t + ~200ns</div>
+    <div class="lifetime-event">First <span class="term" data-term="Warp">warp</span> starts issuing. Other warps in the block start as slots free up.</div>
+  </div>
+  <div class="lifetime-row running">
+    <div class="lifetime-time">t = &hellip;</div>
+    <div class="lifetime-event big">block runs to completion</div>
+  </div>
+  <div class="lifetime-row">
+    <div class="lifetime-time">t = end</div>
+    <div class="lifetime-event">Last <span class="term" data-term="Warp">warp</span> hits <code>EXIT</code>. <span class="term" data-term="SM">SM</span> retires resources.</div>
+  </div>
+  <div class="lifetime-row">
+    <div class="lifetime-time">t + ~50ns</div>
+    <div class="lifetime-event">CWD asks <span class="term" data-term="SM">SM</span> 17 for next assignment. Gets block (5, 3).</div>
+  </div>
+</div>
+
+<p>Blocks do not communicate with other blocks. Block (0, 0) and block (1, 0) might be running on the same <span class="term" data-term="SM">SM</span>, different SMs, or at different times. The <span class="term" data-term="Kernel">kernel</span> cannot assume any ordering. The <span class="term" data-term="Grid">grid</span> is an unordered bag of independent computations.</p>
+</section>
+
+<section>
+<h2>Grid and Block Dims</h2>
+<p><code>gridDim</code> is the shape of the <span class="term" data-term="Grid">grid</span> &mdash; how many blocks, in up to 3 dimensions. <code>blockDim</code> is the shape of each block. Both are fixed at launch; kernels read them via special registers <code>SR_CTAID</code> and <code>SR_TID</code>.</p>
+
+<table>
+<tr><th><span class="term" data-term="Kernel">Kernel</span></th><th>blockDim</th><th>gridDim</th><th>Mapping</th></tr>
+<tr><td>QKV proj (M=1, N=12288)</td><td class="num">128</td><td class="num">96</td><td>Each block computes 128 output columns</td></tr>
+<tr><td>FlashAttn decode</td><td class="num">256</td><td class="num">32 heads</td><td>One block per attention head</td></tr>
+<tr><td><span class="term" data-term="RMSNorm">RMSNorm</span></td><td class="num">1024</td><td class="num">seq_len</td><td>One block per token</td></tr>
+<tr><td>MLP up/gate fused</td><td class="num">128</td><td class="num">(M/128, 1, 1)</td><td>Each block computes one output row tile</td></tr>
+</table>
+
+<p><span class="term" data-term="Lithos">Lithos</span> picks these sizes to saturate 132 SMs without overshoot. For decode (batch=1), gridDim is usually in the range 96-256. For prefill (batch=N), gridDim scales with sequence length; that is where the GPU runs wide.</p>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

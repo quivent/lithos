@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> Architecture &mdash; What <span class="term" data-term="Lithos">Lithos</span> Writes Onto</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+.wide-container { max-width: 1200px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Architecture subnav */
+.subnav { display: flex; gap: 16px; padding: 12px 32px; background: #141420; border-bottom: 1px solid #2a2a3a; font-size: 13px; overflow-x: auto; position: sticky; top: 36px; z-index: 99; }
+.subnav a { color: #a0a0a8; text-decoration: none; white-space: nowrap; }
+.subnav a:hover { color: #d4a053; text-decoration: none; }
+.subnav a.active { color: #d4a053; border-bottom: 2px solid #d4a053; padding-bottom: 10px; margin-bottom: -12px; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3rem; font-weight: 300; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+/* ===== SM Architecture Diagram Styles ===== */
+
+/* Color scheme */
+.clr-reg { color: #4fc3f7; }
+.bg-reg { background: rgba(79, 195, 247, 0.12); border-color: rgba(79, 195, 247, 0.35); }
+.clr-l1 { color: #d4a053; }
+.bg-l1 { background: rgba(212, 160, 83, 0.12); border-color: rgba(212, 160, 83, 0.35); }
+.clr-compute { color: #66bb6a; }
+.bg-compute { background: rgba(102, 187, 106, 0.10); border-color: rgba(102, 187, 106, 0.30); }
+.clr-tensor { color: #ef5350; }
+.bg-tensor { background: rgba(239, 83, 80, 0.12); border-color: rgba(239, 83, 80, 0.35); }
+.clr-support { color: #9e9e9e; }
+.bg-support { background: rgba(158, 158, 158, 0.08); border-color: rgba(158, 158, 158, 0.25); }
+
+/* SM outer frame */
+.sm-frame {
+  background: var(--bg-code);
+  border: 2px solid var(--border);
+  padding: 1.2rem;
+  margin: 1rem 0;
+  position: relative;
+}
+.sm-frame-label {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Sub-partition grid */
+.sub-partitions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+@media (max-width: 800px) {
+  .sub-partitions { grid-template-columns: repeat(2, 1fr); }
+}
+
+.sub-partition {
+  border: 1px solid var(--border);
+  padding: 0.6rem;
+  background: var(--bg-raised);
+}
+.sp-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-align: center;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+/* Warp scheduler */
+.warp-sched {
+  border: 1px solid rgba(255,255,255,0.2);
+  padding: 0.35rem;
+  margin-bottom: 0.5rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--text-dim);
+}
+.warp-sched strong { color: var(--text); font-weight: 500; }
+
+/* Register file box */
+.reg-file {
+  border: 1px solid rgba(79, 195, 247, 0.35);
+  background: rgba(79, 195, 247, 0.08);
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  text-align: center;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.reg-file .rf-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #4fc3f7;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.reg-file .rf-detail {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: rgba(79, 195, 247, 0.7);
+  margin-top: 0.15rem;
+}
+
+/* Compute unit rows */
+.compute-row {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.25rem;
+  flex-wrap: wrap;
+}
+.cu-box {
+  flex: 1;
+  text-align: center;
+  padding: 0.2rem 0.15rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  border: 1px solid;
+  min-width: 0;
+}
+
+/* Shared L1 block */
+.shared-l1 {
+  border: 2px solid rgba(212, 160, 83, 0.45);
+  background: rgba(212, 160, 83, 0.08);
+  padding: 0.8rem 1rem;
+  text-align: center;
+  margin-bottom: 0.8rem;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.shared-l1 .sl-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #d4a053;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.shared-l1 .sl-detail {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: rgba(212, 160, 83, 0.7);
+  margin-top: 0.2rem;
+}
+
+/* Instruction cache */
+.icache {
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  padding: 0.4rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--text-faint);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Key insight callout */
+.key-insight {
+  border: 1px solid var(--accent-dim);
+  border-left: 4px solid var(--accent);
+  background: rgba(212, 160, 83, 0.05);
+  padding: 1rem 1.2rem;
+  margin: 1.5rem 0;
+  font-size: 0.88rem;
+}
+.key-insight strong { color: var(--accent); }
+
+/* Annotation boxes */
+.annotation {
+  border-left: 3px solid var(--cyan);
+  background: rgba(110, 200, 208, 0.05);
+  padding: 0.5rem 0.8rem;
+  margin: 0.5rem 0;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.annotation code { color: var(--cyan); font-size: 0.78rem; }
+
+/* Legend */
+.legend {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.legend-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid;
+  display: inline-block;
+}
+
+/* ===== Memory Hierarchy Bars ===== */
+.mem-hierarchy {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+.mem-row {
+  display: grid;
+  grid-template-columns: 110px 60px 1fr 160px;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.6rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+}
+.mem-label { color: var(--text); text-align: right; }
+.mem-cycles { color: var(--cyan); text-align: right; }
+.mem-bar-wrap { position: relative; height: 22px; }
+.mem-bar {
+  height: 100%;
+  border-radius: 2px;
+  position: relative;
+}
+.mem-info { color: var(--text-dim); font-size: 0.65rem; }
+
+/* ===== GPU-Wide View ===== */
+.gpu-frame {
+  background: var(--bg-code);
+  border: 2px solid var(--border);
+  padding: 1.5rem;
+  margin: 1rem 0;
+  position: relative;
+}
+.gpu-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-align: center;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+
+.gpu-layout {
+  display: grid;
+  grid-template-columns: 60px 1fr 60px;
+  grid-template-rows: 40px auto 40px auto;
+  gap: 0.5rem;
+}
+
+.hbm-block {
+  background: rgba(110, 142, 208, 0.12);
+  border: 1px solid rgba(110, 142, 208, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.55rem;
+  color: var(--blue);
+  text-align: center;
+  writing-mode: vertical-lr;
+  letter-spacing: 0.05em;
+}
+.hbm-block.horizontal {
+  writing-mode: horizontal-tb;
+}
+
+.sm-grid-wrapper {
+  grid-column: 2;
+  grid-row: 1 / 4;
+}
+
+.sm-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 2px;
+}
+.sm-cell {
+  aspect-ratio: 1;
+  background: rgba(102, 187, 106, 0.15);
+  border: 1px solid rgba(102, 187, 106, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.45rem;
+  color: rgba(102, 187, 106, 0.6);
+}
+.sm-cell.disabled {
+  background: rgba(158, 158, 158, 0.05);
+  border-color: rgba(158, 158, 158, 0.12);
+  color: rgba(158, 158, 158, 0.3);
+}
+
+.l2-cache {
+  grid-column: 2;
+  grid-row: 4;
+  background: rgba(212, 160, 83, 0.12);
+  border: 1px solid rgba(212, 160, 83, 0.35);
+  padding: 0.5rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--accent);
+}
+
+.nvlink-bar {
+  background: rgba(239, 83, 80, 0.12);
+  border: 1px solid rgba(239, 83, 80, 0.35);
+  padding: 0.5rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--red);
+  margin-top: 0.5rem;
+}
+
+/* ===== Sub-Partition Detail ===== */
+.sp-detail {
+  background: var(--bg-code);
+  border: 2px solid var(--border);
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+.sp-detail-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-align: center;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+
+.sp-detail-grid {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 1rem;
+}
+@media (max-width: 700px) {
+  .sp-detail-grid { grid-template-columns: 1fr; }
+}
+
+.sp-scheduler-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.warp-pool {
+  border: 1px solid var(--border);
+  padding: 0.5rem;
+  background: var(--bg-raised);
+}
+.warp-pool-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  text-align: center;
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.warp-slots {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+}
+.warp-slot {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  text-align: center;
+  padding: 0.15rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.5rem;
+  color: var(--text-faint);
+}
+.warp-slot.active {
+  background: rgba(102, 187, 106, 0.15);
+  border-color: rgba(102, 187, 106, 0.4);
+  color: var(--green);
+}
+
+.dispatch-unit {
+  border: 1px solid rgba(255,255,255,0.2);
+  padding: 0.35rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: var(--text-dim);
+}
+
+.sp-exec-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.datapath {
+  border: 1px solid var(--border);
+  padding: 0.5rem;
+  background: var(--bg-raised);
+}
+.dp-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  text-align: center;
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.dp-units {
+  display: flex;
+  gap: 0.2rem;
+  flex-wrap: wrap;
+}
+.dp-unit {
+  flex: 1;
+  min-width: 40px;
+  text-align: center;
+  padding: 0.25rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  border: 1px solid;
+}
+
+.tc-block {
+  border: 1px solid rgba(239, 83, 80, 0.4);
+  background: rgba(239, 83, 80, 0.08);
+  padding: 0.5rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: var(--red);
+}
+.tc-block .tc-detail {
+  font-size: 0.55rem;
+  color: rgba(239, 83, 80, 0.6);
+  margin-top: 0.15rem;
+}
+
+.sp-reg-file {
+  border: 1px solid rgba(79, 195, 247, 0.35);
+  background: rgba(79, 195, 247, 0.06);
+  padding: 0.5rem;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  color: #4fc3f7;
+}
+.sp-reg-file .rf-sub {
+  font-size: 0.55rem;
+  color: rgba(79, 195, 247, 0.6);
+  margin-top: 0.15rem;
+}
+
+.ldst-sfu-row {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.arrow-down {
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 0.7rem;
+  padding: 0.15rem 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Comparison boxes for the key insight */
+.two-memories {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin: 1rem 0;
+}
+@media (max-width: 700px) { .two-memories { grid-template-columns: 1fr; } }
+
+.mem-block {
+  border: 2px solid;
+  padding: 1rem;
+}
+.mem-block h4 {
+  margin: 0 0 0.5rem 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+.mem-block ul {
+  list-style: none;
+  padding: 0;
+}
+.mem-block li {
+  font-size: 0.82rem;
+  padding: 0.15rem 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.mem-block li::before {
+  content: "\25B8 ";
+  opacity: 0.4;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture" class="active">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<!-- Architecture Subnav -->
+<div class="subnav">
+  <a href="/architecture">Pipeline</a>
+  <a href="/arch-gpu">GPU</a>
+  <a href="/sm-architecture" class="active">SM</a>
+  <a href="/arch-cores">Cores</a>
+  <a href="/arch-registers">Registers</a>
+  <a href="/warp-scheduler">Warp</a>
+  <a href="/memory">Memory</a>
+  <a href="/arch-kernel">Kernel</a>
+</div>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Hopper SM</h1>
+  <p>What <span class="term" data-term="Lithos">Lithos</span> writes onto &mdash; the streaming multiprocessor in exact detail</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Key Insight -->
+<section>
+<h2>The Critical Distinction</h2>
+
+<p>Every <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> contains <strong>two separate 256 KB memory blocks</strong>. They serve entirely different purposes. Confusing them is a common source of wrong mental models.</p>
+
+<div class="two-memories">
+  <div class="mem-block bg-reg" style="border-color: rgba(79, 195, 247, 0.5);">
+    <h4 class="clr-reg"><span class="term" data-term="Register File">Register File</span> &mdash; 256 KB</h4>
+    <ul>
+      <li class="clr-reg">65,536 x 32-bit registers</li>
+      <li class="clr-reg">64 KB per sub-partition x 4</li>
+      <li class="clr-reg">1 cycle access latency</li>
+      <li class="clr-reg">Private per thread</li>
+      <li class="clr-reg">Feeds ALUs directly</li>
+      <li class="clr-reg">Determines <span class="term" data-term="Occupancy">occupancy</span></li>
+    </ul>
+  </div>
+  <div class="mem-block bg-l1" style="border-color: rgba(212, 160, 83, 0.5);">
+    <h4 class="clr-l1"><span class="term" data-term="L1 Cache">L1</span>/<span class="term" data-term="Shared Memory">Shared Memory</span> &mdash; 256 KB</h4>
+    <ul>
+      <li class="clr-l1">Unified, configurable split</li>
+      <li class="clr-l1">Up to 228 KB shared + rest <span class="term" data-term="L1 Cache">L1</span></li>
+      <li class="clr-l1">23 cycle access latency</li>
+      <li class="clr-l1">Shared across all threads in <span class="term" data-term="SM">SM</span></li>
+      <li class="clr-l1">32 banks x 4 bytes</li>
+      <li class="clr-l1">128 bytes/clock bandwidth</li>
+    </ul>
+  </div>
+</div>
+
+<div class="key-insight">
+  <strong>Same size, completely different hardware.</strong> The <span class="term" data-term="Register File">register file</span> is SRAM tightly coupled to each sub-partition's execution units &mdash; one cycle, private per thread, split across four physical blocks. The <span class="term" data-term="L1 Cache">L1</span>/<span class="term" data-term="Shared Memory">shared memory</span> is a separate SRAM bank shared across all four sub-partitions &mdash; <span class="speedup">23x</span> slower but visible to every thread in the <span class="term" data-term="SM">SM</span>. <span class="term" data-term="Lithos">Lithos</span> must manage both correctly.
+</div>
+</section>
+
+<!-- Diagram 1: Full <span class="term" data-term="SM">SM</span> Overview -->
+<section id="sm-overview">
+<h2>Diagram 1: Full SM Overview</h2>
+<p>The <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> contains 4 identical sub-partitions, each with its own <span class="term" data-term="Warp">warp</span> scheduler, <span class="term" data-term="Register File">register file</span>, and execution units. The <span class="term" data-term="L1 Cache">L1</span>/<span class="term" data-term="Shared Memory">shared memory</span> is shared across all four.</p>
+
+<div class="legend">
+  <div class="legend-item"><span class="legend-swatch" style="background: rgba(79,195,247,0.15); border-color: rgba(79,195,247,0.5);"></span> <span class="clr-reg"><span class="term" data-term="Register File">Register File</span> (1 cyc)</span></div>
+  <div class="legend-item"><span class="legend-swatch" style="background: rgba(212,160,83,0.15); border-color: rgba(212,160,83,0.5);"></span> <span class="clr-l1"><span class="term" data-term="L1 Cache">L1</span>/Shared (23 cyc)</span></div>
+  <div class="legend-item"><span class="legend-swatch" style="background: rgba(102,187,106,0.15); border-color: rgba(102,187,106,0.5);"></span> <span class="clr-compute">Compute (FP/INT)</span></div>
+  <div class="legend-item"><span class="legend-swatch" style="background: rgba(239,83,80,0.15); border-color: rgba(239,83,80,0.5);"></span> <span class="clr-tensor"><span class="term" data-term="Tensor Core">Tensor Core</span></span></div>
+  <div class="legend-item"><span class="legend-swatch" style="background: rgba(158,158,158,0.1); border-color: rgba(158,158,158,0.35);"></span> <span class="clr-support">LD/ST, <span class="term" data-term="SFU">SFU</span></span></div>
+</div>
+
+<div class="sm-frame">
+  <div class="sm-frame-label">Streaming Multiprocessor (<span class="term" data-term="SM">SM</span>) &mdash; 1 of 132 on <span class="term" data-term="GH200">GH200</span></div>
+
+  <!-- 4 Sub-partitions -->
+  <div class="sub-partitions">
+    <!-- Sub-partition 0 -->
+    <div class="sub-partition">
+      <div class="sp-label">Sub-partition 0</div>
+      <div class="warp-sched"><strong><span class="term" data-term="Warp">Warp</span> Scheduler</strong><br>16 resident warps &middot; 1 inst/clk</div>
+      <div class="reg-file">
+        <div class="rf-title"><span class="term" data-term="Register File">Register File</span></div>
+        <div class="rf-detail">64 KB &middot; 16,384 x 32b</div>
+        <div class="rf-detail">1 CYCLE &middot; PRIVATE/THREAD</div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-compute" style="flex: 2;">32 <span class="term" data-term="FP32">FP32</span></div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-compute">16 FP64</div>
+        <div class="cu-box bg-compute">16 INT32</div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-tensor">1 <span class="term" data-term="Tensor Core">Tensor Core</span></div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-support">4 LD/ST</div>
+        <div class="cu-box bg-support">4 <span class="term" data-term="SFU">SFU</span></div>
+      </div>
+    </div>
+
+    <!-- Sub-partition 1 -->
+    <div class="sub-partition">
+      <div class="sp-label">Sub-partition 1</div>
+      <div class="warp-sched"><strong><span class="term" data-term="Warp">Warp</span> Scheduler</strong><br>16 resident warps &middot; 1 inst/clk</div>
+      <div class="reg-file">
+        <div class="rf-title"><span class="term" data-term="Register File">Register File</span></div>
+        <div class="rf-detail">64 KB &middot; 16,384 x 32b</div>
+        <div class="rf-detail">1 CYCLE &middot; PRIVATE/THREAD</div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-compute" style="flex: 2;">32 <span class="term" data-term="FP32">FP32</span></div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-compute">16 FP64</div>
+        <div class="cu-box bg-compute">16 INT32</div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-tensor">1 <span class="term" data-term="Tensor Core">Tensor Core</span></div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-support">4 LD/ST</div>
+        <div class="cu-box bg-support">4 <span class="term" data-term="SFU">SFU</span></div>
+      </div>
+    </div>
+
+    <!-- Sub-partition 2 -->
+    <div class="sub-partition">
+      <div class="sp-label">Sub-partition 2</div>
+      <div class="warp-sched"><strong><span class="term" data-term="Warp">Warp</span> Scheduler</strong><br>16 resident warps &middot; 1 inst/clk</div>
+      <div class="reg-file">
+        <div class="rf-title"><span class="term" data-term="Register File">Register File</span></div>
+        <div class="rf-detail">64 KB &middot; 16,384 x 32b</div>
+        <div class="rf-detail">1 CYCLE &middot; PRIVATE/THREAD</div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-compute" style="flex: 2;">32 <span class="term" data-term="FP32">FP32</span></div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-compute">16 FP64</div>
+        <div class="cu-box bg-compute">16 INT32</div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-tensor">1 <span class="term" data-term="Tensor Core">Tensor Core</span></div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-support">4 LD/ST</div>
+        <div class="cu-box bg-support">4 <span class="term" data-term="SFU">SFU</span></div>
+      </div>
+    </div>
+
+    <!-- Sub-partition 3 -->
+    <div class="sub-partition">
+      <div class="sp-label">Sub-partition 3</div>
+      <div class="warp-sched"><strong><span class="term" data-term="Warp">Warp</span> Scheduler</strong><br>16 resident warps &middot; 1 inst/clk</div>
+      <div class="reg-file">
+        <div class="rf-title"><span class="term" data-term="Register File">Register File</span></div>
+        <div class="rf-detail">64 KB &middot; 16,384 x 32b</div>
+        <div class="rf-detail">1 CYCLE &middot; PRIVATE/THREAD</div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-compute" style="flex: 2;">32 <span class="term" data-term="FP32">FP32</span></div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-compute">16 FP64</div>
+        <div class="cu-box bg-compute">16 INT32</div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-tensor">1 <span class="term" data-term="Tensor Core">Tensor Core</span></div>
+      </div>
+      <div class="compute-row">
+        <div class="cu-box bg-support">4 LD/ST</div>
+        <div class="cu-box bg-support">4 <span class="term" data-term="SFU">SFU</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- <span class="term" data-term="Register File">Register file</span> total callout -->
+  <div style="text-align: center; margin-bottom: 0.8rem;">
+    <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; color: #4fc3f7; letter-spacing: 0.05em;">TOTAL <span class="term" data-term="Register File">REGISTER FILE</span>: 64 KB x 4 = 256 KB &mdash; 65,536 x 32-bit &mdash; 1 CYCLE &mdash; PRIVATE PER THREAD</span>
+  </div>
+
+  <!-- Shared <span class="term" data-term="L1 Cache">L1</span> -->
+  <div class="shared-l1">
+    <div class="sl-title"><span class="term" data-term="L1 Cache">L1</span> Data Cache + <span class="term" data-term="Shared Memory">Shared Memory</span></div>
+    <div class="sl-detail">256 KB unified &mdash; configurable: up to 228 KB shared + rest as <span class="term" data-term="L1 Cache">L1</span></div>
+    <div class="sl-detail">23 CYCLES ACCESS &mdash; 32 banks x 4 bytes &mdash; 128 bytes/clock</div>
+    <div class="sl-detail" style="margin-top: 0.4rem; color: var(--accent);">SHARED ACROSS ALL 4 SUB-PARTITIONS</div>
+  </div>
+
+  <!-- Instruction cache -->
+  <div class="icache"><span class="term" data-term="L1 Cache">L1</span> Instruction Cache</div>
+</div>
+
+<h3><span class="term" data-term="SM">SM</span> Totals</h3>
+<table>
+  <tr><th>Resource</th><th>Per Sub-Partition</th><th>Per <span class="term" data-term="SM">SM</span> (x4)</th></tr>
+  <tr><td><span class="term" data-term="FP32">FP32</span> <span class="term" data-term="CUDA">CUDA</span> Cores</td><td class="num">32</td><td class="num">128</td></tr>
+  <tr><td>FP64 Cores</td><td class="num">16</td><td class="num">64</td></tr>
+  <tr><td>INT32 Cores</td><td class="num">16</td><td class="num">64</td></tr>
+  <tr><td>Tensor Cores (4th gen)</td><td class="num">1</td><td class="num">4</td></tr>
+  <tr><td>Load/Store Units</td><td class="num">4</td><td class="num">16</td></tr>
+  <tr><td>Special Function Units</td><td class="num">4</td><td class="num">16</td></tr>
+  <tr><td><span class="term" data-term="Warp">Warp</span> Schedulers</td><td class="num">1</td><td class="num">4</td></tr>
+  <tr><td><span class="term" data-term="Register File">Register File</span></td><td class="num">64 KB</td><td class="num">256 KB</td></tr>
+  <tr><td>Max Resident Warps</td><td class="num">16</td><td class="num">64</td></tr>
+  <tr><td>Max Thread Blocks</td><td class="num">8</td><td class="num">32</td></tr>
+</table>
+
+<div class="annotation">
+  <code>Lithos controls register allocation</code> &mdash; more registers per thread means fewer concurrent warps, fewer warps means less <span class="term" data-term="Latency Hiding">latency hiding</span>. <span class="term" data-term="Lithos">Lithos</span> patterns target &le;128 regs/thread for memory-bound kernels.
+</div>
+<div class="annotation">
+  <code>Lithos controls shared memory usage</code> &mdash; declaring more <span class="term" data-term="Shared Memory">shared memory</span> shifts the <span class="term" data-term="L1 Cache">L1</span>/shared split, reducing <span class="term" data-term="L1 Cache">L1 cache</span> capacity. <span class="term" data-term="Lithos">Lithos</span> knows the exact 228 KB shared ceiling and sizes tiles accordingly.
+</div>
+</section>
+
+<!-- Diagram 2: Memory Hierarchy -->
+<section id="memory-hierarchy">
+<h2>Diagram 2: Memory Hierarchy (Scaled by Latency)</h2>
+<p>Access latency from the perspective of a single thread, shown to scale. Each bar's width is proportional to cycles. All latencies are measured in GPU clock <span class="term" data-term="Cycle">cycles</span> &mdash; at <span class="term" data-term="Hopper">Hopper</span>'s 1.83 GHz each cycle is ~0.55 ns, so a 400-cycle <span class="term" data-term="HBM">HBM</span> load is <em>~220 nanoseconds</em> of wall-clock time from <code>ld.global</code> issue to data in a register.</p>
+
+<div class="mem-hierarchy">
+  <!-- Register -->
+  <div class="mem-row">
+    <span class="mem-label clr-reg">Register</span>
+    <span class="mem-cycles">1 cyc</span>
+    <div class="mem-bar-wrap">
+      <div class="mem-bar" style="width: 0.25%; min-width: 4px; background: #4fc3f7;"></div>
+    </div>
+    <span class="mem-info">256 KB/<span class="term" data-term="SM">SM</span> &middot; private/thread</span>
+  </div>
+
+  <!-- <span class="term" data-term="Shared Memory">Shared Memory</span> -->
+  <div class="mem-row">
+    <span class="mem-label clr-l1">Shared Mem</span>
+    <span class="mem-cycles">23 cyc</span>
+    <div class="mem-bar-wrap">
+      <div class="mem-bar" style="width: 5.75%; background: #d4a053;"></div>
+    </div>
+    <span class="mem-info">up to 228 KB &middot; 128 B/clk</span>
+  </div>
+
+  <!-- <span class="term" data-term="L1 Cache">L1 Cache</span> -->
+  <div class="mem-row">
+    <span class="mem-label" style="color: #b0a060;"><span class="term" data-term="L1 Cache">L1 Cache</span></span>
+    <span class="mem-cycles">33 cyc</span>
+    <div class="mem-bar-wrap">
+      <div class="mem-bar" style="width: 8.25%; background: #b0a060;"></div>
+    </div>
+    <span class="mem-info">remainder of 256 KB &middot; 128 B/clk</span>
+  </div>
+
+  <!-- <span class="term" data-term="L2 Cache">L2 Cache</span> -->
+  <div class="mem-row">
+    <span class="mem-label clr-compute"><span class="term" data-term="L2 Cache">L2 Cache</span></span>
+    <span class="mem-cycles">200 cyc</span>
+    <div class="mem-bar-wrap">
+      <div class="mem-bar" style="width: 50%; background: #66bb6a;"></div>
+    </div>
+    <span class="mem-info">50 MB total &middot; ~12 TB/s internal</span>
+  </div>
+
+  <!-- <span class="term" data-term="HBM3e">HBM3e</span> -->
+  <div class="mem-row">
+    <span class="mem-label" style="color: var(--blue);"><span class="term" data-term="HBM3e">HBM3e</span></span>
+    <span class="mem-cycles">400 cyc</span>
+    <div class="mem-bar-wrap">
+      <div class="mem-bar" style="width: 100%; background: var(--blue);"></div>
+    </div>
+    <span class="mem-info">96 GB &middot; 4.0 TB/s &middot; 32B sectors</span>
+  </div>
+</div>
+
+<p class="small" style="margin-top: 0.5rem;">Scale: bar width = cycles / 400. Register (1 cycle) is <span class="speedup">400x</span> faster than <span class="term" data-term="HBM">HBM</span> (400 cycles). The gap between <span class="term" data-term="Shared Memory">shared memory</span> and <span class="term" data-term="L2 Cache">L2</span> is the biggest single jump &mdash; 8.7x.</p>
+
+<h3>Bandwidth at Each Level</h3>
+<table>
+  <tr><th>Level</th><th>Latency (cycles)</th><th>Real time @ 1.83 GHz</th><th>Bandwidth</th><th>Line/Sector</th></tr>
+  <tr><td class="clr-reg"><span class="term" data-term="Register File">Register File</span></td><td class="num">1 cycle</td><td class="num">~0.5 ns</td><td>&mdash;</td><td>&mdash;</td></tr>
+  <tr><td class="clr-l1"><span class="term" data-term="Shared Memory">Shared Memory</span></td><td class="num">~23 cycles</td><td class="num">~12 ns</td><td>128 bytes/clock/<span class="term" data-term="SM">SM</span></td><td>32 banks x 4 bytes</td></tr>
+  <tr><td style="color: #b0a060;"><span class="term" data-term="L1 Cache">L1</span> Data Cache</td><td class="num">~33 cycles</td><td class="num">~18 ns</td><td>128 bytes/clock/<span class="term" data-term="SM">SM</span></td><td>128-byte lines</td></tr>
+  <tr><td class="clr-compute"><span class="term" data-term="L2 Cache">L2 Cache</span></td><td class="num">~200 cycles</td><td class="num">~110 ns</td><td>~12 TB/s internal</td><td>128-byte lines</td></tr>
+  <tr><td style="color: var(--blue);"><span class="term" data-term="HBM3e">HBM3e</span> (Global)</td><td class="num">~400 cycles</td><td class="num">~220 ns</td><td>4.0 TB/s</td><td>32-byte sectors</td></tr>
+</table>
+<p class="small" style="margin-top: 0.5rem;">A <em>cycle</em> here is one GPU clock tick. The 400-cycle <span class="term" data-term="HBM">HBM</span> latency is end-to-end: from the <span class="term" data-term="SM">SM</span> issuing <code>ld.global.f32</code> to the data arriving in a register. During that ~220 ns, each of the <span class="term" data-term="SM">SM</span>'s four sub-partitions could have issued ~400 other instructions &mdash; that budget is the opportunity <span class="term" data-term="Latency Hiding">latency hiding</span> exploits.</p>
+
+<div class="annotation">
+  <code>Lithos controls stall counts in SASS</code> &mdash; every memory access that misses a fast level adds hundreds of stall cycles. <span class="term" data-term="Lithos">Lithos</span> patterns guarantee data is staged to the right level before compute needs it.
+</div>
+<div class="annotation">
+  <code>Lithos patterns guarantee coalesced access</code> &mdash; a <span class="term" data-term="Warp">warp</span> reading 32 contiguous 4-byte values hits one 128-byte cache line. Scattered access can waste <span class="speedup">32x</span> bandwidth. <span class="term" data-term="Lithos">Lithos</span> vocabulary words enforce <span class="term" data-term="Coalescing">coalescing</span> by construction.
+</div>
+</section>
+
+<!-- Diagram 3: GPU-Wide View -->
+<section id="gpu-wide">
+<h2>Diagram 3: GPU-Wide View (GH200)</h2>
+<p>132 active SMs (of 144 on die), 50 MB <span class="term" data-term="L2 Cache">L2 cache</span>, 6 <span class="term" data-term="HBM3e">HBM3e</span> stacks, <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> to <span class="term" data-term="Grace">Grace</span> CPU.</p>
+
+<div class="gpu-frame">
+  <div class="gpu-label">NVIDIA <span class="term" data-term="GH200">GH200</span> &mdash; <span class="term" data-term="Hopper">Hopper</span> GPU Die &mdash; ~1830 MHz Boost</div>
+
+  <div class="gpu-layout">
+    <!-- Left <span class="term" data-term="HBM">HBM</span> stacks -->
+    <div class="hbm-block" style="grid-column: 1; grid-row: 1 / 4;">
+      <span class="term" data-term="HBM3e">HBM3e</span> x3 &middot; 48 GB &middot; 2 TB/s
+    </div>
+
+    <!-- <span class="term" data-term="SM">SM</span> <span class="term" data-term="Grid">Grid</span> -->
+    <div class="sm-grid-wrapper">
+      <div class="sm-grid">
+        <!-- 132 active + 12 disabled = 144 total, 12 columns x 12 rows -->
+        <!-- Row 1 -->
+        <div class="sm-cell">0</div><div class="sm-cell">1</div><div class="sm-cell">2</div>
+        <div class="sm-cell">3</div><div class="sm-cell">4</div><div class="sm-cell">5</div>
+        <div class="sm-cell">6</div><div class="sm-cell">7</div><div class="sm-cell">8</div>
+        <div class="sm-cell">9</div><div class="sm-cell">10</div><div class="sm-cell">11</div>
+        <!-- Row 2 -->
+        <div class="sm-cell">12</div><div class="sm-cell">13</div><div class="sm-cell">14</div>
+        <div class="sm-cell">15</div><div class="sm-cell">16</div><div class="sm-cell">17</div>
+        <div class="sm-cell">18</div><div class="sm-cell">19</div><div class="sm-cell">20</div>
+        <div class="sm-cell">21</div><div class="sm-cell">22</div><div class="sm-cell">23</div>
+        <!-- Row 3 -->
+        <div class="sm-cell">24</div><div class="sm-cell">25</div><div class="sm-cell">26</div>
+        <div class="sm-cell">27</div><div class="sm-cell">28</div><div class="sm-cell">29</div>
+        <div class="sm-cell">30</div><div class="sm-cell">31</div><div class="sm-cell">32</div>
+        <div class="sm-cell">33</div><div class="sm-cell">34</div><div class="sm-cell">35</div>
+        <!-- Row 4 -->
+        <div class="sm-cell">36</div><div class="sm-cell">37</div><div class="sm-cell">38</div>
+        <div class="sm-cell">39</div><div class="sm-cell">40</div><div class="sm-cell">41</div>
+        <div class="sm-cell">42</div><div class="sm-cell">43</div><div class="sm-cell">44</div>
+        <div class="sm-cell">45</div><div class="sm-cell">46</div><div class="sm-cell">47</div>
+        <!-- Row 5 -->
+        <div class="sm-cell">48</div><div class="sm-cell">49</div><div class="sm-cell">50</div>
+        <div class="sm-cell">51</div><div class="sm-cell">52</div><div class="sm-cell">53</div>
+        <div class="sm-cell">54</div><div class="sm-cell">55</div><div class="sm-cell">56</div>
+        <div class="sm-cell">57</div><div class="sm-cell">58</div><div class="sm-cell">59</div>
+        <!-- Row 6 -->
+        <div class="sm-cell">60</div><div class="sm-cell">61</div><div class="sm-cell">62</div>
+        <div class="sm-cell">63</div><div class="sm-cell">64</div><div class="sm-cell">65</div>
+        <div class="sm-cell">66</div><div class="sm-cell">67</div><div class="sm-cell">68</div>
+        <div class="sm-cell">69</div><div class="sm-cell">70</div><div class="sm-cell">71</div>
+        <!-- Row 7 -->
+        <div class="sm-cell">72</div><div class="sm-cell">73</div><div class="sm-cell">74</div>
+        <div class="sm-cell">75</div><div class="sm-cell">76</div><div class="sm-cell">77</div>
+        <div class="sm-cell">78</div><div class="sm-cell">79</div><div class="sm-cell">80</div>
+        <div class="sm-cell">81</div><div class="sm-cell">82</div><div class="sm-cell">83</div>
+        <!-- Row 8 -->
+        <div class="sm-cell">84</div><div class="sm-cell">85</div><div class="sm-cell">86</div>
+        <div class="sm-cell">87</div><div class="sm-cell">88</div><div class="sm-cell">89</div>
+        <div class="sm-cell">90</div><div class="sm-cell">91</div><div class="sm-cell">92</div>
+        <div class="sm-cell">93</div><div class="sm-cell">94</div><div class="sm-cell">95</div>
+        <!-- Row 9 -->
+        <div class="sm-cell">96</div><div class="sm-cell">97</div><div class="sm-cell">98</div>
+        <div class="sm-cell">99</div><div class="sm-cell">100</div><div class="sm-cell">101</div>
+        <div class="sm-cell">102</div><div class="sm-cell">103</div><div class="sm-cell">104</div>
+        <div class="sm-cell">105</div><div class="sm-cell">106</div><div class="sm-cell">107</div>
+        <!-- Row 10 -->
+        <div class="sm-cell">108</div><div class="sm-cell">109</div><div class="sm-cell">110</div>
+        <div class="sm-cell">111</div><div class="sm-cell">112</div><div class="sm-cell">113</div>
+        <div class="sm-cell">114</div><div class="sm-cell">115</div><div class="sm-cell">116</div>
+        <div class="sm-cell">117</div><div class="sm-cell">118</div><div class="sm-cell">119</div>
+        <!-- Row 11 -->
+        <div class="sm-cell">120</div><div class="sm-cell">121</div><div class="sm-cell">122</div>
+        <div class="sm-cell">123</div><div class="sm-cell">124</div><div class="sm-cell">125</div>
+        <div class="sm-cell">126</div><div class="sm-cell">127</div><div class="sm-cell">128</div>
+        <div class="sm-cell">129</div><div class="sm-cell">130</div><div class="sm-cell">131</div>
+        <!-- Row 12: disabled SMs -->
+        <div class="sm-cell disabled">x</div><div class="sm-cell disabled">x</div><div class="sm-cell disabled">x</div>
+        <div class="sm-cell disabled">x</div><div class="sm-cell disabled">x</div><div class="sm-cell disabled">x</div>
+        <div class="sm-cell disabled">x</div><div class="sm-cell disabled">x</div><div class="sm-cell disabled">x</div>
+        <div class="sm-cell disabled">x</div><div class="sm-cell disabled">x</div><div class="sm-cell disabled">x</div>
+      </div>
+    </div>
+
+    <!-- Right <span class="term" data-term="HBM">HBM</span> stacks -->
+    <div class="hbm-block" style="grid-column: 3; grid-row: 1 / 4;">
+      <span class="term" data-term="HBM3e">HBM3e</span> x3 &middot; 48 GB &middot; 2 TB/s
+    </div>
+
+    <!-- <span class="term" data-term="L2 Cache">L2 Cache</span> -->
+    <div class="l2-cache">
+      <span class="term" data-term="L2 Cache">L2 CACHE</span> &mdash; 50 MB &mdash; 12 PARTITIONS &mdash; 128-BYTE LINES &mdash; ~12 TB/s INTERNAL &mdash; ~200 CYCLES
+    </div>
+
+    <!-- <span class="term" data-term="HBM">HBM</span> stacks left/right placeholders for row 4 alignment -->
+    <div style="grid-column: 1; grid-row: 4;"></div>
+    <div style="grid-column: 3; grid-row: 4;"></div>
+  </div>
+
+  <!-- NVLink bar -->
+  <div class="nvlink-bar">
+    <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> &mdash; 900 GB/s bidirectional &mdash; coherent <span class="term" data-term="Unified Memory">unified memory</span> &mdash; <span class="term" data-term="Grace">Grace</span> ARM64 CPU (72 cores, 480 GB <span class="term" data-term="LPDDR5X">LPDDR5X</span>)
+  </div>
+</div>
+
+<h3>GPU-Wide Totals</h3>
+<table>
+  <tr><th>Resource</th><th>Total</th></tr>
+  <tr><td>Active SMs</td><td class="num">132 (of 144 on die)</td></tr>
+  <tr><td>Tensor Cores</td><td class="num">528</td></tr>
+  <tr><td><span class="term" data-term="FP32">FP32</span> <span class="term" data-term="CUDA">CUDA</span> Cores</td><td class="num">16,896</td></tr>
+  <tr><td>Total <span class="term" data-term="Register File">Register File</span></td><td class="num">33 MB (256 KB x 132)</td></tr>
+  <tr><td>Total <span class="term" data-term="L1 Cache">L1</span>/Shared</td><td class="num">33 MB (256 KB x 132)</td></tr>
+  <tr><td><span class="term" data-term="L2 Cache">L2 Cache</span></td><td class="num">50 MB</td></tr>
+  <tr><td><span class="term" data-term="HBM3e">HBM3e</span> Capacity</td><td class="num">96 GB</td></tr>
+  <tr><td><span class="term" data-term="HBM3e">HBM3e</span> Bandwidth</td><td class="num">4.0 TB/s</td></tr>
+  <tr><td><span class="term" data-term="FP16">FP16</span> Tensor TFLOPS</td><td class="num">~990 dense</td></tr>
+  <tr><td><span class="term" data-term="FP8">FP8</span> Tensor TFLOPS</td><td class="num">~1979 dense</td></tr>
+</table>
+
+<div class="annotation">
+  <code>Lithos launches one kernel across all 132 SMs</code> &mdash; no framework overhead, no inter-<span class="term" data-term="Kernel">kernel</span> gaps. A single <code>cuLaunchKernel</code> call saturates the entire die.
+</div>
+</section>
+
+<!-- Diagram 4: Sub-Partition Detail -->
+<section id="sub-partition">
+<h2>Diagram 4: One Sub-Partition in Detail</h2>
+<p>Zoomed-in view showing how the <span class="term" data-term="Warp">warp</span> scheduler feeds the two datapaths, the <span class="term" data-term="Tensor Core">tensor core</span>, and how the <span class="term" data-term="Register File">register file</span> connects to everything.</p>
+
+<div class="sp-detail">
+  <div class="sp-detail-label">Sub-Partition Detail &mdash; 1 of 4 per <span class="term" data-term="SM">SM</span></div>
+
+  <div class="sp-detail-grid">
+    <!-- Left: Scheduler side -->
+    <div class="sp-scheduler-side">
+      <!-- <span class="term" data-term="Warp">Warp</span> pool -->
+      <div class="warp-pool">
+        <div class="warp-pool-label">16 Resident Warps (512 threads)</div>
+        <div class="warp-slots">
+          <div class="warp-slot active">W0</div><div class="warp-slot">W1</div>
+          <div class="warp-slot">W2</div><div class="warp-slot">W3</div>
+          <div class="warp-slot">W4</div><div class="warp-slot">W5</div>
+          <div class="warp-slot">W6</div><div class="warp-slot">W7</div>
+          <div class="warp-slot">W8</div><div class="warp-slot">W9</div>
+          <div class="warp-slot">W10</div><div class="warp-slot">W11</div>
+          <div class="warp-slot">W12</div><div class="warp-slot">W13</div>
+          <div class="warp-slot">W14</div><div class="warp-slot">W15</div>
+        </div>
+      </div>
+
+      <div class="arrow-down">| pick eligible <span class="term" data-term="Warp">warp</span> |</div>
+
+      <!-- <span class="term" data-term="Warp">Warp</span> scheduler -->
+      <div class="dispatch-unit" style="border-color: rgba(255,255,255,0.3);">
+        <strong style="color: var(--text);"><span class="term" data-term="Warp">Warp</span> Scheduler</strong><br>
+        <span class="term" data-term="Scoreboard">scoreboard</span> check &middot; dependency tracking<br>
+        picks 1 <span class="term" data-term="Warp">warp</span> per cycle
+      </div>
+
+      <div class="arrow-down">| dispatch 1 instruction |</div>
+
+      <!-- Dispatch -->
+      <div class="dispatch-unit">
+        <strong style="color: var(--text);">Dispatch Unit</strong><br>
+        routes to correct execution unit
+      </div>
+
+      <div class="arrow-down">|</div>
+
+      <!-- <span class="term" data-term="Register File">Register file</span> at bottom of scheduler side -->
+      <div class="sp-reg-file">
+        <span class="term" data-term="Register File">REGISTER FILE</span> &mdash; 64 KB<br>
+        16,384 x 32-bit registers<br>
+        <span class="rf-sub">1 cycle &middot; feeds all execution units</span><br>
+        <span class="rf-sub">max 255 registers per thread</span>
+      </div>
+    </div>
+
+    <!-- Right: Execution side -->
+    <div class="sp-exec-side">
+      <!-- Datapath A: <span class="term" data-term="FP32">FP32</span> only -->
+      <div class="datapath">
+        <div class="dp-label">Datapath A &mdash; <span class="term" data-term="FP32">FP32</span> Only (16-wide)</div>
+        <div class="dp-units">
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+          <div class="dp-unit bg-compute"><span class="term" data-term="FP32">FP32</span></div>
+        </div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--text-faint); text-align: center; margin-top: 0.3rem;">
+          16 <span class="term" data-term="FP32">FP32</span> cores &middot; processes one <span class="term" data-term="Warp">warp</span> in 2 cycles (32 threads / 16-wide)
+        </div>
+      </div>
+
+      <!-- Datapath B: <span class="term" data-term="FP32">FP32</span>/INT32 dual-issue -->
+      <div class="datapath">
+        <div class="dp-label">Datapath B &mdash; <span class="term" data-term="FP32">FP32</span> or INT32 (16-wide, shared)</div>
+        <div class="dp-units">
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.3); background: rgba(102,187,106,0.08);"><span class="term" data-term="FP32">FP32</span><br><span style="font-size: 0.48rem; color: var(--text-faint);">or</span><br>INT</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.3); background: rgba(102,187,106,0.08);"><span class="term" data-term="FP32">FP32</span><br><span style="font-size: 0.48rem; color: var(--text-faint);">or</span><br>INT</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.3); background: rgba(102,187,106,0.08);"><span class="term" data-term="FP32">FP32</span><br><span style="font-size: 0.48rem; color: var(--text-faint);">or</span><br>INT</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.3); background: rgba(102,187,106,0.08);"><span class="term" data-term="FP32">FP32</span><br><span style="font-size: 0.48rem; color: var(--text-faint);">or</span><br>INT</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.3); background: rgba(102,187,106,0.08);"><span class="term" data-term="FP32">FP32</span><br><span style="font-size: 0.48rem; color: var(--text-faint);">or</span><br>INT</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.3); background: rgba(102,187,106,0.08);"><span class="term" data-term="FP32">FP32</span><br><span style="font-size: 0.48rem; color: var(--text-faint);">or</span><br>INT</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.3); background: rgba(102,187,106,0.08);"><span class="term" data-term="FP32">FP32</span><br><span style="font-size: 0.48rem; color: var(--text-faint);">or</span><br>INT</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.3); background: rgba(102,187,106,0.08);"><span class="term" data-term="FP32">FP32</span><br><span style="font-size: 0.48rem; color: var(--text-faint);">or</span><br>INT</div>
+        </div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--text-faint); text-align: center; margin-top: 0.3rem;">
+          16 cores &middot; <span class="term" data-term="FP32">FP32</span> when no INT work &middot; INT32 shares this datapath with <span class="term" data-term="FP32">FP32</span>
+        </div>
+      </div>
+
+      <!-- FP64 -->
+      <div class="datapath">
+        <div class="dp-label">FP64 Units (16)</div>
+        <div class="dp-units">
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.2);">FP64</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.2);">FP64</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.2);">FP64</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.2);">FP64</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.2);">FP64</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.2);">FP64</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.2);">FP64</div>
+          <div class="dp-unit bg-compute" style="border-color: rgba(102,187,106,0.2);">FP64</div>
+        </div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; color: var(--text-faint); text-align: center; margin-top: 0.3rem;">
+          Full-rate FP64: 1:2 ratio with <span class="term" data-term="FP32">FP32</span>. <span class="term" data-term="Hopper">Hopper</span> is compute-class silicon.
+        </div>
+      </div>
+
+      <!-- <span class="term" data-term="Tensor Core">Tensor Core</span> -->
+      <div class="tc-block">
+        <span class="term" data-term="Tensor Core">TENSOR CORE</span> (4th Gen)<br>
+        <span class="tc-detail"><span class="term" data-term="FP8">FP8</span>: 2048 FLOPs/clk &middot; <span class="term" data-term="FP16">FP16</span>/<span class="term" data-term="BF16">BF16</span>: 1024 FLOPs/clk &middot; TF32: 512 FLOPs/clk</span><br>
+        <span class="tc-detail">Shape: m16n8k16 (<span class="term" data-term="FP16">FP16</span>) &middot; m16n8k32 (<span class="term" data-term="FP8">FP8</span>/INT8) &middot; m16n8k8 (TF32)</span>
+      </div>
+
+      <!-- LD/ST and <span class="term" data-term="SFU">SFU</span> -->
+      <div class="ldst-sfu-row">
+        <div class="datapath" style="flex: 1;">
+          <div class="dp-label">Load/Store (4)</div>
+          <div class="dp-units">
+            <div class="dp-unit bg-support">LD/ST</div>
+            <div class="dp-unit bg-support">LD/ST</div>
+            <div class="dp-unit bg-support">LD/ST</div>
+            <div class="dp-unit bg-support">LD/ST</div>
+          </div>
+        </div>
+        <div class="datapath" style="flex: 1;">
+          <div class="dp-label"><span class="term" data-term="SFU">SFU</span> (4)</div>
+          <div class="dp-units">
+            <div class="dp-unit bg-support"><span class="term" data-term="SFU">SFU</span></div>
+            <div class="dp-unit bg-support"><span class="term" data-term="SFU">SFU</span></div>
+            <div class="dp-unit bg-support"><span class="term" data-term="SFU">SFU</span></div>
+            <div class="dp-unit bg-support"><span class="term" data-term="SFU">SFU</span></div>
+          </div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.5rem; color: var(--text-faint); text-align: center; margin-top: 0.2rem;">
+            rcp rsqrt sin cos ex2 lg2
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h3>Data Flow Within a Sub-Partition</h3>
+<p>Every cycle, the <span class="term" data-term="Warp">warp</span> scheduler examines its pool of up to 16 resident warps. It checks the <span class="term" data-term="Scoreboard">scoreboard</span> for each &mdash; are the operand registers ready? Is the target execution unit free? If a <span class="term" data-term="Warp">warp</span> is eligible, its next instruction is dispatched.</p>
+<p>The dispatch unit reads source operands from the <span class="clr-reg"><span class="term" data-term="Register File">register file</span> (1 cycle)</span>, routes them to the correct execution unit, and writes results back to the <span class="term" data-term="Register File">register file</span>. Load/store units access <span class="clr-l1"><span class="term" data-term="Shared Memory">shared memory</span> (23 cycles)</span> or global memory through the cache hierarchy.</p>
+<p>The two datapaths give 32 <span class="term" data-term="FP32">FP32</span> operations per cycle (one full <span class="term" data-term="Warp">warp</span>). When a <span class="term" data-term="Warp">warp</span> has both <span class="term" data-term="FP32">FP32</span> and INT32 instructions, Datapath B handles INT32 while Datapath A handles <span class="term" data-term="FP32">FP32</span> &mdash; but they cannot both do <span class="term" data-term="FP32">FP32</span> simultaneously from different warps.</p>
+
+<div class="annotation">
+  <code>Lithos controls register allocation</code> &mdash; determines how many warps can be resident. At 128 regs/thread: 16,384 / (128 x 32) = 4 warps per sub-partition. At 64 regs/thread: 8 warps. More warps = more <span class="term" data-term="Latency Hiding">latency hiding</span>.
+</div>
+<div class="annotation">
+  <code>Lithos controls stall counts in SASS</code> &mdash; the <span class="term" data-term="Warp">warp</span> scheduler uses stall counts in the control word of each <span class="term" data-term="SASS">SASS</span> instruction to know the minimum wait before the next instruction from that <span class="term" data-term="Warp">warp</span> can issue. <span class="term" data-term="Lithos">Lithos</span> will emit these directly.
+</div>
+<div class="annotation">
+  <code>Lithos controls shared memory usage</code> &mdash; <code>cp.async</code> and TMA bypass the <span class="term" data-term="Register File">register file</span>, flowing data directly from global memory to <span class="term" data-term="Shared Memory">shared memory</span>. This preserves the scarce <span class="term" data-term="Register File">register file</span> for compute, not data staging.
+</div>
+</section>
+
+<!-- Summary -->
+<section>
+<h2>Why This Matters for Lithos</h2>
+<p><span class="term" data-term="Lithos">Lithos</span> writes directly onto this silicon. Every vocabulary word maps to specific hardware:</p>
+
+<table>
+  <tr><th><span class="term" data-term="Lithos">Lithos</span> Decision</th><th>Hardware Effect</th><th>Consequence</th></tr>
+  <tr>
+    <td>Register allocation</td>
+    <td>Fills 256 KB <span class="term" data-term="Register File">register file</span> across 4 sub-partitions</td>
+    <td>Determines <span class="term" data-term="Occupancy">occupancy</span> (warps/<span class="term" data-term="SM">SM</span>)</td>
+  </tr>
+  <tr>
+    <td><span class="term" data-term="Shared Memory">Shared memory</span> declaration</td>
+    <td>Configures <span class="term" data-term="L1 Cache">L1</span>/shared split in the 256 KB unified block</td>
+    <td>More shared = less <span class="term" data-term="L1 Cache">L1 cache</span></td>
+  </tr>
+  <tr>
+    <td>Memory access pattern</td>
+    <td>Coalesced = 1 cache line; scattered = up to 32 lines</td>
+    <td>Up to <span class="speedup">32x</span> bandwidth waste</td>
+  </tr>
+  <tr>
+    <td>Instruction scheduling</td>
+    <td><span class="term" data-term="SASS">SASS</span> stall counts tell scheduler when to re-issue <span class="term" data-term="Warp">warp</span></td>
+    <td>Wrong stalls = pipeline bubbles</td>
+  </tr>
+  <tr>
+    <td><span class="term" data-term="Kernel">Kernel</span> fusion</td>
+    <td>Data stays in registers/shared instead of round-tripping <span class="term" data-term="HBM">HBM</span></td>
+    <td>400-cycle (~220 ns) penalty per boundary</td>
+  </tr>
+  <tr>
+    <td><span class="term" data-term="Tensor Core">Tensor core</span> tile size</td>
+    <td>Must match m16n8k16/m16n8k32 hardware shapes</td>
+    <td>Mismatched tiles waste cycles</td>
+  </tr>
+</table>
+
+<p class="small" style="margin-top: 1rem;">Every number on this page comes from <a href="index.html#silicon">SPEC.md</a> and is encoded into <span class="term" data-term="Lithos">Lithos</span> vocabulary constraints. Patterns that violate these numbers are rejected at the language level, not discovered at runtime.</p>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+  <span class="term" data-term="Lithos">Lithos</span> &mdash; Writing on silicon
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

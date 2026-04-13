@@ -1,0 +1,1078 @@
+{
+  "arch": "sm_90",
+  "categories": {
+    "1_float_arithmetic": [
+      {
+        "ptx_pattern": "add.f32 rd, rs1, rs2",
+        "sass_mnemonic": "FADD",
+        "opcode": "0x221",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077221",
+        "ctrl_word": "0x004fca0000000000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x221",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x2",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      },
+      {
+        "ptx_pattern": "add.f32 rd, rs1, 1.0",
+        "sass_mnemonic": "FADD",
+        "opcode": "0x421",
+        "form": "reg-imm",
+        "inst_word": "0x3f80000002077421",
+        "ctrl_word": "0x004fca0000000000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x421",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x2",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x3f800000",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x2",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      },
+      {
+        "ptx_pattern": "mul.f32 rd, rs1, rs2",
+        "sass_mnemonic": "FMUL",
+        "opcode": "0x220",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077220",
+        "ctrl_word": "0x004fca0000400000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x220",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x2",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      },
+      {
+        "ptx_pattern": "fma.rn.f32 rd, rs1, rs2, rs3",
+        "sass_mnemonic": "FFMA",
+        "opcode": "0x223",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077223",
+        "ctrl_word": "0x004fca0000000009",
+        "fields": {
+          "opcode": "opcode[11:0]=0x223",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x9",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x2",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "rs3 in ctrl[7:0]"
+      },
+      {
+        "ptx_pattern": "min.f32 rd, rs1, rs2",
+        "sass_mnemonic": "FMNMX",
+        "opcode": "0x209",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077209",
+        "ctrl_word": "0x004fca0003800000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x209",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x2",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "FMNMX with PT -> min, !PT -> max. Select pred in ctrl[23:20]"
+      },
+      {
+        "ptx_pattern": "max.f32 rd, rs1, rs2",
+        "sass_mnemonic": "FMNMX",
+        "opcode": "0x209",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077209",
+        "ctrl_word": "0x004fca0007800000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x209",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x2",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "FMNMX with !PT in ctrl[23:20] -> max"
+      },
+      {
+        "ptx_pattern": "setp.gt.f32 pd, rs1, rs2",
+        "sass_mnemonic": "FSETP.GT.AND",
+        "opcode": "0x20b",
+        "form": "reg-reg",
+        "inst_word": "0x000000000500720b",
+        "ctrl_word": "0x004fda0003f04000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x20b",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x5",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x6",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "Dest pred in ctrl[19:16], comparison type in ctrl[15:12]"
+      }
+    ],
+    "2_special_functions": [
+      {
+        "ptx_pattern": "cos.approx.f32 rd, rs1",
+        "sass_mnemonic": "MUFU.COS",
+        "opcode": "0x308",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077308",
+        "ctrl_word": "0x000e240000000000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x308",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x0",
+          "wait_mask": "wait_mask[109:106]=0x9",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "subfunc_ctrl_13_10": "0x0"
+        },
+        "notes": "MUFU.COS: ctrl[13:10]=0x0"
+      },
+      {
+        "ptx_pattern": "sin.approx.f32 rd, rs1",
+        "sass_mnemonic": "MUFU.SIN",
+        "opcode": "0x308",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077308",
+        "ctrl_word": "0x000e240000000400",
+        "fields": {
+          "opcode": "opcode[11:0]=0x308",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x0",
+          "wait_mask": "wait_mask[109:106]=0x9",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "subfunc_ctrl_13_10": "0x1"
+        },
+        "notes": "MUFU.SIN: ctrl[13:10]=0x1"
+      },
+      {
+        "ptx_pattern": "ex2.approx.f32 rd, rs1",
+        "sass_mnemonic": "MUFU.EX2",
+        "opcode": "0x308",
+        "form": "reg-reg",
+        "inst_word": "0x0000000000077308",
+        "ctrl_word": "0x000e640000000800",
+        "fields": {
+          "opcode": "opcode[11:0]=0x308",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0x9",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "subfunc_ctrl_13_10": "0x2"
+        },
+        "notes": "MUFU.EX2: ctrl[13:10]=0x2"
+      },
+      {
+        "ptx_pattern": "lg2.approx.f32 rd, rs1",
+        "sass_mnemonic": "MUFU.LG2",
+        "opcode": "0x308",
+        "form": "reg-reg",
+        "inst_word": "0x0000000000077308",
+        "ctrl_word": "0x000e640000000c00",
+        "fields": {
+          "opcode": "opcode[11:0]=0x308",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0x9",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "subfunc_ctrl_13_10": "0x3"
+        },
+        "notes": "MUFU.LG2: ctrl[13:10]=0x3"
+      },
+      {
+        "ptx_pattern": "rcp.approx.f32 rd, rs1",
+        "sass_mnemonic": "MUFU.RCP",
+        "opcode": "0x308",
+        "form": "reg-reg",
+        "inst_word": "0x0000000000007308",
+        "ctrl_word": "0x000e640000001000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x308",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0x9",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "subfunc_ctrl_13_10": "0x4"
+        },
+        "notes": "MUFU.RCP: ctrl[13:10]=0x4"
+      },
+      {
+        "ptx_pattern": "rsqrt.approx.f32 rd, rs1",
+        "sass_mnemonic": "MUFU.RSQ",
+        "opcode": "0x308",
+        "form": "reg-reg",
+        "inst_word": "0x0000000000077308",
+        "ctrl_word": "0x000e640000001400",
+        "fields": {
+          "opcode": "opcode[11:0]=0x308",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0x9",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "subfunc_ctrl_13_10": "0x5"
+        },
+        "notes": "MUFU.RSQ: ctrl[13:10]=0x5"
+      },
+      {
+        "ptx_pattern": "sqrt.approx.f32 rd, rs1",
+        "sass_mnemonic": "MUFU.SQRT",
+        "opcode": "0x308",
+        "form": "reg-reg",
+        "inst_word": "0x0000000000077308",
+        "ctrl_word": "0x000e640000002000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x308",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0x9",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "subfunc_ctrl_13_10": "0x8"
+        },
+        "notes": "MUFU.SQRT: ctrl[13:10]=0x8"
+      }
+    ],
+    "3_half_precision": [
+      {
+        "ptx_pattern": "add.rn.f16x2 rd, rs1, rs2",
+        "sass_mnemonic": "HFMA2.MMA",
+        "opcode": "0x835",
+        "form": "reg-reg",
+        "inst_word": "0x3c003c0000077835",
+        "ctrl_word": "0x004fce0000000007",
+        "fields": {
+          "opcode": "opcode[11:0]=0x835",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x3c003c00",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x7",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x3",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      },
+      {
+        "ptx_pattern": "mul.rn.f16x2 rd, rs1, rs2",
+        "sass_mnemonic": "HFMA2.MMA",
+        "opcode": "0x235",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077235",
+        "ctrl_word": "0x004fce00001000ff",
+        "fields": {
+          "opcode": "opcode[11:0]=0x235",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0xff",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x3",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      },
+      {
+        "ptx_pattern": "fma.rn.f16x2 rd, rs1, rs2, rs3",
+        "sass_mnemonic": "HFMA2.MMA",
+        "opcode": "0x235",
+        "form": "reg-reg",
+        "inst_word": "0x0000000700077235",
+        "ctrl_word": "0x004fce0000000006",
+        "fields": {
+          "opcode": "opcode[11:0]=0x235",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x7",
+          "imm32": "imm32[63:32]=0x7",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x6",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x3",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "rs3 in ctrl[7:0]"
+      }
+    ],
+    "4_tensor_core": [
+      {
+        "ptx_pattern": "mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32",
+        "sass_mnemonic": "HMMA.16816.F32",
+        "opcode": "0x23c",
+        "form": "special",
+        "inst_word": "0x000000060808723c",
+        "ctrl_word": "0x004fde00000018ff",
+        "fields": {
+          "opcode": "opcode[11:0]=0x23c",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x8",
+          "rs1": "rs1[31:24]=0x8",
+          "rs2": "rs2[39:32]=0x6",
+          "imm32": "imm32[63:32]=0x6",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0xff",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x7",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "Shape/type in ctrl[15:8], accumulator in ctrl[7:0]"
+      },
+      {
+        "ptx_pattern": "ldmatrix.sync.aligned.m8n8.x4.shared.b16",
+        "sass_mnemonic": "LDSM.16.M88.4",
+        "opcode": "0x83b",
+        "form": "special",
+        "inst_word": "0x000000000404783b",
+        "ctrl_word": "0x000e280000000200",
+        "fields": {
+          "opcode": "opcode[11:0]=0x83b",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x4",
+          "rs1": "rs1[31:24]=0x4",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x0",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      }
+    ],
+    "5_shared_memory": [
+      {
+        "ptx_pattern": "ld.shared (32/64/128-bit)",
+        "sass_mnemonic": "LDS",
+        "opcode": "0x984",
+        "form": "special",
+        "inst_word": "0x0000000000057984",
+        "ctrl_word": "0x000e680000000800",
+        "fields": {
+          "opcode": "opcode[11:0]=0x984",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x5",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "LDS 32-bit, size in ctrl[13:10]"
+      },
+      {
+        "ptx_pattern": "ld.shared.64 (32/64/128-bit)",
+        "sass_mnemonic": "LDS.64",
+        "opcode": "0x984",
+        "form": "special",
+        "inst_word": "0x0000000000047984",
+        "ctrl_word": "0x000e680000000a00",
+        "fields": {
+          "opcode": "opcode[11:0]=0x984",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x4",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "LDS 64-bit, size in ctrl[13:10]"
+      },
+      {
+        "ptx_pattern": "ld.shared.128 (32/64/128-bit)",
+        "sass_mnemonic": "LDS.64",
+        "opcode": "0x984",
+        "form": "special",
+        "inst_word": "0x0000000000047984",
+        "ctrl_word": "0x000e680000000a00",
+        "fields": {
+          "opcode": "opcode[11:0]=0x984",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x4",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "LDS 128-bit, size in ctrl[13:10]"
+      },
+      {
+        "ptx_pattern": "st.shared.f32 [addr], rs",
+        "sass_mnemonic": "STS",
+        "opcode": "0x388",
+        "form": "special",
+        "inst_word": "0x0000000205007388",
+        "ctrl_word": "0x004fe20000000800",
+        "fields": {
+          "opcode": "opcode[11:0]=0x388",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x5",
+          "rs2": "rs2[39:32]=0x2",
+          "imm32": "imm32[63:32]=0x2",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x8",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      }
+    ],
+    "6_warp_shuffle": [
+      {
+        "ptx_pattern": "shfl.sync.bfly.b32",
+        "sass_mnemonic": "SHFL.BFLY",
+        "opcode": "0xf89",
+        "form": "imm",
+        "inst_word": "0x0c201f0000057f89",
+        "ctrl_word": "0x001e6800000e0000",
+        "fields": {
+          "opcode": "opcode[11:0]=0xf89",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x5",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0xc201f00",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x1",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x1",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "mode_bits_59_58": "0x3"
+        },
+        "notes": "SHFL.BFLY: inst[59:58]=0b11, opcode 0xf89 (imm)"
+      },
+      {
+        "ptx_pattern": "shfl.sync.down.b32",
+        "sass_mnemonic": "SHFL.DOWN",
+        "opcode": "0xf89",
+        "form": "imm",
+        "inst_word": "0x08201f0000077f89",
+        "ctrl_word": "0x000e2800000e0000",
+        "fields": {
+          "opcode": "opcode[11:0]=0xf89",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x8201f00",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x0",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "mode_bits_59_58": "0x2"
+        },
+        "notes": "SHFL.DOWN: inst[59:58]=0b10, opcode 0xf89 (imm)"
+      },
+      {
+        "ptx_pattern": "shfl.sync.up.b32",
+        "sass_mnemonic": "SHFL.UP",
+        "opcode": "0xf89",
+        "form": "imm",
+        "inst_word": "0x04201f0000097f89",
+        "ctrl_word": "0x000ea800000e0000",
+        "fields": {
+          "opcode": "opcode[11:0]=0xf89",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x9",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x4201f00",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x2",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "mode_bits_59_58": "0x1"
+        },
+        "notes": "SHFL.UP: inst[59:58]=0b01, opcode 0xf89 (imm)"
+      },
+      {
+        "ptx_pattern": "shfl.sync.idx.b32",
+        "sass_mnemonic": "SHFL.IDX",
+        "opcode": "0x589",
+        "form": "reg",
+        "inst_word": "0x00001fff000b7589",
+        "ctrl_word": "0x000ee800000e0000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x589",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0xb",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0xff",
+          "imm32": "imm32[63:32]=0x1fff",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x3",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "mode_bits_59_58": "0x0"
+        },
+        "notes": "SHFL.IDX: inst[59:58]=0b00, opcode 0x589 (reg)"
+      }
+    ],
+    "7_synchronization": [
+      {
+        "ptx_pattern": "bar.sync 0",
+        "sass_mnemonic": "BAR.SYNC.DEFER_BLOCKING",
+        "opcode": "0xb1d",
+        "form": "special",
+        "inst_word": "0x0000000000007b1d",
+        "ctrl_word": "0x000fec0000010000",
+        "fields": {
+          "opcode": "opcode[11:0]=0xb1d",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0xb",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      },
+      {
+        "ptx_pattern": "membar.cta",
+        "sass_mnemonic": "MEMBAR.SC.CTA",
+        "opcode": "0x992",
+        "form": "special",
+        "inst_word": "0x0000000000007992",
+        "ctrl_word": "0x0001ec0000000000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x992",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x0",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0xb",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "scope_ctrl_13_12": "0x0"
+        },
+        "notes": "MEMBAR.CTA: ctrl[13:12]=0x0"
+      },
+      {
+        "ptx_pattern": "membar.gl",
+        "sass_mnemonic": "MEMBAR.SC.GPU",
+        "opcode": "0x992",
+        "form": "special",
+        "inst_word": "0x0000000000007992",
+        "ctrl_word": "0x000fec0000002000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x992",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0xb",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "scope_ctrl_13_12": "0x2"
+        },
+        "notes": "MEMBAR.GPU: ctrl[13:12]=0x2"
+      },
+      {
+        "ptx_pattern": "membar.sys",
+        "sass_mnemonic": "MEMBAR.SC.SYS",
+        "opcode": "0x992",
+        "form": "special",
+        "inst_word": "0x0000000000007992",
+        "ctrl_word": "0x000fec0000003000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x992",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0xb",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {
+          "scope_ctrl_13_12": "0x3"
+        },
+        "notes": "MEMBAR.SYS: ctrl[13:12]=0x3"
+      },
+      {
+        "ptx_pattern": "cp.async.wait_group -> DEPBAR",
+        "sass_mnemonic": "DEPBAR.LE",
+        "opcode": "0x91a",
+        "form": "special",
+        "inst_word": "0x000080000000791a",
+        "ctrl_word": "0x000fc80000000000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x91a",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x8000",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0x2",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      }
+    ],
+    "8_async_copy": [
+      {
+        "ptx_pattern": "cp.async.ca.shared.global [smem], [global], 16",
+        "sass_mnemonic": "LDGSTS.E.128",
+        "opcode": "0xfae",
+        "form": "special",
+        "inst_word": "0x0000000002077fae",
+        "ctrl_word": "0x004fe8000b921c44",
+        "fields": {
+          "opcode": "opcode[11:0]=0xfae",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x7",
+          "rs1": "rs1[31:24]=0x2",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x44",
+          "stall": "stall[121:117]=0x2",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x7",
+          "wait_mask": "wait_mask[109:106]=0xa",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": "LDGSTS: combined global load + shared store"
+      },
+      {
+        "ptx_pattern": "(compiler-generated after cp.async)",
+        "sass_mnemonic": "LDGDEPBAR",
+        "opcode": "0x9af",
+        "form": "special",
+        "inst_word": "0x00000000000079af",
+        "ctrl_word": "0x000e220000000000",
+        "fields": {
+          "opcode": "opcode[11:0]=0x9af",
+          "pred": "pred[15:12]=0x7",
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "imm32": "imm32[63:32]=0x0",
+          "rs3_ctrl": "rs3_ctrl[71:64]=0x0",
+          "stall": "stall[121:117]=0x0",
+          "yield": "yield[116:116]=0x0",
+          "wr_bar": "wr_bar[115:113]=0x7",
+          "rd_bar": "rd_bar[112:110]=0x0",
+          "wait_mask": "wait_mask[109:106]=0x8",
+          "reuse": "reuse[127:122]=0x0"
+        },
+        "modifiers": {},
+        "notes": ""
+      }
+    ],
+    "9_register_fields": [
+      {
+        "ptx_pattern": "add.f32 (multiple, varied register assignments)",
+        "sass_mnemonic": "FADD",
+        "opcode": "0x221",
+        "form": "reg-reg",
+        "inst_word": "0x0000000000000000",
+        "ctrl_word": "0x0000000000000000",
+        "fields": {
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0"
+        },
+        "modifiers": {},
+        "notes": "Rd in inst[23:16], Rs1 in inst[31:24], Rs2 in inst[39:32]. 8-bit fields, R255 (0xFF) = RZ. Physical register numbers assigned by ptxas register allocator.",
+        "variants": [
+          {
+            "desc": "FADD R7, R0, R7",
+            "inst": "0x0000000700077221",
+            "ctrl": "0x004fca0000000000"
+          },
+          {
+            "desc": "FADD R6, R6, R9",
+            "inst": "0x0000000906067221",
+            "ctrl": "0x008fc80000000000"
+          },
+          {
+            "desc": "FADD R0, R7, R6",
+            "inst": "0x0000000607007221",
+            "ctrl": "0x000fe20000000000"
+          },
+          {
+            "desc": "FADD R11, R8, R11",
+            "inst": "0x0000000b080b7221",
+            "ctrl": "0x010fc60000000000"
+          },
+          {
+            "desc": "FADD R9, R11, R0",
+            "inst": "0x000000000b097221",
+            "ctrl": "0x000fc60000000000"
+          }
+        ]
+      },
+      {
+        "ptx_pattern": "abs.f32 -> FADD Rd, |Rs1|, -RZ",
+        "sass_mnemonic": "FADD",
+        "opcode": "0x221",
+        "form": "",
+        "inst_word": "0x800000ff02077221",
+        "ctrl_word": "0x004fca0000000200",
+        "fields": {
+          "rs2_RZ": "rs2[39:32]=0xff"
+        },
+        "modifiers": {},
+        "notes": "RZ=0xff (expect 0xFF), inst[63]=negate_src2=1, ctrl[9]=abs_src1=1"
+      },
+      {
+        "ptx_pattern": "fma.rn.f32 (rs3 location check)",
+        "sass_mnemonic": "FFMA",
+        "opcode": "0x223",
+        "form": "reg-reg",
+        "inst_word": "0x0000000000000000",
+        "ctrl_word": "0x0000000000000000",
+        "fields": {
+          "rd": "rd[23:16]=0x0",
+          "rs1": "rs1[31:24]=0x0",
+          "rs2": "rs2[39:32]=0x0",
+          "rs3": "rs3_ctrl[71:64]=0x0"
+        },
+        "modifiers": {},
+        "notes": "4-operand: rs3 in ctrl[7:0] (bits 71:64 of 128-bit instruction)",
+        "variants": [
+          {
+            "desc": "FFMA R7, R0, R7, R9 (rs3=ctrl[7:0]=R9)",
+            "inst": "0x0000000700077223",
+            "ctrl": "0x004fe20000000009"
+          },
+          {
+            "desc": "FFMA R9, R9, R6, R0 (rs3=ctrl[7:0]=R0)",
+            "inst": "0x0000000609097223",
+            "ctrl": "0x008fc80000000000"
+          }
+        ]
+      }
+    ],
+    "10_immediate_encoding": [
+      {
+        "ptx_pattern": "add.f32 rd, rs, <float_imm>",
+        "sass_mnemonic": "FADD",
+        "opcode": "0x000",
+        "form": "reg-imm",
+        "inst_word": "0x0000000000000000",
+        "ctrl_word": "0x0000000000000000",
+        "fields": {
+          "imm32": "imm32[63:32]=0x0"
+        },
+        "modifiers": {},
+        "notes": "IEEE 754 float immediate in inst[63:32]. inst[63:32]=0x3F800000 (expected 0x3F800000, MATCH); inst[63:32]=0x40000000 (expected 0x40000000, MATCH); inst[63:32]=0x3F000000 (expected 0x3F000000, MATCH); inst[63:32]=0xBF800000 (expected 0xBF800000, MATCH); inst[63:32]=0x3E800000 (expected 0x3E800000, MATCH)",
+        "variants": [
+          {
+            "desc": "FADD Rd, Rs, 1.0",
+            "inst": "0x3f80000002077421",
+            "ctrl": "0x004fca0000000000"
+          },
+          {
+            "desc": "FADD Rd, Rs, 2.0",
+            "inst": "0x4000000002077421",
+            "ctrl": "0x004fca0000000000"
+          },
+          {
+            "desc": "FADD Rd, Rs, 0.5",
+            "inst": "0x3f00000002077421",
+            "ctrl": "0x004fca0000000000"
+          },
+          {
+            "desc": "FADD Rd, Rs, -1.0",
+            "inst": "0xbf80000002077421",
+            "ctrl": "0x004fca0000000000"
+          },
+          {
+            "desc": "FADD Rd, Rs, 0.25",
+            "inst": "0x3e80000002077421",
+            "ctrl": "0x004fca0000000000"
+          }
+        ]
+      }
+    ],
+    "11_predication": [
+      {
+        "ptx_pattern": "@Px / @!Px guard on instructions",
+        "sass_mnemonic": "(any)",
+        "opcode": "0x000",
+        "form": "",
+        "inst_word": "0x0000000000000000",
+        "ctrl_word": "0x0000000000000000",
+        "fields": {
+          "pred_guard": "pred[15:12]=0x0"
+        },
+        "modifiers": {},
+        "notes": "Pred guard in inst[15:12]: bit[15]=negate, bits[14:12]=pred reg index, PT=0x7 (always true, unpredicated). Note: ptxas remaps PTX predicate registers to physical SASS predicates. Observed physical pred values: [0, 8]. Format: 0x0-0x6 = @P0-@P6, 0x8-0xE = @!P0-@!P6, 0x7 = PT, 0xF = !PT.",
+        "variants": [
+          {
+            "desc": "@%p0 @!P0",
+            "inst": "0x0000000704008986",
+            "ctrl": "0x000fe2000c101904"
+          },
+          {
+            "desc": "@%p1 @P0",
+            "inst": "0x0000000704000986",
+            "ctrl": "0x000fe2000c101904"
+          },
+          {
+            "desc": "@%p2 @P0",
+            "inst": "0x0000000704000986",
+            "ctrl": "0x000fe2000c101904"
+          },
+          {
+            "desc": "@%p3 @!P0",
+            "inst": "0x0000000704008986",
+            "ctrl": "0x000fe2000c101904"
+          },
+          {
+            "desc": "@!%p0 @P0",
+            "inst": "0x0000000704000986",
+            "ctrl": "0x000fe2000c101904"
+          },
+          {
+            "desc": "@!%p1 @!P0",
+            "inst": "0x0000000704008986",
+            "ctrl": "0x000fe2000c101904"
+          },
+          {
+            "desc": "@!%p2 @!P0",
+            "inst": "0x0000000704008986",
+            "ctrl": "0x000fe2000c101904"
+          }
+        ]
+      }
+    ]
+  }
+}

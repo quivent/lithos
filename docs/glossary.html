@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><span class="term" data-term="Lithos">Lithos</span> Glossary &mdash; Technical Terms Reference</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 4.5rem; font-weight: 300; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+  color: var(--accent);
+}
+
+/* Letter index */
+.letter-index {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.letter-index a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+.letter-index a:hover {
+  border-color: var(--accent-dim);
+  background: var(--bg-raised);
+  text-decoration: none;
+}
+.letter-index a.inactive {
+  color: var(--text-faint);
+  border-color: transparent;
+  pointer-events: none;
+}
+
+/* Letter sections */
+.letter-section {
+  margin-bottom: 2.5rem;
+}
+.letter-heading {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 1.6rem;
+  font-weight: 300;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.2rem;
+}
+
+/* Term entries */
+.glossary-entry {
+  margin-bottom: 1.5rem;
+  padding-left: 1rem;
+  border-left: 2px solid transparent;
+  transition: border-color 0.2s;
+}
+.glossary-entry:target {
+  border-left-color: var(--accent);
+  background: var(--bg-raised);
+  padding: 0.8rem 1rem;
+  margin-left: -1rem;
+  border-radius: 0 2px 2px 0;
+}
+.glossary-term {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.3rem;
+  letter-spacing: 0.02em;
+}
+.glossary-term code {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.glossary-def {
+  color: var(--text-dim);
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+.glossary-def em {
+  color: var(--text);
+  font-style: normal;
+}
+
+/* Utility */
+.small { font-size: 0.82rem; color: var(--text-dim); }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary" class="active">Glossary</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Glossary</h1>
+  <p>Every technical term used across the <span class="term" data-term="Lithos">Lithos</span> documentation.</p>
+</div>
+</header>
+
+<main class="container">
+
+<section>
+
+<!-- Letter Index -->
+<div class="letter-index">
+  <a href="#letter-A">A</a>
+  <a href="#letter-B">B</a>
+  <a href="#letter-C">C</a>
+  <a href="#letter-D">D</a>
+  <a class="inactive">E</a>
+  <a href="#letter-F">F</a>
+  <a href="#letter-G">G</a>
+  <a href="#letter-H">H</a>
+  <a class="inactive">I</a>
+  <a class="inactive">J</a>
+  <a href="#letter-K">K</a>
+  <a href="#letter-L">L</a>
+  <a href="#letter-M">M</a>
+  <a href="#letter-N">N</a>
+  <a href="#letter-O">O</a>
+  <a href="#letter-P">P</a>
+  <a class="inactive">Q</a>
+  <a href="#letter-R">R</a>
+  <a href="#letter-S">S</a>
+  <a href="#letter-T">T</a>
+  <a href="#letter-U">U</a>
+  <a class="inactive">V</a>
+  <a href="#letter-W">W</a>
+  <a class="inactive">X</a>
+  <a class="inactive">Y</a>
+  <a class="inactive">Z</a>
+</div>
+
+<!-- ===== A ===== -->
+<div class="letter-section" id="letter-A">
+<div class="letter-heading">A</div>
+
+<div class="glossary-entry" id="term-aten">
+<div class="glossary-term">ATen &mdash; PyTorch Tensor Library</div>
+<div class="glossary-def">PyTorch's tensor library, written in C++. The layer below Python &mdash; every tensor operation (add, mul, matmul) hits <span class="term" data-term="ATen">ATen</span> before reaching <span class="term" data-term="CUDA">CUDA</span>. Handles shape checks, dtype promotion, and dispatch to the right backend kernel. <span class="term" data-term="Lithos">Lithos</span> skips this entire layer and talks to the driver directly.</div>
+</div>
+
+<div class="glossary-entry" id="term-autograd">
+<div class="glossary-term">Autograd</div>
+<div class="glossary-def">PyTorch's automatic differentiation machinery. Tracks operations on tensors to compute gradients for training. <em>Disabled during inference</em> (<code>torch.no_grad</code> or <code>inference_mode</code>), but the checking for whether it's disabled runs on every operation. <span class="term" data-term="Lithos">Lithos</span> has no <span class="term" data-term="Autograd">Autograd</span> &mdash; an inference engine doesn't need gradients, so the machinery doesn't exist.</div>
+</div>
+
+<div class="glossary-entry" id="term-awq">
+<div class="glossary-term">AWQ &mdash; Activation-aware Weight Quantization</div>
+<div class="glossary-def">A quantization method that preserves important weights by observing activation distributions during calibration. <span class="term" data-term="AWQ">AWQ</span> identifies which weight channels matter most for accuracy and protects them during quantization. Used alongside <span class="term" data-term="GPTQ">GPTQ</span> to compress models like Qwen 27B to <em>4-bit weights</em> for <span class="term" data-term="Lithos">Lithos</span> inference.</div>
+</div>
+
+</div>
+
+<!-- ===== B ===== -->
+<div class="letter-section" id="letter-B">
+<div class="letter-heading">B</div>
+
+<div class="glossary-entry" id="term-bank-conflict">
+<div class="glossary-term">Bank Conflict</div>
+<div class="glossary-def">When multiple threads in a <span class="term" data-term="Warp">warp</span> access different addresses within the same <span class="term" data-term="Shared Memory">shared memory</span> bank simultaneously. <span class="term" data-term="Shared Memory">Shared memory</span> has <em>32 banks, 4 bytes each</em>. If two threads hit the same bank at different addresses, their accesses serialize &mdash; what should be parallel becomes sequential. <span class="term" data-term="Lithos">Lithos</span> patterns encode conflict-free access structurally, guaranteeing all 32 threads access 32 different banks every cycle.</div>
+</div>
+
+<div class="glossary-entry" id="term-bf16">
+<div class="glossary-term">BF16 &mdash; Brain Floating Point 16</div>
+<div class="glossary-def">A 16-bit floating point format with the same 8-bit exponent as <span class="term" data-term="FP32">FP32</span> but only 7 bits of mantissa. Trades precision for dynamic range, making it well-suited for deep learning where range matters more than exact precision. <span class="term" data-term="Hopper">Hopper</span> tensor cores support <span class="term" data-term="BF16">BF16</span> at <em>1,024 <span class="term" data-term="FLOPs/clock">FLOPs/clock</span>/<span class="term" data-term="SM">SM</span></em>. Not sufficient for <span class="term" data-term="DeltaNet">DeltaNet</span> state accumulation, where drift destroys accuracy at ~50%.</div>
+</div>
+
+</div>
+
+<!-- ===== C ===== -->
+<div class="letter-section" id="letter-C">
+<div class="letter-heading">C</div>
+
+<div class="glossary-entry" id="term-coalescing">
+<div class="glossary-term">Coalescing</div>
+<div class="glossary-def">Combining memory accesses from threads in a <span class="term" data-term="Warp">warp</span> into fewer, larger memory transactions. When 32 threads read 32 consecutive bytes aligned to a <em>32-byte sector boundary</em>, the hardware serves it in one transaction. Misaligned access wastes bandwidth in direct proportion to the misalignment. <span class="term" data-term="Coalescing">Coalescing</span> is the single most important memory optimization &mdash; the difference between 4 TB/s and a fraction of it.</div>
+</div>
+
+<div class="glossary-entry" id="term-conv1d">
+<div class="glossary-term">Conv1D &mdash; Causal 1D Convolution</div>
+<div class="glossary-def">A 1D causal convolution applied before the <span class="term" data-term="DeltaNet">DeltaNet</span> recurrence in Qwen 3.5. Uses a <em><span class="term" data-term="Kernel">kernel</span> size of 4</em> &mdash; a rolling buffer of the 4 most recent input vectors. Acts as a short-range FIR filter that gives the recurrence local context before it updates the global state. Trivially parallel across channels. Fused into the <span class="term" data-term="DeltaNet">DELTANET</span> <span class="term" data-term="Kernel">kernel</span> in <span class="term" data-term="Lithos">Lithos</span>.</div>
+</div>
+
+<div class="glossary-entry" id="term-cta">
+<div class="glossary-term">CTA &mdash; Cooperative Thread Array</div>
+<div class="glossary-def">NVIDIA's internal name for a <span class="term" data-term="Thread Block">thread block</span>. A group of threads (up to 1,024 on <span class="term" data-term="Hopper">Hopper</span>) that execute on the same <span class="term" data-term="SM">SM</span>, share <span class="term" data-term="Shared Memory">shared memory</span>, and can synchronize via barriers. Each <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> can host up to <em>32 CTAs</em> simultaneously. See also: <em><span class="term" data-term="Thread Block">Thread Block</span></em>.</div>
+</div>
+
+<div class="glossary-entry" id="term-cuda">
+<div class="glossary-term">CUDA &mdash; Compute Unified Device Architecture</div>
+<div class="glossary-def">NVIDIA's parallel computing platform and programming model. Provides APIs for launching GPU kernels, managing memory, and synchronizing execution. <span class="term" data-term="Lithos">Lithos</span> bypasses most of the <span class="term" data-term="CUDA">CUDA</span> software stack (runtime, <span class="term" data-term="cuBLAS">cuBLAS</span>, <span class="term" data-term="cuDNN">cuDNN</span>) and talks directly to the <em><span class="term" data-term="CUDA">CUDA</span> Driver API</em> (<code>libcuda.so</code>) for <span class="term" data-term="Kernel">kernel</span> launch via <code>cuLaunchKernel</code>.</div>
+</div>
+
+<div class="glossary-entry" id="term-cuda-core">
+<div class="glossary-term">CUDA Core</div>
+<div class="glossary-def">A scalar floating-point execution unit on an NVIDIA GPU. Each <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> has <em>128 <span class="term" data-term="FP32">FP32</span> <span class="term" data-term="CUDA">CUDA</span> cores</em>, organized as two 16-wide datapaths per sub-partition across 4 sub-partitions. Handles general arithmetic. For matrix math, tensor cores are far more efficient &mdash; a single <span class="term" data-term="Tensor Core">tensor core</span> MMA instruction produces 1,024 <span class="term" data-term="FLOPs/clock">FLOPs/clock</span> versus 128 for all <span class="term" data-term="CUDA">CUDA</span> cores combined.</div>
+</div>
+
+<div class="glossary-entry" id="term-cublas">
+<div class="glossary-term">cuBLAS &mdash; CUDA Basic Linear Algebra Subroutines</div>
+<div class="glossary-def">NVIDIA's GPU-accelerated matrix math library. Provides optimized GEMM (General Matrix Multiply) kernels selected from a pre-compiled atlas. The atlas is <em>~800 MB</em> because it contains kernels for every possible matrix shape. <span class="term" data-term="Lithos">Lithos</span> replaces <span class="term" data-term="cuBLAS">cuBLAS</span> with 7 purpose-built cubins totaling <em>32 KB</em>, specialized for the exact model dimensions.</div>
+</div>
+
+<div class="glossary-entry" id="term-cuda-graph">
+<div class="glossary-term">CUDA graph</div>
+<div class="glossary-def">A recorded sequence of <span class="term" data-term="Kernel">kernel</span> launches that can be replayed as a single operation. Reduces per-<span class="term" data-term="Kernel">kernel</span> launch overhead from <em>2&ndash;5&mu;s to ~0.3&ndash;1&mu;s</em> amortized. Used by vLLM and similar engines to amortize the cost of thousands of small <span class="term" data-term="Kernel">kernel</span> launches across a forward pass. <span class="term" data-term="Lithos">Lithos</span> doesn't need graphs because it fuses kernels at the language level &mdash; one large <span class="term" data-term="Kernel">kernel</span> instead of many small ones, so the launch overhead is paid once.</div>
+</div>
+
+<div class="glossary-entry" id="term-cudacachingallocator">
+<div class="glossary-term">CUDACachingAllocator</div>
+<div class="glossary-def">PyTorch's GPU memory manager. Maintains pools of free blocks to avoid the <em>10&ndash;500&mu;s cost of <code>cudaMalloc</code></em> on every allocation. Adds bookkeeping overhead on every tensor operation &mdash; tracking which blocks are free, which are in use, and which can be reused. <span class="term" data-term="Lithos">Lithos</span> replaces this entire machinery with <code>mmap</code>: zero allocation overhead, OS handles page management.</div>
+</div>
+
+<div class="glossary-entry" id="term-cubin">
+<div class="glossary-term">cubin &mdash; Compiled GPU Binary</div>
+<div class="glossary-def">A GPU executable in ELF format containing <span class="term" data-term="SASS">SASS</span> machine code, constant data, and metadata in NVIDIA-specific ELF sections (<code>.text.&lt;kernel&gt;</code>, <code>.nv.info</code>, <code>.nv.constant0</code>). <span class="term" data-term="Lithos">Lithos</span> generates cubins either by compiling <span class="term" data-term="PTX">PTX</span> through <span class="term" data-term="ptxas">ptxas</span> or (in future) by emitting <span class="term" data-term="SASS">SASS</span> directly into the ELF structure. A <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="cubin">cubin</span> is ~4 KB; the entire set is ~32 KB.</div>
+</div>
+
+<div class="glossary-entry" id="term-cudnn">
+<div class="glossary-term">cuDNN &mdash; CUDA Deep Neural Network Library</div>
+<div class="glossary-def">NVIDIA's library of optimized primitives for convolutions, normalization, attention, and activations. Hundreds of MB of pre-compiled kernels covering many architectures and configurations. <span class="term" data-term="Lithos">Lithos</span> replaces <span class="term" data-term="cuDNN">cuDNN</span> entirely with fused kernels built from <span class="term" data-term="PTX">PTX</span> &mdash; purpose-built for the target model's exact dimensions and operations.</div>
+</div>
+
+<div class="glossary-entry" id="term-culaunchkernel">
+<div class="glossary-term"><code>cuLaunchKernel</code></div>
+<div class="glossary-def"><span class="term" data-term="CUDA">CUDA</span> driver API function that launches a <span class="term" data-term="Kernel">kernel</span> on the GPU. Takes a function handle, <span class="term" data-term="Grid">grid</span>/block dimensions, and parameter pointers. The <em>lowest-level launch API</em> &mdash; TensorRT, vLLM, and PyTorch all eventually call <span class="term" data-term="cuLaunchKernel">cuLaunchKernel</span> (or <code>cudaLaunchKernel</code>, which wraps it). <span class="term" data-term="Lithos">Lithos</span> calls this directly via <code>libcuda.so</code>.</div>
+</div>
+
+<div class="glossary-entry" id="term-cudamalloc">
+<div class="glossary-term"><code>cudaMalloc</code></div>
+<div class="glossary-def"><span class="term" data-term="CUDA">CUDA</span> runtime API for allocating GPU memory. <em>10&ndash;500 &mu;s per call</em>. Goes through <code>ioctl</code> to the NVIDIA kernel driver. What PyTorch's <span class="term" data-term="CUDACachingAllocator">CUDACachingAllocator</span> wraps to avoid calling directly. <span class="term" data-term="Lithos">Lithos</span> doesn't call <span class="term" data-term="cudaMalloc">cudaMalloc</span> at all &mdash; <span class="term" data-term="mmap">mmap</span> gives CPU/GPU-addressable memory on <span class="term" data-term="GH200">GH200</span> with zero allocation overhead.</div>
+</div>
+
+<div class="glossary-entry" id="term-cudamemcpy">
+<div class="glossary-term"><code>cudaMemcpy</code></div>
+<div class="glossary-def"><span class="term" data-term="CUDA">CUDA</span> runtime API for copying memory between CPU and GPU. <em>Required on discrete GPUs</em>. Unnecessary on <span class="term" data-term="GH200">GH200</span> with <span class="term" data-term="Unified Memory">unified memory</span> &mdash; both processors share one address space via <span class="term" data-term="NVLink-C2C">NVLink-C2C</span>. This is why <span class="term" data-term="Lithos">Lithos</span> uses <span class="term" data-term="mmap">mmap</span>: no explicit transfers, hardware coherence handles everything.</div>
+</div>
+
+<div class="glossary-entry" id="term-cycle">
+<div class="glossary-term">Cycle</div>
+<div class="glossary-def">One GPU clock tick. On <span class="term" data-term="Hopper">Hopper</span> the <span class="term" data-term="SM">SM</span> clock runs at <em>1.83 GHz</em>, so a cycle is <em>~0.55 nanoseconds</em>. All hardware latencies on this site &mdash; memory access, instruction issue, <span class="term" data-term="Tensor Core">tensor core</span> throughput, stall counts &mdash; are measured in cycles, not instructions or wall-clock time. Reference conversions: <em>1 cycle &asymp; 0.5 ns</em>, <em>23 cycles &asymp; 12 ns</em> (<span class="term" data-term="Shared Memory">shared memory</span>), <em>33 cycles &asymp; 18 ns</em> (<span class="term" data-term="L1 Cache">L1</span>), <em>200 cycles &asymp; 110 ns</em> (<span class="term" data-term="L2 Cache">L2</span>), <em>400 cycles &asymp; 220 ns</em> (<span class="term" data-term="HBM3e">HBM3e</span>). Each of an <span class="term" data-term="SM">SM</span>'s four sub-partitions can issue one instruction per cycle, so the "cost" of a 400-cycle stall is ~400 issue slots per sub-partition of forgone work &mdash; the budget <span class="term" data-term="Latency Hiding">latency hiding</span> tries to spend.</div>
+</div>
+
+</div>
+
+<!-- ===== D ===== -->
+<div class="letter-section" id="letter-D">
+<div class="letter-heading">D</div>
+
+<div class="glossary-entry" id="term-deltanet">
+<div class="glossary-term">DeltaNet &mdash; Linear Attention with Recurrent State</div>
+<div class="glossary-def">A linear attention mechanism used in <em>48 of 64 layers</em> in Qwen 3.5. Instead of attending over the full sequence (O(seq_len)), <span class="term" data-term="DeltaNet">DeltaNet</span> maintains a compressed state matrix <code>S</code> of shape <code>[num_heads x key_dim x value_dim]</code> that is updated per token in <em>O(1)</em> time. The update is state-dependent (<code>k^T @ S</code> feeds back into the update), making it non-invertible. The state <em>requires <span class="term" data-term="FP32">FP32</span> precision</em> &mdash; <span class="term" data-term="BF16">BF16</span> achieves ~50% accuracy, <span class="term" data-term="FP16">FP16</span> produces garbage.</div>
+</div>
+
+</div>
+
+<!-- ===== F ===== -->
+<div class="letter-section" id="letter-F">
+<div class="letter-heading">F</div>
+
+<div class="glossary-entry" id="term-flashattention">
+<div class="glossary-term">FlashAttention</div>
+<div class="glossary-def">A <span class="term" data-term="Tiled Attention">tiled attention</span> <span class="term" data-term="Kernel">kernel</span> implementation by Tri Dao that avoids the <em>O(N&sup2;) memory cost</em> of naive attention by computing attention in blocks that fit in <span class="term" data-term="Shared Memory">shared memory</span>, using <span class="term" data-term="Online Softmax">online softmax</span>. Used by vLLM, SGLang, and TensorRT-LLM. Not an inference engine &mdash; just the attention <span class="term" data-term="Kernel">kernel</span>. Build fragility is a persistent issue: compilation depends on specific <span class="term" data-term="CUDA">CUDA</span> toolkit, PyTorch, and GPU architecture versions. When it fails (common), the fallback is naive attention with O(N&sup2;) memory and dramatically slower performance.</div>
+</div>
+
+<div class="glossary-entry" id="term-flop">
+<div class="glossary-term">FLOP &mdash; Floating Point Operation</div>
+<div class="glossary-def">One multiply or one add. An <span class="term" data-term="FMA">FMA</span> (fused multiply-add) counts as <em>2 FLOPs</em> because it does both in one instruction. FLOPs are the unit for measuring compute work and GPU throughput &mdash; billions per second (GFLOPS) or trillions per second (TFLOPS).</div>
+</div>
+
+<div class="glossary-entry" id="term-flops-clock">
+<div class="glossary-term">FLOPs/clock</div>
+<div class="glossary-def">Floating point operations completed per GPU clock cycle. Per <span class="term" data-term="Tensor Core">tensor core</span> on <span class="term" data-term="Hopper">Hopper</span> at <span class="term" data-term="FP16">FP16</span>: <em>1,024 <span class="term" data-term="FLOPs/clock">FLOPs/clock</span></em> effective throughput. Per <span class="term" data-term="SM">SM</span> (4 tensor cores): ~1,024 effective. Per GPU (132 SMs &times; 1.83 GHz): <em>~247 TFLOPS</em> effective. Marketing numbers often cite higher values by counting differently (e.g., counting sparse-accelerated throughput or theoretical peaks).</div>
+</div>
+
+<div class="glossary-entry" id="term-fma">
+<div class="glossary-term">FMA &mdash; Fused Multiply-Add</div>
+<div class="glossary-def">One instruction that computes <code>a &times; b + c</code> with a single rounding step. Counts as <em>2 FLOPs</em>. The single most important instruction for GEMM kernels &mdash; every dot product is a chain of FMAs. <span class="term" data-term="Tensor Core">Tensor core</span> MMA instructions are essentially batched FMAs across a matrix tile.</div>
+</div>
+
+<div class="glossary-entry" id="term-forth">
+<div class="glossary-term">Forth</div>
+<div class="glossary-def">A stack-based programming language invented by Charles Moore in 1970. Programs are sequences of <em>words</em> that manipulate a data stack. <span class="term" data-term="Lithos">Lithos</span> is <span class="term" data-term="Forth">Forth</span>-derived: each word takes register IDs from the stack, emits <span class="term" data-term="PTX">PTX</span> or <span class="term" data-term="SASS">SASS</span> instructions, and returns result register IDs. Compilation is string concatenation &mdash; a full inference <span class="term" data-term="Kernel">kernel</span> compiles in <em>microseconds</em>.</div>
+</div>
+
+<div class="glossary-entry" id="term-fp8">
+<div class="glossary-term">FP8 &mdash; 8-bit Floating Point</div>
+<div class="glossary-def">Available in E4M3 (4-bit exponent, 3-bit mantissa) and E5M2 (5-bit exponent, 2-bit mantissa) formats on <span class="term" data-term="Hopper">Hopper</span>. Doubles <span class="term" data-term="Tensor Core">tensor core</span> throughput compared to <span class="term" data-term="FP16">FP16</span> &mdash; <span class="term" data-term="Hopper">Hopper</span> delivers <em>~1,979 TFLOPS at <span class="term" data-term="FP8">FP8</span></em>. Used for inference where reduced precision is acceptable. <span class="term" data-term="Tensor Core">Tensor core</span> shape: <code>m16n8k32</code>.</div>
+</div>
+
+<div class="glossary-entry" id="term-fp16">
+<div class="glossary-term">FP16 &mdash; Half-Precision Floating Point</div>
+<div class="glossary-def">IEEE 754 half-precision (16 bits: 5-bit exponent, 10-bit mantissa). The standard precision for inference compute. <span class="term" data-term="Hopper">Hopper</span> tensor cores deliver <em>~990 TFLOPS at <span class="term" data-term="FP16">FP16</span></em>. Insufficient for <span class="term" data-term="DeltaNet">DeltaNet</span> state accumulation due to limited dynamic range &mdash; errors compound through the state-dependent feedback loop, producing catastrophic drift at ~15% accuracy.</div>
+</div>
+
+<div class="glossary-entry" id="term-fp32">
+<div class="glossary-term">FP32 &mdash; Single-Precision Floating Point</div>
+<div class="glossary-def">IEEE 754 single-precision (32 bits: 8-bit exponent, 23-bit mantissa). Required for <span class="term" data-term="DeltaNet">DeltaNet</span> state matrices to prevent drift. <span class="term" data-term="Lithos">Lithos</span> RECURRENCE kernels use <em>mixed precision</em>: <span class="term" data-term="FP32">FP32</span> for state accumulation, <span class="term" data-term="FP16">FP16</span>/<span class="term" data-term="BF16">BF16</span> for throughput in projections, gating, and output queries.</div>
+</div>
+
+</div>
+
+<!-- ===== G ===== -->
+<div class="letter-section" id="letter-G">
+<div class="letter-heading">G</div>
+
+<div class="glossary-entry" id="term-gh200">
+<div class="glossary-term">GH200 &mdash; NVIDIA Grace Hopper Superchip</div>
+<div class="glossary-def">NVIDIA's combined CPU-GPU module. Pairs a <em><span class="term" data-term="Grace">Grace</span> ARM64 CPU</em> (72 cores, 480 GB <span class="term" data-term="LPDDR5X">LPDDR5X</span>) with a <em><span class="term" data-term="Hopper">Hopper</span> GPU</em> (132 SMs, 96 GB <span class="term" data-term="HBM3e">HBM3e</span>) connected via <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> at 900 GB/s. Features hardware-coherent <span class="term" data-term="Unified Memory">unified memory</span> &mdash; both processors share one address space. The primary target for <span class="term" data-term="Lithos">Lithos</span>, which exploits this <span class="term" data-term="Unified Memory">unified memory</span> model to eliminate cudaMalloc/cudaMemcpy entirely.</div>
+</div>
+
+<div class="glossary-entry" id="term-gptq">
+<div class="glossary-term">GPTQ &mdash; Post-Training Quantization</div>
+<div class="glossary-def">A quantization method that uses approximate second-order information (Hessian) to minimize quantization error. Compresses model weights to lower precision (e.g., 4-bit) with calibration data. Enables running larger models in less GPU memory &mdash; Qwen 27B at W4 fits in <em>~18 GB</em> instead of ~54 GB at <span class="term" data-term="FP16">FP16</span>.</div>
+</div>
+
+<div class="glossary-entry" id="term-gqa">
+<div class="glossary-term">GQA &mdash; Grouped Query Attention</div>
+<div class="glossary-def">An attention variant where multiple query heads share a single key-value head, reducing <span class="term" data-term="KV Cache">KV cache</span> size proportionally. Qwen 3.5 uses <span class="term" data-term="GQA">GQA</span> in its <em>16 full attention layers</em>. Fewer KV heads means less memory for the <span class="term" data-term="KV Cache">KV cache</span> and fewer memory reads during attention scoring, while maintaining model quality through grouped sharing.</div>
+</div>
+
+<div class="glossary-entry" id="term-grace">
+<div class="glossary-term">Grace &mdash; NVIDIA ARM64 CPU</div>
+<div class="glossary-def">NVIDIA's server CPU based on ARM Neoverse V2 cores. The CPU component of the <span class="term" data-term="GH200">GH200</span> superchip, with <em>72 cores</em> paired with <em>480 GB <span class="term" data-term="LPDDR5X">LPDDR5X</span></em> at ~500 GB/s. Connected to the <span class="term" data-term="Hopper">Hopper</span> GPU via <span class="term" data-term="NVLink-C2C">NVLink-C2C</span>. In <span class="term" data-term="Lithos">Lithos</span>, <span class="term" data-term="Grace">Grace</span> handles token sampling, <span class="term" data-term="KV Cache">KV cache</span> management, and speculative decode orchestration while the GPU computes.</div>
+</div>
+
+<div class="glossary-entry" id="term-grid">
+<div class="glossary-term">Grid</div>
+<div class="glossary-def">The complete set of thread blocks launched for a single <span class="term" data-term="Kernel">kernel</span> invocation. <span class="term" data-term="Grid">Grid</span> dimensions (gridDim.x, .y, .z) determine how many thread blocks execute in total. For <span class="term" data-term="Lithos">Lithos</span>, <span class="term" data-term="Grid">grid</span> size is calculated from model dimensions at compile time &mdash; no runtime <span class="term" data-term="Grid">grid</span> size decisions. The <span class="term" data-term="Grid">grid</span> for a full forward pass maps directly to the model's layer and head structure.</div>
+</div>
+
+</div>
+
+<!-- ===== H ===== -->
+<div class="letter-section" id="letter-H">
+<div class="letter-heading">H</div>
+
+<div class="glossary-entry" id="term-hbm">
+<div class="glossary-term">HBM &mdash; High Bandwidth Memory</div>
+<div class="glossary-def">Stacked DRAM chips connected to the GPU die via a wide silicon interposer bus. Provides massive bandwidth compared to traditional DRAM. On <span class="term" data-term="GH200">GH200</span>, the <span class="term" data-term="HBM3e">HBM3e</span> variant provides <em>96 GB at 4 TB/s</em> total bandwidth. This is where weights, activations, and hot <span class="term" data-term="KV Cache">KV cache</span> reside. The single most important hardware resource for memory-bound inference at batch=1.</div>
+</div>
+
+<div class="glossary-entry" id="term-hbm3e">
+<div class="glossary-term">HBM3e &mdash; High Bandwidth Memory 3e</div>
+<div class="glossary-def">The latest generation of <span class="term" data-term="HBM">HBM</span>, used in the <span class="term" data-term="GH200">GH200</span>. Six stacks provide <em>96 GB capacity</em> at <em>4 TB/s</em> aggregate bandwidth (~667 GB/s per stack). Access latency <em>~400 GPU <span class="term" data-term="Cycle">cycles</span></em> (<em>~220 ns</em> at 1.83 GHz) end-to-end from <code>ld.global</code> issue to data in a register. Data arrives in 32-byte sectors. Achieving full bandwidth requires coalesced access from every <span class="term" data-term="Warp">warp</span>.</div>
+</div>
+
+<div class="glossary-entry" id="term-hopper">
+<div class="glossary-term">Hopper &mdash; NVIDIA GPU Architecture (sm_90)</div>
+<div class="glossary-def">NVIDIA's GPU architecture powering the <span class="term" data-term="GH200">GH200</span>. Key specs: <em>132 active SMs</em> (from 144 on die), 4th-generation tensor cores, TMA (Tensor Memory Accelerator), <em>50 MB <span class="term" data-term="L2 Cache">L2 cache</span></em>, and 256 KB configurable <span class="term" data-term="L1 Cache">L1</span>/<span class="term" data-term="Shared Memory">shared memory</span> per <span class="term" data-term="SM">SM</span>. Every <span class="term" data-term="Lithos">Lithos</span> pattern is designed against <span class="term" data-term="Hopper">Hopper</span>'s exact numbers &mdash; register counts, bank structure, <span class="term" data-term="Tensor Core">tensor core</span> shapes, and latencies.</div>
+</div>
+
+</div>
+
+<!-- ===== K ===== -->
+<div class="letter-section" id="letter-K">
+<div class="letter-heading">K</div>
+
+<div class="glossary-entry" id="term-kernel">
+<div class="glossary-term">Kernel</div>
+<div class="glossary-def">A function that runs on the GPU, executed by thousands of threads organized into thread blocks. In <span class="term" data-term="Lithos">Lithos</span>, kernels are compiled from <span class="term" data-term="Forth">Forth</span> words into <span class="term" data-term="PTX">PTX</span> or <span class="term" data-term="SASS">SASS</span>. A <em>fused <span class="term" data-term="Kernel">kernel</span></em> combines multiple operations (e.g., norm + projection + activation + residual) into a single launch, eliminating inter-<span class="term" data-term="Kernel">kernel</span> <span class="term" data-term="HBM">HBM</span> round-trips. <span class="term" data-term="Lithos">Lithos</span> targets <em>5 fused <span class="term" data-term="Kernel">kernel</span> types</em> for production inference.</div>
+</div>
+
+<div class="glossary-entry" id="term-kv-cache">
+<div class="glossary-term">KV Cache &mdash; Key-Value Cache</div>
+<div class="glossary-def">Stored key and value vectors from all previous tokens, used by full attention layers to score against the current token. Grows linearly with sequence length at <em>262 KB per token</em> for Qwen 3.5. On <span class="term" data-term="GH200">GH200</span>, the <span class="term" data-term="KV Cache">KV cache</span> can seamlessly span <span class="term" data-term="HBM3e">HBM3e</span> (hot/recent tokens) and <span class="term" data-term="LPDDR5X">LPDDR5X</span> (cold/old context) via unified addressing &mdash; up to <em>~1.8 million tokens</em> of context.</div>
+</div>
+
+</div>
+
+<!-- ===== L ===== -->
+<div class="letter-section" id="letter-L">
+<div class="letter-heading">L</div>
+
+<div class="glossary-entry" id="term-l1-cache">
+<div class="glossary-term">L1 Cache</div>
+<div class="glossary-def">Per-<span class="term" data-term="SM">SM</span> on-chip cache, sharing <em>256 KB</em> with <span class="term" data-term="Shared Memory">shared memory</span> on <span class="term" data-term="Hopper">Hopper</span> (configurable split, up to 228 KB as <span class="term" data-term="Shared Memory">shared memory</span>). Access latency <em>~33 GPU <span class="term" data-term="Cycle">cycles</span></em> (<em>~18 ns</em> at 1.83 GHz). Automatically caches global memory accesses. Serves as the first level of the memory hierarchy above registers and <span class="term" data-term="Shared Memory">shared memory</span>.</div>
+</div>
+
+<div class="glossary-entry" id="term-l2-cache">
+<div class="glossary-term">L2 Cache</div>
+<div class="glossary-def">GPU-wide shared cache. <em>50 MB</em> on <span class="term" data-term="GH200">GH200</span>, split across 12 partitions with 128-byte cache lines. Sits between the SMs and <span class="term" data-term="HBM3e">HBM3e</span> at <em>~200 GPU <span class="term" data-term="Cycle">cycles</span></em> (<em>~110 ns</em> at 1.83 GHz) latency and <em>~12 TB/s</em> internal bandwidth. The full <span class="term" data-term="DeltaNet">DeltaNet</span> state checkpoint (12.3 MB across 48 layers) fits comfortably in <span class="term" data-term="L2 Cache">L2</span>, enabling fast rollback for speculative decoding.</div>
+</div>
+
+<div class="glossary-entry" id="term-latency-hiding">
+<div class="glossary-term">Latency Hiding</div>
+<div class="glossary-def">The fundamental GPU technique of keeping execution units busy by switching between warps while one waits for memory. When a <span class="term" data-term="Warp">warp</span> stalls on an <span class="term" data-term="HBM">HBM</span> load (<em>~400 <span class="term" data-term="Cycle">cycles</span>, ~220 ns at <span class="term" data-term="Hopper">Hopper</span>'s 1.83 GHz</em>), the scheduler instantly switches to another ready <span class="term" data-term="Warp">warp</span>. Think of it as a cycle budget: while one warp waits 400 cycles for memory, each of the <span class="term" data-term="SM">SM</span>'s four sub-partitions could issue one instruction per cycle &mdash; so the SM could have issued ~400 other instructions per sub-partition in that window. Filling the <span class="term" data-term="SM">SM</span> with many warps lets it keep issuing useful work during memory stalls instead of sitting idle. More concurrent warps means more opportunities to hide latency, but each additional <span class="term" data-term="Warp">warp</span> requires registers, creating the core GPU optimization tradeoff.</div>
+</div>
+
+<div class="glossary-entry" id="term-lithos">
+<div class="glossary-term">Lithos</div>
+<div class="glossary-def">A <span class="term" data-term="Forth">Forth</span>-derived GPU compute language that emits <span class="term" data-term="PTX">PTX</span> and <span class="term" data-term="SASS">SASS</span> for NVIDIA GPUs. Built for inference on <span class="term" data-term="GH200">GH200</span>. Replaces PyTorch, <span class="term" data-term="cuBLAS">cuBLAS</span>, <span class="term" data-term="cuDNN">cuDNN</span>, and the <span class="term" data-term="CUDA">CUDA</span> runtime with <em>direct <span class="term" data-term="Kernel">kernel</span> compilation in microseconds</em>. Framework size: ~30 MB (just libcuda.so). <span class="term" data-term="Kernel">Kernel</span> binaries: 32 KB total. Named from <em>lithography</em> &mdash; writing on stone, the process that puts circuits on silicon.</div>
+</div>
+
+<div class="glossary-entry" id="term-lpddr5x">
+<div class="glossary-term">LPDDR5X &mdash; Low-Power DDR5X Memory</div>
+<div class="glossary-def">The CPU-side memory on <span class="term" data-term="GH200">GH200</span>, providing <em>480 GB</em> at <em>~500 GB/s</em>. Connected to <span class="term" data-term="HBM3e">HBM3e</span> via <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> at 900 GB/s. Accessible by GPU kernels through unified addressing. Used for cold <span class="term" data-term="KV Cache">KV cache</span> (old context rarely touched), weight overflow, and OS workspace. The hardware page migration engine automatically moves hot pages to <span class="term" data-term="HBM3e">HBM3e</span>.</div>
+</div>
+
+</div>
+
+<!-- ===== M ===== -->
+<div class="letter-section" id="letter-M">
+<div class="letter-heading">M</div>
+
+<div class="glossary-entry" id="term-mma-sync-m16n8k16">
+<div class="glossary-term"><code>mma.sync.m16n8k16</code></div>
+<div class="glossary-def">The workhorse <span class="term" data-term="Tensor Core">tensor core</span> instruction for <span class="term" data-term="FP16">FP16</span> inference. One <span class="term" data-term="Warp">warp</span>-wide instruction that multiplies a <em>16&times;16 tile of matrix A</em> by a <em>16&times;8 tile of matrix B</em> (both <span class="term" data-term="FP16">FP16</span>), and adds to a <em>16&times;8 accumulator</em> (<span class="term" data-term="FP32">FP32</span>). Executes <em>4,096 FLOPs</em> in one instruction. Every PROJECTION <span class="term" data-term="Kernel">kernel</span>'s inner loop is built around keeping this instruction fed with data. The entire inference engine's performance depends on this single instruction.</div>
+</div>
+
+<div class="glossary-entry" id="term-mmap">
+<div class="glossary-term">mmap &mdash; Memory-Mapped File I/O</div>
+<div class="glossary-def">A system call that maps files directly into the process virtual address space. On <span class="term" data-term="GH200">GH200</span>, <span class="term" data-term="mmap">mmap</span>'d memory is accessible to both CPU and GPU via unified addressing. <span class="term" data-term="Lithos">Lithos</span> uses <span class="term" data-term="mmap">mmap</span> two ways: <em>lazy</em> for weights (pages fault in on first GPU access, zero startup cost) and <em>eager</em> for <span class="term" data-term="KV Cache">KV cache</span> and activations (pre-touched with memset for zero-fault inference). Replaces cudaMalloc, cudaMemcpy, and <span class="term" data-term="CUDACachingAllocator">CUDACachingAllocator</span> entirely.</div>
+</div>
+
+<div class="glossary-entry" id="term-mtp">
+<div class="glossary-term">MTP &mdash; Multi-Token Prediction</div>
+<div class="glossary-def">A speculative decoding technique where the model predicts multiple future tokens at once. In <span class="term" data-term="Lithos">Lithos</span>, the <em>48 <span class="term" data-term="DeltaNet">DeltaNet</span> layers</em> (skipping all 16 attention layers) serve as a fast draft model for self-speculative decoding at <em><span class="speedup">~3x</span> speed</em>. Draft tokens are verified against the full model. With <span class="term" data-term="FP32">FP32</span> state precision, acceptance rate is 100%.</div>
+</div>
+
+</div>
+
+<!-- ===== N ===== -->
+<div class="letter-section" id="letter-N">
+<div class="letter-heading">N</div>
+
+<div class="glossary-entry" id="term-nn-module">
+<div class="glossary-term"><code>nn.Module</code></div>
+<div class="glossary-def">PyTorch's base class for neural network layers. Holds parameters (weights), sub-modules, and forward logic. Used for model definitions &mdash; every custom layer, every transformer block subclasses <span class="term" data-term="nn.Module">nn.Module</span>. The stateful counterpart to <span class="term" data-term="torch.nn.functional">torch.nn.functional</span>'s stateless API. <span class="term" data-term="Lithos">Lithos</span> has no equivalent &mdash; models are compiled from <span class="term" data-term="Forth">Forth</span> words directly to <span class="term" data-term="PTX">PTX</span>.</div>
+</div>
+
+<div class="glossary-entry" id="term-nvlink-c2c">
+<div class="glossary-term">NVLink-C2C &mdash; Chip-to-Chip Interconnect</div>
+<div class="glossary-def">The high-bandwidth coherent interconnect on <span class="term" data-term="GH200">GH200</span>, connecting the <span class="term" data-term="Grace">Grace</span> CPU to the <span class="term" data-term="Hopper">Hopper</span> GPU at <em>900 GB/s bidirectional</em>. Provides hardware-level memory coherence &mdash; both processors see the same data without explicit synchronization or transfers. This is what makes <span class="term" data-term="mmap">mmap</span> work for GPU computing: a pointer from <span class="term" data-term="mmap">mmap</span> is valid for both CPU and GPU access.</div>
+</div>
+
+</div>
+
+<!-- ===== O ===== -->
+<div class="letter-section" id="letter-O">
+<div class="letter-heading">O</div>
+
+<div class="glossary-entry" id="term-occupancy">
+<div class="glossary-term">Occupancy</div>
+<div class="glossary-def">The ratio of active warps to the maximum possible warps on an <span class="term" data-term="SM">SM</span> (64 on <span class="term" data-term="Hopper">Hopper</span>). Higher <span class="term" data-term="Occupancy">occupancy</span> provides more warps for <em><span class="term" data-term="Latency Hiding">latency hiding</span></em>. Lower <span class="term" data-term="Occupancy">occupancy</span> allows more <em>registers per thread</em> for keeping data on-chip. <span class="term" data-term="Lithos">Lithos</span> makes a different <span class="term" data-term="Occupancy">occupancy</span> choice per <span class="term" data-term="Kernel">kernel</span>: memory-bound kernels maximize registers (255/thread), compute-bound kernels balance for higher <span class="term" data-term="Occupancy">occupancy</span> (~128 registers/thread).</div>
+</div>
+
+<div class="glossary-entry" id="term-online-softmax">
+<div class="glossary-term">Online Softmax</div>
+<div class="glossary-def">Computing softmax in a streaming fashion as tiles of the attention matrix are processed, tracking a <em>running max</em> and a <em>running sum</em>. Enables <span class="term" data-term="Tiled Attention">tiled attention</span> without materializing the full N&times;N matrix &mdash; when a new tile arrives with a larger max, the previously accumulated sum is rescaled. The key mathematical trick that makes <span class="term" data-term="FlashAttention">FlashAttention</span> possible.</div>
+</div>
+
+</div>
+
+<!-- ===== P ===== -->
+<div class="letter-section" id="letter-P">
+<div class="letter-heading">P</div>
+
+<div class="glossary-entry" id="term-ptx">
+<div class="glossary-term">PTX &mdash; Parallel Thread Execution</div>
+<div class="glossary-def">NVIDIA's virtual instruction set architecture &mdash; an intermediate representation between high-level code and GPU machine code (<span class="term" data-term="SASS">SASS</span>). A stable text ISA, compiled to <span class="term" data-term="SASS">SASS</span> by the driver (<code>ptxas</code>) at load time. This is the layer <span class="term" data-term="Lithos">Lithos</span> emits directly, bypassing <span class="term" data-term="CUDA">CUDA</span> C++ compilation. The programmer controls instruction selection, register count, and memory access patterns; <span class="term" data-term="ptxas">ptxas</span> handles final scheduling.</div>
+</div>
+
+<div class="glossary-entry" id="term-ptxas">
+<div class="glossary-term">ptxas &mdash; PTX Assembler</div>
+<div class="glossary-def">NVIDIA's <span class="term" data-term="PTX">PTX</span> assembler. Compiles <span class="term" data-term="PTX">PTX</span> to <span class="term" data-term="SASS">SASS</span>. Runs inside the driver when you call <code>cuModuleLoadData</code> with <span class="term" data-term="PTX">PTX</span>. Typical compile time: <em>100ms&ndash;2s per <span class="term" data-term="Kernel">kernel</span></em>. The compilation step <span class="term" data-term="Lithos">Lithos</span> will eventually eliminate by emitting <span class="term" data-term="SASS">SASS</span> directly into <span class="term" data-term="cubin">cubin</span> ELF files, skipping the <span class="term" data-term="ptxas">ptxas</span> JIT entirely.</div>
+</div>
+
+<div class="glossary-entry" id="term-pytorch-dispatcher">
+<div class="glossary-term">PyTorch dispatcher</div>
+<div class="glossary-def">The C++ mechanism that routes tensor operations through <em>dispatch keys</em> (<span class="term" data-term="Autograd">Autograd</span>, <span class="term" data-term="CUDA">CUDA</span>, CPU, etc.) to the right backend implementation. <em>1&ndash;3 &mu;s overhead per operation</em>. For a model with thousands of ops per forward pass, this adds up to milliseconds of pure dispatch overhead before any compute happens. <span class="term" data-term="Lithos">Lithos</span> has no dispatcher &mdash; kernels are called directly by name.</div>
+</div>
+
+</div>
+
+<!-- ===== R ===== -->
+<div class="letter-section" id="letter-R">
+<div class="letter-heading">R</div>
+
+<div class="glossary-entry" id="term-register-file">
+<div class="glossary-term">Register File</div>
+<div class="glossary-def">Per-thread fastest storage on the GPU. Each <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> has <em>65,536 32-bit registers</em> (256 KB total), split as 16,384 per sub-partition. Access takes <em>1 <span class="term" data-term="Cycle">cycle</span></em> (~0.5 ns at 1.83 GHz). Each thread can use up to 255 registers. When a thread exceeds its allocation, values <em>spill</em> to memory &mdash; the nearest fallback is <span class="term" data-term="Shared Memory">shared memory</span> at 23 cycles (~12 ns), then <span class="term" data-term="HBM">HBM</span> at 400 cycles (~220 ns). This <span class="speedup">400x</span> penalty makes register allocation the most critical <span class="term" data-term="Kernel">kernel</span> optimization decision.</div>
+</div>
+
+<div class="glossary-entry" id="term-register-reuse-flags-sass">
+<div class="glossary-term">Register reuse flags (SASS)</div>
+<div class="glossary-def">Fields in the <span class="term" data-term="SASS">SASS</span> control word (<em>bits [63:58]</em>) that hint which source registers will be reused by the next instruction. Helps the hardware avoid register bank conflicts by caching the operand in a small reuse cache near the datapath. Set automatically by <span class="term" data-term="ptxas">ptxas</span> based on its scheduling decisions; can be set manually in direct <span class="term" data-term="SASS">SASS</span> emission for fine-grained control.</div>
+</div>
+
+<div class="glossary-entry" id="term-rmsnorm">
+<div class="glossary-term">RMSNorm &mdash; Root Mean Square Normalization</div>
+<div class="glossary-def">A simplification of LayerNorm that normalizes by the root mean square of activations: <code>x * rsqrt(mean(x^2) + eps) * weight</code>. Used throughout Qwen 3.5 before every attention and MLP block. <span class="term" data-term="Lithos">Lithos</span> fuses <span class="term" data-term="RMSNorm">RMSNorm</span> with residual addition into a single <span class="term" data-term="Kernel">kernel</span>, using <em><span class="term" data-term="Warp">warp</span> butterfly shuffles</em> for the reduction &mdash; no <span class="term" data-term="Shared Memory">shared memory</span> needed.</div>
+</div>
+
+<div class="glossary-entry" id="term-rope">
+<div class="glossary-term">RoPE &mdash; Rotary Position Embedding</div>
+<div class="glossary-def">Encodes token position by rotating query and key vectors in pairs of dimensions using sinusoidal functions. Only needed for the <em>16 full attention layers</em> in Qwen 3.5 &mdash; <span class="term" data-term="DeltaNet">DeltaNet</span> layers encode position implicitly through their sequential state updates. Applied after QK projection, before attention scoring.</div>
+</div>
+
+</div>
+
+<!-- ===== S ===== -->
+<div class="letter-section" id="letter-S">
+<div class="letter-heading">S</div>
+
+<div class="glossary-entry" id="term-safetensors">
+<div class="glossary-term">Safetensors</div>
+<div class="glossary-def">A weight file format by Hugging Face. Simple structure: a JSON header describing tensor names, shapes, and dtypes, followed by flat binary data with no compression or encoding. <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="mmap">mmap</span>'s <span class="term" data-term="Safetensors">safetensors</span> files directly &mdash; <em>pointer arithmetic</em> gives access to any tensor with zero deserialization. No <code>torch.load()</code>, no <code>pickle</code>, no framework.</div>
+</div>
+
+<div class="glossary-entry" id="term-sass">
+<div class="glossary-term">SASS &mdash; Shader Assembly</div>
+<div class="glossary-def">The actual GPU machine code that runs on NVIDIA hardware. Each instruction is <em>16 bytes</em>: an 8-byte instruction word (opcode in bits [15:0], operands, modifiers) and an 8-byte control word (stall counts, yield hints, read/write barriers, <span class="term" data-term="Register reuse flags">register reuse flags</span>). <span class="term" data-term="Lithos">Lithos</span> has reverse-engineered 47+ <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SASS">SASS</span> opcodes and aims to emit <span class="term" data-term="SASS">SASS</span> directly, bypassing <span class="term" data-term="ptxas">ptxas</span> for full scheduling control.</div>
+</div>
+
+<div class="glossary-entry" id="term-scaled-dot-product-attention">
+<div class="glossary-term"><code>scaled_dot_product_attention</code></div>
+<div class="glossary-def">PyTorch's built-in attention function (<code>torch.nn.functional.scaled_dot_product_attention</code>). Added in PyTorch 2.0 as a one-call API that internally dispatches to <span class="term" data-term="FlashAttention">FlashAttention</span>, memory-efficient attention, or naive attention depending on inputs and hardware. The official <em>"you don't have to write your own attention anymore"</em> API. Still opaque &mdash; you don't control what <span class="term" data-term="Kernel">kernel</span> runs, you don't control fusion with surrounding operations, you can't see the <span class="term" data-term="PTX">PTX</span> it produces.</div>
+</div>
+
+<div class="glossary-entry" id="term-scoreboard">
+<div class="glossary-term">Scoreboard</div>
+<div class="glossary-def">The hardware structure that tracks which registers have pending writes from in-flight instructions (memory loads, <span class="term" data-term="Tensor Core">tensor core</span> ops, <span class="term" data-term="SFU">SFU</span>). The <span class="term" data-term="Warp">warp</span> scheduler uses it to determine which warps are ready to issue the next instruction &mdash; a <span class="term" data-term="Warp">warp</span> whose next instruction depends on a pending write must wait. When the <span class="term" data-term="Scoreboard">scoreboard</span> blocks all warps on an <span class="term" data-term="SM">SM</span>, the <span class="term" data-term="SM">SM</span> stalls.</div>
+</div>
+
+<div class="glossary-entry" id="term-stall-count-sass">
+<div class="glossary-term">Stall count (SASS)</div>
+<div class="glossary-def">A field in the <span class="term" data-term="SASS">SASS</span> control word (<em>bits [57:53]</em>) that specifies the minimum number of cycles the scheduler must wait before issuing the next instruction from the same <span class="term" data-term="Warp">warp</span>. Normally set by <span class="term" data-term="ptxas">ptxas</span> based on dependency analysis. The <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="SASS">SASS</span> emitter can set these directly for fine-grained scheduling control, potentially outperforming <span class="term" data-term="ptxas">ptxas</span>'s generic scheduling.</div>
+</div>
+
+<div class="glossary-entry" id="term-sfu">
+<div class="glossary-term">SFU &mdash; Special Function Unit</div>
+<div class="glossary-def">A hardware unit on each <span class="term" data-term="SM">SM</span> that computes transcendental functions: <em>sin, cos, reciprocal (rcp), reciprocal square root (rsqrt), ex2, lg2</em>. Each <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> has 16 SFUs (4 per sub-partition). Used by <span class="term" data-term="RMSNorm">RMSNorm</span> (<code>rsqrt.approx.ftz.f32</code>) and <span class="term" data-term="SiLU">SiLU</span> (<code>ex2.approx</code>) in <span class="term" data-term="Lithos">Lithos</span> kernels. Lower throughput than <span class="term" data-term="CUDA">CUDA</span> cores, so <span class="term" data-term="SFU">SFU</span>-heavy operations can bottleneck.</div>
+</div>
+
+<div class="glossary-entry" id="term-shared-memory">
+<div class="glossary-term">Shared Memory</div>
+<div class="glossary-def">Per-<span class="term" data-term="SM">SM</span> fast scratchpad memory, configurable up to <em>228 KB</em> on <span class="term" data-term="Hopper">Hopper</span> (from a 256 KB unified <span class="term" data-term="L1 Cache">L1</span>/shared pool). Access latency <em>~23 GPU <span class="term" data-term="Cycle">cycles</span></em> (<em>~12 ns</em> at 1.83 GHz). Organized in 32 banks of 4 bytes each. Used as a staging area between <span class="term" data-term="HBM">HBM</span> and registers &mdash; data arrives from <span class="term" data-term="HBM">HBM</span> into <span class="term" data-term="Shared Memory">shared memory</span>, then threads pull it into registers. All threads in a <span class="term" data-term="Thread Block">thread block</span> can communicate through <span class="term" data-term="Shared Memory">shared memory</span>.</div>
+</div>
+
+<div class="glossary-entry" id="term-silu">
+<div class="glossary-term">SiLU &mdash; Sigmoid Linear Unit</div>
+<div class="glossary-def">The activation function <code>x * sigmoid(x)</code>, computed as <code>x / (1 + exp(-x))</code>. Used in every MLP layer of Qwen 3.5 (64 layers). <span class="term" data-term="Lithos">Lithos</span> computes <span class="term" data-term="SiLU">SiLU</span> in <em>6 <span class="term" data-term="PTX">PTX</span> instructions</em> entirely in registers using <code>ex2.approx</code> and <code>rcp.approx</code>, with no intermediate memory access. Always fused into the MLP <span class="term" data-term="Kernel">kernel</span>.</div>
+</div>
+
+<div class="glossary-entry" id="term-sm">
+<div class="glossary-term">SM &mdash; Streaming Multiprocessor</div>
+<div class="glossary-def">The fundamental compute unit of an NVIDIA GPU. Each <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> contains <em>128 <span class="term" data-term="CUDA">CUDA</span> cores, 4 tensor cores, 16 SFUs, 256 KB <span class="term" data-term="Register File">register file</span>, 256 KB configurable <span class="term" data-term="L1 Cache">L1</span>/<span class="term" data-term="Shared Memory">shared memory</span>, and 4 <span class="term" data-term="Warp">warp</span> schedulers</em>. The <span class="term" data-term="GH200">GH200</span> has 132 active SMs (from 144 on die). <span class="term" data-term="Lithos">Lithos</span> patterns are designed against the exact per-<span class="term" data-term="SM">SM</span> resource budgets.</div>
+</div>
+
+</div>
+
+<!-- ===== T ===== -->
+<div class="letter-section" id="letter-T">
+<div class="letter-heading">T</div>
+
+<div class="glossary-entry" id="term-tensor-core">
+<div class="glossary-term">Tensor Core</div>
+<div class="glossary-def">Dedicated matrix-multiply-accumulate (MMA) hardware on NVIDIA GPUs. Each <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> has <em>4 tensor cores</em> (4th generation). At <span class="term" data-term="FP16">FP16</span>, one <code>mma.sync.m16n8k16</code> instruction delivers <em>1,024 <span class="term" data-term="FLOPs/clock">FLOPs/clock</span>/<span class="term" data-term="SM">SM</span></em>. At <span class="term" data-term="FP8">FP8</span>, throughput doubles to 2,048 <span class="term" data-term="FLOPs/clock">FLOPs/clock</span>/<span class="term" data-term="SM">SM</span>. The heavy lifter for projection and attention kernels. Keeping tensor cores continuously fed is the primary optimization goal for compute-bound workloads.</div>
+</div>
+
+<div class="glossary-entry" id="term-thread-block">
+<div class="glossary-term">Thread Block</div>
+<div class="glossary-def">A group of threads (up to 1,024 on <span class="term" data-term="Hopper">Hopper</span>) that execute on the same <span class="term" data-term="SM">SM</span> and share <span class="term" data-term="Shared Memory">shared memory</span>. Also called <em><span class="term" data-term="CTA">CTA</span></em> (Cooperative Thread Array). Each <span class="term" data-term="SM">SM</span> can host up to 32 thread blocks simultaneously. <span class="term" data-term="Lithos">Lithos</span> sizes thread blocks to match model dimensions &mdash; block size is a compile-time constant, not a runtime parameter.</div>
+</div>
+
+<div class="glossary-entry" id="term-tiled-attention">
+<div class="glossary-term">Tiled Attention</div>
+<div class="glossary-def">The general algorithm for computing attention by loading tiles of Q, K, V into <span class="term" data-term="Shared Memory">shared memory</span>, processing tile-by-tile, and using <em><span class="term" data-term="Online Softmax">online softmax</span></em> to avoid materializing the full N&times;N attention matrix. <span class="term" data-term="FlashAttention">FlashAttention</span> is the most popular implementation. Key insight: attention is <em>O(N&sup2;) in compute</em> but can be <em>O(N) in memory</em> if you process it in tiles and never store the intermediate attention matrix.</div>
+</div>
+
+<div class="glossary-entry" id="term-torch-nn-functional">
+<div class="glossary-term"><code>torch.nn.functional</code></div>
+<div class="glossary-def">PyTorch's stateless function API (as opposed to <span class="term" data-term="nn.Module">torch.nn.Module</span> classes). The layer operations: <code>linear</code>, <code>relu</code>, <code>softmax</code>, etc. Conventionally imported as <code>F</code> &mdash; <code>F.linear</code>, <code>F.scaled_dot_product_attention</code>, etc. Each call passes through the <span class="term" data-term="PyTorch dispatcher">PyTorch dispatcher</span>, <span class="term" data-term="Autograd">Autograd</span> checks, and <span class="term" data-term="ATen">ATen</span> before reaching the GPU.</div>
+</div>
+
+<div class="glossary-entry" id="term-torch-compile">
+<div class="glossary-term"><code>torch.compile</code></div>
+<div class="glossary-def">PyTorch's JIT compiler (introduced in 2.0, also called Inductor). Traces Python model code and generates fused <span class="term" data-term="CUDA">CUDA</span> kernels via <span class="term" data-term="Triton">Triton</span>. Adds <em>30&ndash;60 seconds of warmup</em> time at startup. Creates <em>2&ndash;10 GB of disk cache</em> at <code>~/.cache/torch/inductor/</code> per model configuration. CPU RAM usage spikes 5&ndash;10 GB during compilation &mdash; OOM risk on machines where the model fits but compilation overhead doesn't. Per-config: different batch size or sequence length regenerates the cache.</div>
+</div>
+
+<div class="glossary-entry" id="term-triton">
+<div class="glossary-term">Triton</div>
+<div class="glossary-def">OpenAI's GPU <span class="term" data-term="Kernel">kernel</span> compiler. A Python-embedded DSL for writing GPU kernels. Used by <code>torch.compile</code>/Inductor to generate fused kernels. Simpler than <span class="term" data-term="CUDA">CUDA</span> C++ but still requires compilation (<span class="term" data-term="Triton">Triton</span> IR &rarr; <span class="term" data-term="PTX">PTX</span> &rarr; <span class="term" data-term="ptxas">ptxas</span> &rarr; <span class="term" data-term="SASS">SASS</span>). Not an inference engine &mdash; a compiler for writing individual kernels.</div>
+</div>
+
+</div>
+
+<!-- ===== U ===== -->
+<div class="letter-section" id="letter-U">
+<div class="letter-heading">U</div>
+
+<div class="glossary-entry" id="term-unified-memory">
+<div class="glossary-term">Unified Memory</div>
+<div class="glossary-def">A memory model where CPU and GPU share the same virtual address space. On <span class="term" data-term="GH200">GH200</span>, this is <em>hardware-native</em> via <span class="term" data-term="NVLink-C2C">NVLink-C2C</span> &mdash; not the software-managed <span class="term" data-term="CUDA">CUDA</span> <span class="term" data-term="Unified Memory">Unified Memory</span> that requires driver hints and page migration. <code>mmap</code> returns a pointer that both processors can use. The hardware maintains coherence at page granularity. No cudaMalloc, no cudaMemcpy, no staging buffers.</div>
+</div>
+
+</div>
+
+<!-- ===== W ===== -->
+<div class="letter-section" id="letter-W">
+<div class="letter-heading">W</div>
+
+<div class="glossary-entry" id="term-w4a16">
+<div class="glossary-term">W4A16 &mdash; 4-bit Weights, 16-bit Activations</div>
+<div class="glossary-def">A quantization scheme that stores model weights at 4-bit precision while keeping activations at 16-bit for accurate computation. Reduces Qwen 27B from <em>~54 GB</em> (<span class="term" data-term="FP16">FP16</span>) to <em>~18 GB</em>, fitting comfortably in <span class="term" data-term="GH200">GH200</span>'s 96 GB <span class="term" data-term="HBM3e">HBM3e</span> with ample room for <span class="term" data-term="KV Cache">KV cache</span> and activations. The standard quantization target for <span class="term" data-term="Lithos">Lithos</span> inference.</div>
+</div>
+
+<div class="glossary-entry" id="term-warp">
+<div class="glossary-term">Warp</div>
+<div class="glossary-def">A group of <em>32 threads</em> that execute in lockstep on an <span class="term" data-term="SM">SM</span>. The fundamental scheduling unit of the GPU &mdash; the <span class="term" data-term="Warp">warp</span> scheduler issues one instruction per clock to all 32 threads simultaneously. <span class="term" data-term="Warp">Warp</span>-level operations like <em>shuffles</em> (<code>shfl.sync.bfly</code>) enable fast reductions and broadcasts without <span class="term" data-term="Shared Memory">shared memory</span>, at register-access speed. Each <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SM">SM</span> has 4 <span class="term" data-term="Warp">warp</span> schedulers, each managing up to 16 warps.</div>
+</div>
+
+</div>
+
+</section>
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

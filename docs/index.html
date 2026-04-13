@@ -21,7 +21,49 @@
   --blue: #6e8ed0;
   --red: #d06e6e;
   --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
 }
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
 
 html { font-size: 15px; scroll-behavior: smooth; }
 body {
@@ -253,6 +295,7 @@ footer {
   <a href="#code">Code</a>
   <a href="pytorch.html">Lithos vs PyTorch</a>
   <a href="performance.html">Performance</a>
+  <a href="bandwidth.html">Bandwidth</a>
   <a href="memory.html">Memory</a>
   <a href="architecture.html">Architecture</a>
   <a href="kernels.html">Kernels</a>
@@ -305,7 +348,7 @@ footer {
     <span class="problem-title">Memory Management on Unified Memory</span>
   </div>
   <p><code>cudaMalloc</code>/<code>cudaMemcpy</code> exist for discrete GPUs with separate memory spaces. GH200 has hardware-coherent unified memory. The entire CUDA memory management layer is unnecessary overhead.</p>
-  <p>Lithos on GH200: allocate with <code>mmap</code>, pass the pointer to the kernel. The hardware handles coherence. No cudaMalloc, no memory pools, no transfer scheduling.</p>
+  <p>Lithos on GH200: allocate with <code>mmap</code>, pass the pointer to the kernel. The hardware handles coherence. No <span class="term" data-term="cudaMalloc">cudaMalloc</span>, no memory pools, no transfer scheduling.</p>
 </div>
 
 <div class="problem">
@@ -313,7 +356,7 @@ footer {
     <span class="problem-num">04</span>
     <span class="problem-title">Dispatch Overhead</span>
   </div>
-  <p>Current path: Python &rarr; PyTorch &rarr; ATen &rarr; cuBLAS &rarr; CUDA Runtime &rarr; Driver &rarr; GPU. Measured: <span class="numbers">10-40&#xB5;s per operation</span>. With CUDA graphs: <span class="numbers">0.3-1&#xB5;s amortized</span>.</p>
+  <p>Current path: Python &rarr; PyTorch &rarr; <span class="term" data-term="ATen">ATen</span> &rarr; cuBLAS &rarr; CUDA Runtime &rarr; Driver &rarr; GPU. Measured: <span class="numbers">10-40&#xB5;s per operation</span>. With CUDA graphs: <span class="numbers">0.3-1&#xB5;s amortized</span>.</p>
   <p>Lithos: Forth &rarr; driver API (<code>cuLaunchKernel</code>) &rarr; GPU. One call. For the fused mega-kernel approach, one launch per forward pass.</p>
 </div>
 
@@ -400,7 +443,7 @@ footer {
 </table>
 
 <h3>Design Rules for Lithos Patterns</h3>
-<p class="small mb-1">These are not guidelines. They are constraints. Patterns that violate them waste hardware.</p>
+<p class="small mb-1">Constraints applied to every Lithos pattern. Violations leave bandwidth or compute unused.</p>
 
 <div class="design-rule"><strong>1. Coalesce at 32 bytes.</strong> <span>Every global memory access from a warp must hit contiguous 32-byte sectors. Misaligned access wastes bandwidth 1:1 with the misalignment.</span></div>
 <div class="design-rule"><strong>2. Avoid shared memory bank conflicts.</strong> <span>32 banks, 4 bytes each. If two threads in a warp access the same bank (different addresses), one stalls.</span></div>
@@ -408,7 +451,7 @@ footer {
 <div class="design-rule"><strong>4. Match tensor core shapes.</strong> <span>m16n8k16 for FP16/BF16. m16n8k32 for FP8/INT8. Tiles that don't match waste tensor core cycles.</span></div>
 <div class="design-rule"><strong>5. Use async copy.</strong> <span><code>cp.async</code> and TMA bypass registers. Global memory flows directly to shared memory. Don't waste register file on data staging.</span></div>
 <div class="design-rule"><strong>6. Minimize register pressure.</strong> <span>&le;128 registers/thread for memory-bound, &le;255 for compute-bound. More registers = fewer warps = less latency hiding.</span></div>
-<div class="design-rule"><strong>7. Fuse to eliminate global memory round-trips.</strong> <span>Every kernel boundary writes to HBM and reads back. Fused kernels keep intermediates in registers or shared memory. Savings: 10-100x per intermediate value.</span></div>
+<div class="design-rule"><strong>7. Fuse to eliminate global memory round-trips.</strong> <span>Every kernel boundary writes to HBM and reads back. Fused kernels keep intermediates in registers or shared memory. Savings: <span class="speedup">10-100x</span> per intermediate value.</span></div>
 
 </section>
 
@@ -427,7 +470,7 @@ footer {
        <span class="dim">v</span>
 <span class="accent">SASS on GPU</span>                            <span class="dim">cached after first load</span>
        <span class="dim">|</span>
-       <span class="dim">|</span> <span class="highlight">cuLaunchKernel</span>          <span class="dim">one call</span>
+       <span class="dim">|</span> <span class="highlight"><span class="term" data-term="cuLaunchKernel">cuLaunchKernel</span></span>          <span class="dim">one call</span>
        <span class="dim">v</span>
 <span class="accent">GPU Execution</span></div>
 
@@ -787,46 +830,46 @@ footer {
 <section id="kernel-guide">
 <h2>Kernel Guide &mdash; Why These Kernels, Why Not Others</h2>
 
-<h3>Why 7 Kernels and Not 1 or 100</h3>
-<p>Each kernel matches a distinct mathematical operation in the transformer. You cannot merge all 7 into 1 because some need fundamentally different parallelism strategies &mdash; <code>PROJECTION</code> tiles matrices across warps, while <code>NORM</code> reduces across a single vector. You do not need 100 because there are only 7 distinct operations. Everything else in the model is repetition with different weight pointers. Seven operations, seven kernels, each with a reason to exist separately.</p>
+<h3>Why 7 Kernels</h3>
+<p>Each kernel matches a distinct parallelism strategy &mdash; <code>PROJECTION</code> tiles matrices across warps, <code>NORM</code> reduces a single vector. Seven operations, everything else is repetition with different weight pointers.</p>
 
 <h3>The Kernels</h3>
 
-<h4><code>PROJECTION</code> &mdash; Multiplication</h4>
-<p>The model has learned a giant table of numbers (weights). For every token, we multiply the token's representation against this table to transform it. This happens 448 times per token (7 projections &times; 64 layers). It is 90% of all work. The kernel exists because matrix multiplication has a specific optimal pattern on GPUs &mdash; you tile it into blocks that fit in shared memory, feed chunks to tensor cores, and accumulate. No other operation uses this pattern.</p>
+<h4><code>PROJECTION</code> &mdash; GEMM</h4>
+<p>Token-vector &times; weight matrix. 448 times per token (7 projections &times; 64 layers). 90% of all work. Tile into shared-memory blocks, feed tensor cores, accumulate.</p>
 
-<h4><code>ATTENTION-SCORE</code> &mdash; Memory</h4>
-<p>The model looks back at every previous token to decide what matters for the current one. It computes a relevance score for each past token, then combines the past tokens weighted by relevance. This kernel exists separately from <code>PROJECTION</code> because the access pattern is fundamentally different &mdash; it streams through a growing cache rather than reading a fixed matrix. The KV cache grows with every token; the weight matrix does not.</p>
+<h4><code>ATTENTION-SCORE</code></h4>
+<p>Streams the KV cache rather than reading a fixed matrix &mdash; the cache grows per token. Different access pattern from <code>PROJECTION</code>.</p>
 
-<h4><code>NORM</code> &mdash; Balancing</h4>
-<p>After each transformation, the numbers can drift to extreme ranges. Normalization brings them back to a stable scale. It reads every number in the vector, computes one aggregate statistic (root mean square), and scales everything by it. This kernel exists because it requires a reduction (sum across all elements) followed by a broadcast (multiply all elements by one value) &mdash; a pattern unlike multiplication or attention.</p>
+<h4><code>NORM</code></h4>
+<p>RMS reduction + broadcast across the hidden vector. Reduction-then-broadcast pattern, distinct from GEMM or attention.</p>
 
-<h4><code>ACTIVATE</code> &mdash; Nonlinearity</h4>
-<p>Without this, stacking 64 layers of multiplication would collapse into a single multiplication. SiLU introduces a curve that lets the network represent complex functions. It is applied to each number independently &mdash; no interaction between elements. This kernel exists because it is embarrassingly parallel (every element is independent) unlike <code>PROJECTION</code> (elements cooperate) or <code>NORM</code> (elements reduce).</p>
+<h4><code>ACTIVATE</code></h4>
+<p>SiLU, elementwise. Embarrassingly parallel &mdash; no inter-element dependency.</p>
 
-<h4><code>ROTATE</code> &mdash; Position Encoding</h4>
-<p>The model needs to know that token 5 came before token 50. RoPE rotates pairs of numbers by angles that depend on position &mdash; different positions get different rotations. This kernel exists separately because it operates on pairs (2D rotation) unlike <code>ACTIVATE</code> (single elements) or <code>NORM</code> (full vector reduction).</p>
+<h4><code>ROTATE</code></h4>
+<p>RoPE. 2D rotations on pairs of elements, angle depending on position.</p>
 
-<h4><code>RESIDUAL</code> &mdash; Shortcut</h4>
-<p>The output of each layer is added to its input, creating a direct path for information to flow through the network without being transformed. It is one addition per number. In practice it is always fused with <code>NORM</code> &mdash; never launched alone.</p>
+<h4><code>RESIDUAL</code></h4>
+<p>Elementwise add. Always fused with <code>NORM</code> &mdash; never launched alone.</p>
 
-<h4><code>DEQUANTIZE</code> &mdash; Unpacking</h4>
-<p>Weights are stored as 4-bit integers to save memory (8 GB instead of 32 GB). Before multiplication, each 4-bit integer must be converted to a 16-bit float. This happens inside <code>PROJECTION</code> &mdash; never standalone. It exists as a concept because the unpacking logic is the main thing that differs between quantization formats (<code>W4</code>, <code>W8</code>, <code>GPTQ</code>, <code>AWQ</code>).</p>
+<h4><code>DEQUANTIZE</code></h4>
+<p>4-bit &rarr; FP16 unpack. Fused inside <code>PROJECTION</code>. Format-specific logic (W4, W8, GPTQ, AWQ).</p>
 
-<h4><code>SAMPLE</code> &mdash; Decision</h4>
-<p>After 64 layers of transformation, the model outputs a score for every word in its vocabulary (248,320 scores). <code>SAMPLE</code> picks one word. It can run on CPU because it happens once per token and the data is small enough to fit in CPU cache.</p>
+<h4><code>SAMPLE</code></h4>
+<p>Argmax/top-k over the 248,320-wide logit vector. Runs on CPU &mdash; small enough for cache.</p>
 
-<h4><code>EMBED</code> &mdash; Lookup</h4>
-<p>Convert a token ID (a number like <code>4217</code>) into the model's internal representation (a vector of 5,120 numbers). One table lookup. Trivial.</p>
+<h4><code>EMBED</code></h4>
+<p>Token ID &rarr; 5,120-dim vector. Table lookup.</p>
 
 <h3>Why Not cuBLAS</h3>
-<p>cuBLAS ships 800 MB of pre-compiled kernels for every possible matrix size, data type, and GPU. Lithos generates the exact kernel for your model's dimensions. cuBLAS cannot fuse <code>PROJECTION</code> with <code>DEQUANTIZE</code> or <code>NORM</code> with <code>RESIDUAL</code> because it does not know your model. Lithos does.</p>
+<p>cuBLAS ships 800 MB of pre-compiled kernels for every supported matrix size, data type, and GPU. Lithos generates the kernel for the model's specific dimensions. cuBLAS does not fuse <code>PROJECTION</code> with <code>DEQUANTIZE</code> or <code>NORM</code> with <code>RESIDUAL</code> because it operates at the GEMM level and has no view of surrounding operations.</p>
 
-<h3>Fusion Explained</h3>
-<p>When two operations run as separate kernels, the result of the first must be written to GPU memory (HBM) and the second reads it back. At 4 TB/s this sounds fast, but the data is often only a few KB &mdash; the overhead of launching a new kernel and reading the data back dominates. Fusion means both operations run in the same kernel. The intermediate result stays in registers (<span class="numbers">1 cycle</span> access) instead of going to HBM (<span class="numbers">400 cycle</span> access). That is a <span class="numbers">400&times;</span> latency reduction on every intermediate value.</p>
+<h3>Fusion</h3>
+<p>Separate kernels write intermediates to HBM and read them back. Launch overhead and write-then-read dominate at a few KB. Fusion keeps intermediates in registers (<span class="numbers">1 cycle</span>) vs HBM (<span class="numbers">400 cycles</span>).</p>
 
 <h3>The 3-Kernel Target</h3>
-<p>The ultimate Lithos goal is 3 fused kernels: <code>ATTENTION</code> (norm + rotate + projection&times;4 + attention-score + residual), <code>MLP</code> (norm + projection&times;3 + activate + residual), and <code>SAMPLE</code>. One kernel per major block. No intermediate memory traffic. This is what cuBLAS fundamentally cannot do.</p>
+<p>Target configuration: 3 fused kernels &mdash; <code>ATTENTION</code> (norm + rotate + projection&times;4 + attention-score + residual), <code>MLP</code> (norm + projection&times;3 + activate + residual), and <code>SAMPLE</code>. One kernel per major block. No intermediate HBM traffic within a block.</p>
 
 </section>
 
@@ -865,7 +908,7 @@ footer {
   </tr>
   <tr>
     <td>Memory management overhead</td>
-    <td class="num">cudaMalloc pools + transfers</td>
+    <td class="num"><span class="term" data-term="cudaMalloc">cudaMalloc</span> pools + transfers</td>
     <td class="num" style="color:var(--accent)">Zero</td>
     <td>Unified memory, mmap only</td>
   </tr>
@@ -981,7 +1024,7 @@ n <span class="number">255</span> + <span class="number">256</span> / <span clas
 <span class="comment">\ Launch — one call, one kernel, the GPU executes</span>
 cuLaunchKernel                   <span class="comment">\ GPU runs vec_add</span></pre>
 
-<p class="mt-2">This is the entire path. Forth words concatenate PTX strings. <code>ptx$</code> returns the buffer. The driver JITs it to SASS. One <code>cuLaunchKernel</code> call. No frameworks, no templates, no intermediate representations.</p>
+<p class="mt-2">Forth words concatenate PTX strings. <code>ptx$</code> returns the buffer. The driver JITs it to SASS. One <code>cuLaunchKernel</code> call. No framework, template instantiation, or intermediate representations between Forth and PTX.</p>
 
 <p class="mt-1">Because compilation is microseconds, kernels specialize at runtime: generate a kernel tuned for the exact <code>hidden_dim</code>, <code>num_heads</code>, <code>head_dim</code>. Regenerate when batch size changes. Inline constants. Unroll loops to exact layer count.</p>
 

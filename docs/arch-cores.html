@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title><span class="term" data-term="Lithos">Lithos</span> Cores &mdash; What a <span class="term" data-term="CUDA Core">CUDA Core</span>, <span class="term" data-term="Tensor Core">Tensor Core</span>, FP64 Core, <span class="term" data-term="SFU">SFU</span> Actually Does</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f; --bg-raised: #10101a; --bg-code: #0e0e18;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --accent-dim: #a07830;
+  --cyan: #6ec8d0; --green: #7ec87e; --blue: #6e8ed0; --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.subnav { display: flex; gap: 16px; padding: 12px 32px; background: #141420; border-bottom: 1px solid #2a2a3a; font-size: 13px; overflow-x: auto; position: sticky; top: 36px; z-index: 99; }
+.subnav a { color: #a0a0a8; text-decoration: none; white-space: nowrap; }
+.subnav a:hover { color: #d4a053; text-decoration: none; }
+.subnav a.active { color: #d4a053; border-bottom: 2px solid #d4a053; padding-bottom: 10px; margin-bottom: -12px; }
+
+.hero { padding: 6rem 0 4rem 0; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 4.5rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem; }
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 { font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem; }
+h3 { font-size: 1rem; font-weight: 300; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0; }
+h4 { font-size: 0.9rem; font-weight: 600; color: var(--text); margin: 1.5rem 0 0.5rem 0; }
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.866rem; }
+code { color: var(--accent); }
+pre { background: var(--bg-code); border: 1px solid var(--border); padding: 1rem 1.2rem; overflow-x: auto; margin: 0.8rem 0 1.2rem 0; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.82rem; line-height: 1.55; color: var(--text); }
+
+table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.2rem 0; font-size: 0.88rem; }
+th { text-align: left; padding: 0.5rem 0.8rem; border-bottom: 2px solid var(--accent-dim); color: var(--accent); font-weight: 400; letter-spacing: 0.04em; white-space: nowrap; }
+td { padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+td code { font-size: 0.82rem; color: var(--text); background: var(--bg-code); padding: 0.1rem 0.3rem; }
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+.diagram-title { font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.8rem; font-weight: 500; }
+
+/* Sub-partition diagram */
+.sp-diagram { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.sp-row { border: 1px solid var(--border); background: var(--bg-raised); padding: 0.9rem 1rem; }
+.sp-row.sched { border-color: var(--accent-dim); }
+.sp-row.regfile { border-color: var(--green); background: rgba(126, 200, 126, 0.04); }
+.sp-row.ldst { border-color: var(--blue); background: rgba(110, 142, 208, 0.04); }
+.sp-row h5 { margin: 0 0 0.2rem 0; font-size: 0.85rem; color: var(--text); font-weight: 500; }
+.sp-row.regfile h5 { color: var(--green); font-family: 'JetBrains Mono', monospace; }
+.sp-row.ldst h5 { color: var(--blue); font-family: 'JetBrains Mono', monospace; }
+.sp-row .sp-note { color: var(--text-dim); font-size: 0.78rem; }
+.sp-units { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin: 0.6rem 0 0 0; }
+.sp-unit { border: 1px solid var(--border); background: var(--bg); padding: 0.55rem 0.6rem; text-align: center; }
+.sp-unit.cuda { border-color: var(--cyan); }
+.sp-unit.tensor { border-color: var(--accent); }
+.sp-unit.fp64 { border-color: var(--red); }
+.sp-unit.sfu { border-color: var(--text-dim); }
+.sp-unit-name { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; font-weight: 500; }
+.sp-unit.cuda .sp-unit-name { color: var(--cyan); }
+.sp-unit.tensor .sp-unit-name { color: var(--accent); }
+.sp-unit.fp64 .sp-unit-name { color: var(--red); }
+.sp-unit.sfu .sp-unit-name { color: var(--text); }
+.sp-unit-count { font-size: 0.72rem; color: var(--text-dim); font-family: 'JetBrains Mono', monospace; margin-top: 0.15rem; }
+.sp-unit-op { font-size: 0.7rem; color: var(--text-faint); font-family: 'JetBrains Mono', monospace; margin-top: 0.2rem; }
+@media (max-width: 600px) { .sp-units { grid-template-columns: repeat(2, 1fr); } }
+
+/* Workload bar chart */
+.work-chart { border: 1px solid var(--border); background: var(--bg-code); padding: 1.5rem; margin: 1rem 0; display: flex; flex-direction: column; gap: 1.1rem; }
+.work-row { display: grid; grid-template-columns: 8rem 1fr 4rem; gap: 1rem; align-items: center; }
+.work-label { font-size: 0.86rem; color: var(--text); font-weight: 500; }
+.work-bar-track { background: var(--bg); border: 1px solid var(--border); height: 1.2rem; position: relative; }
+.work-bar-fill { height: 100%; background: var(--accent); }
+.work-bar-fill.tensor { background: var(--accent); }
+.work-bar-fill.cuda { background: var(--cyan); }
+.work-bar-fill.sfu { background: var(--text-dim); }
+.work-bar-fill.ldst { background: var(--green); }
+.work-bar-fill.fp64 { background: var(--red); }
+.work-value { text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: var(--cyan); }
+.work-sub { font-size: 0.76rem; color: var(--text-dim); margin-top: 0.1rem; grid-column: 1 / -1; padding-left: 9rem; }
+@media (max-width: 600px) {
+  .work-row { grid-template-columns: 1fr 3.5rem; }
+  .work-label { grid-column: 1 / -1; }
+  .work-sub { padding-left: 0; }
+}
+
+footer { padding: 2rem 0; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 0.78rem; letter-spacing: 0.04em; }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture" class="active">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<!-- Architecture Subnav -->
+<div class="subnav">
+  <a href="/architecture">Pipeline</a>
+  <a href="/arch-gpu">GPU</a>
+  <a href="/sm-architecture">SM</a>
+  <a href="/arch-cores" class="active">Cores</a>
+  <a href="/arch-registers">Registers</a>
+  <a href="/warp-scheduler">Warp</a>
+  <a href="/memory">Memory</a>
+  <a href="/arch-kernel">Kernel</a>
+</div>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Cores</h1>
+  <p>The actual compute units. What each one does, what each one is for, what it costs.</p>
+</div>
+</header>
+
+<main class="container">
+
+<section>
+<h2>Cells in a Sub-Partition</h2>
+<p>A sub-partition is the smallest scheduling unit. Four per <span class="term" data-term="SM">SM</span>. Each contains its own <span class="term" data-term="Warp">warp</span> scheduler, its own 64 KB <span class="term" data-term="Register File">register file</span> slice, and a fixed set of execution units. When a <span class="term" data-term="Warp">warp</span> issues an instruction, it routes to the unit that can execute that opcode.</p>
+
+<div class="diagram-title">One sub-partition &mdash; 1/4 of an <span class="term" data-term="SM">SM</span></div>
+<div class="sp-diagram">
+  <div class="sp-row sched">
+    <h5><span class="term" data-term="Warp">Warp</span> scheduler + dispatch</h5>
+    <div class="sp-note">Picks 1 <span class="term" data-term="Warp">warp</span> per cycle from up to 16 resident warps.</div>
+  </div>
+  <div class="sp-row regfile">
+    <h5><span class="term" data-term="Register File">Register file</span> &middot; 64 KB</h5>
+    <div class="sp-note">16,384 entries &times; 32-bit, banked 4 ways.</div>
+  </div>
+  <div class="sp-row">
+    <h5 style="margin-bottom: 0.5rem;">Execution units</h5>
+    <div class="sp-units">
+      <div class="sp-unit cuda">
+        <div class="sp-unit-name"><span class="term" data-term="CUDA">CUDA</span> &times;32</div>
+        <div class="sp-unit-count">scalar <span class="term" data-term="FP32">FP32</span></div>
+        <div class="sp-unit-op">one per lane</div>
+      </div>
+      <div class="sp-unit tensor">
+        <div class="sp-unit-name"><span class="term" data-term="Tensor Core">Tensor Core</span></div>
+        <div class="sp-unit-count">mma.sync</div>
+        <div class="sp-unit-op">m16n8k16 / cycle</div>
+      </div>
+      <div class="sp-unit fp64">
+        <div class="sp-unit-name">FP64 &times;2</div>
+        <div class="sp-unit-count">DFMA</div>
+        <div class="sp-unit-op">per subpart</div>
+      </div>
+      <div class="sp-unit sfu">
+        <div class="sp-unit-name"><span class="term" data-term="SFU">SFU</span> &times;4</div>
+        <div class="sp-unit-count">transcendentals</div>
+        <div class="sp-unit-op">rcp, rsq, sin, exp2</div>
+      </div>
+    </div>
+  </div>
+  <div class="sp-row ldst">
+    <h5>LD/ST unit</h5>
+    <div class="sp-note">Issues loads and stores to <span class="term" data-term="L1 Cache">L1</span> / <span class="term" data-term="L2 Cache">L2</span> / <span class="term" data-term="HBM">HBM</span>.</div>
+  </div>
+</div>
+
+<p>128 <span class="term" data-term="CUDA">CUDA</span> cores per <span class="term" data-term="SM">SM</span> = 32 per sub-partition. 4 tensor cores per <span class="term" data-term="SM">SM</span> = 1 per sub-partition. 8 FP64 cores per <span class="term" data-term="SM">SM</span> = 2 per sub-partition. 16 SFUs per <span class="term" data-term="SM">SM</span> = 4 per sub-partition. 16 LD/ST units per <span class="term" data-term="SM">SM</span> = 4 per sub-partition.</p>
+</section>
+
+<section>
+<h2>CUDA Core</h2>
+<p>A single-lane scalar <span class="term" data-term="FP32">FP32</span> unit. One <span class="term" data-term="FMA">FMA</span> per cycle: <code>d = a * b + c</code>. 32-bit input, 32-bit output. Takes one <span class="term" data-term="Warp">warp</span> (32 threads) one cycle to fully occupy the 32 <span class="term" data-term="CUDA">CUDA</span> cores of a sub-partition.</p>
+
+<p>Instructions that run here:</p>
+<table>
+<tr><th><span class="term" data-term="SASS">SASS</span></th><th>Operation</th></tr>
+<tr><td><code>FFMA R0, R1, R2, R3</code></td><td><span class="term" data-term="FP32">FP32</span> fused multiply-add</td></tr>
+<tr><td><code>FADD R0, R1, R2</code></td><td><span class="term" data-term="FP32">FP32</span> add</td></tr>
+<tr><td><code>FMUL R0, R1, R2</code></td><td><span class="term" data-term="FP32">FP32</span> multiply</td></tr>
+<tr><td><code>IADD3 R0, R1, R2, R3</code></td><td>INT32 three-operand add</td></tr>
+<tr><td><code>IMAD R0, R1, R2, R3</code></td><td>INT32 multiply-add</td></tr>
+<tr><td><code>SHF.L R0, R1, R2, R3</code></td><td>Funnel shift left</td></tr>
+<tr><td><code>LOP3.LUT</code></td><td>Three-op bitwise lookup</td></tr>
+</table>
+
+<p><strong>In inference:</strong> <span class="term" data-term="CUDA">CUDA</span> cores handle the elementwise operations &mdash; <span class="term" data-term="RoPE">RoPE</span> sin/cos application, residual adds, activation gates, scale factors, index arithmetic for gather/scatter. They are not the bottleneck; they are the glue.</p>
+</section>
+
+<section>
+<h2>Tensor Core</h2>
+<p>A matrix engine. The smallest operation is a 16x8x16 matrix-multiply-accumulate (the <code>m16n8k16</code> shape). Takes <span class="term" data-term="FP16">FP16</span>/<span class="term" data-term="BF16">BF16</span>/<span class="term" data-term="FP8">FP8</span>/INT8 inputs, accumulates in <span class="term" data-term="FP32">FP32</span> or <span class="term" data-term="FP16">FP16</span>. One <span class="term" data-term="Tensor Core">tensor core</span> per sub-partition, four per <span class="term" data-term="SM">SM</span>.</p>
+
+<p>The key instruction:</p>
+<pre><code>wgmma.mma_async.sync.aligned.m64n256k16.f16.f16.f16
+    // 64 x 256 output tile, 16 reduction depth
+    // fed from shared memory (no register stall)
+    // issued asynchronously; warp continues</code></pre>
+
+<p>On <span class="term" data-term="Hopper">Hopper</span>, <code>wgmma</code> supersedes the older <code>mma.sync</code>. A single <code>wgmma</code> instruction launches a matrix multiply that takes many cycles but does not stall the <span class="term" data-term="Warp">warp</span> &mdash; the <span class="term" data-term="Warp">warp</span> can issue memory ops while the <span class="term" data-term="Tensor Core">tensor core</span> grinds.</p>
+
+<p>Throughput: each <span class="term" data-term="Tensor Core">tensor core</span> in <span class="term" data-term="Hopper">Hopper</span> does ~1024 <span class="term" data-term="FP16">FP16</span> FMAs per cycle (twice what an Ampere TC did). Across 528 tensor cores on <span class="term" data-term="GH200">GH200</span> at ~1.98 GHz, that is ~990 TFLOPS <span class="term" data-term="FP16">FP16</span> dense, ~1980 sparse. This is where the FLOPS are.</p>
+
+<p><strong>In inference:</strong> Tensor cores do the heavy matmuls &mdash; QKV projection, attention output, MLP up/down, LM head. That is roughly 90% of total FLOPs in a decode step. Everything else is either feeding them or cleaning up after them.</p>
+</section>
+
+<section>
+<h2>FP64 Core</h2>
+<p>Double-precision <span class="term" data-term="FMA">FMA</span>. 2 per sub-partition, 8 per <span class="term" data-term="SM">SM</span>, 1056 per <span class="term" data-term="GH200">GH200</span>. Half the width of the <span class="term" data-term="FP32">FP32</span> pipe, same two-operand model.</p>
+
+<table>
+<tr><th><span class="term" data-term="SASS">SASS</span></th><th>Operation</th></tr>
+<tr><td><code>DFMA R0, R2, R4, R6</code></td><td>FP64 fused multiply-add</td></tr>
+<tr><td><code>DADD</code>, <code>DMUL</code></td><td>FP64 add, multiply</td></tr>
+</table>
+
+<p><strong>In inference:</strong> unused. LLM inference never sees FP64. These exist for HPC workloads (CFD, molecular dynamics). For <span class="term" data-term="Lithos">Lithos</span> they are 1056 transistors per <span class="term" data-term="SM">SM</span> that sit idle &mdash; a tax paid to the <span class="term" data-term="Hopper">Hopper</span> die.</p>
+</section>
+
+<section>
+<h2>SFU &mdash; Special Function Unit</h2>
+<p>Transcendentals. Reciprocal, reciprocal square root, sine, cosine, exp2, log2. 16 per <span class="term" data-term="SM">SM</span>, 4 per sub-partition. Lower throughput than <span class="term" data-term="CUDA">CUDA</span> cores (usually 1 <span class="term" data-term="SFU">SFU</span> op per 4 cycles per <span class="term" data-term="Warp">warp</span>) but they compute functions that would take dozens of FMAs to approximate.</p>
+
+<table>
+<tr><th><span class="term" data-term="SASS">SASS</span></th><th>Operation</th></tr>
+<tr><td><code>MUFU.RCP</code></td><td>1/x</td></tr>
+<tr><td><code>MUFU.RSQ</code></td><td>1/sqrt(x)</td></tr>
+<tr><td><code>MUFU.SIN</code>, <code>MUFU.COS</code></td><td>sin(x), cos(x)</td></tr>
+<tr><td><code>MUFU.EX2</code>, <code>MUFU.LG2</code></td><td>2^x, log2(x)</td></tr>
+<tr><td><code>MUFU.TANH</code></td><td>tanh(x)</td></tr>
+</table>
+
+<p><strong>In inference:</strong> softmax uses <code>MUFU.EX2</code> heavily (exp is synthesized as ex2 with ln2 scaling). <span class="term" data-term="RMSNorm">RMSNorm</span> and LayerNorm use <code>MUFU.RSQ</code>. SwiGLU uses sigmoid &mdash; also ex2 under the hood. <span class="term" data-term="RoPE">RoPE</span> uses <code>MUFU.SIN</code>/<code>MUFU.COS</code> once at <span class="term" data-term="Kernel">kernel</span> start then reuses. <span class="term" data-term="SFU">SFU</span> throughput is usually a non-issue; the work is small.</p>
+</section>
+
+<section>
+<h2>LD/ST Unit</h2>
+<p>The address generator and data mover. 16 per <span class="term" data-term="SM">SM</span>. Issues one load or store per cycle per unit. Handles global loads (<code>LDG</code>), shared-memory loads (<code>LDS</code>), ldmatrix (a wide shared-memory read that delivers a matrix tile directly to registers), <code>cp.async</code> (asynchronous global-to-shared copy), and all the stores.</p>
+
+<p>The LD/ST unit is where the memory system intersects the <span class="term" data-term="SM">SM</span>. It enqueues a request, the request goes through <span class="term" data-term="L1 Cache">L1</span> -> <span class="term" data-term="L2 Cache">L2</span> -> <span class="term" data-term="HBM">HBM</span>, data comes back, the <span class="term" data-term="Warp">warp</span> wakes up. While waiting, the <span class="term" data-term="Warp">warp</span> scheduler runs other warps. This is how <span class="term" data-term="Latency Hiding">latency hiding</span> works.</p>
+
+<p><strong>In inference:</strong> LD/ST is the busiest unit in a decode step. Every weight read, every <span class="term" data-term="KV Cache">KV cache</span> read, every activation write goes through it. Memory-bound kernels saturate LD/ST well before they saturate tensor cores.</p>
+</section>
+
+<section>
+<h2>What Each Is Used For</h2>
+<div class="diagram-title">Decode step by work category</div>
+<div class="work-chart">
+  <div class="work-row">
+    <div class="work-label">Tensor cores</div>
+    <div class="work-bar-track"><div class="work-bar-fill tensor" style="width: 90%;"></div></div>
+    <div class="work-value">~90% FLOPs</div>
+    <div class="work-sub">QKV proj, attention out, MLP up, MLP down, LM head</div>
+  </div>
+  <div class="work-row">
+    <div class="work-label"><span class="term" data-term="CUDA">CUDA</span> cores</div>
+    <div class="work-bar-track"><div class="work-bar-fill cuda" style="width: 6%;"></div></div>
+    <div class="work-value">~6% FLOPs</div>
+    <div class="work-sub"><span class="term" data-term="RoPE">RoPE</span> apply, residual adds, activation gates, indexing</div>
+  </div>
+  <div class="work-row">
+    <div class="work-label"><span class="term" data-term="SFU">SFU</span></div>
+    <div class="work-bar-track"><div class="work-bar-fill sfu" style="width: 2%;"></div></div>
+    <div class="work-value">~2% FLOPs</div>
+    <div class="work-sub">softmax exp, <span class="term" data-term="RMSNorm">RMSNorm</span> rsqrt, sigmoid in SwiGLU</div>
+  </div>
+  <div class="work-row">
+    <div class="work-label">LD/ST</div>
+    <div class="work-bar-track"><div class="work-bar-fill ldst" style="width: 100%;"></div></div>
+    <div class="work-value">100% busy</div>
+    <div class="work-sub">every weight load, every KV read, every write</div>
+  </div>
+  <div class="work-row">
+    <div class="work-label">FP64</div>
+    <div class="work-bar-track"><div class="work-bar-fill fp64" style="width: 0.5%;"></div></div>
+    <div class="work-value">0%</div>
+    <div class="work-sub">not used by inference</div>
+  </div>
+</div>
+
+<p><span class="term" data-term="Lithos">Lithos</span> does not write FP64 kernels. Every matmul is <span class="term" data-term="FP16">FP16</span> (or <span class="term" data-term="FP8">FP8</span> for some projections), every reduction is <span class="term" data-term="FP32">FP32</span>, every elementwise op runs on <span class="term" data-term="CUDA">CUDA</span> cores. The tensor cores set the speed of light; the other units get out of their way.</p>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>

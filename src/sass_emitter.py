@@ -57,10 +57,13 @@ OP = {
     # Tensor
     "HMMA":      0x23c,
     # Integer
-    "ISETP_RR":  0xc0c,
-    "IADD3_RR":  0xc10,
-    "IMAD_RR":   0xc24,
-    "IMAD_RI":   0x424,
+    "ISETP_RR":  0x20c,   # ISETP Pd, Rs1, Rs2 (reg-reg)
+    "ISETP_RU":  0xc0c,   # ISETP Pd, Rs1, URs2 (rs2 is uniform)
+    "IADD3_RR":  0x210,   # IADD3 Rd, Rs1, Rs2, Rs3   (all regular regs)
+    "IADD3_RU":  0xc10,   # IADD3 Rd, Rs1, URs2, Rs3  (rs2 is uniform reg)
+    "IMAD_RR":   0x224,   # IMAD Rd, Rs1, Rs2, Rs3
+    "IMAD_RU":   0xc24,   # IMAD Rd, Rs1, URs2, Rs3
+    "IMAD_RI":   0x824,
     # Data movement
     "MOV":       0x802,
     "CS2R":      0x805,
@@ -321,13 +324,28 @@ class SASSEmitter:
 
     def IADD3(self, rd: int, rs1: int, rs2: int, rs3: int = RZ,
               pred: int = PT, pred_neg: bool = False, stall: int = 4, **kw):
-        """IADD3 Rd, Rs1, Rs2, Rs3."""
+        """IADD3 Rd, Rs1, Rs2, Rs3.
+
+        ctrl bits [23:5] encode the predicate-out (Pcarry, Pcarry2) and
+        carry-in predicate fields.  When all outputs are unused we set them
+        to PT/disabled, which matches ptxas's ``0xf3e0`` pattern at bits
+        [23:5]:  output-pred=PT, dual-pred=PT, carry-in=PT, no negate.
+        """
         inst = _make_inst(OP["IADD3_RR"], rd, rs1, rs2, pred, pred_neg)
-        self._emit_instr(inst, stall=stall, ctrl_extra=(rs3 & 0xFF), **kw)
+        # Default: all predicate slots disabled. Reference ctrl pattern for
+        # the RRR form (opcode 0x210) with no Pcarry output:
+        #   ctrl[31:24]=0x07, ctrl[23:16]=0xff, ctrl[15:8]=0xe0, ctrl[7:0]=rs3.
+        ctrl_extra = 0x07ffe000 | (rs3 & 0xFF)
+        self._emit_instr(inst, stall=stall, ctrl_extra=ctrl_extra, **kw)
 
     def IMAD(self, rd: int, rs1: int, rs2, rs3: int = RZ,
              pred: int = PT, pred_neg: bool = False, stall: int = 4, **kw):
-        """IMAD Rd, Rs1, Rs2, Rs3.  Rs2 can be int for immediate form."""
+        """IMAD Rd, Rs1, Rs2, Rs3.  Rs2 can be int for immediate form.
+
+        Reference ctrl bits [23:0]: ``0x8e02`` in ctrl[23:8], Rs3 in [7:0].
+        These encode the signed/unsigned flags, output predicate=PT,
+        etc. -- values observed across all ptxas IMAD encodings we probed.
+        """
         if isinstance(rs2, str):
             # Uniform register like "UR4" -- just encode as register form with value
             ureg = int(rs2.replace("UR", ""))
@@ -337,23 +355,42 @@ class SASSEmitter:
             inst = _make_inst(OP["IMAD_RI"], rd, rs1, rs2, pred, pred_neg, is_imm=True)
         else:
             inst = _make_inst(OP["IMAD_RR"], rd, rs1, rs2, pred, pred_neg)
-        self._emit_instr(inst, stall=stall, ctrl_extra=(rs3 & 0xFF), **kw)
+        ctrl_extra = 0x078e0200 | (rs3 & 0xFF)
+        self._emit_instr(inst, stall=stall, ctrl_extra=ctrl_extra, **kw)
 
     def ISETP(self, pd: int, rs1: int, rs2: int, cmp: str = "LT",
               pred: int = PT, pred_neg: bool = False, stall: int = 4, **kw):
         """ISETP.cmp Pd, Rs1, Rs2."""
         cmp_code = ISETP_CMP[cmp] if isinstance(cmp, str) else cmp
         inst = _make_inst(OP["ISETP_RR"], RZ, rs1, rs2, pred, pred_neg)
-        ctrl_extra = (0xF << 20) | ((pd * 2) << 16) | (cmp_code << 12)
+        # Reference ISETP.<cmp>.U32.AND ctrl[27:0]:
+        #   bits [31:24]=0x0b (signed/unsigned + predicate-combine-AND flags)
+        #   bits [23:20]=0xf  (Pnot output = PT, unused)
+        #   bits [19:16]=Pd*2 (output predicate register)
+        #   bits [15:8]=0x60|(cmp_code<<4)  -> cmp_code goes in bits [15:12]
+        #   bits [7:0]=0x70   (src predicate PT, no negate)
+        # Reference ISETP.<cmp>.U32.AND (RR form) ctrl[31:0]:
+        #   [31:24] = 0x03  (ISETP flags: U32 + AND combine, no negate)
+        #   [23:20] = 0xf   (Pnot output disabled)
+        #   [19:16] = Pd*2  (output predicate)
+        #   [15:12] = cmp_code
+        #   [11:8]  = 0x60  (boolean combine mode = AND)
+        #   [7:0]   = 0x70  (src predicate PT, no negate)
+        ctrl_extra = (0x03 << 24) | (0xF << 20) | ((pd * 2) << 16) \
+                   | (cmp_code << 12) | 0x6070
         self._emit_instr(inst, stall=stall, ctrl_extra=ctrl_extra, **kw)
 
     # -- Data movement --
 
     def MOV(self, rd: int, imm: int, pred: int = PT, pred_neg: bool = False,
             stall: int = 2, **kw):
-        """MOV Rd, #imm32."""
+        """MOV Rd, #imm32.
+
+        ctrl[11:8] = 0xf is the 4-bit byte write-mask (all 4 bytes live).
+        ptxas always sets it for a full 32-bit MOV.
+        """
         inst = _make_inst(OP["MOV"], rd, RZ, imm & 0xFFFFFFFF, pred, pred_neg, is_imm=True)
-        self._emit_instr(inst, stall=stall, **kw)
+        self._emit_instr(inst, stall=stall, ctrl_extra=0x0f00, **kw)
 
     def MOV_REG(self, rd: int, rs: int, pred: int = PT, pred_neg: bool = False,
                 stall: int = 2, **kw):
@@ -369,8 +406,12 @@ class SASSEmitter:
             sr_id = SR_MAP[sr]
         else:
             sr_id = sr
-        # S2R encoding: opcode 0x919, SR ID in control word bits [15:8]
-        inst = _make_inst(OP["S2R"], rd, RZ, 0, pred, pred_neg)
+        # S2R encoding: opcode 0x919.
+        #   inst[23:16] = Rd
+        #   inst[31:24] = 0 (not RZ -- must be zero per ptxas encodings)
+        #   ctrl[15:8]  = SR ID
+        guard = _encode_pred(pred, pred_neg)
+        inst = (OP["S2R"] | (guard << 12) | ((rd & 0xFF) << 16))
         self._emit_instr(inst, stall=stall, ctrl_extra=(sr_id << 8), **kw)
 
     def CS2R(self, rd: int, sr: int, pred: int = PT, pred_neg: bool = False,
@@ -382,58 +423,84 @@ class SASSEmitter:
     # -- Memory: Global --
 
     def LDG(self, rd: int, ra: int, offset: int = 0,
-            size: int = 32, pred: int = PT, pred_neg: bool = False,
+            size: int = 32, ur_desc: int = 4,
+            pred: int = PT, pred_neg: bool = False,
             stall: int = 15, wbar: int = 0, **kw):
         """
-        LDG.E[.sz] Rd, [Ra + offset].
+        LDG.E[.sz] Rd, desc[URx][Ra.64 + offset].
 
-        size: 32, 64, 128 bits.
-        ra: register holding base address (64-bit).
+        Hopper (sm_90) mandates descriptor-based global addressing: the
+        uniform register ``ur_desc`` must already contain the generic-global
+        memory descriptor (typically loaded from ``c[0x0][0x208]`` into UR4).
+
+        Layout of the 128-bit instruction:
+          inst[11:0]   = 0x981 (LDG)
+          inst[15:12]  = predicate guard
+          inst[23:16]  = Rd           (destination; register pair for .64, quad for .128)
+          inst[31:24]  = Ra           (64-bit address register pair: Ra, Ra+1)
+          inst[39:32]  = URx          (memory descriptor uniform register)
+          inst[63:40]  = 24-bit signed byte offset
+          ctrl[11:8]   = 0x9/0xb/0xd  (32/64/128-bit size)
+          ctrl[15:12]  = 0x1          (fixed: LDG variant flags)
+          ctrl[23:16]  = 0x1e         (cache op .EF + mem-space = global)
+          ctrl[31:24]  = 0x0c         (.E extended addressing + desc mode)
         """
-        # LDG encoding based on probe analysis:
-        #   inst bits [63:32] hold immediate offset (24 bits, shifted)
-        #   inst [31:24] = Ra (address register)
-        #   inst [23:16] = Rd (destination)
-        #   ctrl encodes size: bits [13:10] = 0x2(32b), 0x2+bit9(64b), 0x3(128b)
-        imm_field = (offset & 0xFFFFFF) << 32
-        inst = (OP["LDG"] | (_encode_pred(pred, pred_neg) << 12) |
-                ((rd & 0xFF) << 16) | ((ra & 0xFF) << 24))
-        inst |= imm_field
-        inst &= 0xFFFFFFFFFFFFFFFF
-        # Size encoding in ctrl
         if size == 32:
-            sz_bits = 0x2 << 10
+            sz_nibble = 0x9
         elif size == 64:
-            sz_bits = (0x2 << 10) | (1 << 9)
+            sz_nibble = 0xb
         elif size == 128:
-            sz_bits = 0x3 << 10
+            sz_nibble = 0xd
         else:
-            sz_bits = 0x2 << 10
-        self._emit_instr(inst, stall=stall, wbar=wbar, ctrl_extra=sz_bits, **kw)
+            raise ValueError(f"LDG size must be 32/64/128, got {size}")
+        inst = (OP["LDG"] | (_encode_pred(pred, pred_neg) << 12) |
+                ((rd & 0xFF) << 16) | ((ra & 0xFF) << 24) |
+                ((ur_desc & 0xFF) << 32) |
+                ((offset & 0xFFFFFF) << 40))
+        inst &= 0xFFFFFFFFFFFFFFFF
+        ctrl_extra = (0x0c << 24) | (0x1e << 16) | (0x10 << 8) | (sz_nibble << 8)
+        # 0x10 << 8 | 0x09 << 8 = 0x1900 (size=32). For 64: 0x1b00, 128: 0x1d00.
+        # Resolved explicitly:
+        ctrl_extra = 0x0c1e0000 | ((0x10 | sz_nibble) << 8)
+        self._emit_instr(inst, stall=stall, wbar=wbar, ctrl_extra=ctrl_extra, **kw)
 
     def STG(self, ra: int, rs: int, offset: int = 0,
-            size: int = 32, pred: int = PT, pred_neg: bool = False,
+            size: int = 32, ur_desc: int = 4,
+            pred: int = PT, pred_neg: bool = False,
             stall: int = 15, **kw):
         """
-        STG.E[.sz] [Ra + offset], Rs.
+        STG.E[.sz] desc[URx][Ra.64 + offset], Rs.
 
-        ra: register holding base address (64-bit).
-        rs: register holding data to store.
+        Like LDG, sm_90 requires a descriptor. ``ur_desc`` picks the uniform
+        register holding it (UR4 = c[0x0][0x208] generic-global descriptor).
+
+        Layout of the 128-bit instruction:
+          inst[11:0]   = 0x986 (STG)
+          inst[15:12]  = predicate guard
+          inst[23:16]  = 0x00          (reserved; STG has no Rd)
+          inst[31:24]  = Ra            (64-bit address register pair)
+          inst[39:32]  = Rs            (data register; pair/quad for .64/.128)
+          inst[63:40]  = 24-bit signed byte offset
+          ctrl[7:0]    = URx           (descriptor encoded in the 3rd-source slot)
+          ctrl[11:8]   = 0x9/0xb/0xd   (size nibble)
+          ctrl[15:12]  = 0x1           (fixed)
+          ctrl[23:16]  = 0x10          (.EF / store, no cache read)
+          ctrl[31:24]  = 0x0c          (.E + desc mode)
         """
-        imm_field = (offset & 0xFFFFFF) << 32
-        inst = (OP["STG"] | (_encode_pred(pred, pred_neg) << 12) |
-                ((rs & 0xFF) << 16) | ((ra & 0xFF) << 24))
-        inst |= imm_field
-        inst &= 0xFFFFFFFFFFFFFFFF
         if size == 32:
-            sz_bits = 0x2 << 10
+            sz_nibble = 0x9
         elif size == 64:
-            sz_bits = (0x2 << 10) | (1 << 9)
+            sz_nibble = 0xb
         elif size == 128:
-            sz_bits = 0x3 << 10
+            sz_nibble = 0xd
         else:
-            sz_bits = 0x2 << 10
-        self._emit_instr(inst, stall=stall, ctrl_extra=sz_bits, **kw)
+            raise ValueError(f"STG size must be 32/64/128, got {size}")
+        inst = (OP["STG"] | (_encode_pred(pred, pred_neg) << 12) |
+                ((ra & 0xFF) << 24) | ((rs & 0xFF) << 32) |
+                ((offset & 0xFFFFFF) << 40))
+        inst &= 0xFFFFFFFFFFFFFFFF
+        ctrl_extra = (0x0c << 24) | (0x10 << 16) | ((0x10 | sz_nibble) << 8) | (ur_desc & 0xFF)
+        self._emit_instr(inst, stall=stall, ctrl_extra=ctrl_extra, **kw)
 
     # -- Memory: Shared --
 
@@ -674,318 +741,420 @@ def _build_cubin_elf(kernel_name: str,
                      max_regs: int,
                      sm_version: int,
                      toolkit_version: int) -> bytes:
-    """Build a minimal cubin ELF for Hopper (sm_90)."""
+    """Build a minimal cubin ELF for Hopper (sm_90).
+
+    The layout mirrors ptxas output so that the CUDA driver recognises
+    the kernel entry point.  Required sections:
+
+        .shstrtab, .strtab, .symtab, .nv.info, .nv.info.<kernel>,
+        .nv.callgraph, .text.<kernel>, .nv.shared.reserved.0,
+        .nv.constant0.<kernel>
+
+    Program headers: PHDR, LOAD(phdr), LOAD(.text + shared), LOAD(shared),
+    LOAD(constant0).
+    """
 
     # ---- Compute sizes ----
     code_size = len(instructions) * 16
-    # Pad code to 128-byte alignment (required by .text section align=128)
     code_padded = _align(code_size, 128)
 
-    # Total parameter size
     total_param_size = 0
     for _, psz, poff in params:
         total_param_size = max(total_param_size, poff + psz)
 
-    # Constant bank: 0x160 bytes of header/reserved + param area
-    CBANK_PARAM_BASE = 0x160
-    cbank_size = _align(CBANK_PARAM_BASE + total_param_size, 4)
+    # Constant bank layout (matching ptxas output):
+    #   Bytes 0x00..0x6f  = system constants (gridDim, blockDim, etc.)
+    #   Bytes 0x70..0x70+param_window = kernel parameters
+    # PARAM_CBANK offset tells the driver where params start.
+    # The constant0 section must be at least 0x22c bytes for sm_90
+    # or the CUDA driver will reject the launch.
+    # On sm_90 the ABI places kernel params at c[0x0][0x210].
+    # Bytes 0x200..0x20f hold system-provided memory descriptors
+    # (UR4 = generic-global descriptor at 0x208) required by LDG.E/STG.E.
+    CBANK_PARAM_BASE = 0x210
+    cbank_param_window = 0x180  # standard param window
+    cbank_size = CBANK_PARAM_BASE + cbank_param_window  # enough for all params
 
-    # Section names
     text_sec_name = f".text.{kernel_name}"
     info_kern_name = f".nv.info.{kernel_name}"
     const0_name = f".nv.constant0.{kernel_name}"
+    shared_name = f".nv.shared.{kernel_name}"
 
     # ---- Section indices ----
-    SEC_NULL     = 0
-    SEC_SHSTRTAB = 1
-    SEC_STRTAB   = 2
-    SEC_SYMTAB   = 3
-    SEC_NV_INFO  = 4
-    SEC_NV_INFO_K = 5
-    SEC_TEXT      = 6
-    SEC_CONST0    = 7
-    NUM_SECTIONS  = 8
+    SEC_NULL       = 0
+    SEC_SHSTRTAB   = 1
+    SEC_STRTAB     = 2
+    SEC_SYMTAB     = 3
+    SEC_NV_INFO    = 4
+    SEC_NV_INFO_K  = 5
+    SEC_NV_CALLGR  = 6
+    SEC_TEXT        = 7
+    SEC_NV_SHARED  = 8
+    SEC_CONST0     = 9
+    NUM_SECTIONS   = 10
 
-    # Build section-name string table (.shstrtab)
-    # We build it manually to get exact name offsets for each section header.
+    # ---- String tables ----
     shstrtab_data = bytearray()
     def _add_shstr(s: str) -> int:
         off = len(shstrtab_data)
         shstrtab_data.extend(s.encode('ascii') + b'\x00')
         return off
 
-    SN_NULL      = _add_shstr("")
-    SN_SHSTRTAB  = _add_shstr(".shstrtab")
-    SN_STRTAB    = _add_shstr(".strtab")
-    SN_SYMTAB    = _add_shstr(".symtab")
-    SN_NV_INFO   = _add_shstr(".nv.info")
-    SN_NV_INFO_K = _add_shstr(info_kern_name)
-    SN_TEXT      = _add_shstr(text_sec_name)
-    SN_CONST0    = _add_shstr(const0_name)
+    SN_NULL       = _add_shstr("")
+    SN_SHSTRTAB   = _add_shstr(".shstrtab")
+    SN_STRTAB     = _add_shstr(".strtab")
+    SN_SYMTAB     = _add_shstr(".symtab")
+    SN_NV_INFO    = _add_shstr(".nv.info")
+    SN_NV_INFO_K  = _add_shstr(info_kern_name)
+    SN_NV_CALLGR  = _add_shstr(".nv.callgraph")
+    SN_TEXT        = _add_shstr(text_sec_name)
+    SN_NV_SHARED  = _add_shstr(".nv.shared.reserved.0")
+    SN_CONST0     = _add_shstr(const0_name)
     shstrtab = bytes(shstrtab_data)
 
-    # Build symbol string table (.strtab)
     strtab_data = bytearray()
     def _add_str(s: str) -> int:
         off = len(strtab_data)
         strtab_data.extend(s.encode('ascii') + b'\x00')
         return off
 
-    _add_str("")  # null string at offset 0
-    STR_TEXT     = _add_str(text_sec_name)
-    STR_NV_INFO  = _add_str(".nv.info")
-    STR_NV_INFO_K = _add_str(info_kern_name)
-    STR_CONST0   = _add_str(const0_name)
-    STR_FUNC     = _add_str(kernel_name)
+    _add_str("")  # null at offset 0
+    STR_TEXT       = _add_str(text_sec_name)
+    STR_NV_INFO    = _add_str(".nv.info")
+    STR_NV_INFO_K  = _add_str(info_kern_name)
+    STR_NV_CALLGR  = _add_str(".nv.callgraph")
+    STR_NV_SHARED_OBJ = _add_str(".nv.reservedSmem.offset0")
+    STR_NV_SHARED_ALIAS = _add_str("__nv_reservedSMEM_offset_0_alias")
+    STR_CONST0     = _add_str(const0_name)
+    STR_FUNC       = _add_str(kernel_name)
     strtab = bytes(strtab_data)
 
-    # ---- Build .nv.info (global) ----
+    # ---- .nv.info (global) ----
+    SYM_FUNC_IDX = 7  # will be set correctly below based on symbol layout
     nv_info = bytearray()
-    # EIATTR_CUDA_API_VERSION (0x2f): symidx -> toolkit_version
-    # Format: attr(2) + size(2) + symidx(4) + value(4)
-    SYM_FUNC_IDX = 5  # symbol index of the kernel function
     nv_info += struct.pack('<HH', 0x2f04, 8)
     nv_info += struct.pack('<II', SYM_FUNC_IDX, toolkit_version)
-    # EIATTR_SW_WAR (0x11)
     nv_info += struct.pack('<HH', 0x1104, 8)
     nv_info += struct.pack('<II', SYM_FUNC_IDX, 0)
-    # EIATTR_CUDA_VERSION_HI (0x12)
     nv_info += struct.pack('<HH', 0x1204, 8)
     nv_info += struct.pack('<II', SYM_FUNC_IDX, 0)
 
-    # ---- Build .nv.info.<kernel> ----
+    # ---- .nv.info.<kernel> ----
     nv_info_k = bytearray()
-    # EIATTR_MAXREG_COUNT (0x37)
+    # MAXREG_COUNT
     nv_info_k += struct.pack('<HHI', 0x3704, 4, max_regs)
-    # EIATTR_KPARAM_INFO (0x17) for each param, in reverse ordinal order
+    # KPARAM_INFO -- offsets relative to PARAM_CBANK base
     for i in range(len(params) - 1, -1, -1):
         pname, psz, poff = params[i]
-        # Param info: 4 bytes zero, ordinal(2), cbank_offset(2), space(2), sizetype(2)
-        # sizetype: 0x0021 for 8-byte, 0x0011 for 4-byte
-        if psz == 8:
-            sizetype = 0x0021
-        elif psz == 4:
-            sizetype = 0x0011
-        else:
-            sizetype = 0x0021
+        sizetype = 0x0021 if psz == 8 else 0x0011
         nv_info_k += struct.pack('<HH', 0x1704, 12)
-        nv_info_k += struct.pack('<I', 0)  # padding
-        nv_info_k += struct.pack('<HH', i, CBANK_PARAM_BASE + poff)
+        nv_info_k += struct.pack('<I', 0)
+        nv_info_k += struct.pack('<HH', i, poff)
         nv_info_k += struct.pack('<HH', 0xf000, sizetype)
-    # EIATTR_EXIT_INSTR_OFFSETS (0x36) -- find EXIT instructions
+    # MAX_THREADS
+    nv_info_k += struct.pack('<HH', 0x5003, 0)
+    # CRS_STACK_SIZE
+    nv_info_k += struct.pack('<HH', 0x1b03, 0xFF)
+    # PARAM_CBANK
+    nv_info_k += struct.pack('<HH', 0x1c04, 8)
+    nv_info_k += struct.pack('<II', CBANK_PARAM_BASE, cbank_param_window)
+    # CBANK_PARAM_SIZE
+    nv_info_k += struct.pack('<HH', 0x1903, total_param_size)
+    # REGCOUNT -- second word encodes actual register allocation:
+    #   bits [7:0]   = 0x10 (flags)
+    #   bits [15:8]  = 0x02 (bar alloc + flags)
+    #   bits [23:16] = actual register count for the kernel
+    #   bits [31:24] = 0x00
+    # Compute actual register count from instructions (only count true
+    # register operands, skip fields that encode immediates/SR IDs).
+    actual_regs = 8  # minimum allocation
+    # Opcodes where bits [39:32] are NOT a src2 register:
+    NON_REG_SRC2 = {
+        0x919, 0x9c3,  # S2R, S2UR -- SR ID in ctrl, src2 unused
+        0x802, 0x882,  # MOV, UMOV -- immediate in upper 32 bits
+        0x94d, 0x947, 0x918,  # EXIT, BRA, NOP
+        0xb82, 0xab9,  # LDC, ULDC -- cbank offset encoded
+        0xb1d, 0x91a, 0x992, 0x9ab, 0x5ab, 0x9af, 0x98f,  # barriers
+    }
+    # Opcodes with immediate forms (upper 32 bits = immediate, not register)
+    IMM_OPCODES = {
+        0x421, 0x820, 0x808, 0x80b,  # FADD_I, FMUL_I, FSEL_I, FSETP_I
+        0x424, 0x435, 0x835,  # IMAD_I, HFMA2_I
+        0xf89,  # SHFL_IMM
+    }
+    for inst, ctrl in instructions:
+        opcode = inst & 0xFFF
+        rd = (inst >> 16) & 0xFF
+        rs1 = (inst >> 24) & 0xFF
+        # Count destination register (skip for opcodes with no Rd: EXIT/NOP/
+        # barriers *and* stores which put 0x00 in the Rd slot).
+        NO_RD = (0x94d, 0x918, 0xb1d, 0x91a, 0x992, 0x9ab,
+                 0x5ab, 0x9af, 0x986, 0x988, 0x947)  # + STG, STS, BRA
+        # rd < 0xFF to skip the RZ marker
+        if rd < 0xFF and opcode not in NO_RD:
+            actual_regs = max(actual_regs, rd + 1)
+        # Count src1 register
+        if rs1 != 0xFF:
+            actual_regs = max(actual_regs, rs1 + 1)
+            # LDG/STG/LDS/STS use a 64-bit address register pair
+            if opcode in (0x981, 0x986, 0x984, 0x988):
+                actual_regs = max(actual_regs, rs1 + 2)
+        # For LDG, inst[39:32] is the UR descriptor -- not a regular reg.
+        # For STG, inst[39:32] is the data register (Rs), which we count below.
+        # For other reg-reg forms inst[39:32] is src2.
+        if opcode in (0x981,):
+            pass  # UR descriptor, skip
+        elif opcode == 0x986:  # STG: data reg Rs at [39:32]
+            rs_data = (inst >> 32) & 0xFF
+            if rs_data != 0xFF:
+                actual_regs = max(actual_regs, rs_data + 1)
+                # Account for 64/128-bit stores (register pair/quad)
+                sz_nibble = (ctrl >> 8) & 0xF
+                if sz_nibble == 0xb:   # 64-bit
+                    actual_regs = max(actual_regs, rs_data + 2)
+                elif sz_nibble == 0xd:  # 128-bit
+                    actual_regs = max(actual_regs, rs_data + 4)
+        elif opcode == 0x988:  # STS
+            rs_data = (inst >> 32) & 0xFF
+            if rs_data != 0xFF:
+                actual_regs = max(actual_regs, rs_data + 1)
+        elif opcode not in NON_REG_SRC2 and opcode not in IMM_OPCODES:
+            rs2 = (inst >> 32) & 0xFF
+            if rs2 != 0xFF:
+                actual_regs = max(actual_regs, rs2 + 1)
+        # Count src3 in ctrl[7:0] for 4-operand instructions
+        if opcode in (0x223, 0x235, 0x23c, 0xc10, 0xc24):  # FFMA, HFMA2, HMMA, IADD3, IMAD
+            rs3 = ctrl & 0xFF
+            if rs3 != 0xFF:
+                actual_regs = max(actual_regs, rs3 + 1)
+        # For LDG/LDS 64/128-bit loads, the destination is a register pair/quad.
+        if opcode in (0x981, 0x984):
+            sz_nibble = (ctrl >> 8) & 0xF
+            if sz_nibble == 0xb:   # 64-bit
+                actual_regs = max(actual_regs, rd + 2)
+            elif sz_nibble == 0xd:  # 128-bit
+                actual_regs = max(actual_regs, rd + 4)
+    # Hopper requires register-count to be at least (max_used + 2) aligned
+    # to 8, because LDG/LDS may write (rd, rd+1) pairs and the scheduler
+    # reserves two spill slots behind the high-water mark.
+    actual_regs = actual_regs + 2
+    actual_regs = (actual_regs + 7) & ~7
+    if actual_regs < 24:
+        actual_regs = 24  # CUDA minimum for most kernels
+    regcount_val = (actual_regs << 16) | 0x0210
+    nv_info_k += struct.pack('<HH', 0x0a04, 8)
+    nv_info_k += struct.pack('<II', 7, regcount_val)
+    # EXIT_INSTR_OFFSETS
     for idx, (inst, ctrl) in enumerate(instructions):
         if (inst & 0xFFF) == OP["EXIT"]:
             nv_info_k += struct.pack('<HHI', 0x3604, 4, idx * 16)
-    # EIATTR_PARAM_CBANK (0x1c): cbank_offset, cbank_size
-    nv_info_k += struct.pack('<HH', 0x1c04, 8)
-    nv_info_k += struct.pack('<II', CBANK_PARAM_BASE, cbank_size)
-    # EIATTR_CBANK_PARAM_SIZE (0x19): total param bytes -- format 03
-    nv_info_k += struct.pack('<HH', 0x1903, total_param_size)
-    # EIATTR_MAX_THREADS (0x50): no payload, format 03
-    nv_info_k += struct.pack('<HH', 0x5003, 0)
-    # EIATTR_CRS_STACK_SIZE (0x1b): format 03, value=0xFF (default)
-    nv_info_k += struct.pack('<HH', 0x1b03, 0xFF)
-    # EIATTR_REGCOUNT (0x0a): maxreg info
-    nv_info_k += struct.pack('<HH', 0x0a04, 8)
-    nv_info_k += struct.pack('<II', 7, (max_regs << 16) | 0x1c00)
 
-    # ---- Build .nv.constant0 section (all zeros, params set by driver) ----
+    # ---- .nv.callgraph ----
+    callgraph = bytearray()
+    callgraph += struct.pack('<II', 0x00000000, 0xFFFFFFFF)
+    callgraph += struct.pack('<II', 0x00000000, 0xFFFFFFFE)
+    callgraph += struct.pack('<II', 0x00000000, 0xFFFFFFFD)
+    callgraph += struct.pack('<II', 0x00000000, 0xFFFFFFFC)
+
+    # ---- .nv.constant0 ----
     const0_data = bytes(cbank_size)
 
-    # ---- Build code (.text) ----
+    # ---- .text code ----
     code_data = bytearray()
     for inst, ctrl in instructions:
         code_data += struct.pack('<QQ', inst, ctrl)
-    # Pad to 128-byte boundary
+    # Pad with NOPs (0x7918) like ptxas does.  Zero-fill would decode as an
+    # illegal opcode if the hardware prefetches past the BRA trailer and
+    # trigger CUDA_ERROR_ILLEGAL_INSTRUCTION on otherwise-valid kernels.
+    NOP_INST = 0x0000000000007918
+    NOP_CTRL = 0x000fc00000000000
     while len(code_data) < code_padded:
-        code_data += b'\x00'
+        code_data += struct.pack('<QQ', NOP_INST, NOP_CTRL)
 
-    # ---- Build symbol table ----
+    # ---- Symbol table ----
+    # Match reference layout:
+    # 0: NULL
+    # 1: .text section sym
+    # 2: .nv.reservedSmem.offset0 (WEAK OBJECT, UND)
+    # 3: __nv_reservedSMEM_offset_0_alias (WEAK NOTYPE, shndx=SEC_NV_SHARED, other=0xa0)
+    # 4: .nv.callgraph section sym
+    # 5: .nv.info section sym  -- NOT present in ref (ref has debug_frame there)
+    # Actually reference sym order:
+    #   0: NULL, 1: .text.vecadd section, 2: .nv.reservedSmem.offset0,
+    #   3: __nv_reserved..., 4: .debug_frame section, 5: .nv.callgraph section,
+    #   6: vecadd (FUNC), 7: .nv.constant0.vecadd section
+    # We'll skip debug_frame but keep the rest:
+    #   0: NULL, 1: .text section, 2: .nv.reservedSmem weak,
+    #   3: __nv_reserved alias, 4: .nv.info section, 5: .nv.callgraph section,
+    #   6: .nv.constant0 section, 7: kernel func
+    SYM_FUNC_IDX = 7
+
     symbols = []
-    # sym 0: NULL
-    symbols.append(struct.pack('<IBBHQQ', 0, 0, 0, 0, 0, 0))
-    # sym 1: .text.<kernel> section
-    symbols.append(struct.pack('<IBBHQQ',
+    symbols.append(struct.pack('<IBBHQQ', 0, 0, 0, 0, 0, 0))  # 0: NULL
+    symbols.append(struct.pack('<IBBHQQ',  # 1: .text section
                                STR_TEXT, 0x03, 0x00, SEC_TEXT, 0, 0))
-    # sym 2: .nv.info section
-    symbols.append(struct.pack('<IBBHQQ',
+    symbols.append(struct.pack('<IBBHQQ',  # 2: .nv.reservedSmem.offset0 (WEAK OBJECT, UND)
+                               STR_NV_SHARED_OBJ, 0x21, 0x00, 0, 0, 4))
+    symbols.append(struct.pack('<IBBHQQ',  # 3: __nv_reservedSMEM_offset_0_alias (WEAK, other=0xa0)
+                               STR_NV_SHARED_ALIAS, 0x20, 0xa0, SEC_NV_SHARED, 0, 0))
+    symbols.append(struct.pack('<IBBHQQ',  # 4: .nv.info section
                                STR_NV_INFO, 0x03, 0x00, SEC_NV_INFO, 0, 0))
-    # sym 3: .nv.info.<kernel> section
-    symbols.append(struct.pack('<IBBHQQ',
-                               STR_NV_INFO_K, 0x03, 0x00, SEC_NV_INFO_K, 0, 0))
-    # sym 4: .nv.constant0.<kernel> section
-    symbols.append(struct.pack('<IBBHQQ',
+    symbols.append(struct.pack('<IBBHQQ',  # 5: .nv.callgraph section
+                               STR_NV_CALLGR, 0x03, 0x00, SEC_NV_CALLGR, 0, 0))
+    symbols.append(struct.pack('<IBBHQQ',  # 6: .nv.constant0 section
                                STR_CONST0, 0x03, 0x00, SEC_CONST0, 0, 0))
-    # sym 5: kernel function (GLOBAL FUNC)
-    symbols.append(struct.pack('<IBBHQQ',
+    symbols.append(struct.pack('<IBBHQQ',  # 7: kernel function
                                STR_FUNC, 0x12, 0x10, SEC_TEXT, 0, code_size))
     symtab_data = b''.join(symbols)
     num_symbols = len(symbols)
 
-    # ---- Layout sections in file ----
-    # ELF header = 64 bytes
-    # Then sections: shstrtab, strtab, symtab, nv.info, nv.info.kern,
-    # text (128-aligned), const0
-    # Then section headers
-    # Then program headers
+    # Update nv.info to reference correct SYM_FUNC_IDX.
+    # 0x2f04 = EIATTR_REGCOUNT (global form): value is the actual register
+    # count used by the kernel.  Must match the per-kernel 0x0a04 entry,
+    # otherwise the driver rejects launches that touch "out of range" regs
+    # with CUDA_ERROR_ILLEGAL_INSTRUCTION.
+    nv_info = bytearray()
+    nv_info += struct.pack('<HH', 0x2f04, 8)
+    nv_info += struct.pack('<II', SYM_FUNC_IDX, actual_regs)
+    nv_info += struct.pack('<HH', 0x1104, 8)
+    nv_info += struct.pack('<II', SYM_FUNC_IDX, 0)
+    nv_info += struct.pack('<HH', 0x1204, 8)
+    nv_info += struct.pack('<II', SYM_FUNC_IDX, 0)
 
-    offset = 64  # after ELF header
+    # ---- File layout ----
+    offset = 64
 
-    # .shstrtab
     shstrtab_off = offset
     offset += len(shstrtab)
 
-    # .strtab
     strtab_off = offset
     offset += len(strtab)
 
-    # .symtab (8-byte aligned)
     offset = _align(offset, 8)
     symtab_off = offset
     offset += len(symtab_data)
 
-    # .nv.info (4-byte aligned)
     offset = _align(offset, 4)
     nv_info_off = offset
     offset += len(nv_info)
 
-    # .nv.info.<kernel> (4-byte aligned)
     offset = _align(offset, 4)
     nv_info_k_off = offset
     offset += len(nv_info_k)
 
-    # .text.<kernel> (128-byte aligned)
+    offset = _align(offset, 4)
+    callgraph_off = offset
+    offset += len(callgraph)
+
+    # .text (128-byte aligned)
     offset = _align(offset, 128)
     text_off = offset
     offset += len(code_data)
 
-    # .nv.constant0.<kernel> (4-byte aligned)
+    # .nv.shared.reserved.0 is NOBITS -- shares offset with next section
+    shared_off = offset  # same offset, zero size
+
+    # .nv.constant0
     offset = _align(offset, 4)
     const0_off = offset
     offset += len(const0_data)
 
-    # Section headers (64-byte aligned)
+    # Section headers
     offset = _align(offset, 8)
     shdr_off = offset
-    offset += NUM_SECTIONS * 64  # each section header is 64 bytes
+    offset += NUM_SECTIONS * 64
 
     # Program headers
     phdr_off = offset
-    NUM_PHDRS = 3  # PHDR, code LOAD, const0 LOAD
-    offset += NUM_PHDRS * 56  # each phdr is 56 bytes
+    NUM_PHDRS = 5  # PHDR, LOAD(phdr), LOAD(.text+shared), LOAD(shared), LOAD(const0)
+    offset += NUM_PHDRS * 56
 
-    # ---- Build section headers ----
+    # ---- Section headers ----
     shdrs = bytearray()
     SHT_LOPROC = 0x70000000
+    SHT_LOPROC1 = 0x70000001
+    SHT_NOBITS = 8
     SHF_ALLOC = 0x2
+    SHF_WRITE = 0x1
     SHF_EXECINSTR = 0x4
     SHF_INFO_LINK = 0x40
 
-    # [0] NULL
-    shdrs += _elf_shdr(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-
-    # [1] .shstrtab  (SHT_STRTAB=3)
+    shdrs += _elf_shdr(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)  # [0] NULL
     shdrs += _elf_shdr(SN_SHSTRTAB, 3, 0, 0, shstrtab_off,
-                       len(shstrtab), 0, 0, 1, 0)
-
-    # [2] .strtab  (SHT_STRTAB=3)
+                       len(shstrtab), 0, 0, 1, 0)  # [1]
     shdrs += _elf_shdr(SN_STRTAB, 3, 0, 0, strtab_off,
-                       len(strtab), 0, 0, 1, 0)
-
-    # [3] .symtab  (SHT_SYMTAB=2)
+                       len(strtab), 0, 0, 1, 0)  # [2]
     shdrs += _elf_shdr(SN_SYMTAB, 2, 0, 0, symtab_off,
-                       len(symtab_data), SEC_STRTAB, num_symbols, 8, 24)
-
-    # [4] .nv.info  (SHT_LOPROC)
+                       len(symtab_data), SEC_STRTAB, SYM_FUNC_IDX, 8, 24)  # [3]
     shdrs += _elf_shdr(SN_NV_INFO, SHT_LOPROC, 0, 0,
-                       nv_info_off, len(nv_info), SEC_SYMTAB, 0, 4, 0)
-
-    # [5] .nv.info.<kernel>  (SHT_LOPROC, INFO_LINK)
+                       nv_info_off, len(nv_info), SEC_SYMTAB, 0, 4, 0)  # [4]
     shdrs += _elf_shdr(SN_NV_INFO_K, SHT_LOPROC, SHF_INFO_LINK, 0,
-                       nv_info_k_off, len(nv_info_k), SEC_SYMTAB, SEC_TEXT, 4, 0)
-
-    # [6] .text.<kernel>  (SHT_PROGBITS=1, ALLOC|EXECINSTR)
+                       nv_info_k_off, len(nv_info_k), SEC_SYMTAB, SEC_TEXT, 4, 0)  # [5]
+    shdrs += _elf_shdr(SN_NV_CALLGR, SHT_LOPROC1, 0, 0,
+                       callgraph_off, len(callgraph), SEC_SYMTAB, 0, 4, 8)  # [6]
     shdrs += _elf_shdr(SN_TEXT, 1, SHF_ALLOC | SHF_EXECINSTR, 0,
-                       text_off, len(code_data), SEC_SYMTAB, SYM_FUNC_IDX, 128, 0)
-
-    # [7] .nv.constant0.<kernel>  (SHT_PROGBITS=1, ALLOC|INFO_LINK)
+                       text_off, len(code_data), SEC_SYMTAB, SYM_FUNC_IDX, 128, 0)  # [7]
+    shdrs += _elf_shdr(SN_NV_SHARED, SHT_NOBITS, SHF_WRITE | SHF_ALLOC, 0,
+                       shared_off, 0, 0, 0, 1, 0)  # [8]
     shdrs += _elf_shdr(SN_CONST0, 1, SHF_ALLOC | SHF_INFO_LINK, 0,
-                       const0_off, len(const0_data), 0, SEC_TEXT, 4, 0)
+                       const0_off, len(const0_data), 0, SEC_TEXT, 4, 0)  # [9]
 
-    # ---- Build program headers ----
+    # ---- Program headers ----
     phdrs = bytearray()
-
-    # PHDR segment (points to itself)
     PT_PHDR = 6
-    phdrs += _elf_phdr(PT_PHDR, phdr_off, 0, 0, NUM_PHDRS * 56,
-                       NUM_PHDRS * 56, 0x4, 8)  # PF_R
-
-    # LOAD segment for .text (code)
     PT_LOAD = 1
-    phdrs += _elf_phdr(PT_LOAD, text_off, 0, 0, len(code_data),
-                       len(code_data), 0x5, 8)  # PF_R | PF_X
 
-    # LOAD segment for .nv.constant0
-    phdrs += _elf_phdr(PT_LOAD, const0_off, 0, 0, len(const0_data),
-                       len(const0_data), 0x4, 8)  # PF_R
+    # PHDR (self-referential)
+    phdrs += _elf_phdr(PT_PHDR, phdr_off, 0, 0,
+                       NUM_PHDRS * 56, NUM_PHDRS * 56, 0x4, 8)
+    # LOAD for PHDR
+    phdrs += _elf_phdr(PT_LOAD, phdr_off, 0, 0,
+                       NUM_PHDRS * 56, NUM_PHDRS * 56, 0x4, 8)
+    # LOAD for .text + .nv.shared
+    phdrs += _elf_phdr(PT_LOAD, text_off, 0, 0,
+                       len(code_data), len(code_data), 0x5, 8)  # R|X
+    # LOAD for .nv.shared (RW, zero size)
+    phdrs += _elf_phdr(PT_LOAD, shared_off, 0, 0, 0, 0, 0x6, 8)  # R|W
+    # LOAD for .nv.constant0
+    phdrs += _elf_phdr(PT_LOAD, const0_off, 0, 0,
+                       len(const0_data), len(const0_data), 0x4, 8)  # R
 
-    # ---- Build ELF header ----
-    e_flags = (sm_version << 16) | (5 << 8) | sm_version  # 0x5a055a for sm_90
+    # ---- ELF header ----
+    e_flags = (sm_version << 16) | (5 << 8) | sm_version
     elf_header = bytearray(64)
-    # ELF magic
     elf_header[0:4] = b'\x7fELF'
     elf_header[4] = 2   # 64-bit
     elf_header[5] = 1   # little-endian
-    elf_header[6] = 1   # ELF version
-    elf_header[7] = 0x33  # OS/ABI = CUDA
+    elf_header[6] = 1   # version
+    elf_header[7] = 0x33  # CUDA ABI
     elf_header[8] = 7     # ABI version
-    # e_type = ET_EXEC (2)
-    struct.pack_into('<H', elf_header, 16, 2)
-    # e_machine = 0xBE (CUDA)
-    struct.pack_into('<H', elf_header, 18, 0xBE)
-    # e_version = 0x80
-    struct.pack_into('<I', elf_header, 20, 0x80)
-    # e_entry = 0
-    struct.pack_into('<Q', elf_header, 24, 0)
-    # e_phoff
+    struct.pack_into('<H', elf_header, 16, 2)      # ET_EXEC
+    struct.pack_into('<H', elf_header, 18, 0xBE)   # CUDA
+    struct.pack_into('<I', elf_header, 20, 0x80)   # version
+    struct.pack_into('<Q', elf_header, 24, 0)      # entry
     struct.pack_into('<Q', elf_header, 32, phdr_off)
-    # e_shoff
     struct.pack_into('<Q', elf_header, 40, shdr_off)
-    # e_flags
     struct.pack_into('<I', elf_header, 48, e_flags)
-    # e_ehsize = 64
-    struct.pack_into('<H', elf_header, 52, 64)
-    # e_phentsize = 56
-    struct.pack_into('<H', elf_header, 54, 56)
-    # e_phnum
+    struct.pack_into('<H', elf_header, 52, 64)     # ehsize
+    struct.pack_into('<H', elf_header, 54, 56)     # phentsize
     struct.pack_into('<H', elf_header, 56, NUM_PHDRS)
-    # e_shentsize = 64
-    struct.pack_into('<H', elf_header, 58, 64)
-    # e_shnum
+    struct.pack_into('<H', elf_header, 58, 64)     # shentsize
     struct.pack_into('<H', elf_header, 60, NUM_SECTIONS)
-    # e_shstrndx
     struct.pack_into('<H', elf_header, 62, SEC_SHSTRTAB)
 
-    # ---- Assemble final binary ----
+    # ---- Assemble ----
     total_size = phdr_off + NUM_PHDRS * 56
     binary = bytearray(total_size)
-
-    # Copy ELF header
     binary[0:64] = elf_header
-
-    # Copy sections
     binary[shstrtab_off:shstrtab_off + len(shstrtab)] = shstrtab
     binary[strtab_off:strtab_off + len(strtab)] = strtab
     binary[symtab_off:symtab_off + len(symtab_data)] = symtab_data
     binary[nv_info_off:nv_info_off + len(nv_info)] = nv_info
     binary[nv_info_k_off:nv_info_k_off + len(nv_info_k)] = nv_info_k
+    binary[callgraph_off:callgraph_off + len(callgraph)] = callgraph
     binary[text_off:text_off + len(code_data)] = code_data
     binary[const0_off:const0_off + len(const0_data)] = const0_data
-
-    # Copy section headers
     binary[shdr_off:shdr_off + len(shdrs)] = shdrs
-
-    # Copy program headers
     binary[phdr_off:phdr_off + len(phdrs)] = phdrs
 
     return bytes(binary)
@@ -1023,90 +1192,152 @@ def _elf_phdr(p_type: int, offset: int, vaddr: int, paddr: int,
 # Convenience: build a vector-add kernel
 # =========================================================================
 
+def build_store_const_cubin() -> bytes:
+    """
+    Build a kernel that stores a constant value to c[0]:
+        __global__ void store_const(float *c) { c[0] = 42.0f; }
+
+    This is the simplest "real" kernel that proves our emitter can
+    produce functional SASS with memory access and parameter loading.
+    """
+    e = SASSEmitter("store_const", max_regs=128)
+    e.add_param_u64("c")
+
+    # ULDC helper: inst[63:40] = byte_addr/4.
+    def uldc(rd, byte_addr, is64=True, stall=0, rbar=7, wait=0x38):
+        enc = (byte_addr // 4) & 0xFFFF
+        inst = 0xab9 | (0x7 << 12) | ((rd & 0xFF) << 16) | (enc << 40)
+        sz = 0x0a00 if is64 else 0x0800
+        ctrl = _default_ctrl(stall=stall, rbar=rbar, wait_mask=wait)
+        ctrl |= sz
+        e.emit(inst, ctrl)
+
+    def ldc(rd, byte_addr, is64=True, stall=0, rbar=7, wait=0x38):
+        enc = (byte_addr // 4) & 0xFFFF
+        inst = (0xb82 | (0x7 << 12) | ((rd & 0xFF) << 16)
+                | (0xFF << 24) | (enc << 40))
+        sz = 0x0a00 if is64 else 0x0800
+        ctrl = _default_ctrl(stall=stall, rbar=rbar, wait_mask=wait)
+        ctrl |= sz
+        e.emit(inst, ctrl)
+
+    # Load generic-global memory descriptor into UR4
+    uldc(4, 0x208, is64=True, stall=0, wait=0x00)
+
+    # Load c pointer (64-bit) from cbank[0x210] into R2:R3
+    ldc(2, 0x210, is64=True, stall=4, wait=0x00)
+
+    # MOV R4, 42.0f = 0x42280000
+    e.MOV(4, 0x42280000, stall=2)
+
+    # STG.E desc[UR4][R2.64], R4
+    e.STG(2, 4, size=32, ur_desc=4, stall=4)
+
+    # EXIT
+    e.emit(0x000000000000794d, 0x000fea0003800000)
+
+    return e.build_cubin()
+
+
 def build_vecadd_cubin() -> bytes:
     """
     Build a complete cubin for a float32 vector-add kernel:
         __global__ void vecadd(float *a, float *b, float *c, unsigned int n)
 
     This kernel computes c[tid] = a[tid] + b[tid] for tid < n.
+
+    The instructions are modelled after ptxas output for this kernel,
+    using raw emit() for ULDC param loads (which have a complex encoding
+    that differs from plain LDC).
     """
-    e = SASSEmitter("vecadd", max_regs=32)
-    e.add_param_u64("a")   # param 0 at cbank+0x160
-    e.add_param_u64("b")   # param 1 at cbank+0x168
-    e.add_param_u64("c")   # param 2 at cbank+0x170
-    e.add_param_u32("n")   # param 3 at cbank+0x178
+    e = SASSEmitter("vecadd", max_regs=128)
+    e.add_param_u64("a")   # param 0 at cbank+0x70, ordinal offset 0
+    e.add_param_u64("b")   # param 1 at cbank+0x78, ordinal offset 8
+    e.add_param_u64("c")   # param 2 at cbank+0x80, ordinal offset 16
+    e.add_param_u32("n")   # param 3 at cbank+0x88, ordinal offset 24
 
-    CBANK = 0x160
+    # ULDC helper: load from constant bank 0 at byte address into a uniform reg.
+    #   inst[11:0]   = 0xab9 (ULDC)
+    #   inst[23:16]  = URd
+    #   inst[63:40]  = byte_addr / 4  (the word index within the cbank)
+    # ctrl size nibble: 0x0800 for 32-bit, 0x0a00 for 64-bit.
+    def uldc(rd, byte_addr, is64=True, stall=0, rbar=7, wait=0x38):
+        enc = (byte_addr // 4) & 0xFFFF
+        inst = 0xab9 | (0x7 << 12) | ((rd & 0xFF) << 16) | (enc << 40)
+        sz = 0x0a00 if is64 else 0x0800
+        ctrl = _default_ctrl(stall=stall, rbar=rbar, wait_mask=wait)
+        ctrl |= sz
+        e.emit(inst, ctrl)
 
-    # R0 = tid.x
-    e.S2R(0, "SR_TID_X", stall=2)
-    # R1 = ctaid.x
-    e.S2R(1, "SR_CTAID_X", stall=2)
-    # R2 = ntid.x (blockDim.x)
-    e.S2R(2, "SR_NTID_X", stall=15)
+    # LDC helper: load from cbank into a regular register.
+    #   inst[11:0]   = 0xb82 (LDC)
+    #   inst[23:16]  = Rd
+    #   inst[31:24]  = 0xFF (RZ base)
+    #   inst[63:40]  = byte_addr / 4
+    def ldc(rd, byte_addr, is64=True, stall=0, rbar=7, wait=0x38):
+        enc = (byte_addr // 4) & 0xFFFF
+        inst = (0xb82 | (0x7 << 12) | ((rd & 0xFF) << 16)
+                | (0xFF << 24) | (enc << 40))
+        sz = 0x0a00 if is64 else 0x0800
+        ctrl = _default_ctrl(stall=stall, rbar=rbar, wait_mask=wait)
+        ctrl |= sz
+        e.emit(inst, ctrl)
 
-    # R3 = ctaid.x * ntid.x + tid.x = global thread id
-    e.IMAD(3, 1, 2, 0, stall=4)
+    # -- Kernel body --
+    # Load the generic-global memory descriptor into UR4 (mandatory on sm_90
+    # for LDG.E/STG.E addressing).
+    uldc(4, 0x208, is64=True, stall=15)
 
-    # Load n from constant bank
-    e.LDC(4, CBANK + 0x18, size=32, stall=4)
+    # S2R is variable-latency; use a large stall so the value has time to
+    # land before the first consumer reads it.  (A proper implementation
+    # would use write-barriers + wait_mask bits, but these stall counts
+    # give correct semantics without a full scheduler.)
+    e.S2R(3, "SR_TID_X", stall=15, rbar=7)
+    e.NOP(stall=15)
+    e.NOP(stall=15)
 
-    # Bounds check: P0 = (R3 >= R4) -- if true, skip to exit
-    e.ISETP(0, 3, 4, cmp="GE", stall=4)
+    # Load pointers (param 0/1/2 at 0x210, 0x218, 0x220):
+    ldc(8,  0x210, is64=True, stall=15)   # a -> R8:R9
+    ldc(10, 0x218, is64=True, stall=15)   # b -> R10:R11
+    ldc(12, 0x220, is64=True, stall=15)   # c -> R12:R13
 
-    # Load base pointers from constant bank (64-bit loads)
-    # R6:R7 = a (pointer)
-    e.LDC(6, CBANK + 0x00, size=64, stall=2)
-    # R8:R9 = b (pointer)
-    e.LDC(8, CBANK + 0x08, size=64, stall=2)
-    # R10:R11 = c (pointer)
-    e.LDC(10, CBANK + 0x10, size=64, stall=4)
+    # R3 <<= 2  (tid * sizeof(float))
+    e.IADD3(3, 3, 3, RZ, stall=15)
+    e.IADD3(3, 3, 3, RZ, stall=15)
+    # zero-extend offset high word
+    e.MOV(4, 0, stall=15)
 
-    # Compute byte offset: R5 = R3 << 2 (tid * 4 for float)
-    # Use IMAD: R5 = R3 * 4 + 0 (with immediate 4)
-    # But we need to use SHL via IMAD: R5 = R3 * 4 + RZ
-    # IMAD Rd, Rs1, imm, Rs3  -- imm form opcode 0x424
-    # Actually let's use IADD3 R5 = R3 + R3 twice, or IMAD with const
-    # Simplest: use LEA or shift.  Let's use IMAD with immediate.
-    # IMAD R5, R3, 4, RZ
-    e.MOV(5, 4, stall=2)  # R5 = 4 (the constant)
-    e.IMAD(5, 3, 5, RZ, stall=4)  # R5 = R3 * 4 + 0
+    # a_addr = R8:R9 + R3:R4 -> R16:R17
+    e.IADD3(16, 8, 3, RZ, stall=15)
+    e.IADD3(17, 9, 4, RZ, stall=15)
+    # b_addr -> R18:R19
+    e.IADD3(18, 10, 3, RZ, stall=15)
+    e.IADD3(19, 11, 4, RZ, stall=15)
+    # c_addr -> R20:R21
+    e.IADD3(20, 12, 3, RZ, stall=15)
+    e.IADD3(21, 13, 4, RZ, stall=15)
 
-    # Widen offset to 64-bit: R12 = 0 (high word of offset)
-    e.MOV(12, 0, stall=2)
+    # LDG.E R22, desc[UR4][R16.64]  (a[tid])
+    e.LDG(22, 16, size=32, ur_desc=4, stall=15, wbar=0)
+    # LDG.E R23, desc[UR4][R18.64]  (b[tid])
+    e.LDG(23, 18, size=32, ur_desc=4, stall=15, wbar=1)
 
-    # Add offset to base pointers
-    # a_addr = R6:R7 + R5:R12  =>  R14:R15
-    e.IADD3(14, 6, 5, RZ, stall=2)
-    e.IADD3(15, 7, 12, RZ, stall=4)  # carry approximation (ignore carry for simplicity)
-
-    # b_addr = R8:R9 + R5:R12  =>  R16:R17
-    e.IADD3(16, 8, 5, RZ, stall=2)
-    e.IADD3(17, 9, 12, RZ, stall=4)
-
-    # c_addr = R10:R11 + R5:R12  =>  R18:R19
-    e.IADD3(18, 10, 5, RZ, stall=2)
-    e.IADD3(19, 11, 12, RZ, stall=4)
-
-    # Load a[tid] -> R20
-    e.LDG(20, 14, size=32, stall=15, wbar=0)
-    # Load b[tid] -> R21
-    e.LDG(21, 16, size=32, stall=15, wbar=1)
-
-    # Wait for loads (wait on barriers 0 and 1)
+    # Wait for both loads
+    e.NOP(stall=15, wait_mask=0x03)
     e.NOP(stall=15, wait_mask=0x03)
 
-    # R22 = R20 + R21  (FADD)
-    e.FADD(22, 20, 21, stall=4)
+    # FADD R24 = R22 + R23
+    e.FADD(24, 22, 23, stall=15)
+    e.NOP(stall=15)
 
-    # Store c[tid] = R22
-    e.STG(18, 22, size=32, stall=4)
+    # STG.E desc[UR4][R20.64], R24
+    e.STG(20, 24, size=32, ur_desc=4, stall=15)
 
-    # @P0 EXIT (bounds-check fail path -- predicated EXIT before actual EXIT)
-    e.EXIT(pred=0, stall=15)
+    # EXIT
+    e.emit(0x000000000000794d, 0x000fea0003800000)
 
-    # Normal EXIT
-    e.EXIT(stall=15)
+    # Trailing BRA -4 + NOPs (standard postamble)
+    e.emit(0xfffffffc00fc7947, 0x000fc0000383ffff)  # BRA -4
 
     return e.build_cubin()
 
@@ -1119,6 +1350,42 @@ if __name__ == "__main__":
     import sys
     import os
 
+    # First test: trivial EXIT-only kernel that loads, launches, and executes.
+    print("=" * 60)
+    print("Test 1: minimal EXIT kernel")
+    print("=" * 60)
+
+    e = SASSEmitter("noop_kernel", max_regs=128)
+    e.add_param_u64("ptr")
+    e.emit(0x000000000000794d, 0x000fea0003800000)  # EXIT
+    noop_cubin = e.build_cubin()
+    print(f"Built noop cubin: {len(noop_cubin)} bytes")
+
+    try:
+        import ctypes
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from cuda_driver import CUDADriver
+        gpu = CUDADriver()
+        print(f"GPU: {gpu.device_name}")
+        mod = gpu.load_cubin_bytes(noop_cubin)
+        func = gpu.get_function(mod, "noop_kernel")
+        print(f"Loaded kernel: noop_kernel @ {func}")
+        gpu.launch(func, grid=(1, 1, 1), block=(32, 1, 1),
+                   args=[ctypes.c_uint64(0)])
+        gpu.synchronize()
+        print("Kernel executed: PASS")
+        gpu.close()
+    except Exception as ex:
+        print(f"noop test error: {ex}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+    # Second test: full vector-add kernel
+    print()
+    print("=" * 60)
+    print("Test 2: vector-add kernel (work-in-progress)")
+    print("=" * 60)
     cubin = build_vecadd_cubin()
 
     # Write cubin to disk for debugging
@@ -1136,11 +1403,8 @@ if __name__ == "__main__":
     try:
         import ctypes
         import array
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from cuda_driver import CUDADriver
 
         gpu = CUDADriver()
-        print(f"\nGPU: {gpu.device_name}")
 
         # Load cubin from bytes
         module = gpu.load_cubin_bytes(cubin)

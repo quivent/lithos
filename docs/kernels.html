@@ -21,7 +21,49 @@
   --blue: #6e8ed0;
   --red: #d06e6e;
   --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
 }
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
 
 html { font-size: 15px; scroll-behavior: smooth; }
 body {
@@ -199,6 +241,7 @@ footer {
   <a href="#building-around-qwen">Building Around Qwen</a>
   <a href="index.html">Home</a>
   <a href="performance.html">Performance</a>
+  <a href="bandwidth.html">Bandwidth</a>
   <a href="pytorch.html">Lithos vs PyTorch</a>
   <a href="memory.html">Memory</a>
   <a href="architecture.html">Architecture</a>
@@ -210,7 +253,7 @@ footer {
 <header class="hero">
 <div class="container">
   <h1>Kernels</h1>
-  <p>Beyond the vanilla transformer.</p>
+  <p>Kernel types for hybrid attention/recurrence models.</p>
 </div>
 </header>
 
@@ -228,7 +271,7 @@ footer {
 
 <p>Every existing inference engine handles this one of two ways: ignore the recurrent structure and run it as dense attention (wrong, and slow), or use slow generic fallbacks that treat the recurrence as a sequence of matmuls with Python-level loop overhead. Neither option is acceptable.</p>
 
-<p>A purpose-built DeltaNet kernel is the single largest optimization opportunity for Qwen 3.5-27B. It is not an incremental improvement. It is the difference between the GPU doing useful work and the GPU waiting.</p>
+<p>A purpose-built DeltaNet kernel is the largest optimization opportunity for Qwen 3.5-27B. It changes the dominant kernel for 48 of 64 layers from a generic attention fallback to an O(1) recurrence.</p>
 
 </section>
 
@@ -287,7 +330,7 @@ footer {
   <span class="kernel-num">01</span>
   <span class="kernel-name">PROJECTION</span>
 </div>
-<p>Matrix multiply. Weight matrix times activation vector. The workhorse &mdash; <span class="numbers">448</span> per forward pass across all layers. Every QKV projection, every gate/up/down in the MLP, every output projection. This is what cuBLAS does well. Lithos does it with the exact tile sizes for Qwen's dimensions, inlined constants, no dispatch overhead.</p>
+<p>Matrix multiply. Weight matrix times activation vector. <span class="numbers">448</span> per forward pass across all layers. Every QKV projection, every gate/up/down in the MLP, every output projection. cuBLAS handles this operation; the Lithos variant specializes tile sizes for Qwen's dimensions, inlines constants, and removes dispatch overhead.</p>
 </div>
 
 <div class="kernel-card">
@@ -348,9 +391,9 @@ footer {
 <p>Rotary position embedding (RoPE). Applies rotation matrices to query and key vectors to encode position information. Only needed for full attention layers &mdash; DeltaNet layers encode position implicitly through the sequential state update.</p>
 </div>
 
-<h3>DeltaNet-Specific &mdash; 48 of 64 Layers &mdash; New Territory</h3>
+<h3>DeltaNet-Specific &mdash; 48 of 64 Layers</h3>
 
-<p>This is where every existing engine stops. No library provides these. No framework fuses them. Lithos builds them from PTX.</p>
+<p>No production library provides recurrence kernels at this specialization level. Existing engines fall back to generic matmul sequences. Lithos emits them from PTX.</p>
 
 <div class="kernel-card">
 <div class="kernel-header">
@@ -393,7 +436,7 @@ footer {
   <span class="kernel-name">STATE-CHECKPOINT</span>
 </div>
 <p>Save and restore DeltaNet state for speculative decoding. Clone the state matrix before verification. Restore on rejection. <span class="numbers">48 layers x 256 KB = 12.3 MB</span> per checkpoint.</p>
-<p>Measured: <span class="mono" style="color: var(--cyan);">0.85 ms</span> for rollback via state restore vs <span class="mono" style="color: var(--cyan);">8.7 ms</span> for recomputation. A <span class="numbers">10.2x</span> speedup. This kernel exists because the DeltaNet recurrence is non-invertible &mdash; you cannot undo a state update, you can only restore from a saved copy.</p>
+<p>Measured: <span class="mono" style="color: var(--cyan);">0.85 ms</span> for rollback via state restore vs <span class="mono" style="color: var(--cyan);">8.7 ms</span> for recomputation. A <span class="numbers"><span class="speedup">10.2x</span></span> speedup. This kernel exists because the DeltaNet recurrence is non-invertible &mdash; you cannot undo a state update, you can only restore from a saved copy.</p>
 </div>
 
 </section>
@@ -426,7 +469,7 @@ footer {
 
 <h3>Modal MTP &mdash; Self-Speculative Decoding</h3>
 
-<p>The key insight: skip all 16 attention layers for draft tokens. Run only the 48 DeltaNet layers. The DeltaNet-only forward pass is <span class="mono" style="color: var(--cyan);">O(1)</span> per token with no KV cache reads. Draft at <span class="numbers">~3x</span> speed, then verify with the full model.</p>
+<p>Draft tokens skip all 16 attention layers and run only the 48 DeltaNet layers. The DeltaNet-only forward pass is <span class="mono" style="color: var(--cyan);">O(1)</span> per token with no KV cache reads. Draft speed: <span class="numbers"><span class="speedup">~3x</span></span> the full forward pass. Verification runs the full model.</p>
 
 <p>The acceptance rate depends entirely on state precision:</p>
 
@@ -568,11 +611,9 @@ footer {
 <tr><td><code>STATE-CHECKPOINT + ROLLBACK</code></td><td>Snapshot and restore DeltaNet state for speculative verification</td><td>All 48 DeltaNet layers</td></tr>
 </table>
 
-<p class="mt-1"><span class="mono" style="color: var(--cyan);">5</span> kernel types in production. Not 7. Not thousands. Five.</p>
+<p class="mt-1"><span class="mono" style="color: var(--cyan);">5</span> kernel types in production.</p>
 
-<p>Every kernel boundary that still exists is between operations that <em>must</em> synchronize: the DeltaNet layers need their state before the attention layer can correct drift. The attention layer needs the KV cache written before it can score. The sample step needs all 64 layers done before it picks a token. These are the only boundaries. Everything else is fused.</p>
-
-<p class="mt-2">This is what it means to build an engine for a specific model. Not an engine that <em>can run</em> Qwen 3.5. An engine that <em>is</em> Qwen 3.5, compiled to silicon.</p>
+<p>Every remaining kernel boundary sits between operations with a hard data dependency: DeltaNet layers must write state before the attention layer can correct drift; the attention layer must write the KV cache before it can score; the sample step runs after all 64 layers. Everything else is fused.</p>
 
 </section>
 

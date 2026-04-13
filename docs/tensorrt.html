@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TensorRT-LLM &mdash; Why It's the Fastest and What It Costs</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Semantic / engine palette (consistent across docs) */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+}
+/* Speedup multiplier chip -- Lithos wins jump off the page */
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+/* Per-engine name tints -- use like <span class="engine engine-vllm">vLLM</span> */
+.engine { font-weight: 500; }
+.engine.engine-lithos,    .engine-lithos    { color: var(--engine-lithos)    !important; }
+.engine.engine-tensorrt,  .engine-tensorrt  { color: var(--engine-tensorrt)  !important; }
+.engine.engine-vllm,      .engine-vllm      { color: var(--engine-vllm)      !important; }
+.engine.engine-pytorch,   .engine-pytorch   { color: var(--engine-pytorch)   !important; }
+.engine.engine-llamacpp,  .engine-llamacpp  { color: var(--engine-llamacpp)  !important; }
+.engine.engine-mlx,       .engine-mlx       { color: var(--engine-mlx)       !important; }
+.engine.engine-sglang,    .engine-sglang    { color: var(--engine-sglang)    !important; }
+.engine.engine-exllama,   .engine-exllama   { color: var(--engine-exllama)   !important; }
+.engine.engine-mlc,       .engine-mlc       { color: var(--engine-mlc)       !important; }
+.engine.engine-flashattn, .engine-flashattn { color: var(--engine-flashattn) !important; }
+.engine.engine-cublas,    .engine-cublas    { color: var(--engine-cublas)    !important; }
+/* Tint glossary-term spans whose data-term is an engine name */
+.term[data-term="Lithos"]       { color: var(--engine-lithos); }
+.term[data-term="TensorRT-LLM"],
+.term[data-term="TensorRT"]     { color: var(--engine-tensorrt); }
+.term[data-term="vLLM"]         { color: var(--engine-vllm); }
+.term[data-term="PyTorch"]      { color: var(--engine-pytorch); }
+.term[data-term="llama.cpp"]    { color: var(--engine-llamacpp); }
+.term[data-term="MLX"]          { color: var(--engine-mlx); }
+.term[data-term="SGLang"]       { color: var(--engine-sglang); }
+.term[data-term="ExLlamaV2"]    { color: var(--engine-exllama); }
+.term[data-term="MLC-LLM"]      { color: var(--engine-mlc); }
+.term[data-term="FlashAttention"],
+.term[data-term="FlashInfer"]   { color: var(--engine-flashattn); }
+.term[data-term="cuBLAS"],
+.term[data-term="cuDNN"]        { color: var(--engine-cublas); }
+/* Quantitative measurement values */
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+/* Pitfall / cost / waste */
+.pitfall { color: var(--red); }
+
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 2.8rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Detail blocks */
+.detail { margin-bottom: 2.5rem; }
+.detail-header {
+  display: flex; align-items: baseline; gap: 0.8rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.detail-num { color: var(--accent); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
+.detail-title { font-size: 1rem; font-weight: 600; color: var(--text); }
+.detail p { color: var(--text-dim); }
+.detail .numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+.hw { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+
+/* Tradeoff cards */
+.tradeoff { margin-bottom: 1.5rem; }
+.tradeoff h4 { color: var(--red); font-size: 0.9rem; margin: 0 0 0.3rem 0; }
+.tradeoff p { color: var(--text-dim); font-size: 0.9rem; }
+
+/* Diagram */
+.diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.diagram .highlight { color: var(--text); }
+.diagram .accent { color: var(--accent); }
+.diagram .dim { color: var(--text-faint); }
+
+/* Lithos highlight */
+tr.lithos-row td { color: var(--accent); }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.nowrap { white-space: nowrap; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/kernels">Kernels</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/performance">Performance</a>
+  <a href="/bandwidth">Bandwidth</a>
+  <a href="/multicore">Multicore</a>
+  <a href="/comparison">Engine Comparison</a>
+  <a href="/tensorrt" class="active">TensorRT-LLM</a>
+  <a href="/pytorch">Lithos vs PyTorch</a>
+  <a href="/language-design">Language Design</a>
+  <a href="/glossary">Glossary</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1><span class="engine engine-tensorrt">TensorRT-LLM</span></h1>
+  <p>Why it is the fastest inference engine, and what that speed costs.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Section 1: What It Is -->
+<section id="what">
+<h2>1. What TensorRT-LLM Actually Is</h2>
+
+<p>TensorRT-LLM is not "TensorRT but for LLMs." It is a complete inference framework &mdash; with its own model definition API, weight loading pipeline, graph compiler, runtime scheduler, memory manager, and multi-GPU orchestration layer. It happens to use TensorRT's compiler as one component in a much larger system.</p>
+
+<p>The architecture has two distinct halves:</p>
+
+<h4>The Python Layer (Partially Open Source)</h4>
+<p>The Python layer defines the model graph using a torch-like API. You write something that looks like PyTorch &mdash; <code>Linear</code>, <code>RMSNorm</code>, <code>Attention</code> modules &mdash; but instead of executing eagerly, it builds a TensorRT <code>INetworkDefinition</code> graph. Each operation becomes a node. The graph is the input to the compiler.</p>
+
+<p>Model definitions live in Python. Weight loading, checkpoint conversion, calibration, and quantization configuration are all Python. The <code>trtllm-build</code> command orchestrates this phase. This layer is open source on GitHub.</p>
+
+<h4>The C++ Runtime (Closed Source)</h4>
+<p>The C++ runtime loads serialized engine files and executes them. It manages the <span class="term" data-term="KV Cache">KV cache</span>, schedules requests, handles multi-GPU communication via NCCL, and launches kernels. No Python executes during inference. The runtime is a compiled binary &mdash; you cannot inspect, modify, or port it.</p>
+
+<p>This split is deliberate. The Python layer lets users define and customize models. The C++ runtime lets NVIDIA keep their performance-critical code proprietary. You can see what graph gets built. You cannot see how it gets executed.</p>
+
+<div class="diagram"><span class="accent">Python build phase</span>                         <span class="accent">C++ runtime</span>
+<span class="dim">|</span>                                            <span class="dim">|</span>
+<span class="highlight">Model definition (torch-like API)</span>            <span class="highlight">Load engine file</span>
+<span class="dim">|</span>                                            <span class="dim">|</span>
+<span class="highlight">Graph construction (INetworkDefinition)</span>      <span class="highlight">Pre-allocate memory</span>
+<span class="dim">|</span>                                            <span class="dim">|</span>
+<span class="highlight">Weight binding from checkpoint</span>               <span class="highlight">Schedule requests (in-flight batching)</span>
+<span class="dim">|</span>                                            <span class="dim">|</span>
+<span class="highlight">TensorRT compiler (fusion, autotuning)</span>      <span class="highlight">Execute <span class="term" data-term="Kernel">kernel</span> sequence</span>
+<span class="dim">|</span>                                            <span class="dim">|</span>
+<span class="highlight">Serialized engine file (.engine)</span> <span class="dim">&mdash;&mdash;&rarr;</span>     <span class="highlight">Token sampling &amp; output</span></div>
+
+</section>
+
+<!-- Section 2: The Build Phase -->
+<section id="build">
+<h2>2. The Build Phase (Why It Takes Minutes)</h2>
+
+<p>When you run <code>trtllm-build</code>, six things happen in sequence. Each is expensive. Together they take 5&ndash;30 minutes depending on model size and GPU.</p>
+
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">01</span>
+    <span class="detail-title">Graph Definition</span>
+  </div>
+  <p>The Python model definition executes. Each <code>Linear</code>, <code>RMSNorm</code>, <code>Attention</code> call appends nodes to a TensorRT <code>INetworkDefinition</code>. The result is a directed acyclic graph of operations &mdash; hundreds of nodes per transformer layer, thousands for the full model. Weight tensors are bound to specific nodes. Input/output shapes are declared (max batch size, max sequence length, max number of tokens).</p>
+  <p class="small">This step takes seconds. It is pure Python graph construction.</p>
+</div>
+
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">02</span>
+    <span class="detail-title">Graph Optimization</span>
+  </div>
+  <p>TensorRT's compiler applies classical graph optimizations:</p>
+  <p><strong>Constant folding:</strong> any operation on known values (like scale factors or shape calculations) is computed once and baked into the graph.</p>
+  <p><strong>Dead code elimination:</strong> nodes whose outputs are never consumed are removed.</p>
+  <p><strong>Layer fusion:</strong> the compiler runs pattern matching across the graph. When it finds sequences that can be replaced by a single fused <span class="term" data-term="Kernel">kernel</span> &mdash; like QKV projection + bias + <span class="term" data-term="RoPE">RoPE</span>, or LayerNorm + residual add &mdash; it collapses them into one node. This is where TensorRT's proprietary <span class="term" data-term="Kernel">kernel</span> library matters: it has fused kernels for hundreds of common patterns that no public library provides.</p>
+  <p class="small">This step takes 10&ndash;30 seconds. The pattern matching is the expensive part &mdash; the number of possible subgraph matches grows combinatorially.</p>
+</div>
+
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">03</span>
+    <span class="detail-title"><span class="term" data-term="Kernel">Kernel</span> Selection</span>
+  </div>
+  <p>For each node in the optimized graph, TensorRT has multiple <span class="term" data-term="Kernel">kernel</span> implementations ("tactics") available. A single GEMM node might have 20+ candidate kernels: different tile sizes (64x64, 128x128, 256x128), different data layouts (row-major, column-major), different algorithms (<span class="term" data-term="cuBLAS">cuBLAS</span>, CUTLASS, TensorRT's internal kernels). For attention nodes, the candidates include <span class="term" data-term="FlashAttention">FlashAttention</span>-like kernels, XQA kernels, and standard multi-head attention.</p>
+  <p>TensorRT must pick one tactic per node. The "right" choice depends on the specific tensor dimensions, the GPU's <span class="term" data-term="SM">SM</span> count, available <span class="term" data-term="Shared Memory">shared memory</span>, and interactions with neighboring kernels.</p>
+  <p class="small">The candidate enumeration is fast. The selection requires the next step.</p>
+</div>
+
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">04</span>
+    <span class="detail-title">Autotuning</span>
+  </div>
+  <p>This is where the minutes go. For each node, TensorRT launches every candidate <span class="term" data-term="Kernel">kernel</span> with representative data and measures wall-clock execution time. A model with 64 transformer layers, each with ~10 fused nodes, and ~20 tactics per node means <span class="hw">64 &times; 10 &times; 20 = 12,800 <span class="term" data-term="Kernel">kernel</span> launches</span> just for timing. Each launch includes setup, execution, synchronization, and measurement.</p>
+  <p>The results are stored in a timing cache. If you rebuild with the same GPU and same shapes, the cache avoids re-timing. But change the GPU (H100 to A100), the batch size, or the sequence length, and the cache is invalidated &mdash; full autotuning runs again.</p>
+  <p>The autotuner selects the fastest tactic for each node. The combined selections form the execution plan.</p>
+  <p class="small">This step takes 3&ndash;25 minutes. It is the dominant cost of the build phase. The <code>--profiling_verbosity detailed</code> flag lets you inspect which tactics were selected and why.</p>
+</div>
+
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">05</span>
+    <span class="detail-title">Memory Planning</span>
+  </div>
+  <p>With the <span class="term" data-term="Kernel">kernel</span> sequence fixed, TensorRT computes the exact memory layout. Every intermediate tensor's size is known at build time (because shapes are fixed). The planner assigns memory offsets so that non-overlapping tensors share the same physical memory. Buffer reuse across layers is aggressive &mdash; layer N's output buffer can be reused as layer N+2's workspace if the lifetimes don't overlap.</p>
+  <p>The activation memory size is fixed at build time and queryable via <code>trt.ICudaEngine.device_memory_size_v2</code>. Once built, it cannot change. The runtime pre-allocates this exact amount &mdash; no <code>malloc</code> during inference.</p>
+  <p class="small">This step takes seconds. It is a linear scan over the execution order with a simple interval-scheduling algorithm.</p>
+</div>
+
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">06</span>
+    <span class="detail-title">Serialization</span>
+  </div>
+  <p>The execution plan &mdash; the optimized graph, the selected kernels (actual compiled <span class="term" data-term="CUDA">CUDA</span> code), the memory layout, and the model weights &mdash; is serialized into a single binary blob: the engine file. This file contains everything needed to run inference. No model definition, no Python, no weight files. Just a sequence of <span class="term" data-term="Kernel">kernel</span> launches with pre-assigned memory.</p>
+  <p>Engine files are not portable. They encode the specific GPU architecture (<span class="term" data-term="SM">SM</span> version), the <span class="term" data-term="CUDA">CUDA</span> driver version, and the TensorRT version. An engine built for H100 will not run on A100. An engine built with TensorRT 10.3 may not run with TensorRT 10.4.</p>
+  <p class="small">Serialization takes seconds. The engine file is typically 1&ndash;2x the model weight size (weights are embedded in the engine).</p>
+</div>
+
+</section>
+
+<!-- Section 3: The Optimizations -->
+<section id="optimizations">
+<h2>3. The Optimizations (Each One Explained)</h2>
+
+<!-- Layer Fusion -->
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">A</span>
+    <span class="detail-title">Layer Fusion</span>
+  </div>
+
+  <h4>What gets fused</h4>
+  <p>The TensorRT compiler identifies and fuses common operation sequences into single kernels. The key fusions in a transformer layer:</p>
+  <p><strong>QKV projection:</strong> three separate <code>Linear</code> layers (Q, K, V) become one GEMM with a single weight matrix read. Instead of three <span class="term" data-term="Kernel">kernel</span> launches reading three weight matrices, one <span class="term" data-term="Kernel">kernel</span> reads a concatenated weight matrix and produces all three outputs. This saves two <span class="term" data-term="Kernel">kernel</span> launch overheads and two weight-read passes.</p>
+  <p><strong>Bias + activation:</strong> the bias add and <span class="term" data-term="SiLU">SiLU</span>/GeLU activation after a linear layer are fused into the GEMM's epilogue. The GEMM <span class="term" data-term="Kernel">kernel</span> writes the final activated output directly &mdash; no intermediate tensor materialized in <span class="term" data-term="HBM">HBM</span>.</p>
+  <p><strong>LayerNorm + residual add:</strong> the residual connection and the subsequent <span class="term" data-term="RMSNorm">RMSNorm</span>/LayerNorm are fused into one <span class="term" data-term="Kernel">kernel</span>. The <span class="term" data-term="Kernel">kernel</span> reads the residual input, adds it to the layer output, normalizes, and writes the result. One read, one write, instead of three reads and two writes.</p>
+  <p><strong>Attention + softmax:</strong> the QK dot product, scaling, masking, softmax, and V multiplication are fused into a single attention <span class="term" data-term="Kernel">kernel</span> (similar to <span class="term" data-term="FlashAttention">FlashAttention</span>). Intermediate attention scores never touch <span class="term" data-term="HBM">HBM</span>.</p>
+
+  <h4>What cannot be fused</h4>
+  <p>Operations across attention boundaries &mdash; the output of attention feeds into a different <span class="term" data-term="Kernel">kernel</span> than what produced K and V. Cross-layer dependencies prevent fusion. AllReduce operations in tensor-parallel setups are synchronization barriers that break fusion chains.</p>
+
+  <h4>How it decides</h4>
+  <p>Pattern matching on the graph. TensorRT maintains an internal catalog of fusible patterns (subgraph templates). The compiler walks the graph, matches subgraphs against the catalog, and replaces matches with fused nodes. The catalog is proprietary and grows with each TensorRT release.</p>
+
+  <h4>Impact</h4>
+  <p>A standard transformer layer without fusion requires <span class="hw">20&ndash;50 <span class="term" data-term="Kernel">kernel</span> launches</span>. With fusion, this drops to <span class="hw">5&ndash;10 launches</span>. Across 64 layers, that is the difference between 3,000+ <span class="term" data-term="Kernel">kernel</span> launches and ~500. Each eliminated <span class="term" data-term="Kernel">kernel</span> boundary saves <span class="hw">1&ndash;5 us</span> of dead time plus the <span class="term" data-term="HBM">HBM</span> round-trip for intermediate data. At 64 layers, fusion alone is worth <span class="hw">30&ndash;50%</span> throughput improvement.</p>
+</div>
+
+<!-- Quantization -->
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">B</span>
+    <span class="detail-title">Quantization (<span class="term" data-term="FP8">FP8</span>, INT8, INT4)</span>
+  </div>
+
+  <h4><span class="term" data-term="FP8">FP8</span> on <span class="term" data-term="Hopper">Hopper</span></h4>
+  <p>The H100's fourth-generation tensor cores natively support <span class="term" data-term="FP8">FP8</span> (E4M3 format: 4 exponent bits, 3 mantissa bits). This is not emulated &mdash; the <span class="term" data-term="Tensor Core">tensor core</span> MMA instructions accept <span class="term" data-term="FP8">FP8</span> inputs directly, at <span class="hw"><span class="speedup">2x</span> the throughput</span> of <span class="term" data-term="FP16">FP16</span>/<span class="term" data-term="BF16">BF16</span>. TensorRT-LLM exploits this by quantizing both weights and activations to <span class="term" data-term="FP8">FP8</span>, letting the tensor cores run at full E4M3 speed.</p>
+
+  <h4>Calibration</h4>
+  <p><span class="term" data-term="FP8">FP8</span> quantization requires scale factors that map the <span class="term" data-term="FP16">FP16</span> dynamic range into <span class="term" data-term="FP8">FP8</span>'s narrower range. TensorRT-LLM's calibration runs representative data through the model and records the activation distributions. Configuration is via <code>CalibConfig</code>: typically <span class="hw">512 batches, batch_size=1, max_seq_length=2048</span>. The calibrator computes per-tensor or per-channel scale factors that minimize quantization error.</p>
+
+  <h4>Per-tensor vs per-channel vs per-group</h4>
+  <p><strong>Per-tensor:</strong> one scale factor for the entire weight matrix. Fastest (no extra indexing) but least accurate &mdash; outlier channels distort the scale for all channels.</p>
+  <p><strong>Per-channel:</strong> one scale factor per output channel. Better accuracy, small overhead for looking up the scale during the GEMM.</p>
+  <p><strong>Per-group:</strong> one scale factor per group of (typically 128) elements within a channel. Used in INT4/<span class="term" data-term="GPTQ">GPTQ</span>/<span class="term" data-term="AWQ">AWQ</span>. Best accuracy, more indexing overhead.</p>
+
+  <h4>SmoothQuant</h4>
+  <p>When activation outliers make quantization difficult, SmoothQuant mathematically redistributes the quantization difficulty from activations to weights. It multiplies activations by a per-channel smoothing factor and divides weights by the same factor. Since weights are static (smoothed offline), this makes activation quantization easier at no runtime cost.</p>
+
+  <h4><span class="term" data-term="AWQ">AWQ</span> (Activation-Aware Weight Quantization)</h4>
+  <p><span class="term" data-term="AWQ">AWQ</span> identifies the 1% of weight channels that are most important to accuracy (determined by activation magnitudes) and protects them by keeping higher precision for those channels. TensorRT-LLM integrates <span class="term" data-term="AWQ">AWQ</span> as a quantization method selectable during the build phase.</p>
+
+  <h4>Numbers: <span class="term" data-term="FP8">FP8</span> vs <span class="term" data-term="FP16">FP16</span></h4>
+  <table>
+    <tr><th>Metric</th><th><span class="term" data-term="FP16">FP16</span> (tuned)</th><th><span class="term" data-term="FP8">FP8</span> (tuned)</th><th>Improvement</th></tr>
+    <tr><td>Token throughput</td><td class="num">2,474 tok/s</td><td class="num">6,049 tok/s</td><td class="num">+144%</td></tr>
+    <tr><td>Request throughput</td><td class="num">1.21 req/s</td><td class="num">2.95 req/s</td><td class="num">+144%</td></tr>
+    <tr><td>Time to first token</td><td class="num">147.6 ms</td><td class="num">88.0 ms</td><td class="num">-40%</td></tr>
+    <tr><td>Inter-token latency</td><td class="num">14.69 ms</td><td class="num">10.82 ms</td><td class="num">-26%</td></tr>
+  </table>
+  <p class="small">Llama 3.3 70B on 4x H100-SXM-80GB with tensor parallelism. Source: NVIDIA performance tuning guide.</p>
+</div>
+
+<!-- In-Flight Batching -->
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">C</span>
+    <span class="detail-title">In-Flight Batching</span>
+  </div>
+
+  <p>Static batching waits for an entire batch to finish before accepting new requests. If one request in a batch of 32 generates 500 tokens while the others generate 50, the GPU sits idle for 31 slots during the last 450 tokens.</p>
+
+  <p>In-flight batching (enabled by default in TensorRT-LLM) operates at iteration-level granularity. At every decode step, the scheduler evaluates:</p>
+
+  <p><strong>Which requests have finished?</strong> Evict them from the batch immediately. Free their <span class="term" data-term="KV Cache">KV cache</span> blocks.</p>
+  <p><strong>Which new requests are waiting?</strong> Insert them into the freed slots. Run their prefill (context) phase while other requests continue decoding.</p>
+  <p><strong>Is there <span class="term" data-term="KV Cache">KV cache</span> capacity?</strong> If not, defer new requests rather than OOM.</p>
+
+  <p>This is conceptually identical to vLLM's continuous batching. The difference is execution: vLLM's scheduler runs in Python and dispatches to PyTorch. TensorRT-LLM's scheduler runs in C++ and dispatches to pre-compiled <span class="term" data-term="Kernel">kernel</span> sequences.</p>
+
+  <p>An additional optimization is the overlap scheduler, which launches GPU work for step N+1 before the CPU finishes processing step N's results. This hides CPU scheduling latency behind GPU computation, yielding up to <span class="hw">22% additional throughput</span> improvement.</p>
+</div>
+
+<!-- <span class="term" data-term="KV Cache">KV Cache</span> Management -->
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">D</span>
+    <span class="detail-title"><span class="term" data-term="KV Cache">KV Cache</span> Management</span>
+  </div>
+
+  <h4>Paged <span class="term" data-term="KV Cache">KV Cache</span></h4>
+  <p>Borrowed from vLLM's PagedAttention concept. The <span class="term" data-term="KV Cache">KV cache</span> is split into fixed-size blocks (pages). Tokens map to pages non-contiguously, like virtual memory. This eliminates the fragmentation problem: without paging, each sequence needs a contiguous buffer sized for <code>max_seq_length</code>, wasting <span class="hw">60&ndash;80%</span> of KV memory on padding. With paging, blocks are allocated on demand.</p>
+
+  <p>By default, TensorRT-LLM allocates <span class="hw">90%</span> of remaining GPU memory to the <span class="term" data-term="KV Cache">KV cache</span> pool after loading the engine and activation buffers. This can be tuned via <code>maxTokens</code> or <code>freeGpuMemoryFraction</code>.</p>
+
+  <h4><span class="term" data-term="KV Cache">KV Cache</span> Reuse (Prefix Caching)</h4>
+  <p>If two requests share a common prefix (e.g., the same system prompt), the <span class="term" data-term="KV Cache">KV cache</span> for that prefix is computed once and shared. The second request skips the prefill for the shared tokens. This is significant for multi-turn conversations and few-shot prompting where system prompts repeat across every request.</p>
+
+  <h4>Quantized <span class="term" data-term="KV Cache">KV Cache</span></h4>
+  <p>KV values can be stored in <span class="term" data-term="FP8">FP8</span> or INT8 instead of <span class="term" data-term="FP16">FP16</span>, halving <span class="term" data-term="KV Cache">KV cache</span> memory and doubling the number of sequences that fit in memory. Enabled via <code>--use_fp8_context_fmha=True</code> at build time. The attention <span class="term" data-term="Kernel">kernel</span> reads quantized KV values and dequantizes inline.</p>
+  <p>Impact: up to <span class="hw"><span class="speedup">1.45x</span> throughput improvement</span> in decode-heavy scenarios (more sequences in flight) and <span class="hw"><span class="speedup">1.09x</span></span> in prefill-heavy scenarios (less memory pressure).</p>
+</div>
+
+<!-- Multi-GPU -->
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">E</span>
+    <span class="detail-title">Multi-GPU Parallelism</span>
+  </div>
+
+  <h4>Tensor Parallelism (TP)</h4>
+  <p>Split weight matrices across GPUs along the column or row dimension. Each GPU computes a partial result, then AllReduce synchronizes. For a 70B model on 2 GPUs, each GPU holds half the weights and does half the compute. The AllReduce after each layer exchanges partial results &mdash; typically <span class="hw">8&ndash;32 KB per layer</span> for attention output, much more for FFN output.</p>
+  <p>TP requires high inter-GPU bandwidth. On NVLink 4.0 (H100): <span class="hw">900 GB/s bidirectional</span>. The AllReduce for a 4096-dim hidden state across 8 GPUs takes ~1 us &mdash; negligible. But scale to 16 GPUs across two nodes (InfiniBand at 400 Gb/s) and the communication starts limiting scaling efficiency.</p>
+
+  <h4>Pipeline Parallelism (PP)</h4>
+  <p>Different layers on different GPUs. GPU 0 runs layers 0&ndash;31, GPU 1 runs layers 32&ndash;63. Communication happens only at the boundary: the output of layer 31 is sent to GPU 1, which processes layers 32&ndash;63 and sends the result back. Less communication bandwidth needed than TP, but creates pipeline bubbles &mdash; GPU 0 is idle while GPU 1 is computing.</p>
+  <p>TensorRT-LLM uses NCCL-wrapped plugins (<code>allreduce()</code>, <code>allgather()</code>, <code>send()</code>, <code>recv()</code>) exposed in the Python graph definition, so parallelism is built into the compiled engine.</p>
+
+  <h4>Communication Overhead</h4>
+  <p>At batch=1, the communication-to-compute ratio is unfavorable: the computation per layer is tiny (one matrix-vector multiply) but the AllReduce cost is fixed. TP scaling at batch=1 typically yields <span class="hw"><span class="speedup">1.6&ndash;1.8x</span></span> speedup from 2 GPUs, not 2x. At batch=64, compute dominates and scaling efficiency approaches <span class="hw"><span class="speedup">1.9x</span></span> per doubling.</p>
+</div>
+
+<!-- Custom Kernels -->
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">F</span>
+    <span class="detail-title">Custom Kernels</span>
+  </div>
+
+  <p>TensorRT-LLM does not rely on <span class="term" data-term="cuDNN">cuDNN</span> or <span class="term" data-term="cuBLAS">cuBLAS</span> for its performance-critical operations. It ships custom <span class="term" data-term="CUDA">CUDA</span> kernels for every hot path:</p>
+
+  <h4>XQA (eXtended Query Attention)</h4>
+  <p>A generation-phase attention <span class="term" data-term="Kernel">kernel</span> optimized for <span class="term" data-term="GQA">GQA</span> (Grouped Query Attention) and MQA (Multi-Query Attention). Uses tensor cores for the QK dot product and V multiplication, reducing data loading and format conversion overhead. The XQA <span class="term" data-term="Kernel">kernel</span> provides <span class="hw"><span class="speedup">2.4x</span> more Llama-70B throughput</span> within the same latency budget: from 1,227 tok/s/GPU to 2,941 tok/s/GPU on H200. On 8x H100, throughput increased <span class="hw"><span class="speedup">1.9x</span></span> (13,232 to 25,300 tok/s). The <span class="term" data-term="Kernel">kernel</span> includes a JIT codepath for <span class="term" data-term="Hopper">Hopper</span>'s QGMMA (Quantized Group Matrix Multiply-Accumulate) instructions.</p>
+
+  <h4><span class="term" data-term="FP8">FP8</span> GEMM Kernels</h4>
+  <p>Custom matrix multiply kernels that consume <span class="term" data-term="FP8">FP8</span> inputs directly, using <span class="term" data-term="Hopper">Hopper</span>'s native <span class="term" data-term="FP8">FP8</span> <span class="term" data-term="Tensor Core">tensor core</span> instructions. These bypass <span class="term" data-term="cuBLAS">cuBLAS</span> entirely. The kernels fuse dequantization scaling into the GEMM epilogue &mdash; the scale factor multiply happens in registers after the MMA, not as a separate pass.</p>
+
+  <h4>Fused MoE Kernels</h4>
+  <p>For Mixture-of-Experts models (Mixtral, DeepSeek), TensorRT-LLM provides fused kernels that handle the gate network, top-K expert selection, token routing, expert GEMMs, and output combination in a single <span class="term" data-term="Kernel">kernel</span>. Supports <span class="term" data-term="FP16">FP16</span>, <span class="term" data-term="BF16">BF16</span>, <span class="term" data-term="FP8">FP8</span>, and NVFP4 precisions. The Autotuner specifically tunes MoE <span class="term" data-term="Kernel">kernel</span> parameters.</p>
+
+  <h4>How These Compare to <span class="term" data-term="FlashAttention">FlashAttention</span></h4>
+  <p><span class="term" data-term="FlashAttention">FlashAttention</span> is a single algorithm with a public implementation. TensorRT-LLM's attention kernels are a library of specialized implementations &mdash; different kernels for prefill vs decode, for <span class="term" data-term="GQA">GQA</span> vs MHA, for <span class="term" data-term="FP8">FP8</span> vs <span class="term" data-term="FP16">FP16</span>, for different head dimensions. <span class="term" data-term="FlashAttention">FlashAttention</span> optimizes the attention computation. TensorRT's kernels optimize the attention computation for the specific deployment configuration, selected during autotuning.</p>
+</div>
+
+<!-- <span class="term" data-term="CUDA">CUDA</span> Graphs -->
+<div class="detail">
+  <div class="detail-header">
+    <span class="detail-num">G</span>
+    <span class="detail-title"><span class="term" data-term="CUDA">CUDA</span> Graphs</span>
+  </div>
+
+  <p>During the decode phase (generating one token at a time), the <span class="term" data-term="Kernel">kernel</span> sequence is the same every iteration &mdash; same kernels, same memory locations, only the data changes. TensorRT-LLM captures this sequence as a <span class="term" data-term="CUDA graph">CUDA graph</span>: a single object that replays the entire multi-<span class="term" data-term="Kernel">kernel</span> sequence with one CPU-side API call.</p>
+
+  <p>Without <span class="term" data-term="CUDA">CUDA</span> graphs, each <span class="term" data-term="Kernel">kernel</span> launch costs <span class="hw">3&ndash;10 us</span> of CPU dispatch. With ~500 <span class="term" data-term="Kernel">kernel</span> launches per forward pass (after fusion), that is <span class="hw">1.5&ndash;5 ms</span> of pure CPU overhead &mdash; potentially more than the GPU compute time at batch=1. <span class="term" data-term="CUDA">CUDA</span> graphs eliminate this: one launch, one dispatch, all kernels fire in sequence.</p>
+
+  <p>TensorRT-LLM uses graph padding to handle varying batch sizes. Instead of recording a separate graph for every possible batch size, it pads to the nearest cached size. The overhead of computing on padded (unused) elements is less than the cost of re-recording the graph. This yields up to <span class="hw">22% throughput improvement</span> over non-graphed execution.</p>
+
+  <p>The tradeoff: <span class="term" data-term="CUDA">CUDA</span> graphs are rigid. They encode specific memory addresses and tensor shapes. Dynamic shapes (changing sequence lengths during prefill) cannot use graphs &mdash; only the fixed-shape decode phase benefits.</p>
+</div>
+
+</section>
+
+<!-- Section 4: The Runtime -->
+<section id="runtime">
+<h2>4. The Runtime (What Executes)</h2>
+
+<p>After the build phase produces an engine file, the runtime is pure C++. No Python interpreter, no garbage collector, no framework overhead.</p>
+
+<h4>Execution Loop</h4>
+<p>The <code>PyExecutor(Worker)</code> process runs in a continuous loop on each GPU rank. Each iteration:</p>
+<div class="diagram"><span class="highlight">1.</span> Fetch new requests from the input queue
+<span class="highlight">2.</span> Scheduler decides which requests to execute this step
+<span class="highlight">3.</span> KVCacheManager allocates/deallocates page blocks
+<span class="highlight">4.</span> ModelEngine runs the forward pass (the compiled <span class="term" data-term="Kernel">kernel</span> sequence)
+<span class="highlight">5.</span> Sampler selects output tokens (greedy, top-k, top-p, beam search)
+<span class="highlight">6.</span> Finished requests are evicted; results returned</div>
+
+<h4>Pre-Allocated Memory</h4>
+<p>All memory is allocated at startup. The engine file declares its exact activation memory requirement. The <span class="term" data-term="KV Cache">KV cache</span> pool is pre-allocated from remaining GPU memory. During inference, no <code>cudaMalloc</code> is called. Every buffer has a pre-assigned address. The <span class="term" data-term="Kernel">kernel</span> sequence writes to pre-determined offsets. This is what makes the execution path deterministic.</p>
+
+<h4>Deterministic Execution Order</h4>
+<p>The engine file contains an ordered list of <span class="term" data-term="Kernel">kernel</span> launches. There is no dynamic scheduling, no graph re-optimization, no runtime fusion decisions. The C++ runtime iterates through the list and launches each <span class="term" data-term="Kernel">kernel</span> in order. The only runtime decision is which requests are in the current batch &mdash; everything else was decided at build time.</p>
+
+<h4>Engine File to <span class="term" data-term="Kernel">Kernel</span> Launches</h4>
+<p>The engine file is effectively a program: a sequence of (kernel_function, grid_dims, block_dims, shared_mem, arguments) tuples. The runtime maps this to <code>cuLaunchKernel</code> calls (or <span class="term" data-term="CUDA graph">CUDA graph</span> replay). The compiled <span class="term" data-term="Kernel">kernel</span> code is embedded in the engine file &mdash; no JIT compilation at load time. Load the file, allocate memory at the specified offsets, and start launching.</p>
+
+</section>
+
+<!-- Section 5: Tradeoffs -->
+<section id="tradeoffs">
+<h2>5. The Tradeoffs (What It Costs)</h2>
+
+<div class="tradeoff">
+  <h4>Build Time: 5&ndash;30 Minutes Per Configuration</h4>
+  <p>Change the maximum batch size? Rebuild. Change the maximum sequence length? Rebuild. Move to a different GPU? Rebuild. Upgrade TensorRT? Rebuild. Each rebuild runs the full autotuning pass. For a 70B model, expect <span class="hw">~28 minutes</span> of compilation. If you serve multiple model configurations, you maintain multiple engine files. A matrix of 3 batch sizes &times; 2 sequence lengths &times; 2 GPU types = 12 engine files, each requiring a separate build.</p>
+</div>
+
+<div class="tradeoff">
+  <h4>Rigidity: Frozen Execution Plans</h4>
+  <p>The execution plan is fixed at build time. Activation memory is pre-computed and cannot change. If a request arrives with a longer sequence than <code>max_seq_length</code>, it is rejected &mdash; not handled with a slower fallback. Dynamic shapes require building with padded maximums, which wastes memory for smaller inputs, or maintaining multiple engine files for different size ranges.</p>
+</div>
+
+<div class="tradeoff">
+  <h4>Complexity: Dozens of Configuration Parameters</h4>
+  <p>The <code>trtllm-build</code> command exposes dozens of flags: <code>--max_batch_size</code>, <code>--max_input_len</code>, <code>--max_seq_len</code>, <code>--max_num_tokens</code>, <code>--max_beam_width</code>, <code>--use_fp8_context_fmha</code>, <code>--strongly_typed</code>, <code>--context_fmha</code>, quantization type, calibration dataset, parallelism configuration. Getting the combination right for your workload requires experimentation. The model definition API differs from PyTorch/HuggingFace &mdash; not all architectures are supported, and porting a new architecture requires rewriting the model definition in TensorRT-LLM's API.</p>
+</div>
+
+<div class="tradeoff">
+  <h4>NVIDIA Lock-In</h4>
+  <p>The C++ runtime is closed source. Engine files encode the GPU architecture, <span class="term" data-term="CUDA">CUDA</span> driver version, and TensorRT version. They are not portable between GPU generations (H100 vs A100), between driver versions, or between TensorRT releases. You cannot inspect the generated kernels. You cannot run on AMD, Intel, or Apple hardware. You are locked to NVIDIA's release cadence and deprecation decisions.</p>
+</div>
+
+<div class="tradeoff">
+  <h4>Memory Overhead</h4>
+  <p>The engine file embeds the model weights plus the compiled kernels plus the memory plan. It is typically 1&ndash;2x the size of the raw model weights. The autotuning workspace at build time can require significant temporary GPU memory &mdash; you may need more GPU memory to build than to run.</p>
+</div>
+
+<div class="tradeoff">
+  <h4>No <span class="term" data-term="DeltaNet">DeltaNet</span> Support</h4>
+  <p>TensorRT-LLM has no native support for <span class="term" data-term="DeltaNet">DeltaNet</span> or linear attention layers. Qwen 3.5-27B's hybrid attention-<span class="term" data-term="DeltaNet">DeltaNet</span> architecture would require writing custom TensorRT plugins in C++ for the <span class="term" data-term="DeltaNet">DeltaNet</span> layers. Those plugins would bypass TensorRT's fusion and autotuning &mdash; they run as opaque black boxes in the execution graph. This partially defeats the purpose of using TensorRT: the <span class="term" data-term="DeltaNet">DeltaNet</span> layers would be unoptimized islands surrounded by optimized transformer layers.</p>
+</div>
+
+</section>
+
+<!-- Section 6: Benchmarks -->
+<section id="benchmarks">
+<h2>6. Benchmarks (Real Numbers)</h2>
+
+<h3>Official NVIDIA Numbers (TensorRT-LLM Performance Overview)</h3>
+
+<table>
+  <tr><th>Model</th><th>Precision</th><th>GPU</th><th>Parallelism</th><th>Throughput</th></tr>
+  <tr><td>Llama 3.1 8B</td><td><span class="term" data-term="FP8">FP8</span></td><td>H100</td><td>TP=1</td><td class="num">26,401 tok/s</td></tr>
+  <tr><td>Llama 3.1 8B</td><td><span class="term" data-term="FP8">FP8</span></td><td>H200</td><td>TP=1</td><td class="num">27,028 tok/s</td></tr>
+  <tr><td>Llama 3.1 8B</td><td><span class="term" data-term="FP8">FP8</span></td><td><span class="term" data-term="GH200">GH200</span></td><td>TP=1</td><td class="num">27,304 tok/s</td></tr>
+  <tr><td>Llama 3.3 70B</td><td><span class="term" data-term="FP8">FP8</span></td><td>H100</td><td>TP=2</td><td class="num">6,093 tok/s</td></tr>
+  <tr><td>Llama 3.3 70B</td><td><span class="term" data-term="FP8">FP8</span></td><td>H200</td><td>TP=2</td><td class="num">6,328 tok/s</td></tr>
+  <tr><td>Llama 3.3 70B</td><td>FP4</td><td>B200</td><td>TP=1</td><td class="num">10,614 tok/s</td></tr>
+  <tr><td>Llama 3.1 405B</td><td><span class="term" data-term="FP8">FP8</span></td><td>H100</td><td>TP=8</td><td class="num">3,705 tok/s</td></tr>
+  <tr><td>Llama 3.1 405B</td><td><span class="term" data-term="FP8">FP8</span></td><td>H200</td><td>TP=8</td><td class="num">4,715 tok/s</td></tr>
+  <tr><td>Llama 3.1 405B</td><td>FP4</td><td>B200</td><td>TP=4</td><td class="num">6,219 tok/s</td></tr>
+</table>
+<p class="small">Input/output sequence length: 128/128 unless noted. Source: nvidia.github.io/TensorRT-LLM/performance/perf-overview.html</p>
+
+<h3>XQA <span class="term" data-term="Kernel">Kernel</span> Impact (Llama 70B)</h3>
+
+<table>
+  <tr><th>Configuration</th><th>Without XQA</th><th>With XQA</th><th>Speedup</th></tr>
+  <tr><td>1x H200, <span class="term" data-term="FP8">FP8</span></td><td class="num">1,227 tok/s/GPU</td><td class="num">2,941 tok/s/GPU</td><td class="num"><span class="speedup">2.4x</span></td></tr>
+  <tr><td>8x H100, <span class="term" data-term="FP8">FP8</span></td><td class="num">13,232 tok/s</td><td class="num">25,300 tok/s</td><td class="num"><span class="speedup">1.9x</span></td></tr>
+</table>
+<p class="small">128 input tokens, 2048 output tokens. Source: NVIDIA XQA <span class="term" data-term="Kernel">kernel</span> blog.</p>
+
+<h3>TensorRT-LLM vs vLLM vs SGLang (Llama 3.3 70B <span class="term" data-term="FP8">FP8</span>, 1x H100)</h3>
+
+<table>
+  <tr><th>Concurrency</th><th>TensorRT-LLM</th><th>vLLM</th><th>SGLang</th></tr>
+  <tr><td>1 request</td><td class="num">130 tok/s</td><td class="num">120 tok/s</td><td class="num">125 tok/s</td></tr>
+  <tr><td>10 requests</td><td class="num">710 tok/s</td><td class="num">650 tok/s</td><td class="num">680 tok/s</td></tr>
+  <tr><td>50 requests</td><td class="num">2,100 tok/s</td><td class="num">1,850 tok/s</td><td class="num">1,920 tok/s</td></tr>
+  <tr><td>100 requests</td><td class="num">2,780 tok/s</td><td class="num">2,400 tok/s</td><td class="num">2,460 tok/s</td></tr>
+</table>
+
+<h4>Time to First Token (p50)</h4>
+<table>
+  <tr><th>Concurrency</th><th>TensorRT-LLM</th><th>vLLM</th><th>SGLang</th></tr>
+  <tr><td>1 request</td><td class="num">38 ms</td><td class="num">45 ms</td><td class="num">42 ms</td></tr>
+  <tr><td>10 requests</td><td class="num">105 ms</td><td class="num">120 ms</td><td class="num">112 ms</td></tr>
+  <tr><td>50 requests</td><td class="num">340 ms</td><td class="num">380 ms</td><td class="num">360 ms</td></tr>
+  <tr><td>100 requests</td><td class="num">680 ms</td><td class="num">740 ms</td><td class="num">710 ms</td></tr>
+</table>
+<p class="small">Source: Spheron benchmark comparison (2026). Cold start: TensorRT-LLM ~28 min (compilation), vLLM ~62 sec, SGLang ~58 sec.</p>
+
+<h3>MLPerf Inference Results</h3>
+<p>NVIDIA's MLPerf submissions use TensorRT-LLM exclusively:</p>
+<p><strong>H200:</strong> <span class="hw">31,000 tok/s</span> on the Llama 2 70B benchmark (MLPerf record at time of submission).</p>
+<p><strong>Blackwell vs <span class="term" data-term="Hopper">Hopper</span>:</strong> On Llama 2 70B, Blackwell delivered <span class="hw"><span class="speedup">4x</span> higher tok/s per GPU</span> vs H100.</p>
+<p><strong>Software gains:</strong> TensorRT-LLM software optimizations alone improved <span class="term" data-term="Hopper">Hopper</span>'s GPT-J throughput by <span class="hw"><span class="speedup">~3x</span></span> over six months, without hardware changes.</p>
+<p><strong>GB200 NVL72:</strong> On Llama 3.1 405B, delivered <span class="hw"><span class="speedup">3.4x</span> per-GPU improvement</span> over 8x H200.</p>
+
+</section>
+
+<!-- Section 7: What <span class="term" data-term="Lithos">Lithos</span> Learns -->
+<section id="lithos-learns">
+<h2>7. What Lithos Learns From TensorRT</h2>
+
+<p>TensorRT-LLM validates several design decisions that <span class="term" data-term="Lithos">Lithos</span> independently arrived at. It also reveals the limits of the "heavy build, pure execution" philosophy.</p>
+
+<h4>Build-Time <span class="term" data-term="Kernel">Kernel</span> Selection and Specialization</h4>
+<p>TensorRT proves that selecting the optimal <span class="term" data-term="Kernel">kernel</span> for each operation at build time &mdash; rather than at runtime &mdash; is worth minutes of compilation. <span class="term" data-term="Lithos">Lithos</span> agrees with the principle but rejects the time cost. <span class="term" data-term="Lithos">Lithos</span> selects kernels at load time in microseconds, not minutes. The "autotuning" is replaced by <span class="term" data-term="SASS">SASS</span>-level kernels that are already optimal for the target architecture &mdash; there is no need to time 20 tactics when you have one <span class="term" data-term="Kernel">kernel</span> written directly against the hardware.</p>
+
+<h4>Layer Fusion</h4>
+<p>TensorRT fuses at the graph level: pattern-match subgraphs, replace with fused kernels. <span class="term" data-term="Lithos">Lithos</span> fuses at the vocabulary level: each <span class="term" data-term="Forth">Forth</span> word compiles to <span class="term" data-term="SASS">SASS</span> that includes the fused operations by construction. There is no pattern matching because the vocabulary defines the fused operations directly. The result is the same &mdash; fewer <span class="term" data-term="Kernel">kernel</span> launches, no intermediate <span class="term" data-term="HBM">HBM</span> traffic &mdash; but the mechanism is compositional rather than template-based.</p>
+
+<h4>No Python in the Inference Path</h4>
+<p>TensorRT's C++ runtime agrees with <span class="term" data-term="Lithos">Lithos</span>'s design: Python must not be in the hot path. Every microsecond of interpreter overhead is a microsecond the GPU is idle. <span class="term" data-term="Lithos">Lithos</span> has no Python anywhere &mdash; not in the build phase, not in the runtime, not in the scheduler.</p>
+
+<h4>Pre-Allocated Memory</h4>
+<p>TensorRT pre-computes memory layout at build time and allocates everything at startup. <span class="term" data-term="Lithos">Lithos</span> does the same with <span class="term" data-term="mmap">mmap</span> + pre-allocation: weight files are memory-mapped, activation buffers are pre-allocated, and the <span class="term" data-term="KV Cache">KV cache</span> pool is reserved at startup. No <code>malloc</code> during inference.</p>
+
+<h4>What <span class="term" data-term="Lithos">Lithos</span> Does That TensorRT Cannot</h4>
+<table>
+  <tr><th>Capability</th><th>TensorRT-LLM</th><th><span class="term" data-term="Lithos">Lithos</span></th></tr>
+  <tr><td><span class="term" data-term="DeltaNet">DeltaNet</span> kernels</td><td>No support. Requires custom plugins.</td><td>Native <span class="term" data-term="SASS">SASS</span>-level <span class="term" data-term="DeltaNet">DeltaNet</span> kernels.</td></tr>
+  <tr><td><span class="term" data-term="SASS">SASS</span>-level control</td><td>Kernels compiled from <span class="term" data-term="CUDA">CUDA</span> C++. No control below <span class="term" data-term="PTX">PTX</span>.</td><td>Direct <span class="term" data-term="SASS">SASS</span> emission. Controls scheduling, register allocation, barrier placement.</td></tr>
+  <tr><td>Recompilation time</td><td>5&ndash;30 minutes per configuration.</td><td>Microseconds. Change batch size without rebuilding.</td></tr>
+  <tr><td><span class="term" data-term="GH200">GH200</span> <span class="term" data-term="Unified Memory">unified memory</span></td><td>Treated as a standard discrete GPU.</td><td>Exploits <span class="term" data-term="Unified Memory">unified memory</span>: 624 GB addressable, no PCIe bottleneck.</td></tr>
+  <tr><td>Portability</td><td>Engine files locked to one GPU generation + driver + TensorRT version.</td><td><span class="term" data-term="Forth">Forth</span> vocabulary targets any <span class="term" data-term="SM">SM</span> architecture. Recompile, don't rebuild.</td></tr>
+  <tr class="lithos-row"><td>Hardware control</td><td>Trust the compiler.</td><td>Be the compiler.</td></tr>
+</table>
+
+</section>
+
+<!-- Section 8: Key Insight -->
+<section id="insight">
+<h2>8. The Key Insight</h2>
+
+<p>TensorRT-LLM is fast because it moves all decisions to build time. <span class="term" data-term="Kernel">Kernel</span> selection, layer fusion, memory planning, autotuning &mdash; everything that requires intelligence happens once, during a multi-minute compilation pass. The inference path is pure execution: a pre-planned sequence of <span class="term" data-term="Kernel">kernel</span> launches with pre-assigned memory. No decisions, no allocations, no overhead.</p>
+
+<p>This is the right idea. The question is whether it requires minutes.</p>
+
+<p>TensorRT needs minutes because it works at the wrong abstraction level. It starts with a high-level graph (PyTorch-like operations), lowers it through a general-purpose compiler (pattern matching, tactic enumeration), and produces GPU code via <span class="term" data-term="CUDA">CUDA</span> C++ compilation. Each layer of abstraction requires a search through a space of possibilities.</p>
+
+<p><span class="term" data-term="Lithos">Lithos</span> eliminates the search by eliminating the abstraction layers. The <span class="term" data-term="Forth">Forth</span> vocabulary defines operations that map directly to <span class="term" data-term="SASS">SASS</span> instructions. There is no graph to pattern-match &mdash; the fused operations are the vocabulary. There are no tactics to enumerate &mdash; the <span class="term" data-term="SASS">SASS</span> <span class="term" data-term="Kernel">kernel</span> is the tactic, written once for each <span class="term" data-term="SM">SM</span> architecture. There is no memory layout to compute &mdash; the <span class="term" data-term="Forth">Forth</span> stack machine and pre-allocated buffers define it.</p>
+
+<p>The result is the same: a pre-planned sequence of optimized kernels with no runtime overhead. The build takes microseconds instead of minutes. And because recompilation is instant, <span class="term" data-term="Lithos">Lithos</span> adapts to different batch sizes, sequence lengths, and model architectures without maintaining a library of frozen engine files.</p>
+
+<p>TensorRT proved the destination is correct. <span class="term" data-term="Lithos">Lithos</span> found a shorter path.</p>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>
