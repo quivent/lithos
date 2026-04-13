@@ -1,0 +1,293 @@
+// gptq_gemv_fast.ptx -- Bandwidth-optimized GPTQ W4A16 GEMV
+//
+// Computes: output[n] = sum_k( dequant(qweight[k/8, n], k%8) * input[k] )
+//   where dequant = ((nibble - 8) * scale)
+//
+// qweight: [K/8, N] int32 row-major
+// scales:  [K/128, N] float16 row-major
+// input:   [K] float32
+// output:  [N] float32
+//
+// Design: K-split coalesced GEMV with shared memory input caching
+// - 256 output cols per block, 256 threads (1 thread per col)
+// - K dimension split across grid.y
+// - Input vector loaded into shared memory (amortized across 256 threads)
+// - Weight loads perfectly coalesced (32 adjacent cols per warp)
+// - No warp reduction needed (1 thread per output)
+// - Partial sums accumulated via atomicAdd
+//
+// Launch: grid=(ceil(N/256), K_SPLITS, 1), block=(256, 1, 1)
+//   smem = k_packed_per_split * 8 * 4 bytes (input vector slice)
+// Output must be zeroed before launch.
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.extern .shared .align 16 .b8 smem_base[];
+
+.visible .entry gptq_gemv_fast(
+    .param .u64 qweight_ptr,
+    .param .u64 scales_ptr,
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u32 param_N,
+    .param .u32 param_K,
+    .param .u32 param_K_SPLITS
+)
+{
+    .reg .u64   %rd<40>;
+    .reg .u32   %r<70>;
+    .reg .f32   %f<20>;
+    .reg .pred  %p<16>;
+    .reg .b16   %htmp;
+    .reg .u32   %nib;
+    .reg .f32   %dq, %scale, %acc;
+    .reg .u32   %packed;
+    .reg .f32   %x0, %x1, %x2, %x3, %x4, %x5, %x6, %x7;
+
+    // Load parameters
+    ld.param.u64    %rd0, [qweight_ptr];
+    ld.param.u64    %rd1, [scales_ptr];
+    ld.param.u64    %rd2, [input_ptr];
+    ld.param.u64    %rd3, [output_ptr];
+    ld.param.u32    %r0,  [param_N];
+    ld.param.u32    %r1,  [param_K];
+    ld.param.u32    %r2,  [param_K_SPLITS];
+
+    mov.u32         %r3,  %tid.x;
+    mov.u32         %r4,  %ctaid.x;
+    mov.u32         %r5,  %ctaid.y;
+
+    // My global output column
+    shl.b32         %r10, %r4, 8;
+    add.u32         %r11, %r10, %r3;
+
+    setp.ge.u32     %p0, %r11, %r0;
+    @%p0 bra        DONE;
+
+    // K range
+    shr.b32         %r30, %r1, 3;          // K_packed = K / 8
+
+    // k_packed_per_split = (K_packed + K_SPLITS - 1) / K_SPLITS
+    // Avoid div.u32: use repeated subtraction or shift if power of 2
+    // For generality, compute it:
+    add.u32         %r31, %r30, %r2;
+    sub.u32         %r31, %r31, 1;
+    div.u32         %r31, %r31, %r2;       // k_packed_per_split
+
+    // k_start, k_end
+    mul.lo.u32      %r32, %r5, %r31;
+    add.u32         %r33, %r32, %r31;
+    min.u32         %r33, %r33, %r30;
+    // Clamp k_start too
+    min.u32         %r32, %r32, %r30;
+
+    // k_elements in this split
+    sub.u32         %r34, %r33, %r32;      // num k_packed in this split
+    setp.eq.u32     %p1, %r34, 0;
+    @%p1 bra        DONE;
+
+    // ================================================================
+    // Load input vector slice into shared memory
+    // K elements: k_start*8 to k_end*8
+    // Total elements: r34 * 8
+    // ================================================================
+    mov.u32         %r20, smem_base;
+    shl.b32         %r35, %r34, 3;         // num_k_elements = num_k_packed * 8
+    shl.b32         %r36, %r32, 3;         // k_elem_start = k_start * 8
+
+    // Cooperative load: thread t loads elements t, t+256, t+512, ...
+    mov.u32         %r37, %r3;
+LOAD_X:
+    setp.ge.u32     %p2, %r37, %r35;
+    @%p2 bra        LOAD_X_DONE;
+    add.u32         %r38, %r37, %r36;      // global k index
+    cvt.u64.u32     %rd10, %r38;
+    shl.b64         %rd11, %rd10, 2;
+    add.u64         %rd12, %rd2, %rd11;
+    ld.global.ca.f32 %f0, [%rd12];
+    shl.b32         %r39, %r37, 2;         // smem byte offset
+    add.u32         %r40, %r20, %r39;
+    st.shared.f32   [%r40], %f0;
+    add.u32         %r37, %r37, 256;
+    bra             LOAD_X;
+LOAD_X_DONE:
+    bar.sync        0;
+
+    // ================================================================
+    // Precompute strides
+    // ================================================================
+    shl.b32         %r41, %r0, 2;          // N * 4
+    cvt.u64.u32     %rd20, %r41;
+    shl.b32         %r42, %r0, 1;          // N * 2
+    cvt.u64.u32     %rd21, %r42;
+
+    // Column base addresses
+    shl.b32         %r43, %r11, 2;
+    cvt.u64.u32     %rd22, %r43;           // my_col * 4
+    shl.b32         %r44, %r11, 1;
+    cvt.u64.u32     %rd23, %r44;           // my_col * 2
+
+    add.u64         %rd24, %rd0, %rd22;    // qweight_ptr + my_col * 4
+    add.u64         %rd25, %rd1, %rd23;    // scales_ptr + my_col * 2
+
+    // qweight base for k_start row
+    cvt.u64.u32     %rd26, %r32;
+    mul.lo.u64      %rd27, %rd26, %rd20;   // k_start * N * 4
+    add.u64         %rd28, %rd24, %rd27;   // qw_addr for k_start, my_col
+
+    // Initialize
+    mov.f32         %acc, 0f00000000;
+    mov.u32         %r45, 0xFFFFFFFF;      // current scale group (invalid)
+    mov.f32         %scale, 0f00000000;
+
+    // Smem pointer for input (relative to split start, so offset = 0)
+    // smem[local_k * 4] where local_k = (k_packed - k_start) * 8 + nibble
+
+    // ================================================================
+    // Main K loop with 2x unroll
+    // ================================================================
+    mov.u32         %r50, %r32;            // k_packed counter (global)
+    mov.u32         %r51, 0;               // local k_packed counter (for smem offset)
+
+    // Check if we have an even number of iterations for 2x unroll
+    and.b32         %r60, %r34, 1;         // num_k_packed & 1
+
+K_LOOP:
+    // Process 2 k_packed rows per iteration
+    add.u32         %r52, %r50, 1;
+    setp.ge.u32     %p3, %r52, %r33;      // if k_packed+1 >= k_end, handle tail
+    @%p3 bra        K_TAIL;
+
+    // --- Row 0 ---
+    // Scale check
+    shr.b32         %r53, %r50, 4;
+    setp.eq.u32     %p4, %r53, %r45;
+    @%p4 bra        SKIP_SCALE_0;
+    mov.u32         %r45, %r53;
+    cvt.u64.u32     %rd29, %r53;
+    mul.lo.u64      %rd30, %rd29, %rd21;
+    add.u64         %rd31, %rd25, %rd30;
+    ld.global.ca.b16 %htmp, [%rd31];
+    cvt.f32.f16     %scale, %htmp;
+SKIP_SCALE_0:
+
+    // Load weight
+    ld.global.cg.b32 %packed, [%rd28];
+
+    // Load 8 input values from shared memory
+    shl.b32         %r54, %r51, 5;         // local_k_packed * 32 bytes
+    add.u32         %r55, %r20, %r54;
+    ld.shared.f32   %x0, [%r55];
+    ld.shared.f32   %x1, [%r55 + 4];
+    ld.shared.f32   %x2, [%r55 + 8];
+    ld.shared.f32   %x3, [%r55 + 12];
+    ld.shared.f32   %x4, [%r55 + 16];
+    ld.shared.f32   %x5, [%r55 + 20];
+    ld.shared.f32   %x6, [%r55 + 24];
+    ld.shared.f32   %x7, [%r55 + 28];
+
+    // Dequantize and accumulate 8 nibbles
+    and.b32 %nib, %packed, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x0, %acc;
+    shr.b32 %nib, %packed, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x1, %acc;
+    shr.b32 %nib, %packed, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x2, %acc;
+    shr.b32 %nib, %packed, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x3, %acc;
+    shr.b32 %nib, %packed, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x4, %acc;
+    shr.b32 %nib, %packed, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x5, %acc;
+    shr.b32 %nib, %packed, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x6, %acc;
+    shr.b32 %nib, %packed, 28; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x7, %acc;
+
+    // Advance to row 1
+    add.u64         %rd28, %rd28, %rd20;   // next qweight row
+    add.u32         %r50, %r50, 1;
+    add.u32         %r51, %r51, 1;
+
+    // --- Row 1 ---
+    shr.b32         %r53, %r50, 4;
+    setp.eq.u32     %p4, %r53, %r45;
+    @%p4 bra        SKIP_SCALE_1;
+    mov.u32         %r45, %r53;
+    cvt.u64.u32     %rd29, %r53;
+    mul.lo.u64      %rd30, %rd29, %rd21;
+    add.u64         %rd31, %rd25, %rd30;
+    ld.global.ca.b16 %htmp, [%rd31];
+    cvt.f32.f16     %scale, %htmp;
+SKIP_SCALE_1:
+
+    ld.global.cg.b32 %packed, [%rd28];
+
+    shl.b32         %r54, %r51, 5;
+    add.u32         %r55, %r20, %r54;
+    ld.shared.f32   %x0, [%r55];
+    ld.shared.f32   %x1, [%r55 + 4];
+    ld.shared.f32   %x2, [%r55 + 8];
+    ld.shared.f32   %x3, [%r55 + 12];
+    ld.shared.f32   %x4, [%r55 + 16];
+    ld.shared.f32   %x5, [%r55 + 20];
+    ld.shared.f32   %x6, [%r55 + 24];
+    ld.shared.f32   %x7, [%r55 + 28];
+
+    and.b32 %nib, %packed, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x0, %acc;
+    shr.b32 %nib, %packed, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x1, %acc;
+    shr.b32 %nib, %packed, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x2, %acc;
+    shr.b32 %nib, %packed, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x3, %acc;
+    shr.b32 %nib, %packed, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x4, %acc;
+    shr.b32 %nib, %packed, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x5, %acc;
+    shr.b32 %nib, %packed, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x6, %acc;
+    shr.b32 %nib, %packed, 28; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x7, %acc;
+
+    // Advance
+    add.u64         %rd28, %rd28, %rd20;
+    add.u32         %r50, %r50, 1;
+    add.u32         %r51, %r51, 1;
+    bra             K_LOOP;
+
+K_TAIL:
+    // Handle last row if odd number of k_packed rows
+    setp.ge.u32     %p5, %r50, %r33;
+    @%p5 bra        K_DONE;
+
+    shr.b32         %r53, %r50, 4;
+    setp.eq.u32     %p4, %r53, %r45;
+    @%p4 bra        SKIP_SCALE_T;
+    mov.u32         %r45, %r53;
+    cvt.u64.u32     %rd29, %r53;
+    mul.lo.u64      %rd30, %rd29, %rd21;
+    add.u64         %rd31, %rd25, %rd30;
+    ld.global.ca.b16 %htmp, [%rd31];
+    cvt.f32.f16     %scale, %htmp;
+SKIP_SCALE_T:
+
+    ld.global.cg.b32 %packed, [%rd28];
+
+    shl.b32         %r54, %r51, 5;
+    add.u32         %r55, %r20, %r54;
+    ld.shared.f32   %x0, [%r55];
+    ld.shared.f32   %x1, [%r55 + 4];
+    ld.shared.f32   %x2, [%r55 + 8];
+    ld.shared.f32   %x3, [%r55 + 12];
+    ld.shared.f32   %x4, [%r55 + 16];
+    ld.shared.f32   %x5, [%r55 + 20];
+    ld.shared.f32   %x6, [%r55 + 24];
+    ld.shared.f32   %x7, [%r55 + 28];
+
+    and.b32 %nib, %packed, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x0, %acc;
+    shr.b32 %nib, %packed, 4; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x1, %acc;
+    shr.b32 %nib, %packed, 8; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x2, %acc;
+    shr.b32 %nib, %packed, 12; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x3, %acc;
+    shr.b32 %nib, %packed, 16; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x4, %acc;
+    shr.b32 %nib, %packed, 20; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x5, %acc;
+    shr.b32 %nib, %packed, 24; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x6, %acc;
+    shr.b32 %nib, %packed, 28; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %scale; fma.rn.f32 %acc, %dq, %x7, %acc;
+
+K_DONE:
+    // Atomic add partial sum to output
+    cvt.u64.u32     %rd35, %r11;
+    shl.b64         %rd36, %rd35, 2;
+    add.u64         %rd37, %rd3, %rd36;
+    atom.global.add.f32 %f0, [%rd37], %acc;
+
+DONE:
+    ret;
+}
