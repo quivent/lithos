@@ -6,13 +6,13 @@
 \
 \ Required load order (include before this file):
 \   compiler/ls-tokenizer.fs      — tokenizer + token stream
-\   compiler/emit-elementwise.fs  — element-wise SASS emitters
-\     (transitively includes sass/emit-sass.fs)
+\   compiler/emit-elementwise.fs  — element-wise GPU instruction emitters
+\     (transitively includes gpu/emit.fs)
 \   compiler/emit-reduce.fs       — reduction emitters
 \   compiler/emit-gemv.fs         — GEMV / project emitters
 \   compiler/parser.fs            — provides li-set-name, li-name$,
 \                                   n-kparams, freg+, rreg+, preg+
-\   compiler/cubin-wrap.fs        — write-cubin
+\   compiler/elf-wrap.fs          — write-cubin / write-elf
 \
 \ Public interface:
 \   ls-compile-kernel ( name-addr name-len -- )

@@ -1,7 +1,7 @@
-\ emit-gemv.fs — GEMV/project SASS pattern emitter for Lithos compiler
+\ emit-gemv.fs — GEMV/project GPU instruction pattern emitter for Lithos compiler
 \
 \ Emits the complete GPTQ W4A16 matrix-vector multiply kernel body.
-\ This is the heaviest primitive: ~40 SASS instructions per inner loop
+\ This is the heaviest primitive: ~40 sm90 instructions per inner loop
 \ iteration (8 nibbles x 5 ops), memory-bandwidth bound on Hopper.
 \
 \ Pattern: y[row] = sum_k( dequant(W_packed[row,k]) * x[k] )
@@ -20,7 +20,7 @@
 \ ============================================================
 \ DEPENDENCIES
 \ ============================================================
-\ emit-sass.fs provides:
+\ gpu/emit.fs provides:
 \   fadd, ffma, s2r, imad, imad-imm, ldg, ldg-off, stg, exit,
 \   bra, bra-pred, isetp-ge, isetp-lt, iadd3, mov-imm,
 \   shf-r-imm, lop3-and-imm, i2f-s32-f32, dequant-nibble,
@@ -41,7 +41,7 @@
 \ parser.fs (expected) provides:
 \   rreg+ — allocate next general register, return its index
 
-s" /home/ubuntu/lithos/sass/emit-sass.fs" included
+s" /home/ubuntu/lithos/gpu/emit.fs" included
 
 \ ============================================================
 \ CONSTANTS
@@ -112,10 +112,11 @@ variable gv-loop-bra   \ sass-pos of the loop-exit forward branch
 \ at bra-pos. Offset = target_pos - (bra_pos + 16).
 
 : patch-bra-offset  ( target-pos bra-pos -- )
-  \ Compute offset = target - (bra_pos + 16)
-  dup >r 16 + - r>               \ stack: offset bra_pos
+  \ Compute byte offset = target - (bra_pos + 16), then convert to dwords
+  dup >r 16 + - r>               \ stack: byte-offset bra_pos
+  swap 4 / swap                  \ stack: dword-offset bra_pos
   \ Address of byte 4 in the instruction at bra_pos
-  4 + sass-buf + >r              \ stack: offset;  R: addr
+  4 + sass-buf + >r              \ stack: dword-offset;  R: addr
   dup        r@ c!               \ byte 0
   8 rshift
   dup        r@ 1+ c!            \ byte 1
@@ -129,7 +130,7 @@ variable gv-loop-bra   \ sass-pos of the loop-exit forward branch
 \ imul-imm, ( rd rs1 imm32 -- )
 \ Emits: MOV Rtmp, imm32; IMAD Rd, Rs1, Rtmp, RZ
 \ Uses a scratch register from the bump allocator.
-\ This is needed because imad-imm, in emit-sass.fs is actually
+\ This is needed because imad-imm, in gpu/emit.fs is actually
 \ IMAD.MOV.U32 (a move-immediate), not a multiply.
 
 : imul-imm,  ( rd rs1 imm32 -- )
@@ -223,7 +224,7 @@ variable gv-loop-bra   \ sass-pos of the loop-exit forward branch
   dq-acc @ ;
 
 \ ============================================================
-\ WARP REDUCTION (wraps emit-sass.fs warp-reduce,)
+\ WARP REDUCTION (wraps gpu/emit.fs warp-reduce,)
 \ ============================================================
 \ emit-warp-reduce ( partial-reg tmp-reg -- )
 \ 5x SHFL.BFLY + FADD butterfly reduction across 32 lanes.

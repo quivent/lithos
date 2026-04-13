@@ -210,10 +210,107 @@ fn l2norm x -> y
         y [ j ] = x [ j ] * rscale
 
 \ ---- 4. sample_argmax ----
+\ Argmax over logit vector: returns index of maximum value (predicted token ID).
 \ gridDim.x = 1, blockDim.x = 256
-\ Each thread finds local max over its stride, then warp reduces.
-fn sample_argmax logits -> result
-    param n_vocab u32
-    each i
-        if>= i n_vocab exit
-        result [ i ] = logits [ i ]
+\ Single-pass: stride loop finds per-thread max, then parallel reduction
+\ carries both value and index through warp shuffles and shared memory.
+fn sample_argmax logits vocab_size -> output_idx
+    shared smem_vals 32 f32
+    shared smem_idxs 32 u32
+
+    \ Pass 1: stride loop — each thread finds its local max value and index
+    \ Initialize to -inf so any real logit wins
+    my_val = -340282346638528859811704183484516925440.0
+    my_idx = 0
+
+    stride i vocab_size
+        candidate = logits [ i ]
+        if> candidate my_val
+            my_val = candidate
+            my_idx = i
+
+    \ Intra-warp argmax reduction (butterfly shuffle)
+    \ For each delta, exchange value and index with partner lane.
+    \ If partner's value is strictly greater, take their value and index.
+    shfl.bfly nb_val16 my_val 16
+    shfl.bfly nb_idx16 my_idx 16
+    if> nb_val16 my_val
+        my_val = nb_val16
+        my_idx = nb_idx16
+
+    shfl.bfly nb_val8 my_val 8
+    shfl.bfly nb_idx8 my_idx 8
+    if> nb_val8 my_val
+        my_val = nb_val8
+        my_idx = nb_idx8
+
+    shfl.bfly nb_val4 my_val 4
+    shfl.bfly nb_idx4 my_idx 4
+    if> nb_val4 my_val
+        my_val = nb_val4
+        my_idx = nb_idx4
+
+    shfl.bfly nb_val2 my_val 2
+    shfl.bfly nb_idx2 my_idx 2
+    if> nb_val2 my_val
+        my_val = nb_val2
+        my_idx = nb_idx2
+
+    shfl.bfly nb_val1 my_val 1
+    shfl.bfly nb_idx1 my_idx 1
+    if> nb_val1 my_val
+        my_val = nb_val1
+        my_idx = nb_idx1
+
+    \ Cross-warp reduction via shared memory
+    \ Lane 0 of each warp stores its max value and index
+    lane_id = tid & 31
+    warp_id = tid >> 5
+    if== lane_id 0
+        smem_vals [ warp_id ] = my_val
+        smem_idxs [ warp_id ] = my_idx
+    barrier
+
+    \ First warp reads all warp-level maxima and reduces
+    if< tid 32
+        num_warps = blockDim >> 5
+        if< tid num_warps
+            my_val = smem_vals [ tid ]
+            my_idx = smem_idxs [ tid ]
+        else
+            my_val = -340282346638528859811704183484516925440.0
+            my_idx = 0
+
+        shfl.bfly nb_val16 my_val 16
+        shfl.bfly nb_idx16 my_idx 16
+        if> nb_val16 my_val
+            my_val = nb_val16
+            my_idx = nb_idx16
+
+        shfl.bfly nb_val8 my_val 8
+        shfl.bfly nb_idx8 my_idx 8
+        if> nb_val8 my_val
+            my_val = nb_val8
+            my_idx = nb_idx8
+
+        shfl.bfly nb_val4 my_val 4
+        shfl.bfly nb_idx4 my_idx 4
+        if> nb_val4 my_val
+            my_val = nb_val4
+            my_idx = nb_idx4
+
+        shfl.bfly nb_val2 my_val 2
+        shfl.bfly nb_idx2 my_idx 2
+        if> nb_val2 my_val
+            my_val = nb_val2
+            my_idx = nb_idx2
+
+        shfl.bfly nb_val1 my_val 1
+        shfl.bfly nb_idx1 my_idx 1
+        if> nb_val1 my_val
+            my_val = nb_val1
+            my_idx = nb_idx1
+
+        \ Thread 0 writes the winning index to output
+        if== tid 0
+            output_idx [ 0 ] = my_idx

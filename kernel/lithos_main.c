@@ -28,6 +28,7 @@
 #include <linux/mm.h>
 
 #include "lithos.h"
+#include "lithos_dev.h"
 #include "lithos_mem.h"
 #include "lithos_channel.h"
 #include "lithos_init.h"
@@ -40,34 +41,6 @@ MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Lithos");
 MODULE_DESCRIPTION("Lithos GPU driver for GH200 — minimal GPFIFO inference engine");
 MODULE_VERSION("0.1");
-
-/* -----------------------------------------------------------------------
- * Global driver state
- * ----------------------------------------------------------------------- */
-
-struct lithos_device {
-    struct pci_dev     *pdev;
-
-    /* BAR0: MMIO register space */
-    void __iomem       *bar0;
-    resource_size_t     bar0_phys;
-    resource_size_t     bar0_size;
-
-    /* BAR4: 128 GB coherent HBM window (GH200 NVLink-C2C) */
-    resource_size_t     bar4_phys;   /* physical base of coherent HBM */
-    resource_size_t     bar4_size;   /* 128 GB */
-
-    /* char device */
-    struct cdev         cdev;
-    dev_t               devno;
-
-    /* channel table */
-    struct lithos_chan  channels[LITHOS_MAX_CHANNELS];
-    spinlock_t          chan_lock;  /* protects channel table allocation */
-
-    /* device identity — read from PMC_BOOT_0 after BAR0 map */
-    uint32_t            pmc_boot_0;
-};
 
 static struct lithos_device *lithos_dev;   /* single-device driver */
 static struct class        *lithos_class;
@@ -167,7 +140,11 @@ static int lithos_mmap(struct file *filp, struct vm_area_struct *vma)
      * a wbinvd or explicit cache flush from the CPU side.
      */
     vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
-    vma->vm_flags    |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+    /*
+     * vm_flags is read-only in Linux 6.3+; use vm_flags_set() which
+     * goes through the VMA locking protocol.
+     */
+    vm_flags_set(vma, VM_IO | VM_DONTEXPAND | VM_DONTDUMP);
 
     ret = remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
     if (ret) {

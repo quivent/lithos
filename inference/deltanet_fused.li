@@ -34,7 +34,7 @@
 \   - khead * 3 * 16384 = khead * 49152 floats to start of key head's state
 \   - Uses shl 7 for multiply-by-128 (d=128=2^7), shl 14 for d*d
 
-fn deltanet_fused q k v z decay state -> output
+fn deltanet_fused q k v z decay beta state -> output
     param d u32         \ key/value head dim = 128
     param gqa u32       \ value heads per key head = 3
     shared smem_k 128 f32
@@ -80,6 +80,9 @@ fn deltanet_fused q k v z decay state -> output
         \ Decay scalar for this value head
         dec = decay [ vhead ]
 
+        \ Beta scalar for this value head (same per-head shape as decay)
+        bet = beta [ vhead ]
+
         \ V[vhead, lane] — v_base = vhead * 128 + lane
         shl v_vbase vhead 7
         add v_abs v_vbase lane
@@ -106,6 +109,8 @@ fn deltanet_fused q k v z decay state -> output
 
         \ ---- Phase 2: delta[lane] = V[lane] - kT_S[lane] ----
         delta = v_val - kts
+        \ Scale delta by beta: delta = beta * delta
+        delta = bet * delta
 
         \ ---- Phase 3: S update in place ----
         \ S[row, lane] = decay * S[row, lane] + K[row] * delta[lane]

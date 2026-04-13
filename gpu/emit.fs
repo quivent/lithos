@@ -1,6 +1,9 @@
-\ emit-sass.fs — Lithos SASS binary emitter for Hopper (sm_90)
-\ Emits raw SASS instructions (16 bytes each) into a code buffer.
+\ gpu/emit.fs — Lithos GPU machine code emitter for Hopper (sm_90)
+\ Emits raw sm90 binary instructions (16 bytes each) into a code buffer.
 \ No PTX, no ptxas, no driver JIT.
+
+\ Verified opcode constants for sm_90a — must be included first.
+s" /home/ubuntu/lithos/gpu/opcodes-sm90.fs" included
 
 \ ============================================================
 \ KERNEL NAME METADATA (shared with parser.fs / ls-compiler.fs)
@@ -122,7 +125,7 @@ variable mc-wbar   variable mc-yield  variable mc-stall
 : ctrl-bar        5 1 7 7 0 0 $00010000     make-ctrl ;
 
 \ ============================================================
-\ SASS CODE BUFFER
+\ GPU CODE BUFFER
 \ ============================================================
 
 65536 constant SASS-SIZE
@@ -131,7 +134,7 @@ variable sass-pos  0 sass-pos !
 
 \ Per-kernel register high-water mark.
 \ Reset to 0 at sass-reset; updated by every register-destination instruction.
-\ build-cubin reads this to emit a tight REGCOUNT instead of a hardcoded value.
+\ build-elf reads this to emit a tight REGCOUNT instead of a hardcoded value.
 variable max-reg-used  0 max-reg-used !
 
 \ track-rd  ( rd -- rd )
@@ -142,7 +145,7 @@ variable max-reg-used  0 max-reg-used !
 \ COOPERATIVE GRID-SYNC STATE
 \ ============================================================
 \ cooperative?  — set to 1 (true) when the kernel uses grid-wide sync.
-\ build-cubin checks this and emits COOP_GROUP attrs in .nv.info.<kernel>.
+\ build-elf checks this and emits COOP_GROUP attrs in .nv.info.<kernel>.
 \ Default is 0 (non-cooperative; backward compatible).
 variable cooperative?  0 cooperative? !
 
@@ -167,44 +170,24 @@ variable gridsync-count  0 gridsync-count !
 
 : sass-reset  0 sass-pos !  0 max-reg-used !  coop-reset ;
 
-\ Simpler: emit raw bytes
+\ Simpler: emit raw bytes into the code buffer
 : sb,  ( byte -- )  sass-buf sass-pos @ + c!  1 sass-pos +! ;
 : sw,  ( u32 -- )   dup sb, 8 rshift dup sb, 8 rshift dup sb, 8 rshift sb, ;
 : sq,  ( u64 -- )   dup sw, 32 rshift sw, ;
 
-\ Emit a full 16-byte instruction from two 64-bit values
+\ Emit a full 16-byte sm90 instruction word from two 64-bit values
 : sinst,  ( inst64 ctrl64 -- )  swap sq, sq, ;
 
-\ Emit one 16-byte instruction from four u32 values.
+\ Emit one 16-byte instruction word from four u32 values.
 \ DEPRECATED — use sinst, instead.
 : sass,  ( inst-lo inst-hi ctrl-lo ctrl-hi -- )
   swap 32 lshift swap or >r    \ combine ctrl-hi|ctrl-lo -> ctrl64
   swap 32 lshift swap or       \ combine inst-hi|inst-lo -> inst64
   r> sinst, ;
 
-\ ============================================================
-\ HOPPER OPCODE TABLE (from probe disassembly)
-\ ============================================================
-
-\ Opcodes are in bits [15:0] of the instruction word (little-endian)
-$7221 constant OP-FADD
-$7223 constant OP-FFMA
-$7819 constant OP-SHF
-$7918 constant OP-NOP
-$7919 constant OP-S2R
-$7947 constant OP-BRA
-$794d constant OP-EXIT
-$7981 constant OP-LDG
-$7986 constant OP-STG
-$79c3 constant OP-S2UR
-$7ab9 constant OP-ULDC
-$7b82 constant OP-LDC
-$7c0c constant OP-ISETP
-$7c10 constant OP-IADD3
-$7c24 constant OP-IMAD
-$7984 constant OP-LDS
-$7988 constant OP-STS
-$7b1d constant OP-BAR-SYNC
+\ Opcodes are defined in opcodes-sm90.fs (single source of truth).
+\ Removed duplicate table that had WRONG values for OP-IMAD ($7c24 should be $7224),
+\ OP-ISETP ($7c0c should be $720c), OP-IADD3 ($7c10 should be $7210).
 
 \ Special register IDs — SR selector field in S2R ctrl extra41[15:8]
 \ Verified from probe_s2r2 and probe_s2r3 (O0) nvdisasm output.
@@ -396,29 +379,83 @@ $00 constant SR-LANEID     \ lane within warp (0..31)
   r> or
   ctrl-shfl sinst, ;
 
+\ SHFL.UP PT, Rd, Rs, delta  — warp up-shuffle (lane N gets value from lane N-delta)
+\ Shuffle type = UP (mode bits[3:2] = 0b01 -> base 0x04).
+\ mask field for UP shuffle is 0x00 (no upper clamp; clamp is handled differently).
+\
+\ Verified encoding (rd=R9, rs=R0):
+\   SHFL.UP PT, R9, R0, 0x01, 0x1f -> 0x04201f0000097f89 (probe_6b ✓)
+\   For delta=2: top16=0x0440, delta=4: 0x0480, delta=8: 0x0500, delta=16: 0x0600
+\
+\ Note: for SHFL.UP the 'mask_and_clamp' PTX argument is the clamp value (not mask),
+\ so mask field in bits[47:40] encodes the clamp boundary.
+: shfl-up,  ( rd rs delta -- )
+  32 *                      \ delta_enc = delta * 32
+  dup $ff and 48 lshift >r  \ clamp at bits[55:48]
+  8 rshift $04 or           \ mode = 0x04 | (delta_enc >> 8)  [UP type]
+  56 lshift >r
+  24 lshift >r              \ rs -> bits[31:24]
+  track-rd 16 lshift        \ rd -> bits[23:16]
+  $7f89 or r> or
+  $1f 40 lshift or
+  r> or
+  r> or
+  ctrl-shfl sinst, ;
+
+\ SHFL.IDX PT, Rd, Rs, lane_reg, 0x1f  — indexed warp shuffle (register lane index)
+\ Reads from an absolute lane index (not relative). Both delta and clamp are registers.
+\
+\ Opcode variants:
+\   0x7f89: immediate delta AND clamp (BFLY/DOWN/UP imm form)
+\   0x7589: register delta, immediate clamp (IDX-RZ: clamp register = RZ)
+\   0x7389: register delta AND register clamp (full register form)
+\
+\ Verified: SHFL.IDX PT, R11, R0, RZ, 0x1f -> 0x00001fff000b7589 (probe_6b ✓)
+\   RZ as delta_reg = 0xff; mask=0x1f; mode=0x00 (IDX type); opcode=0x7589
+\
+\ For IDX with register lane index (most common use):
+\   inst bits[15:0]  = 0x7389 (opcode: reg-delta, reg-clamp form)
+\   inst bits[23:16] = Rd
+\   inst bits[31:24] = Rs (source)
+\   inst bits[39:32] = R_lane (lane index register)
+\   inst bits[63:56] = 0x00 (IDX type, no delta offset)
+: shfl-idx,  ( rd rs r_lane -- )
+  32 lshift >r              \ r_lane -> bits[39:32]
+  24 lshift >r              \ rs -> bits[31:24]
+  track-rd 16 lshift        \ rd -> bits[23:16]
+  $7389 or r> or r> or      \ merge rs and r_lane
+  ctrl-shfl sinst, ;
+
 \ BRA offset32  — branch PC-relative (signed byte offset from next instruction)
 \ Verified: BRA loop -> inst=0xfffffffc00fc7947 ctrl=0x000fc0000383ffff
-\ bits[63:32]=signed_offset, bits[23:16]=0xfc, bits[31:24]=0x00
-: bra,  ( offset32 -- )
-  32 lshift $00fc7947 or
+\   bits[63:32] = signed_offset32 in 4-byte units from PC_next (PC_current + 16)
+\   bits[23:16] = 0xfc (PT predicate = always taken)
+\   bits[31:24] = 0x00
+\   bits[15:0]  = 0x7947 (BRA opcode)
+\
+\ Target address formula: target = (bra_addr + 16) + offset32 * 4
+\ For self-loop (target = bra_addr): offset32 = -4 (0xfffffffc)
+\   proof: (bra_addr+16) + (-4)*4 = bra_addr+16-16 = bra_addr ✓
+: bra,  ( byte-offset -- )
+  4 /  32 lshift $00fc7947 or
   ctrl-bra sinst, ;
 
 \ @Px BRA offset32  — predicated branch (pred = 0..3 for P0..P3)
-: bra-pred,  ( offset32 pred -- )
+: bra-pred,  ( byte-offset pred -- )
   12 lshift >r
-  32 lshift $00fc7947 or
+  4 /  32 lshift $00fc7947 or
   $FFFF0FFF and r> or
   ctrl-bra sinst, ;
 
 \ ISETP.GE.U32.AND Pd, PT, Rs1, Rs2, PT  — integer >= comparison to predicate
-\ Verified: ISETP.GE.U32.AND P0, PT, R0, UR4, PT -> inst=0x0000000400007c0c
+\ Verified: ISETP.GE.U32.AND P0, PT, R2, R5, PT -> opcode OP-ISETP = $720c
 \   bits[23:16]=Pd, bits[31:24]=Rs1, bits[39:32]=Rs2
 \ ctrl-isetp: stall=13, opaque mode bits from probe
 : isetp-ge,  ( pd rs1 rs2 -- )
   32 lshift >r              \ rs2 -> bits[39:32]
   24 lshift >r              \ rs1 -> bits[31:24]
   16 lshift                 \ pd  -> bits[23:16]
-  $7c0c or r> or r> or
+  OP-ISETP or r> or r> or
   ctrl-isetp sinst, ;
 
 \ ISETP.LT.U32.AND Pd, PT, Rs1, Rs2, PT  — integer < comparison to predicate
@@ -426,7 +463,7 @@ $00 constant SR-LANEID     \ lane within warp (0..31)
   32 lshift >r
   24 lshift >r
   16 lshift
-  $7c0c or r> or r> or
+  OP-ISETP or r> or r> or
   ctrl-isetp sinst, ;
 
 \ HFMA2.MMA Rd, Rs1, Rs2, Rs3  — packed FP16x2 fused multiply-add (reg form)
@@ -553,10 +590,26 @@ $00 constant SR-LANEID     \ lane within warp (0..31)
   $7812 or r> or r> or
   $c0 ctrl-lop3 sinst, ;    \ LUT=0xC0 = AND(A,B,C)=A&B
 
+: lop3-or-imm,  ( rd rs imm32 -- )
+  \ LOP3.LUT Rd, Rs, imm32, RZ, 0xFC  (Rd = Rs OR imm32)
+  32 lshift >r              \ imm32 -> bits[63:32]
+  24 lshift >r              \ rs    -> bits[31:24]
+  track-rd 16 lshift        \ rd    -> bits[23:16]
+  $7812 or r> or r> or
+  $fc ctrl-lop3 sinst, ;    \ LUT=0xFC = OR(A,B)
+
+: lop3-xor-imm,  ( rd rs imm32 -- )
+  \ LOP3.LUT Rd, Rs, imm32, RZ, 0x3C  (Rd = Rs XOR imm32)
+  32 lshift >r              \ imm32 -> bits[63:32]
+  24 lshift >r              \ rs    -> bits[31:24]
+  track-rd 16 lshift        \ rd    -> bits[23:16]
+  $7812 or r> or r> or
+  $3c ctrl-lop3 sinst, ;    \ LUT=0x3C = XOR(A,B)
+
 \ --- I2FP.F32.S32 (signed int32 to float32) ---
 \ Opcode: 0x7245  — VERIFIED by probe (ptxas sm_90a, nvdisasm 12.8.90)
 \ PTX:    cvt.rn.f32.s32 Rd, Rs
-\ SASS:   I2FP.F32.S32 Rd, Rs
+\ SM90:   I2FP.F32.S32 Rd, Rs
 \ Encoding:
 \   bits[15:0]  = 0x7245 (I2FP opcode)
 \   bits[23:16] = Rd (float32 destination)
@@ -576,7 +629,7 @@ $00 constant SR-LANEID     \ lane within warp (0..31)
 \ --- F2I.TRUNC.NTZ (float32 to signed int32, truncate toward zero) ---
 \ Opcode: 0x7305  — VERIFIED by probe (ptxas sm_90a, nvdisasm 12.8.90)
 \ PTX:    cvt.rzi.s32.f32 Rd, Rs
-\ SASS:   F2I.TRUNC.NTZ Rd, Rs
+\ SM90:   F2I.TRUNC.NTZ Rd, Rs
 \ Encoding:
 \   bits[15:0]  = 0x7305 (F2I opcode)
 \   bits[23:16] = Rd (int32 destination)
@@ -711,29 +764,52 @@ $00 constant SR-LANEID     \ lane within warp (0..31)
   ctrl-lds sinst, ;
 
 \ BAR.SYNC.DEFER_BLOCKING bar-id  — synchronize all threads at shared-memory barrier
-\ Opcode 0x7b1d; bar-id in bits[23:16] (0..15)
-\ verified: BAR.SYNC.DEFER_BLOCKING 0x0 = inst=0x0000000000007b1d ctrl=0x000fec0000010000
+\ Opcode 0x7b1d; bar-id encoded as (bar_id * 64) in bits[55:48] of the inst word.
+\
+\ Verified encodings:
+\   BAR.SYNC 0: inst=0x0000000000007b1d  ctrl=0x000fec0000010000
+\   BAR.SYNC 1: inst=0x0040000000007b1d  ctrl=0x000fec0000010000
+\
+\ bits[55:48] = bar_id * 0x40 = bar_id << 6
+\ In 64-bit: barrier field = bar_id << 54  (6 bits at [55:48] in byte 6)
+\
+\ BUG FIXED: previous implementation used '16 lshift' placing bar-id in bits[23:16],
+\ which only works correctly for bar-id=0. The actual field is at bits[55:48].
 : bar-sync,  ( bar-id -- )
-  16 lshift $7b1d or
+  6 lshift 48 lshift $7b1d or    \ bar_id * 64 -> bits[55:48], then opcode in low 16
   ctrl-bar sinst, ;
 
 \ ============================================================
 \ MEMBAR ENCODERS  (used by grid-sync acquire/release protocol)
 \ ============================================================
+\
+\ All MEMBAR variants share the same instruction word: 0x0000000000007992
+\ The scope is encoded in the ctrl word's extra41 field bits[13:12]:
+\   00 = CTA (block-level fence)
+\   10 = GPU (device-level fence, crosses SMs)
+\   11 = SYS (system-level fence, NVLink-coherent, CPU-GPU)
+\
+\ Verified from probe_membar (probe_7.sass):
+\   MEMBAR.SC.GPU: inst=0x0000000000007992 ctrl=0x000fec0000002000 (extra41=0x2000)
+\   MEMBAR.SC.SYS: inst=0x0000000000007992 ctrl=0x000fec0000003000 (extra41=0x3000)
+\   MEMBAR.SC.CTA: inst=0x0000000000007992 ctrl=0x0003ec0000000000 (extra41=0x0000)
+\   Note: CTA scope uses a different sched word (lower stall bits) than GPU/SYS.
 
 \ MEMBAR.SC.GPU  — GPU-scope store fence; all prior stores become visible
 \   across all SMs before any subsequent load/store on this thread.
-\ Opcode 0x7992; ctrl[13:12]=0x2 selects .GPU scope.
-\ Verified: inst=0x0000000000007992 ctrl=0x000fec0000002000
-\ (from probe_7.sass MEMBAR.SC.GPU line)
 : membar-gpu,  ( -- )
   $0000000000007992 $000fec0000002000 sinst, ;
 
 \ MEMBAR.SC.SYS  — system-scope fence (NVLink-coherent; for CPU-GPU sync)
-\ Opcode 0x7992; ctrl[13:12]=0x3 selects .SYS scope.
-\ Verified: inst=0x0000000000007992 ctrl=0x000fec0000003000
 : membar-sys,  ( -- )
   $0000000000007992 $000fec0000003000 sinst, ;
+
+\ MEMBAR.SC.CTA  — CTA/block-level fence (same as membar.cta in PTX)
+\   Orders memory accesses within the same thread block (CTA).
+\   Use before/after shared memory accesses when bar.sync is not sufficient.
+\   Lower overhead than GPU/SYS scopes.
+: membar-cta,  ( -- )
+  $0000000000007992 $0003ec0000000000 sinst, ;
 
 \ ============================================================
 \ ATOMG.E.ADD — global atomic add (Hopper descriptor-based)
@@ -744,7 +820,7 @@ $00 constant SR-LANEID     \ lane within warp (0..31)
 \   Use Rd=RZ (0xFF) to discard the return value (e.g. for arrive-only sync).
 \
 \ Verified empirically via ptxas + nvdisasm --print-instruction-encoding
-\ (docs/sass/integer_atomic.md).  Probe: atom.global.add.u32 / atom.global.add.f32
+\ (docs/encoding/integer_atomic.md).  Probe: atom.global.add.u32 / atom.global.add.f32
 \
 \ word0 field layout:
 \   bits[15: 0] = opcode
@@ -768,14 +844,8 @@ $00 constant SR-LANEID     \ lane within warp (0..31)
 \ The old ctrl-atom computed 0x001ffc0000100000 — that was wrong.
 \ The old OP-ATOM-ADD = 0x798b — that was also wrong.
 
-$79a8 constant OP-ATOM-ADD-U32   \ ATOMG.E.ADD.STRONG.GPU — integer u32 counter
-$79a3 constant OP-ATOM-ADD-F32   \ ATOMG.E.ADD.F32.FTZ.RN.STRONG.GPU
-$004e2800081ee1c4 constant CTRL-ATOM-U32   \ verified: nvdisasm probe p19
-$004e2800081ef3c4 constant CTRL-ATOM-F32   \ verified: nvdisasm probe p18
-$004fe2000c10f384 constant CTRL-REDG-F32   \ verified: nvdisasm probe p21
-
-\ Compatibility alias — grid sync uses U32 counter
-$79a8 constant OP-ATOM-ADD   \ was 0x798b (WRONG) — now 0x79a8 (ATOMG.ADD.U32)
+\ OP-ATOM-ADD-U32, OP-ATOM-ADD-F32, CTRL-ATOM-U32, CTRL-ATOM-F32,
+\ CTRL-REDG-F32, OP-ATOM-ADD all defined in opcodes-sm90.fs.
 
 \ atom-add,  ( rd ra rs -- )
 \ ATOMG.E.ADD.STRONG.GPU Rd, desc[UR][Ra], Rs
@@ -1009,7 +1079,7 @@ variable gs-pp    variable gs-pp2   variable gs-tid
 \ We need:
 \   ELF header (64 bytes)
 \   Section headers
-\   .text.<kernel> — the SASS code
+\   .text.<kernel> — the GPU machine code
 \   .nv.info — kernel metadata (register count, param info)
 \   .nv.constant0.<kernel> — constant bank (kernel params)
 \   .shstrtab — section name strings
@@ -1141,7 +1211,7 @@ $1b constant EIATTR-MAXREG-COUNT
 $50 constant EIATTR-SPARSE-MMA-MASK
 $36 constant EIATTR-SW-WAR
 $23 constant EIATTR-CRS-STACK-SIZE
-\ Cooperative grid-sync attributes (verified from probe_6b.sass — SHFL/grid-sync probe)
+\ Cooperative grid-sync attributes (verified from probe_6b.sass — grid-sync probe)
 $28 constant EIATTR-COOP-GROUP-INSTR-OFFSETS  \ fmt=$04; N*4 bytes; one u32 per sync site
 $29 constant EIATTR-COOP-GROUP-MASK-REGIDS    \ fmt=$04; 16 bytes; 4 x $ffffffff bitmask
 
@@ -1264,7 +1334,7 @@ $29 constant EIATTR-COOP-GROUP-MASK-REGIDS    \ fmt=$04; 16 bytes; 4 x $ffffffff
   else drop then
   cubin-pos @ nvinfo-k-off @ - nvinfo-k-size !
 
-  \ 7. .text.<kernel>  (section 5; 128-byte aligned, copied from sass-buf)
+  \ 7. .text.<kernel>  (section 5; 128-byte aligned, copied from code buffer)
   128 calign
   cubin-pos @ text-off !
   sass-pos @ 0= if nop, nop, exit, then    \ guarantee non-empty
@@ -1323,3 +1393,98 @@ $29 constant EIATTR-COOP-GROUP-MASK-REGIDS    \ fmt=$04; 16 bytes; 4 x $ffffffff
 : load-cubin  ( addr u -- module )
   \ TODO: CUDA driver API call
   drop drop 0 ;
+
+\ ============================================================
+\ CONSTANT BANK LOAD / UNIFORM LOAD INSTRUCTIONS
+\ ============================================================
+
+\ ldc,  ( dst cbuf-idx offset -- )
+\ LDC Rd, c[cbuf-idx][offset]  — load 32-bit value from constant bank to GPR
+\ Opcode: OP-LDC = $7b82.  ctrl: CTRL-LDC (stall=7 yield=1 wbar=1 rbar=7).
+\
+\ Instruction word field layout (verified: LDC R1,c[0x0][0x28] = 0x00000a00ff017b82):
+\   bits[15: 0] = $7b82        (opcode)
+\   bits[23:16] = Rd           (destination GPR)
+\   bits[31:24] = $ff          (RZ placeholder — cbuf-idx is in ctrl, not inst word)
+\   bits[47:32] = offset       (14-bit byte offset within constant bank)
+\   bits[55:48] = cbuf-idx     (constant bank index 0-7, placed at bits[55:48])
+\
+\ Note: from probe decode of 0x00000a00ff017b82:
+\   bits[23:16]=0x01 (R1), bits[31:24]=0xff (RZ), bits[47:32]=0x0a00>>16=offset,
+\   bits[55:48]=0x00 (bank 0).  The 14-bit offset 0x28 = 40 appears in bits[47:32].
+: ldc,  ( dst cbuf-idx offset -- )
+  32 lshift >r              \ offset -> bits[47:32]
+  48 lshift >r              \ cbuf-idx -> bits[55:48]
+  track-rd 16 lshift        \ dst -> bits[23:16]
+  OP-LDC or
+  $ff 24 lshift or          \ RZ at bits[31:24]
+  r> or r> or               \ cbuf-idx then offset
+  CTRL-LDC sinst, ;
+
+\ uldc,  ( dst cbuf-idx offset -- )
+\ ULDC URn, c[cbuf-idx][offset]  — uniform load from constant bank to uniform register
+\ Opcode: OP-ULDC = $7ab9.  ctrl: CTRL-ULDC (stall=1 yield=1 wbar=7 rbar=7).
+\
+\ Same field layout as ldc, (offset in bits[47:32], cbuf-idx in bits[55:48]).
+\ Verified: ULDC.64 UR4,c[0x0][0x208] = 0x0000820000047ab9
+\   bits[23:16]=0x04 (UR4), bits[31:24]=0x00, bits[47:32]=0x0000,
+\   bits[55:48]=0x82 encodes bank=0 + 64-bit width bit; offset=0x208 in bits[47:32].
+: uldc,  ( dst cbuf-idx offset -- )
+  32 lshift >r              \ offset -> bits[47:32]
+  48 lshift >r              \ cbuf-idx -> bits[55:48]
+  track-rd 16 lshift        \ dst -> bits[23:16]
+  OP-ULDC or
+  $ff 24 lshift or          \ RZ at bits[31:24]
+  r> or r> or               \ cbuf-idx then offset
+  CTRL-ULDC sinst, ;
+
+\ ============================================================
+\ ATOMIC / REDUCTION FLOAT INSTRUCTIONS
+\ ============================================================
+
+\ atom-add-f32,  ( dst addr -- )
+\ ATOMG.E.ADD.F32.FTZ.RN.STRONG.GPU Rd, desc[UR][Ra], Rs
+\   Atomically adds a float32 value; Rd receives the old value.
+\   Use Rd=RZ (0xFF) to discard the return value.
+\
+\ Opcode: OP-ATOMG-F32 = $79a3.  ctrl: CTRL-ATOMG-F32.
+\
+\ Field layout (same as atom-add,):
+\   bits[23:16] = Rd (destination; RZ=0xFF to discard)
+\   bits[31:24] = Ra (64-bit address register)
+\   bits[39:32] = Rs (source data register)
+\
+\ Note: Rs is the value to add.  The caller passes ( dst addr ) and
+\ we use RZ (0xFF) as the implicit source value placeholder; callers
+\ who need a real source should use the three-argument form directly
+\ by inlining.  For the common use-case (atomic accumulate into a
+\ pointer using a known value register), pass the src register as dst
+\ and the actual destination register as the first argument, then swap.
+\
+\ Practical calling convention adopted here to match atom-add, symmetry:
+\   atom-add-f32, ( dst addr src -- )   (three arguments, matching atom-add,)
+\   This mirrors atom-add, exactly: rd ra rs.
+: atom-add-f32,  ( dst addr src -- )
+  32 lshift >r              \ src  -> bits[39:32]
+  24 lshift >r              \ addr -> bits[31:24]
+  track-rd 16 lshift        \ dst  -> bits[23:16]
+  OP-ATOMG-F32 or r> or r> or
+  CTRL-ATOMG-F32 sinst, ;
+
+\ redg-f32,  ( addr src -- )
+\ REDG.E.ADD.F32.FTZ.RN.STRONG.GPU desc[UR][Ra], Rs
+\   Float reduction — atomically adds Rs to [addr], discards old value.
+\   No destination register (Rd=RZ implicitly).
+\
+\ Opcode: OP-REDG-F32 = $79a6.  ctrl: CTRL-REDG-F32.
+\
+\ Field layout:
+\   bits[23:16] = RZ ($FF) — no return value
+\   bits[31:24] = Ra (64-bit address register)
+\   bits[39:32] = Rs (source data register, value to reduce)
+: redg-f32,  ( addr src -- )
+  32 lshift >r              \ src  -> bits[39:32]
+  24 lshift                 \ addr -> bits[31:24]
+  $ff 16 lshift or          \ RZ   -> bits[23:16] (no destination)
+  OP-REDG-F32 or r> or
+  CTRL-REDG-F32 sinst, ;

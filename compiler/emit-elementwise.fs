@@ -1,22 +1,22 @@
-\ emit-elementwise.fs — Element-wise SASS pattern emitters for Lithos compiler
+\ emit-elementwise.fs — Element-wise GPU instruction pattern emitters for Lithos compiler
 \
-\ Pattern layer: Forth words that call sequences of SASS instruction encoders
-\ (from emit-sass.fs) to implement each element-wise primitive's SASS pattern.
+\ Pattern layer: Forth words that call sequences of sm90 instruction encoders
+\ (from gpu/emit.fs) to implement each element-wise primitive's instruction pattern.
 \
 \ These primitives operate per-element on vectors and are trivially parallel.
-\ The compiler calls these patterns when lowering Lithos primitives to SASS.
+\ The compiler calls these patterns when lowering Lithos primitives to GPU machine code.
 
 \ ============================================================
 \ DEPENDENCIES
 \ ============================================================
-\ emit-sass.fs provides: fadd, ffma, s2r, imad, ldg, stg, exit,
+\ gpu/emit.fs provides: fadd, ffma, s2r, imad, ldg, stg, exit,
 \   bra, bra-pred, isetp-ge, isetp-lt, iadd3, mov-imm, shf-r-imm,
 \   rcp, rsqrt, lg2, ex2, sqrt, sin, cos, nop,
 \   sass-pos, sass-buf, sinst,
 \   SR-TID-X, SR-CTAID-X
 \ parser.fs provides: rreg+, freg+, preg+, rdreg+, next-rreg, next-freg
 
-s" /home/ubuntu/lithos/sass/emit-sass.fs" included
+s" /home/ubuntu/lithos/gpu/emit.fs" included
 
 \ ============================================================
 \ CONSTANTS
@@ -32,7 +32,7 @@ $3f800000 constant FP32-ONE       \ 1.0
 $ff constant RZ
 
 \ ============================================================
-\ FMUL — MISSING FROM emit-sass.fs
+\ FMUL — MISSING FROM gpu/emit.fs
 \ ============================================================
 \ FMUL Rd, Ra, Rb — FP32 multiply (register form)
 \ Opcode: 0x220 -> $7220 (FADD is $7221; FMUL is adjacent)
@@ -53,26 +53,24 @@ $ff constant RZ
 \ imm32 in bits[63:32], Ra in bits[31:24], Rd in bits[23:16]
 \ Uses ctrl-fadd (same scheduling as FADD-imm).
 \
-\ NOTE: FMUL-imm opcode unverified. Using $7420 by analogy with
-\ IMAD ($7c24) vs IMAD-IMM ($7424) pattern — immediate forms
-\ have bit 10 set. If incorrect, replace with probed value.
+\ Opcode: OP-FMUL-IMM = $7820 (probe-verified in opcodes-sm90.fs).
 
 : fmul-imm,  ( rd ra imm32 -- )
   32 lshift >r              \ imm32 -> bits[63:32]
   24 lshift >r              \ ra    -> bits[31:24]
   track-rd 16 lshift        \ rd    -> bits[23:16]
-  $7420 or r> or r> or
+  OP-FMUL-IMM or r> or r> or
   ctrl-fadd sinst, ;
 
 \ FADD Rd, Ra, imm32 — FP32 add with 32-bit immediate
 \ Same encoding pattern as FMUL-imm but with FADD opcode family.
-\ NOTE: FADD-imm opcode unverified. Using $7421.
+\ Opcode: OP-FADD-IMM = $7421 (probe-verified in opcodes-sm90.fs).
 
 : fadd-imm,  ( rd ra imm32 -- )
   32 lshift >r              \ imm32 -> bits[63:32]
   24 lshift >r              \ ra    -> bits[31:24]
   track-rd 16 lshift        \ rd    -> bits[23:16]
-  $7421 or r> or r> or
+  OP-FADD-IMM or r> or r> or
   ctrl-fadd sinst, ;
 
 \ SHF.L.U32 Rd, Rs, shamt, RZ — shift left by immediate
@@ -133,12 +131,12 @@ $ff constant RZ
 \ Load a 64-bit pointer parameter from constant bank c[0x0][offset].
 \ Offset = 0x160 + param_idx * 8 (CUDA kernel param base on Hopper).
 \
-\ MISSING ENCODER: Neither uldc, nor ldc, exists in emit-sass.fs.
+\ MISSING ENCODER: Neither uldc, nor ldc, exists in gpu/emit.fs.
 \ Workaround: use two MOV-IMM instructions to construct the address,
 \ or use IMAD-IMM as a register move. For now, emit placeholder NOPs
 \ and document the gap.
 \
-\ TODO: Add LDC or ULDC encoder to emit-sass.fs:
+\ TODO: Add LDC or ULDC encoder to gpu/emit.fs:
 \   ULDC URn, c[0x0][offset]  — opcode $7ab9
 \   LDC  Rn, c[0x0][offset]   — opcode $7b82
 
@@ -355,8 +353,8 @@ variable stride-loop-bra    0 stride-loop-bra !   \ sass-pos of forward BRA (for
 \ BRA encoding: signed offset in bits[63:32] of inst word (bytes 4-7 of 16-byte slot).
 variable patch-addr   variable patch-off
 : patch-forward-bra  ( -- )
-  sass-pos @  stride-loop-bra @  -  16 -  patch-off !
-  stride-loop-bra @ 4 + sass-buf +        patch-addr !
+  sass-pos @  stride-loop-bra @  -  16 -  4 /  patch-off !
+  stride-loop-bra @ 4 + sass-buf +              patch-addr !
   patch-off @           patch-addr @ c!
   patch-off @  8 rshift patch-addr @ 1+ c!
   patch-off @ 16 rshift patch-addr @ 2 + c!

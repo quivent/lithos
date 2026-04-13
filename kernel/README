@@ -1,0 +1,96 @@
+lithos.ko — minimal GPU kernel module for GH200 inference
+==========================================================
+
+WHAT IT IS
+----------
+lithos.ko is a Linux kernel module that replaces nvidia.ko for the Lithos
+GPU inference engine.  It targets the NVIDIA GH200 (Grace Hopper Superchip,
+PCI device 10de:2342) running Linux 6.8 on ARM64.
+
+It contains no MIG, no NvLink P2P, no display, no NVENC, no UVM, no
+telemetry, no virtualization.  It does exactly 4 things.
+
+
+WHAT IT REPLACES
+----------------
+nvidia.ko is 14+ MB and implements a full GPU resource manager (RM), a
+display engine, UVM, NvLink P2P, MIG, and ~200 ioctls.  For a dedicated
+inference engine none of that is needed.
+
+lithos.ko strips this to the hardware essentials:
+  - PCI probe and BAR mapping (4 functions)
+  - VRAM allocation (bump allocator over coherent HBM)
+  - GPFIFO channel creation (ring buffer + hardware registration)
+  - USERD doorbell mapping (mmap one 512-byte page; launch = 3 stores)
+  - ATS/C2C link confirmation (GH200 specific)
+
+
+THE 4-IOCTL INTERFACE  (/dev/lithos0)
+--------------------------------------
+
+  LITHOS_IOCTL_ALLOC_VRAM   _IOWR('L', 1, struct lithos_alloc)
+    Allocate GPU-accessible memory.  On GH200 with NVLink-C2C the coherent
+    HBM (BAR4, 128 GB) is directly accessible from both CPU and GPU.  The
+    returned gpu_va is the GPU virtual address for use in pushbuffers.
+
+  LITHOS_IOCTL_CREATE_CHANNEL  _IOR('L', 2, struct lithos_channel)
+    Allocate a GPFIFO ring buffer and register it with the hardware.
+    Returns the GPU VA of the ring, the entry count, and the channel ID.
+
+  LITHOS_IOCTL_MAP_USERD   _IOR('L', 3, struct lithos_userd)
+    Prepare to mmap the 512-byte USERD doorbell page for the given channel.
+    After this ioctl, call mmap(fd, NULL, 512, PROT_WRITE, MAP_SHARED, 0)
+    to get the CPU VA.  Write the new GPPut value to offset 0x8c within
+    that page to submit GPFIFO entries with zero syscalls.
+
+  LITHOS_IOCTL_FREE_VRAM   _IOW('L', 4, struct lithos_free)
+    Release a VRAM allocation.
+
+
+LAUNCH SEQUENCE (after setup)
+------------------------------
+  1. Fill GPFIFO entries in the ring (8 bytes each, CPU writes to HBM)
+  2. Compute new put pointer: put = (put + n) & (entries - 1)
+  3. *(uint32_t *)(userd_va + 0x8c) = put;   // doorbell — 0 syscalls
+
+
+HOPPER / GSP REQUIREMENT
+--------------------------
+Hopper (GH100/GH200) runs the GPU Resource Manager inside a dedicated
+RISC-V coprocessor (GSP) on the GPU die.  The host CPU cannot allocate
+channels or configure the GPU MMU without GSP.  This is the single
+largest piece of work remaining:
+
+  lithos_init.c:lithos_gsp_load() — boots GSP firmware (gsp_ga10x.bin)
+  lithos_channel.c                — sends GSP RPC to allocate channel
+
+Reference implementation:
+  /usr/src/nvidia-srv-580.105.08/  (on this system)
+  open-gpu-kernel-modules/src/nvidia/src/kernel/gpu/gsp/kernel_gsp.c
+  open-gpu-kernel-modules/src/nvidia/src/kernel/gpu/gsp/arch/hopper/kernel_gsp_gh100.c
+
+The TODO comments in lithos_init.c and lithos_channel.c name the exact
+functions and data structures to port.
+
+
+GH200 HARDWARE FACTS (confirmed from this system)
+--------------------------------------------------
+  PCI device:  10de:2342  (GH100 self-hosted, range 0x2340–0x237f)
+  BAR0:  0x44080000000  16 MB   MMIO registers
+  BAR2:  0x44000000000   2 GB   FB aperture window
+  BAR4:  0x42000000000 128 GB   Coherent HBM (NVLink-C2C, CPU PA == GPU VA)
+  GSP firmware: /lib/firmware/nvidia/580.105.08/gsp_ga10x.bin (74 MB)
+  Kernel: 6.8.0-1046-nvidia-64k / ARM64
+
+
+BUILD
+-----
+  cd /home/ubuntu/lithos/kernel
+  make
+
+The module builds against /lib/modules/$(uname -r)/build.
+Kernel headers are at /usr/src/linux-headers-6.8.0-1046-nvidia-64k.
+
+To load (after unloading nvidia.ko — requires stopping all CUDA processes):
+  rmmod nvidia_uvm nvidia_drm nvidia_modeset nvidia
+  insmod lithos.ko

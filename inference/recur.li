@@ -5,24 +5,42 @@
 \ Replaces: recurrence.ptx, recurrence_rollback.ptx, conv1d.ptx, fused_deltanet.ptx
 
 \ ---- 1. conv1d_infer: Causal 1D convolution for single-token inference ----
-\ Kernel size 4. Per-head, applied independently to Q, K, V after projection.
-\ Layout: history[channel*4 + tap], weights[channel*4 + tap], tap in {0,1,2,3}
+\ Kernel size 4 (4 taps). Per-head, applied independently to Q, K, V.
+\ Layout: weights[4, D] planar — weights[k*D+i] is tap k, channel i.
+\         state[3, D] planar — state[k*D+i] is history t-(k+1), channel i.
 \ Launch: gridDim.x = ceil(N/256), blockDim.x = 256
-\ Each thread handles one channel:
-\   output = sum(weights[ch*4+j] * history[ch*4+j]) for j=0..3
-\   then shift: history[ch*4+0..2] = history[ch*4+1..3], history[ch*4+3] = input
-\ NOTE: Compiler now emits mad.lo.u32 for A*imm+B index expressions.
-\ The hand-written PTX fallback in recur.ptx is no longer required.
-fn conv1d_infer input history weights -> output
+\ Each thread handles one channel i:
+\   output[i] = w[0,i]*x[i] + w[1,i]*state[0,i] + w[2,i]*state[1,i] + w[3,i]*state[2,i]
+\   shift: state[2,i] = state[1,i], state[1,i] = state[0,i], state[0,i] = x[i]
+fn conv1d_infer x weights state -> output
     param N u32
     each i
         if>= i N exit
-        \ base = i * 4 (stride through interleaved tap storage)
-        \ acc = w[base+0]*h[base+0] + w[base+1]*h[base+1]
-        \      + w[base+2]*h[base+2] + w[base+3]*h[base+3]
-        \ shift: h[base+0]=h[base+1], h[base+1]=h[base+2],
-        \        h[base+2]=h[base+3], h[base+3]=input[i]
-        \ Hand-unrolled in PTX below; Lithos lacks computed-offset indexing.
+        \ Load current input and tap-0 weight
+        xi = x [ i ]
+        w0 = weights [ i ]
+        acc = w0 * xi
+        \ Compute offsets for tap 1: k=1 -> offset = N + i
+        off1 = N + i
+        w1 = weights [ off1 ]
+        s0 = state [ i ]
+        fma acc w1 s0 acc
+        \ Compute offsets for tap 2: k=2 -> offset = N * 2 + i
+        off2 = off1 + N
+        w2 = weights [ off2 ]
+        s1 = state [ off1 ]
+        fma acc w2 s1 acc
+        \ Compute offsets for tap 3: k=3 -> offset = N * 3 + i
+        off3 = off2 + N
+        w3 = weights [ off3 ]
+        s2 = state [ off2 ]
+        fma acc w3 s2 acc
+        \ Store result
+        output [ i ] = acc
+        \ Shift state: drop oldest (state[2]), push new input
+        state [ off2 ] = s1
+        state [ off1 ] = s0
+        state [ i ] = xi
 
 \ ---- 2. gate_sigmoid: beta[i] = sigmoid(logit[i]) ----
 \ sigmoid(x) = 1 / (1 + exp(-x))

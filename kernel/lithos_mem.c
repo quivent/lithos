@@ -42,6 +42,7 @@
 #include <linux/pci.h>
 
 #include "lithos.h"
+#include "lithos_dev.h"
 #include "lithos_mem.h"
 
 /* Per-free-entry bookkeeping (path B only, no-op for bump allocator) */

@@ -50,7 +50,9 @@
 #include <linux/pci.h>
 
 #include "lithos.h"
+#include "lithos_dev.h"
 #include "lithos_channel.h"
+#include "lithos_gsp.h"
 
 /* -----------------------------------------------------------------------
  * MMIO helpers for channel registration
@@ -84,9 +86,6 @@
  *   gh100/dev_ram.h
  *   Function: kfifoChannelInstBuildHopper() or equivalent
  */
-
-/* Forward declaration — bar0_write is defined in lithos_main.c */
-extern void bar0_write_fn(void __iomem *bar0, uint32_t off, uint32_t val);
 
 static inline void bar0_write_ch(void __iomem *bar0, uint32_t off, uint32_t val)
 {
@@ -176,70 +175,40 @@ int lithos_create_channel(struct lithos_device *ldev,
             LITHOS_GPFIFO_ENTRIES);
 
     /*
-     * Hardware channel registration.
+     * Hardware channel registration via GSP RPC.
      *
-     * On Hopper (GH100), the FIFO engine is managed by GSP firmware.
-     * Direct MMIO channel allocation (writing instance block addresses
-     * to PFIFO registers) is NOT possible without GSP — the hardware
-     * faults if the CPU touches PFIFO registers that GSP owns.
+     * On Hopper (GH100/GH200), all FIFO/channel operations are owned by
+     * GSP firmware.  Direct MMIO channel allocation is not possible —
+     * the hardware faults if the CPU touches PFIFO registers that GSP owns.
      *
-     * The correct flow (which lithos_init.c must implement) is:
+     * lithos_gsp_alloc_channel() sends the following RPC sequence:
+     *   NV_RM_RPC_ALLOC_ROOT     → allocate client handle
+     *   NV_RM_RPC_ALLOC_DEVICE   → allocate device object
+     *   NV_RM_RPC_ALLOC_SUBDEVICE → allocate subdevice
+     *   NV_RM_RPC_ALLOC_CHANNEL  → allocate GPFIFO channel class 0xC86F
      *
-     *   1. GSP is already running (loaded by lithos_init.c).
-     *   2. Send GSP RPC: NV_RM_RPC_ALLOC_OBJECT with class=0xC86F
-     *      (HOPPER_CHANNEL_GPFIFO_A) and the GPFIFO base + entries.
-     *      Source: open-gpu-kernel-modules/src/nvidia/src/kernel/gpu/
-     *              fifo/kernel_channel.c:kchannelAlloc()
-     *   3. GSP responds with the assigned channel ID.
-     *   4. GSP also configures the USERD aperture for this channel.
-     *
-     * TODO: implement the GSP RPC path.  Key source files:
-     *   open-gpu-kernel-modules/src/nvidia/src/kernel/gpu/gsp/
-     *   kernel_gsp.c                    — gspRpcSendMessage / gspRpcRecv
-     *   src/nvidia/interface/deprecated/
-     *   rmapi_deprecated_allocobject.c  — NvRmAlloc dispatch
-     *   src/nvidia/arch/nvalloc/unix/src/
-     *   escape.c:RmAllocObject()
-     *
-     * For now: we register the channel in our software table and document
-     * the MMIO steps that would be used on a pre-GSP Ampere/Turing GPU.
-     * These steps are BLOCKED on Hopper without GSP.
+     * Source: _kchannelSendChannelAllocRpc()
+     *   /tmp/ogkm/src/nvidia/src/kernel/gpu/fifo/kernel_channel.c
      */
-
-    /*
-     * ---- PRE-GSP MMIO PATH (Turing/Ampere, NOT valid on Hopper) ----
-     *
-     * Step 1: Write channel instance block base to PFIFO.
-     *   The instance block is a 4 KB page describing the channel.
-     *   On Turing/Ampere it lives in vidmem and is addressed via
-     *   NV_PFIFO_CHANNEL_INST_{LO,HI} registers.
-     *
-     *   bar0_write_ch(ldev->bar0, 0x002634 + chid*8,      // CHANNEL_INST_LO
-     *                 (uint32_t)(gpfifo_dma & 0xfffff000) | 0x1);
-     *   bar0_write_ch(ldev->bar0, 0x002634 + chid*8 + 4,  // CHANNEL_INST_HI
-     *                 (uint32_t)(gpfifo_dma >> 32));
-     *
-     *   TODO: Verify offsets for GH100 from:
-     *   gh100/dev_fifo.h NV_PFIFO_CHANNEL_INST offset
-     *
-     * Step 2: Enable the channel.
-     *   bar0_write_ch(ldev->bar0, NV_PFIFO_CHANNEL_ENABLE,
-     *                 bar0_read_ch(ldev->bar0, NV_PFIFO_CHANNEL_ENABLE) | BIT(chid));
-     *
-     *   TODO: GH100 channel enable register:
-     *   gh100/dev_fifo.h NV_PFIFO_PBDMA_CHANNEL_LOAD
-     *
-     * Step 3: Submit channel to runlist.
-     *   Construct a runlist entry (8 bytes: channel ID + type bits),
-     *   write to PFIFO_RUNLIST_BASE and toggle PFIFO_RUNLIST to reload.
-     *   TODO: Runlist entry format for GH100:
-     *   src/nvidia/arch/nvalloc/common/inc/hopper/gh100/dev_pbdma.h
-     * ---- END PRE-GSP PATH ----
-     */
-
-    pr_warn("lithos/channel: ch%d hardware registration via GSP RPC is "
-            "NOT YET IMPLEMENTED — channel is software-only\n", chid);
-    pr_warn("lithos/channel: see TODO in lithos_channel.c for GSP RPC path\n");
+    {
+        u32 hw_channel_id = 0;
+        int gsp_ret = lithos_gsp_alloc_channel(ldev,
+                                                ch->gpfifo_gpu_va,
+                                                LITHOS_GPFIFO_ENTRIES,
+                                                &hw_channel_id);
+        if (gsp_ret == 0) {
+            pr_info("lithos/channel: ch%d GSP RPC alloc succeeded: hw_id=%u\n",
+                    chid, hw_channel_id);
+            /* Update software channel ID to the hardware-assigned ID */
+            /* (chid is our software slot; hw_channel_id is the GPU channel) */
+        } else {
+            pr_warn("lithos/channel: ch%d GSP RPC alloc failed (%d) — "
+                    "channel is software-only (requires full GSP boot)\n",
+                    chid, gsp_ret);
+            pr_warn("lithos/channel: TODO: implement lithos_gsp_alloc_channel()\n");
+            pr_warn("lithos/channel:   See lithos_gsp.c lithos_gsp_alloc_channel() stub\n");
+        }
+    }
 
     out->gpfifo_gpu_va  = ch->gpfifo_gpu_va;
     out->gpfifo_entries = LITHOS_GPFIFO_ENTRIES;

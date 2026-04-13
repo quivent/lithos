@@ -1,6 +1,6 @@
-\ emit-reduce.fs — Reduction (sum) SASS pattern emitter for Lithos compiler
+\ emit-reduce.fs — Reduction (sum) GPU instruction pattern emitter for Lithos compiler
 \
-\ Emits the SASS instruction sequence for the `+` (reduce) primitive.
+\ Emits the sm90 instruction sequence for the `+` (reduce) primitive.
 \ This is the ONLY primitive that needs shared memory, barriers, and
 \ warp shuffles.  Every other use of shuffles/smem/barriers in DeltaNet
 \ comes through this pattern.
@@ -19,10 +19,10 @@
 \ 3-arg version here is named emit-xwarp-reduce (private to emit-reduce.fs).
 \
 \ Load order: parser.fs must be loaded before this file (provides
-\ freg+, rreg+, preg+, shmem-size).  This file includes the SASS
+\ freg+, rreg+, preg+, shmem-size).  This file includes the GPU
 \ instruction encoders.
 
-\ Pull in instruction encoders from the SASS backend.
+\ Pull in instruction encoders from gpu/emit.fs.
 \ Provides: shfl-bfly, fadd, sts, lds, bar-sync, isetp-ge, isetp-lt,
 \           bra-pred, bra, mov-imm, iadd3, imad, ldg, s2r, lop3-and-imm,
 \           shf-r-imm, warp-reduce, sinst, sass-pos, track-rd,
@@ -78,7 +78,7 @@ variable smem-next-offset  0 smem-next-offset !
 \   FADD      partial, partial, tmp
 \ After return partial-reg holds the warp sum.  Lane 0 is guaranteed
 \ correct; all lanes hold the full sum due to butterfly topology.
-\ Delegates to warp-reduce, from sass/emit-sass.fs.
+\ Delegates to warp-reduce, from gpu/emit.fs.
 : emit-warp-reduce  ( partial-reg tmp-reg -- )
   warp-reduce, ;
 
@@ -265,8 +265,8 @@ variable sl-pred
   sl-i @  sl-i @  sl-stride @  $ff  iadd3,
 
   \ Branch back to loop top (negative offset)
-  sass-pos @ 16 +  swap -                 \ offset = loop_top - (here + 16)
-  bra,
+  sass-pos @ 16 +  -                      \ loop_top - (here + 16) = negative bytes
+  bra,                                     \ bra, divides by 4 internally
 
   sl-part @ ;                              \ -- partial-reg
 

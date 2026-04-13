@@ -15,13 +15,15 @@ fn rope q k -> q_out k_out
     param pos u32
     each i
 
-    \ Compute rotation angle: freq = 1 / (10000 ^ (2*i / d_head))
+    \ Compute rotation angle: theta_i = 1/(10000^(2i/d)) = exp2(-log2(10000)*2i/d)
+    \ log2(10000) = 13.2877
     u32>f32 fi i
     u32>f32 fd d_head
-    freq_exp = fi * 2.0 / fd
-    \ angle = pos * 10000^(-freq_exp) approximated as pos * freq_exp (scaled)
+    freq_ratio = fi * 2.0 / fd              \ 2*i / d
+    freq = freq_ratio * -13.2877            \ -log2(10000) * 2i/d
+    theta_i = exp2 freq                     \ MUFU.EX2: theta_i = 10000^(-2i/d)
     u32>f32 fpos pos
-    angle = fpos * freq_exp
+    angle = fpos * theta_i                  \ pos * theta_i
 
     cos cs angle
     sin sn angle
@@ -72,15 +74,17 @@ fn attention_score q k_cache v_cache -> output
     if>= tid d_head exit
 
     \ GQA: map q_head -> kv_head
-    \ head = blockIdx.x (injected as r0 in each context)
-    \ kv_head = head * n_kv_heads / n_q_heads — approximated as head for MHA;
-    \ use integer division via shift when ratio is power of 2.
-    \ Here we store head index in a local via mad trick: head = r0
-    mov head_u tid   \ tid is global here; head comes from block dim context
     \ head index is ctaid.x = r0; tid.x = r2 in each preamble
     \ Reconstruct: lane = tid % d_head, head = tid / d_head
     shr head tid d_head   \ head = global_tid / d_head (approximate for blockDim == d_head)
     and lane tid 255      \ lane = tid & (d_head-1); works when d_head is power-of-2
+
+    \ GQA ratio = n_q_heads / n_kv_heads (e.g. 3 for Qwen 2.5 27B: 48Q / 16KV)
+    \ kv_head = head / gqa_ratio via integer division
+    \ Compute gqa_ratio = n_q_heads / n_kv_heads, then kv_head = head / gqa_ratio
+    \ Integer division: kv_head = head * n_kv_heads / n_q_heads
+    mul head_kv head n_kv_heads
+    div kv_head head_kv n_q_heads
 
     \ Scale = 1 / sqrt(d_head)
     u32>f32 fd_head d_head
@@ -105,8 +109,7 @@ fn attention_score q k_cache v_cache -> output
 
         \ k_cache layout: [seq_len, n_kv_heads, d_head]
         \ index = kv_pos * n_kv_heads * d_head + kv_head * d_head + lane
-        \ Simplified: kv_head == head for MHA; for GQA divide head by ratio
-        mad k_base kv_pos n_kv_heads head     \ kv_pos*n_kv_heads + head
+        mad k_base kv_pos n_kv_heads kv_head  \ kv_pos*n_kv_heads + kv_head
         mad k_idx  k_base d_head lane         \ * d_head + lane
         k_val = k_cache [ k_idx ]
         smem_k [ lane ] = k_val

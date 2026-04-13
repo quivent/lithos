@@ -113,7 +113,7 @@ fn gptq_gemv W_packed scales x -> y
         xval7 = x [ xi7 ]
         fma acc fnib7 xval7 acc
     endfor
-    \ Warp reduction across 32 lanes
+    \ Warp reduction across 32 lanes (butterfly; all lanes of each warp sum)
     shfl.bfly t0 acc 16
     acc = acc + t0
     shfl.bfly t1 acc 8
@@ -124,7 +124,48 @@ fn gptq_gemv W_packed scales x -> y
     acc = acc + t3
     shfl.bfly t4 acc 1
     acc = acc + t4
-    \ Store result (lane 0 of each warp holds the warp partial sum)
-    \ Full block reduction would require shared memory barrier + tree reduce
-    \ For now: lane 0 of warp 0 writes y[row_idx]
-    y [ row_idx ] = acc
+    \ Cross-warp reduction: 8 warps (blockDim=256) reduce to one value.
+    \ Step 1: compute warp_id and lane_id from tid.x
+    \ tid_local = tid.x (already in tid_local; recompute for clarity)
+    \ warp_id = tid_local >> 5
+    shr warp_id tid_local 5
+    \ lane_id = tid_local & 31
+    and lane_id tid_local 31
+    \ Step 2: lane 0 of each warp stores partial sum to smem[warp_id]
+    \ Guard: skip STS if lane_id != 0 (i.e. lane_id >= 1)
+    if>= lane_id 1 skip_sts
+    smem_reduce [ warp_id ] = acc
+    label skip_sts
+    \ Step 3: block-wide barrier — all warp partial sums now in smem
+    bar.sync
+    \ Step 4: first warp (tid_local < 32) loads and butterfly-reduces
+    \ Default: partial = 0.0 for threads tid >= 8 (inactive warp slots)
+    warp_acc = 0.0
+    \ Only threads 0..7 (one per warp slot) load; tid >= 8 contribute 0.0
+    if>= tid_local 8 skip_lds
+    warp_acc = smem_reduce [ tid_local ]
+    label skip_lds
+    \ Butterfly reduce within first warp (tid_local < 32 participate)
+    \ Threads with tid_local >= 32 are in other warps and hold 0.0 anyway.
+    shfl.bfly w0 warp_acc 16
+    warp_acc = warp_acc + w0
+    shfl.bfly w1 warp_acc 8
+    warp_acc = warp_acc + w1
+    shfl.bfly w2 warp_acc 4
+    warp_acc = warp_acc + w2
+    shfl.bfly w3 warp_acc 2
+    warp_acc = warp_acc + w3
+    shfl.bfly w4 warp_acc 1
+    warp_acc = warp_acc + w4
+    \ Step 5: thread 0 stores final sum to smem[0]
+    if>= tid_local 1 skip_final_sts
+    smem_reduce [ 0 ] = warp_acc
+    label skip_final_sts
+    \ Step 6: second barrier — broadcast result now in smem[0]
+    bar.sync
+    \ Step 7: all threads load broadcast result from smem[0]
+    result = smem_reduce [ 0 ]
+    \ Step 8: thread 0 (lane 0 of warp 0) stores to output
+    if>= tid_local 1 skip_store
+    y [ row_idx ] = result
+    label skip_store

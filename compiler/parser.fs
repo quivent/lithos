@@ -29,7 +29,7 @@ variable li-hosts    0 li-hosts !
 
 \ ---- Current function name ---------------------------------------------------
 \ li-name-buf, li-name-len, li-set-name, li-name$ are defined in
-\ sass/emit-sass.fs (canonical, loaded before this file).
+\ gpu/emit.fs (canonical, loaded before this file).
 
 \ ---- Symbol table: up to 64 variables ----
 \ kind: 0=input-ptr 1=output-ptr 2=local-f32 3=each-var 4=local-u32
@@ -106,8 +106,9 @@ variable next-label  0 next-label !
 
 \ ---- For-loop stack (nesting up to 8 deep) -----------------------------------
 8 constant MAX-FOR
-create for-labels MAX-FOR cells allot    \ label number
+create for-labels MAX-FOR cells allot    \ label number (reused for loop-top sass-pos)
 create for-counters MAX-FOR cells allot  \ sym index of counter
+create for-bra-pos MAX-FOR cells allot   \ sass-pos of forward-branch placeholder (for patching)
 variable for-depth  0 for-depth !
 
 \ ---- Keyword string constants ------------------------------------------------
@@ -174,7 +175,7 @@ create k-f32u32   7 allot   s" f32>u32" k-f32u32 swap move
 create k-u32f32   7 allot   s" u32>f32" k-u32f32 swap move
 create k-s32f32   7 allot   s" s32>f32" k-s32f32 swap move
 
-\ ---- Param counting (used by cubin-wrap.fs) ----------------------------------
+\ ---- Param counting (used by elf-wrap.fs) ----------------------------------
 : count-ptr-params ( -- n )
     0 n-syms @ 0 ?do
         i sym-kind@ dup 0 = swap 1 = or if 1+ then
@@ -183,8 +184,8 @@ create k-s32f32   7 allot   s" s32>f32" k-s32f32 swap move
 : count-all-params ( -- n )
     count-ptr-params n-sparams @ + ;
 
-\ ---- SASS emitter stubs (overridden when emit-sass.fs is loaded) -------------
-\ These let the parser compile even without the SASS backend.
+\ ---- GPU emitter stubs (overridden when gpu/emit.fs is loaded) -------------
+\ These let the parser compile even without the GPU backend.
 : s2r,       ( rd sr -- )     2drop ;
 : imad,      ( rd r1 r2 r3 -- ) 2drop 2drop ;
 : imad-imm,  ( rd r1 imm -- ) drop 2drop ;
@@ -193,11 +194,19 @@ create k-s32f32   7 allot   s" s32>f32" k-s32f32 swap move
 : isetp-ge,  ( pd r1 r2 -- ) drop 2drop ;
 : isetp-lt,  ( pd r1 r2 -- ) drop 2drop ;
 : bra-pred,  ( off pred -- ) 2drop ;
+: bra,       ( byte-offset -- ) drop ;
 : ldg-off,   ( rd ra off -- ) drop 2drop ;
 : stg-off,   ( ra rs off -- ) drop 2drop ;
 : exit,      ( -- ) ;
 : nop,       ( -- ) ;
+: shf-r-imm,    ( rd rs shamt -- ) drop 2drop ;
+: shf-l-imm,    ( rd rs shamt -- ) drop 2drop ;
+: lop3-and-imm, ( rd rs imm32 -- ) drop 2drop ;
+: lop3-or-imm,  ( rd rs imm32 -- ) drop 2drop ;
+: lop3-xor-imm, ( rd rs imm32 -- ) drop 2drop ;
+: iadd3,     ( rd rs1 rs2 rs3 -- ) 2drop 2drop ;
 variable sass-pos  0 sass-pos !
+create sass-buf 16 allot   \ stub buffer (overridden by gpu/emit.fs)
 
 \ ---- IEEE 754 float encoding -------------------------------------------------
 \ Convert a float string like "1.0" or "0.5" to IEEE 754 hex "0f3F800000"
@@ -435,7 +444,6 @@ variable fc-hex
         fc-freg @ 0 mov-imm,
         fc-freg @
     then ;
-            drop
 
 \ Emit an integer constant into an r32 register
 variable ic-rreg
@@ -664,6 +672,7 @@ variable for-start-is-reg   \ -1 if start is a register, 0 if literal
 variable for-bound-val
 variable for-bound-is-reg
 variable for-step-val
+variable for-step-is-reg    \ -1 if step is a register, 0 if literal
 variable for-label-num
 
 : emit-for-v2 ( -- )
@@ -701,9 +710,10 @@ variable for-label-num
 
     \ Parse step
     src-token 2dup is-number? if
-        parse-uint for-step-val !
+        parse-uint for-step-val ! 0 for-step-is-reg !
     else
-        sym-find dup -1 <> if sym-reg@ else drop 1 then for-step-val !
+        sym-find dup -1 <> if sym-reg@ -1 else drop 1 0 then
+        for-step-is-reg ! for-step-val !
     then
 
     \ Allocate label
@@ -716,34 +726,61 @@ variable for-label-num
         1 for-depth +!
     then
 
-    \ SASS: mov-imm counter, start;  record loop-top sass-pos;
-    \       isetp-ge pred, counter, bound;  bra-pred end_offset pred
+    \ GPU: mov-imm counter, start;  record loop-top sass-pos;
+    \      isetp-ge pred, counter, bound;  bra-pred end_offset pred
     for-start-is-reg @ if
         \ counter = start-reg: use imad-imm with imm=0 to copy
         for-counter-reg @ for-start-val @ 0 imad-imm,
     else
         for-counter-reg @ for-start-val @ mov-imm,
     then
-    \ Record top-of-loop position (in sass-pos units = bytes)
+    \ Record top-of-loop position (in code buffer bytes)
     sass-pos @ for-depth @ 1- cells for-labels + !   \ reuse label slot for sass-pos
     preg+ >r
-    \ Bound: SASS isetp-ge needs a register; use imad-imm to materialize if literal
+    \ Bound: isetp-ge needs a register; use imad-imm to materialize if literal
     for-bound-is-reg @ 0= if
         rreg+ dup for-bound-val @ mov-imm,
         r@ for-counter-reg @ swap isetp-ge,
     else
         r@ for-counter-reg @ for-bound-val @ isetp-ge,
     then
+    \ Save position of forward-branch placeholder for patching in emit-endfor
+    sass-pos @ for-depth @ 1- cells for-bra-pos + !
     \ Emit placeholder bra-pred (offset 0 for now; endfor will patch)
     0 r> bra-pred, ;
+
+variable endfor-loop-top
+variable endfor-counter
+variable endfor-bra-patch
+variable endfor-patch-off
 
 : emit-endfor ( -- )
     for-depth @ 0= if exit then
     -1 for-depth +!
-    for-depth @ cells for-labels + @ >r
-    for-depth @ cells for-counters + @ >r
-    r@ r@ for-step-val @ 0 imad,
-    r> drop r> drop ;
+    for-depth @ cells for-labels   + @ endfor-loop-top  !
+    for-depth @ cells for-counters + @ endfor-counter   !
+    for-depth @ cells for-bra-pos  + @ endfor-bra-patch !
+    \ Emit counter increment: counter += step
+    for-step-is-reg @ if
+        \ step is a register — iadd3 counter, counter, step-reg, RZ
+        endfor-counter @ dup for-step-val @ $ff iadd3,
+    else
+        \ step is a literal — materialize into temp reg, then iadd3
+        rreg+ dup for-step-val @ mov-imm,
+        >r endfor-counter @ dup r> $ff iadd3,
+    then
+    \ Emit back-branch to loop top
+    \ byte-offset = loop-top - (current-pos + 16)
+    endfor-loop-top @ sass-pos @ - 16 -
+    bra,
+    \ Patch forward-branch placeholder to jump here (past the loop)
+    \ offset = sass-pos - (bra-patch-pos + 16), in dwords, stored at bytes [4..7]
+    sass-pos @ endfor-bra-patch @ - 16 - 4 / endfor-patch-off !
+    endfor-bra-patch @ 4 + sass-buf + >r
+    endfor-patch-off @           r@ c!
+    endfor-patch-off @  8 rshift r@ 1+ c!
+    endfor-patch-off @ 16 rshift r@ 2 + c!
+    endfor-patch-off @ 24 rshift r> 3 + c! ;
 
 \ ==============================================================================
 \ FEATURE: STRIDE LOOP
@@ -846,7 +883,19 @@ variable bw-op-len
 : emit-bw-instr ( op-addr op-u -- )
     dup bw-op-len ! bw-op-buf swap move
     parse-bw-args
-    ;
+    \ Dispatch on op-name to emit the actual GPU instruction
+    bw-op-buf bw-op-len @
+    2dup s" shr" compare 0= if 2drop
+        bw-dst @ bw-src1 @ bw-src2 @ shf-r-imm, exit then
+    2dup s" shl" compare 0= if 2drop
+        bw-dst @ bw-src1 @ bw-src2 @ shf-l-imm, exit then
+    2dup s" and" compare 0= if 2drop
+        bw-dst @ bw-src1 @ bw-src2 @ lop3-and-imm, exit then
+    2dup s" or"  compare 0= if 2drop
+        bw-dst @ bw-src1 @ bw-src2 @ lop3-or-imm, exit then
+    2dup s" xor" compare 0= if 2drop
+        bw-dst @ bw-src1 @ bw-src2 @ lop3-xor-imm, exit then
+    2drop ; \ unknown op — no-op
 
 : emit-shr  s" shr" emit-bw-instr ;
 : emit-shl  s" shl" emit-bw-instr ;
@@ -901,7 +950,7 @@ variable shfl-src-freg
             sym-reg@ shfl-src-freg !
             rreg+ dup shfl-src !
             1 shfl-src-is-float !
-            \ float src: handled by SASS shfl
+            \ float src: handled by shfl-bfly
             \ float src: no PTX emission needed
         else sym-reg@ shfl-src ! then
     then
@@ -913,7 +962,7 @@ variable shfl-src-freg
         sym-find dup -1 <> if sym-reg@ shfl-off ! else drop 0 shfl-off ! then
     then
 
-    \ SASS: shfl-bfly
+    \ GPU: shfl-bfly
     shfl-dst @ shfl-src @ shfl-off @ shfl-bfly, ;
 
 \ ==============================================================================
@@ -1000,7 +1049,19 @@ variable mu-src
         drop 2dup is-float? if
             emit-fconst mu-src !
         else 2drop 0 mu-src ! then
-    else nip nip sym-reg@ mu-src ! then ;
+    else nip nip sym-reg@ mu-src ! then
+    \ Dispatch on op-name to emit the actual GPU instruction
+    mu-op-buf mu-op-len @
+    2dup s" neg.f32"        compare 0= if 2drop
+        s" -1.0" emit-fconst >r  mu-dst @ mu-src @ r> fmul, exit then
+    2dup s" ex2.approx.f32"   compare 0= if 2drop mu-dst @ mu-src @ ex2,   exit then
+    2dup s" rcp.approx.f32"   compare 0= if 2drop mu-dst @ mu-src @ rcp,   exit then
+    2dup s" rsqrt.approx.f32" compare 0= if 2drop mu-dst @ mu-src @ rsqrt, exit then
+    2dup s" sqrt.approx.f32"  compare 0= if 2drop mu-dst @ mu-src @ sqrt,  exit then
+    2dup s" sin.approx.f32"   compare 0= if 2drop mu-dst @ mu-src @ sin,   exit then
+    2dup s" cos.approx.f32"   compare 0= if 2drop mu-dst @ mu-src @ cos,   exit then
+    2dup s" lg2.approx.f32"   compare 0= if 2drop mu-dst @ mu-src @ lg2,   exit then
+    2drop ; \ unknown op — no-op
 
 : emit-exp    s" ex2.approx.f32"   emit-math-unary ;
 : emit-rcp    s" rcp.approx.f32"   emit-math-unary ;
@@ -1168,7 +1229,7 @@ variable ifge-target-len
     else nip nip sym-reg@ then
     >r >r >r  r> r> 1 r> imad, ;
 
-\ Emit sub.u32
+\ Emit sub.u32: dst = src1 - src2  (IMAD dst, (-1), src2, src1)
 : emit-sub-u32 ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
@@ -1181,9 +1242,12 @@ variable ifge-target-len
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
     else nip nip sym-reg@ then
-    drop 2drop ;
+    \ stack: dst src1 src2 — want IMAD dst, neg1, src2, src1
+    >r >r >r                         \ R: src2 src1 dst
+    rreg+ dup $ffffffff mov-imm,     \ stack: neg1  R: src2 src1 dst
+    r> swap r> r> swap imad, ;
 
-\ mul.lo.u32
+\ mul.lo.u32: dst = src1 * src2  (IMAD dst, src1, src2, RZ)
 : emit-mul-u32 ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
@@ -1196,7 +1260,7 @@ variable ifge-target-len
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
     else nip nip sym-reg@ then
-    drop 2drop ;
+    $ff imad, ;
 
 \ mad.lo.u32
 : emit-mad ( -- )
@@ -1261,7 +1325,7 @@ variable ldst-type    \ 0=f32 1=u32
         2drop r> src-pos ! 0 ldst-type !
     then then
 
-    \ SASS: ldg-off rd, ra, byte_offset (offset=idx*4)
+    \ GPU: ldg-off rd, ra, byte_offset (offset=idx*4)
     \ We use imad to compute byte offset into a temp reg, then ldg-off
     rreg+ >r   \ temp reg for byte offset
     r@ ldst-offset @ 4 0 imad,   \ temp = idx * 4 + 0
@@ -1300,7 +1364,7 @@ variable ldst-type    \ 0=f32 1=u32
         2drop r> src-pos ! 0 ldst-type !
     then then
 
-    \ SASS: stg-off ra, rs, byte_offset
+    \ GPU: stg-off ra, rs, byte_offset
     rreg+ >r   \ temp reg for byte offset
     r@ ldst-offset @ 4 0 imad,   \ temp = idx * 4 + 0
     ldst-base @ ldst-dst @ r> stg-off, ;
@@ -1623,6 +1687,11 @@ variable fn-body-end
     4 next-rreg !
     4 next-rdreg !
     0 next-preg !
+    \ Also reset the gpu/emit.fs register counters (these win the rreg+/freg+/preg+
+    \ definition race after emit.fs loads, so next-* resets above are not enough).
+    4 _gs-r !    \ restart rreg allocation at R4 (R0-R3 reserved for tid)
+    0 _gs-f !    \ restart freg allocation at F0
+    0 _gs-p !    \ restart preg allocation at P0
     0 n-shared !
     0 n-sparams !
     0 for-depth !

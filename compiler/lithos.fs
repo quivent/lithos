@@ -13,7 +13,7 @@
 
 \ Load sub-modules (order matters).
 s" /home/ubuntu/lithos/compiler/lexer.fs"     included
-\ SASS + ARM64 emitters are optional; include only when needed.
+\ GPU + ARM64 emitters are optional; include only when needed.
 
 s" /home/ubuntu/lithos/compiler/parser.fs"    included
 s" /home/ubuntu/lithos/compiler/inline.fs"   included
@@ -98,15 +98,15 @@ create pa-cubin-kw 5 allot   s" cubin"  pa-cubin-kw swap move
   lithos-compile
 
   arg-emit @ 1 = if
-    \ SASS raw bytes
+    \ GPU machine code raw bytes
     arg-output-buf arg-output-len @ write-sass-raw
   else arg-emit @ 2 = if
     s" /home/ubuntu/lithos/compiler/emit-arm64.fs" included
     emit-host-stub
     arg-output-buf arg-output-len @ write-arm64-raw
   else arg-emit @ 3 = if
-    \ cubin: SASS wrapped in a complete ELF64 cubin for cuModuleLoadData
-    s" /home/ubuntu/lithos/compiler/cubin-wrap.fs" included
+    \ cubin: GPU machine code wrapped in a complete ELF64 for cuModuleLoadData
+    s" /home/ubuntu/lithos/compiler/elf-wrap.fs" included
     arg-output-buf arg-output-len @ write-cubin
   then then then
 
