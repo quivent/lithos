@@ -996,6 +996,17 @@ parse_tokens:
     // Parse top-level declarations
     bl      parse_toplevel
 
+    // Sync ls_code_pos with emit_ptr so CODE-POS reports correct length
+    adrp    x0, ls_code_buf
+    add     x0, x0, :lo12:ls_code_buf
+    adrp    x1, emit_ptr
+    add     x1, x1, :lo12:emit_ptr
+    ldr     x1, [x1]
+    sub     x1, x1, x0            // bytes emitted
+    adrp    x2, ls_code_pos
+    add     x2, x2, :lo12:ls_code_pos
+    str     x1, [x2]
+
     ldp     x28, x20, [sp], #16
     ldp     x19, x27, [sp], #16
     ldp     x29, x30, [sp], #16

@@ -926,49 +926,19 @@ footer {
 <section id="status">
 <h2>Current Status (April 2025)</h2>
 
-<p>First end-to-end inference achieved. Model: Qwen3-30B-A3B (DeltaNet hybrid, 64 layers, GPTQ W4A16). Prompt: "The capital of France is" &rarr; top-1 prediction: <strong>"Paris"</strong> (logit <span class="measure">18.057</span>). All 64 layers verified layer-by-layer against reference (cosine similarity <span class="measure">1.0</span> at every layer).</p>
+<p>Target model: <strong>Qwen 3.5 27B</strong> (Huihui-abliterated, GPTQ W4A16, 64 hybrid layers: 3 DeltaNet + 1 full attention × 16).</p>
 
-<h3>What works</h3>
+<h3>Where we are</h3>
 <ul>
-  <li><strong>Correct inference.</strong> "Paris" rank 1, logit 18.057, all 64 layers verified.</li>
-  <li><strong>Forward pass:</strong> <span class="measure">2.44 s</span> for 5-token prefill (<span class="measure">0.49 s</span> per token, <span class="measure">~2 tok/s</span>). Down from 25.23 s &mdash; <span class="speedup">10.3&times;</span> optimization in one session.</li>
-  <li><strong>13 compiled GPU binaries</strong> + 3 fused + DeltaNet-specific kernels (132 KB total).</li>
-  <li><strong>GPTQ W4A16 dequantization correct</strong> (zero-point 8.0 per auto-GPTQ convention).</li>
-  <li><strong>Weights-as-code architecture:</strong> compiler reads safetensors, encodes Q4 weights as instruction immediates. ELF .text IS the weights. No runtime weight loading from HBM. BAR4 coherent HBM, CPU PA == GPU VA.</li>
-  <li><strong>Lithos compiler:</strong> compiles <code>.ls</code> files to sm90a GPU machine code ELF binaries. lithos.ko kernel module owns GPU hardware (4 ioctls).</li>
-  <li><strong>GPU machine code emitter:</strong> vector-add runs correctly on GH200 (direct binary, no ptxas, no CUDA).</li>
-  <li><strong>5 quantization schemes</strong> designed + implementations.</li>
-  <li><strong>23+ documentation pages.</strong></li>
+  <li><strong>Language spec</strong> complete: symbols &rarr; &larr; &uarr; &darr; $ &Sigma; &#9651; &#9661; # &#8773; &#8801; &radic;, compositions, dual target (ARM64 + GPU).</li>
+  <li><strong>Self-hosting compiler</strong> written in Lithos: <code>compiler/compiler.ls</code>, ~4700 lines across lexer, parser, dual-backend emitter, safetensors reader, ELF writer. Not yet self-compiling &mdash; see roadmap.</li>
+  <li><strong>ARM64 bootstrap</strong> in pure assembly (<code>bootstrap/</code>): trivial <code>.ls</code> programs produce valid ARM64 ELFs. Needs full expression parsing to compile <code>compiler.ls</code>.</li>
+  <li><strong>GPU machine code emitter</strong>: 35+ opcodes probe-verified on live GH200 via <code>ptxas</code> + <code>nvdisasm</code>.</li>
+  <li><strong>Inference kernels</strong> specified in Lithos source: RMSNorm, L2Norm, GEMV, DeltaNet fused, full attention with mRoPE, conv1d, SiLU, embed, argmax sampling.</li>
+  <li><strong>Hardware path</strong> in progress: GSP boot via BAR0 registers (8/9 steps), vfio-pci userspace access design. QMD pushbuffer + USERD doorbell not yet implemented.</li>
 </ul>
 
-<h3>Honest numbers</h3>
-<table>
-<thead>
-  <tr><th>Metric</th><th><span class="engine engine-vllm">vLLM</span></th><th><span class="engine engine-lithos">Lithos</span></th><th>Notes</th></tr>
-</thead>
-<tbody>
-  <tr>
-    <td>tok/s (batch=1)</td>
-    <td class="num" style="color: var(--engine-vllm);">179</td>
-    <td class="num" style="color: var(--engine-lithos);">~2</td>
-    <td><span style="color: var(--red);">90&times; slower</span> &mdash; gap is kernel optimization, not architecture</td>
-  </tr>
-  <tr>
-    <td>Correctness</td>
-    <td class="num">correct</td>
-    <td class="num">correct (layer-by-layer verified)</td>
-    <td>&mdash;</td>
-  </tr>
-  <tr>
-    <td>Startup</td>
-    <td class="num">~30&ndash;120 s</td>
-    <td class="num" style="color: var(--accent);">~228 ms</td>
-    <td><span class="speedup">130&ndash;525&times;</span> faster</td>
-  </tr>
-</tbody>
-</table>
-
-<p>The architecture is proven. The kernels need work. Our projection kernel does not yet use tensor core tiling for the batch=1 GEMV case. vLLM's cuBLAS runs at 3460 GB/s (86% of 4 TB/s peak). The next phase is tensor core optimization via WGMMA instructions and TMA async loads.</p>
+<p>No inference numbers to report yet. The first working end-to-end token is Wave 5 on the roadmap. Architecture validated; execution path still being built.</p>
 
 </section>
 

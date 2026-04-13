@@ -811,89 +811,13 @@ Total                       <span style="color: var(--cyan); font-weight: 600;">
 
 <!-- Section 5: Measured Results -->
 <section id="measured">
-<h2>Measured Results (April 2025)</h2>
+<h2>Measured Results</h2>
 
-<p>First end-to-end inference run. Model: Qwen3-30B-A3B (DeltaNet hybrid, 64 layers, GPTQ W4A16). Hardware: GH200 480GB. Prompt: "The capital of France is" &rarr; top-1 prediction: <strong>"Paris"</strong> (logit 18.057). All 64 layers verified layer-by-layer against reference (cosine similarity 1.0 at every layer).</p>
+<p>No measured end-to-end inference numbers yet. The self-hosting compiler and hardware path are still being built. When the first token goes through all 64 layers on real hardware without CUDA, this section will be populated with real numbers.</p>
 
-<h3>Forward Pass Timing</h3>
+<p>Target model: <strong>Qwen 3.5 27B</strong> (Huihui-abliterated, GPTQ W4A16). Target hardware: GH200 480GB.</p>
 
-<table>
-  <thead>
-    <tr><th>Metric</th><th>Measured</th><th>Notes</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>5-token prefill</td>
-      <td class="num" style="color: var(--cyan);">2.44 s</td>
-      <td>Down from 25.23 s &mdash; <span class="speedup">10.3&times;</span> optimization in one session</td>
-    </tr>
-    <tr>
-      <td>Per-token latency</td>
-      <td class="num" style="color: var(--cyan);">~0.49 s</td>
-      <td>~2 tok/s</td>
-    </tr>
-    <tr>
-      <td>Compiled cubins</td>
-      <td class="num" style="color: var(--cyan);">13 + 3 fused + DeltaNet-specific</td>
-      <td>132 KB total</td>
-    </tr>
-  </tbody>
-</table>
-
-<h3>Time Breakdown</h3>
-
-<table>
-  <thead>
-    <tr><th>Component</th><th>Share</th><th>Notes</th></tr>
-  </thead>
-  <tbody>
-    <tr><td>MLP projections</td><td class="num" style="color: var(--cyan);">49%</td><td>gate_proj, up_proj, down_proj &mdash; 3 large GEMVs per layer</td></tr>
-    <tr><td>DeltaNet recurrence</td><td class="num" style="color: var(--cyan);">10%</td><td>Linear attention state update</td></tr>
-    <tr><td>Other projections</td><td class="num" style="color: var(--cyan);">20%</td><td>q_proj, k_proj, v_proj, o_proj</td></tr>
-    <tr><td>lm_head</td><td class="num" style="color: var(--cyan);">4%</td><td>Final vocabulary projection (5120 &times; 248320)</td></tr>
-    <tr><td>Rest (norm, embed, sample, etc.)</td><td class="num" style="color: var(--cyan);">17%</td><td>RMSNorm, residuals, activation, sampling</td></tr>
-  </tbody>
-</table>
-
-<h3>Comparison to vLLM</h3>
-
-<table>
-  <thead>
-    <tr><th>Metric</th><th><span class="engine engine-vllm">vLLM</span></th><th><span class="engine engine-lithos">Lithos</span> (current)</th><th>Gap</th></tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>tok/s (batch=1)</td>
-      <td class="num" style="color: var(--engine-vllm);">179</td>
-      <td class="num" style="color: var(--engine-lithos);">~2</td>
-      <td class="num" style="color: var(--red);">90&times; slower</td>
-    </tr>
-    <tr>
-      <td>GEMV bandwidth</td>
-      <td class="num" style="color: var(--engine-vllm);">3460 GB/s (86% peak)</td>
-      <td class="num" style="color: var(--engine-lithos);">hand-written kernels, no tensor cores</td>
-      <td>Kernel optimization</td>
-    </tr>
-    <tr>
-      <td>Correctness</td>
-      <td class="num" style="color: var(--engine-vllm);">correct</td>
-      <td class="num" style="color: var(--engine-lithos);">correct (verified layer-by-layer)</td>
-      <td>&mdash;</td>
-    </tr>
-    <tr>
-      <td>Startup</td>
-      <td class="num" style="color: var(--engine-vllm);">~30&ndash;120 s</td>
-      <td class="num" style="color: var(--engine-lithos);">~228 ms</td>
-      <td><span class="speedup">130&ndash;525&times;</span> faster</td>
-    </tr>
-  </tbody>
-</table>
-
-<p>The 90&times; gap is entirely in kernel optimization. Our projection kernel does not yet use tensor cores for the batch=1 GEMV case. vLLM's cuBLAS GEMV runs at 3460 GB/s (86% of GH200's 4 TB/s peak). Our kernel runs slower because it lacks tensor core tiling for the matrix-vector multiply.</p>
-
-<div class="callout" style="border-left: 3px solid var(--accent); padding: 1rem 1.5rem; margin: 1.5rem 0; background: var(--bg-raised);">
-<p><strong>Honest assessment:</strong> We produce correct output. The architecture is proven &mdash; all 64 layers, GPTQ dequantization, DeltaNet recurrence, unified memory mmap, the full pipeline works. But the kernels are slow. The next phase is tensor core optimization of the projection kernel, which accounts for 69% of forward pass time (MLP + other projections). This is engineering work with a known path: WGMMA instructions for Hopper tensor cores, proper tiling, and async memory loads via TMA.</p>
-</div>
+<p>See the <a href="/roadmap">roadmap</a> for the path to first token.</p>
 
 </section>
 

@@ -134,10 +134,10 @@ deltanet_layer x X layer_idx :
 full_attention_layer x X layer_idx :
     \\ Attention sub-block
     rmsnorm x
-    project W_q_full[layer_idx]    x q     \\ 5120 -> 2048  (16 heads x 128)
-    project W_k_full[layer_idx]    x k     \\ 5120 -> 1024  (8 KV heads x 128, GQA)
+    project W_q_full[layer_idx]    x q     \\ 5120 -> 6144  (24 heads x 256)
+    project W_k_full[layer_idx]    x k     \\ 5120 -> 1024  (4 KV heads x 256, GQA ratio 6)
     project W_v_full[layer_idx]    x v     \\ 5120 -> 1024
-    project W_gate_attn[layer_idx] x gate  \\ 5120 -> 2048  (attn_output_gate)
+    project W_gate_attn[layer_idx] x gate  \\ 5120 -> 6144  (attn_output_gate)
 
     mrope q position
     mrope k position
@@ -160,12 +160,11 @@ full_attention_layer x X layer_idx :
     project W_down[layer_idx] X X
 ```
 
-Shapes (Qwen 3.5 27B):
-- `hidden = 5120`, `q_heads = 16`, `kv_heads = 8` (full) / `kv_heads = 16`
-  (DeltaNet key side), `head_dim = 128`.
-- DeltaNet value heads per key head = 3 (GQA ratio 3), 48 value heads.
-- Full-attention GQA ratio = 2.
-- MLP intermediate `= 25600` (up and gate project to 25600, down projects
+Shapes (Qwen 3.5 27B — verified against config.json):
+- `hidden = 5120`
+- Full attention: `q_heads = 24`, `kv_heads = 4` (GQA ratio 6), `head_dim = 256`
+- DeltaNet: `key_heads = 16`, `value_heads = 48` (GQA ratio 3), `head_dim = 128`
+- MLP intermediate `= 17408` (up and gate project to 17408, down projects
   back to 5120).
 
 ---
@@ -229,7 +228,7 @@ Section  5  : layer_04  (DeltaNet)
 ...
 Section 64  : layer_63  (full attn)
 Section 65  : final_rmsnorm              ~1 KB
-Section 66  : lm_head_project          ~80 MB  (5120 x 152064, Q4)
+Section 66  : lm_head_project          ~127 MB (5120 x 248320, Q4)
 Section 67  : argmax_sample             ~4 KB
 ```
 
