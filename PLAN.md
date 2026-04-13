@@ -11,10 +11,10 @@ All sources use `.ls` extension. Zero Forth. Zero Python. Zero CUDA runtime.
 
 ```
 FOUNDATIONS   [████████] complete   language, kernels, grammar, dicts, docs
-COMPILER      [██████░░] wired, not compiling   compiler.ls self-parse blocked
-BOOTSTRAP     [█████░░░] expressions work, compositions + assignments crash (teams hit rate limit)
-RUNTIME       [████░░░░] all .ls written, untested, cbuf0 register_count unknown
-HARDWARE      [████░░░░] GSP boot wired (FSP done), QMD builder untested, cbuf0 probe pending
+COMPILER      [█████░░░] being rewritten to pure Lithos syntax (no =, no fn, no ->)
+BOOTSTRAP     [█████░░░] expressions work, needs compositions + bindings (no = in language)
+RUNTIME       [████████] all .ls written, register_count found (SPD 0x094), pushbuffer needs SPD
+HARDWARE      [██████░░] GSP+FSP wired, cbuf0 probe DONE, QMD builder untested
 INTEGRATION   [██░░░░░░] launcher.ls written (162 lines), not compiled, nothing executes end-to-end
 FIRST TOKEN   [░░░░░░░░] blocked on all above
 ```
@@ -29,14 +29,15 @@ FIRST TOKEN   [░░░░░░░░] blocked on all above
 [✓] 7 stack-alignment SIGBUS bugs in lithos-elf-writer.s fixed
 [✓] Smoke test: `var x 42` → valid ARM64 ELF produced
 [✓] Build: bootstrap/build.sh, Makefile, macros prelude working
-[ ] Parser: expression parsing (IDENT = expr, IDENT[i] = expr)  ← BLOCKING
-[ ] Parser: `fn NAME ARGS ->` OR new composition syntax               ← BLOCKING
-[ ] Parser: hundreds of lines of expression precedence + ARM64 emit   ← BLOCKING
-[ ] Audit: compiler.ls parses cleanly through bootstrap               ← BLOCKING
+[✓] Expression parsing works: `var y x + 1` produces valid ELF
+[ ] Composition parsing: `name args :` → parse error (code at line 1196, crashes) ← BLOCKING
+[ ] Binding syntax: `name expr` (no = sign) — bootstrap treats first token as name ← BLOCKING
+[ ] Audit: compiler.ls parses cleanly through bootstrap                            ← BLOCKING
 ```
 
-Without bootstrap parser work, `compiler.ls` cannot be compiled to `lithos-stage1`.
-That blocks every downstream wave.
+The language has NO `=` assignment. Bindings: first token = name, rest = expression.
+Compositions: `name args :` followed by indented body.
+compiler.ls is being rewritten to pure Lithos syntax (worker dispatched).
 
 ---
 
@@ -51,9 +52,11 @@ That blocks every downstream wave.
 [✓] Parser (Section 4): recursive descent, dual backend routing
 [✓] Main entry (Section 7): argv → mmap → lex → parse → emit → write
 
-Internal inconsistencies (Scout 2):
-[ ] Parser handles superset: `goto`, `label`, `endfor`, `load_u8/16/32/64`,
-    `syscall`, `if!=`, 3-operand stmts — compiler uses them but lexer rejects
+Rewrite to pure Lithos syntax (worker dispatched):
+[ ] Remove all `=` assignment → binding syntax (`name expr`)
+[ ] Remove all `fn ... ->` → composition syntax (`name args :`)
+[ ] Replace `load_u*`/`store_u*` → `→ width addr` / `← width addr val`
+[ ] Replace `syscall` → `trap`
 [ ] `param NAME TYPE` lexed but never parsed → n_kparams always 0
 [✓] config.json reader — EXISTS: compiler/config-reader.ls (873 lines), untested
     Parses all 17 Qwen 3.5 fields, classifies layer_types[], provides accessors
@@ -104,7 +107,9 @@ Replaces all 42 libcuda call sites in `src/launcher.s`.
 [✓] mem.ls — BAR4 bump allocator (coherent HBM, no dma_alloc_coherent)
 [✓] elf_load.ls — parse compiled GPU ELF, extract entry_pc via .symtab walk
 [✓] qmd.ls — 528-byte descriptor with empirically-probed offsets
-[✓] cbuf0.ls — constant buffer (register_count offset UNKNOWN — TODO(probe))
+[✓] cbuf0.ls — constant buffer
+[✓] register_count: NOT in QMD or cbuf0. In 384-byte Shader Program Descriptor (SPD) at 0x094
+[ ] pushbuffer.ls needs update: launch is 5 inline loads (QMD + fence + context + SPD + patch), not just QMD
 [✓] pushbuffer.ls — 6-method GPFIFO submission sequence
 [✓] doorbell.ls — USERD+0x8c GPPut write + USERD+0x90 doorbell
 [✓] launch.ls — kernel dispatch, ties QMD+cbuf0+pushbuffer+doorbell
@@ -135,7 +140,8 @@ FSP subsystem wired:
 [✓] fsp_queue_advance_head added to emem_xfer.s
 [✓] Stale .include directives removed from mctp/response/diag
 [ ] vfio-pci: not implemented (sysfs mmap only)
-[ ] register_count byte offset in cbuf0 unknown          ← probe dispatched
+[✓] register_count: in SPD at offset 0x094 (bits 23:16). 3-point verified.
+[✓] Launch is 5 inline loads: QMD(528B) + fence(8B) + context(384B) + SPD(384B) + patch(4B)
 ```
 
 ---
@@ -169,7 +175,8 @@ FSP subsystem wired:
 [✓] docs/regalloc_design.md
 [✓] HTML versions live on Vercel: /language, /pipeline, /roadmap, architecture,
    compiler, kernels, quantization, performance, bandwidth, glossary (26 pages, all 200)
-[ ] PLAN/STATUS as HTML
+[✓] /status dashboard live (hand-crafted HTML, progress cards, blocker banner)
+[✓] bin/build-status generates from PLAN.md, local server on port 8080
 ```
 
 ---
@@ -290,8 +297,8 @@ Items previously listed as gaps that are actually resolved:
 
 ## CRITICAL BLOCKERS (in order)
 
-1. **Bootstrap parser** — add expression parsing + composition syntax handling
-2. **compiler.ls self-consistency** — fix 8 internal grammar issues from Scout 2
+1. **Bootstrap parser** — compositions (`name args :`) + bindings (`name expr`) — NO `=`
+2. **compiler.ls rewrite** — pure Lithos syntax (worker dispatched, removes =, fn, ->, load_u*, syscall)
 3. ~~**FSP boot wiring**~~ — DONE (wired at step 6, BCR/FSP order fixed)
 4. ~~**register_count probe**~~ — DONE. Not in cbuf0 or QMD. In 384-byte Shader Program Descriptor at SPD offset 0x094
 5. **First compile**: bootstrap parses compiler.ls → lithos-stage1

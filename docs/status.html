@@ -108,26 +108,26 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   <div class="ov-card">
     <h3>Compiler</h3>
     <div class="bar"><div class="fill partial" style="width:70%"></div></div>
-    <div class="pct partial">70%</div>
-    <div class="note">4739 lines wired. 8 self-consistency issues remain.</div>
+    <div class="pct partial">65%</div>
+    <div class="note">Being rewritten to pure Lithos syntax (no =, no fn, no ->).</div>
   </div>
   <div class="ov-card">
     <h3>Bootstrap</h3>
     <div class="bar"><div class="fill partial" style="width:35%"></div></div>
-    <div class="pct blocked">Blocked</div>
-    <div class="note">Smoke test works. Parser can't handle expressions.</div>
+    <div class="pct partial">60%</div>
+    <div class="note">Expressions work. Needs compositions + bindings (no = in language).</div>
   </div>
   <div class="ov-card">
     <h3>Runtime</h3>
     <div class="bar"><div class="fill partial" style="width:85%"></div></div>
-    <div class="pct partial">Written</div>
-    <div class="note">11 .ls files replace 42 libcuda calls. Untested.</div>
+    <div class="pct partial">90%</div>
+    <div class="note">11 .ls files. register_count found (SPD). Pushbuffer needs SPD update.</div>
   </div>
   <div class="ov-card">
     <h3>Hardware</h3>
     <div class="bar"><div class="fill partial" style="width:50%"></div></div>
-    <div class="pct partial">50%</div>
-    <div class="note">GSP 8/9 steps. FSP wired. QMD untested.</div>
+    <div class="pct partial">65%</div>
+    <div class="note">GSP+FSP wired. cbuf0 probe DONE. Launch = 5-part sequence (discovered).</div>
   </div>
   <div class="ov-card">
     <h3>First Token</h3>
@@ -141,10 +141,10 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
 <div class="blocker-banner">
   <h2>Critical Blockers &mdash; in order</h2>
   <ol>
-    <li><strong>Bootstrap parser</strong> &mdash; needs expression parsing + composition syntax <span class="dim">(team dispatched)</span></li>
-    <li><strong>compiler.ls self-consistency</strong> &mdash; 8 internal grammar issues <span class="dim">(team dispatched)</span></li>
-    <li><strong>FSP boot wiring</strong> &mdash; connect GSP/fsp/*.s into GSP/boot.s <span class="dim" style="color:var(--green)">(DONE)</span></li>
-    <li><strong>register_count probe</strong> &mdash; find byte offset in cbuf0 <span class="dim">(team dispatched)</span></li>
+    <li><strong>Bootstrap parser</strong> &mdash; compositions (<code>name args :</code>) + bindings (<code>name expr</code>) &mdash; NO <code>=</code> <span class="dim">(worker dispatched)</span></li>
+    <li><strong>compiler.ls rewrite</strong> &mdash; pure Lithos syntax: remove =, fn, -&gt;, load_u*, syscall <span class="dim">(worker dispatched)</span></li>
+    <li><del>FSP boot wiring</del> <span style="color:var(--green)">DONE</span></li>
+    <li><del>register_count probe</del> <span style="color:var(--green)">DONE</span> &mdash; in 384-byte Shader Program Descriptor at offset 0x094</li>
     <li><strong>First compile</strong> &mdash; bootstrap parses compiler.ls &rarr; lithos-stage1</li>
     <li><strong>Self-compile</strong> &mdash; lithos-stage1 compiles itself (fixed point test)</li>
     <li><strong>First kernel execution</strong> &mdash; GSP + GPFIFO + QMD &rarr; GPU result</li>
@@ -163,8 +163,9 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">7 stack-alignment SIGBUS bugs fixed</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Smoke test: <code>var x 42</code> &rarr; valid ARM64 ELF</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">24 new ARM64 emission helpers, verified against objdump</div></div>
-  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">Lexer: all tokens including UTF-8 arrows, $, keywords <span class="blocking">TEAM DISPATCHED</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Parser: expression parsing, assignments, compositions <span class="blocking">BLOCKING</span></div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Expression parsing works: <code>var y x + 1</code> &rarr; valid ELF</div></div>
+  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">Composition parsing: <code>name args :</code> &rarr; crashes at line 1196 <span class="blocking">WORKER DISPATCHED</span></div></div>
+  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Binding syntax: <code>name expr</code> (no = sign) <span class="blocking">BLOCKING</span></div></div>
   <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>compiler.ls</code> parses cleanly end-to-end <span class="blocking">BLOCKING</span></div></div>
 </div>
 </section>
@@ -181,7 +182,7 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">ELF writer (9-section cubin ELF64, cooperative attributes)</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Parser: recursive descent, dual backend</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Megakernel linker: 833 lines, forward + recurrence, grid-sync</div></div>
-  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">8 self-consistency fixes: <code>goto/label</code>, <code>load_u*</code>, <code>$</code>, <code>param</code>, arch dicts, cubin_buf size <span class="blocking">TEAM DISPATCHED</span></div></div>
+  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">Rewrite to pure Lithos: remove <code>=</code>, <code>fn</code>, <code>-&gt;</code>, <code>load_u*</code>, <code>syscall</code> <span class="blocking">WORKER DISPATCHED</span></div></div>
 </div>
 </section>
 
@@ -206,7 +207,8 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>qmd.ls</code> + <code>pushbuffer.ls</code> + <code>doorbell.ls</code></div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>launch.ls</code> + <code>sync.ls</code> + <code>teardown.ls</code> + <code>dispatch.ls</code></div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>src/launcher.ls</code> &mdash; 162-line orchestrator, zero libcuda</div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>cbuf0.ls</code> register_count offset <strong style="color:var(--red)">UNKNOWN</strong> (probe dispatched)</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">register_count: in Shader Program Descriptor (SPD) at offset 0x094 (3-point verified)</div></div>
+  <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>pushbuffer.ls</code> needs update: launch = QMD + fence + context + SPD + patch (5 parts, not 1)</div></div>
 </div>
 </section>
 
