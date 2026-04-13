@@ -345,10 +345,12 @@ def layer_size_bytes(packed: dict) -> int:
     total += n_sub * N_CODEBOOK_ENTRIES * SUB_DIM * 2
     total += (pq_bits + 7) // 8
 
-    # Stratum III: residual scales + packed bits
+    # Stratum III: residual scales + ternary-packed values
     n_res_groups = (packed['n_res_values'] + RESIDUAL_GROUP - 1) // RESIDUAL_GROUP
     total += n_res_groups * 2  # FP16 scales
-    total += (packed['n_res_values'] * 2 + 7) // 8  # 2 bits per value
+    # Ternary mixed-radix: log2(3) = 1.585 bits per value, packed 20 per uint32
+    n_res_words = (packed['n_res_values'] + 19) // 20
+    total += n_res_words * 4  # uint32 words
 
     # Stratum IV: sparse corrections
     # With 3.8% density, average gap between corrections is ~26 weights

@@ -47,6 +47,44 @@ CONV_KERNEL_SIZE = 4
 HEADS_PER_KEY = NUM_VALUE_HEADS // NUM_KEY_HEADS  # 3
 
 
+# ---------------------------------------------------------------------------
+# Profiling accumulator
+# ---------------------------------------------------------------------------
+class Profiler:
+    """Accumulates timing across named categories."""
+
+    def __init__(self):
+        self.totals: dict[str, float] = {}
+        self.counts: dict[str, int] = {}
+        self._stack: list[tuple[str, float]] = []
+
+    def start(self, name: str):
+        self._stack.append((name, time.monotonic()))
+
+    def stop(self):
+        name, t0 = self._stack.pop()
+        dt = time.monotonic() - t0
+        self.totals[name] = self.totals.get(name, 0.0) + dt
+        self.counts[name] = self.counts.get(name, 0) + 1
+        return dt
+
+    def report(self):
+        total = sum(self.totals.values())
+        print(f"\n{'=' * 72}")
+        print(f"  PROFILE REPORT  (total accounted: {total:.4f}s)")
+        print(f"{'=' * 72}")
+        # Sort by total time descending
+        for name, t in sorted(self.totals.items(), key=lambda x: -x[1]):
+            cnt = self.counts[name]
+            pct = 100.0 * t / total if total > 0 else 0.0
+            avg_ms = 1000.0 * t / cnt if cnt > 0 else 0.0
+            print(f"  {name:40s}  {t:8.4f}s  ({pct:5.1f}%)  n={cnt:5d}  avg={avg_ms:.3f}ms")
+        print(f"{'=' * 72}")
+
+
+PROF = Profiler()
+
+
 def banner(msg: str) -> None:
     print(f"\n{'=' * 72}")
     print(f"  {msg}")
@@ -337,25 +375,40 @@ class PrefillEngine:
 
     def run_mlp(self, layer_idx: int, d_residual):
         prefix = f"model.language_model.layers.{layer_idx}"
+        PROF.start("mlp_norm")
         self.gpu_norm(d_residual, self.d_zero,
                       self.post_attn_norms[layer_idx], self.d_norm_out)
+        self.gpu.synchronize()
+        PROF.stop()
+
+        PROF.start("mlp_gate_up_proj")
         self.gpu_gptq_matvec(f"{prefix}.mlp.gate_proj",
                               self.d_norm_out, self.d_gate,
                               HIDDEN_DIM, INTERMEDIATE_SIZE)
         self.gpu_gptq_matvec(f"{prefix}.mlp.up_proj",
                               self.d_norm_out, self.d_up,
                               HIDDEN_DIM, INTERMEDIATE_SIZE)
+        self.gpu.synchronize()
+        PROF.stop()
+
+        PROF.start("mlp_activate")
         self.gpu_activate(self.d_gate, self.d_up, self.d_act, INTERMEDIATE_SIZE)
+        self.gpu.synchronize()
+        PROF.stop()
+
+        PROF.start("mlp_down_proj")
         self.gpu_gptq_matvec(f"{prefix}.mlp.down_proj",
                               self.d_act, self.d_down,
                               INTERMEDIATE_SIZE, HIDDEN_DIM)
         self.gpu.synchronize()
+        PROF.stop()
 
     def run_full_attention(self, layer_idx: int, d_normed, position: int):
         """Full attention with KV cache and RoPE."""
         prefix = f"model.language_model.layers.{layer_idx}.self_attn"
 
         # Q projection: 5120 -> 12288 (24 heads * 256 dim * 2 for Q + gate)
+        PROF.start("fa_qkv_proj_gpu")
         self.gpu_gptq_matvec(f"{prefix}.q_proj",
                               d_normed, self.d_attn_scratch1,
                               HIDDEN_DIM, 12288)
@@ -375,9 +428,10 @@ class PrefillEngine:
                               HIDDEN_DIM, 1024)
         self.gpu.synchronize()
         v_raw = download_f32(self.gpu, self.d_attn_scratch1, 1024)
+        PROF.stop()
 
         # Split q_proj output into Q and gate
-        # Reference: view as [24, 512] then chunk into Q [24, 256] and gate [24, 256]
+        PROF.start("fa_attn_cpu")
         q_gate_heads = q_gate_raw.reshape(24, 512)  # [num_q_heads, head_dim * 2]
         q_heads = q_gate_heads[:, :256].copy()       # [24, 256] -- Q
         gate_heads = q_gate_heads[:, 256:].copy()    # [24, 256] -- gate
@@ -412,8 +466,10 @@ class PrefillEngine:
         # Apply output gate: attn_output = attn_output * sigmoid(gate)
         gate_sigmoid = 1.0 / (1.0 + np.exp(-gate_flat.clip(-80, 80)))
         attended = attended * gate_sigmoid  # [6144] element-wise
+        PROF.stop()
 
         # O projection: 6144 -> 5120
+        PROF.start("fa_out_proj_gpu")
         self.gpu.memcpy_htod(self.d_attn_scratch2,
                              attended.ctypes.data_as(ctypes.c_void_p),
                              6144 * 4)
@@ -421,6 +477,7 @@ class PrefillEngine:
                               self.d_attn_scratch2, self.d_attn_out,
                               6144, HIDDEN_DIM)
         self.gpu.synchronize()
+        PROF.stop()
 
     def run_deltanet(self, layer_idx: int, d_normed):
         """Run DeltaNet with persistent state S and conv buffer.
@@ -435,6 +492,7 @@ class PrefillEngine:
         prefix = f"model.language_model.layers.{layer_idx}.linear_attn"
 
         # --- QKV projection (GPTQ, 5120 -> 10240) ---
+        PROF.start("dn_proj_qkv")
         self.gpu_gptq_matvec(f"{prefix}.in_proj_qkv",
                               d_normed, self.d_attn_scratch1,
                               HIDDEN_DIM, 10240)
@@ -444,13 +502,16 @@ class PrefillEngine:
                               d_normed, self.d_attn_scratch2,
                               HIDDEN_DIM, 6144)
         self.gpu.synchronize()
+        PROF.stop()
 
+        PROF.start("dn_download_proj")
         qkv = download_f32(self.gpu, self.d_attn_scratch1, 10240)
         z = download_f32(self.gpu, self.d_attn_scratch2, 6144)
         normed_cpu = download_f32(self.gpu, d_normed, HIDDEN_DIM)
+        PROF.stop()
 
         # --- Conv1d with history buffer ---
-        # Update conv buffer: shift left, add new value
+        PROF.start("dn_conv1d_cpu")
         conv_buf = self.dn_conv_buf[layer_idx]  # [10240, 3]
         conv_w = self.dn_conv_w[layer_idx]       # [10240, 1, 4]
 
@@ -458,22 +519,22 @@ class PrefillEngine:
         conv_window = np.concatenate([conv_buf, qkv[:, np.newaxis]], axis=1)  # [10240, 4]
 
         # Apply depthwise conv: sum over kernel positions
-        # conv_w[:, 0, :] is [10240, 4], conv_window is [10240, 4]
         qkv_conv = np.sum(conv_window * conv_w[:, 0, :], axis=1)  # [10240]
 
         # Update conv buffer: shift left by 1, append current
         self.dn_conv_buf[layer_idx] = conv_window[:, 1:]  # [10240, 3] -- drop oldest
 
-        # Apply SiLU activation after conv1d (critical -- matches reference implementation)
+        # Apply SiLU activation after conv1d
         qkv_conv = qkv_conv * (1.0 / (1.0 + np.exp(-qkv_conv.clip(-80, 80))))
+        PROF.stop()
 
         # Split QKV after conv + SiLU
+        PROF.start("dn_pre_recurrence_cpu")
         q = qkv_conv[:2048].reshape(NUM_KEY_HEADS, KEY_HEAD_DIM)
         k = qkv_conv[2048:4096].reshape(NUM_KEY_HEADS, KEY_HEAD_DIM)
         v = qkv_conv[4096:].reshape(NUM_VALUE_HEADS, VALUE_HEAD_DIM)
 
         # --- Q and K L2 normalization + Q scaling ---
-        # L2 normalize Q and K per head, then scale Q by 1/sqrt(head_dim)
         for hi in range(NUM_KEY_HEADS):
             q_norm = np.sqrt(np.sum(q[hi] ** 2) + 1e-6)
             q[hi] = q[hi] / q_norm
@@ -491,9 +552,10 @@ class PrefillEngine:
         # Gate = exp(-A_exp * dt) where A_exp = exp(A_log) (positive)
         A_exp = np.exp(self.dn_A_log[layer_idx])  # [48], positive
         decay = np.exp(-A_exp * dt)  # [48], in (0, 1)
+        PROF.stop()
 
         # --- DeltaNet recurrence with state ---
-        # State layout: S[h] is [Dv, Dk] = [128, 128]
+        PROF.start("dn_recurrence_cpu")
         S = self.dn_S[layer_idx]  # [48, 128, 128] = [Hv, Dv, Dk]
         output_heads = np.zeros((NUM_VALUE_HEADS, VALUE_HEAD_DIM), dtype=np.float32)
 
@@ -503,38 +565,41 @@ class PrefillEngine:
             k_h = k[key_idx]   # [Dk]
             v_h = v[h]         # [Dv]
 
-            # State S[h] has shape [Dv, Dk]
             # Step 1: Apply decay
             S[h] *= decay[h]
 
-            # Step 2: Compute k^T @ S for each Dv index
-            # S[h] @ k_h: [Dv, Dk] @ [Dk] = [Dv] -- this is the retrieval with k
+            # Step 2: Compute k^T @ S
             kv_mem = S[h] @ k_h  # [Dv]
 
             # Step 3: Delta
             delta = (v_h - kv_mem) * beta[h]  # [Dv]
 
-            # Step 4: State update: S += outer(delta, k) = delta[:, None] * k[None, :]
-            # S[h] shape is [Dv, Dk], so update is [Dv, Dk]
+            # Step 4: State update
             S[h] += np.outer(delta, k_h)  # [Dv, Dk]
 
-            # Step 5: Output: S @ q = [Dv, Dk] @ [Dk] = [Dv]
+            # Step 5: Output
             output_heads[h] = S[h] @ q_h
 
         self.dn_S[layer_idx] = S
+        PROF.stop()
 
         # --- Group norm per head ---
+        PROF.start("dn_groupnorm_cpu")
         head_norm_w = self.dn_head_norm_w[layer_idx]
         for h in range(NUM_VALUE_HEADS):
             rms = np.sqrt(np.mean(output_heads[h] ** 2) + self.epsilon)
             output_heads[h] = (output_heads[h] / rms) * head_norm_w
+        PROF.stop()
 
         # --- Gate with Z ---
+        PROF.start("dn_gate_z_cpu")
         z_heads = z.reshape(NUM_VALUE_HEADS, VALUE_HEAD_DIM)
         z_silu = z_heads * (1.0 / (1.0 + np.exp(-z_heads.clip(-80, 80))))
         output_heads = output_heads * z_silu
+        PROF.stop()
 
         # --- Output projection ---
+        PROF.start("dn_out_proj_gpu")
         attn_output_flat = output_heads.flatten()
         self.gpu.memcpy_htod(self.d_attn_scratch2,
                              attn_output_flat.ctypes.data_as(ctypes.c_void_p),
@@ -543,42 +608,78 @@ class PrefillEngine:
                               self.d_attn_scratch2, self.d_attn_out,
                               6144, HIDDEN_DIM)
         self.gpu.synchronize()
+        PROF.stop()
 
     def run_layer(self, layer_idx: int, x: np.ndarray, position: int) -> np.ndarray:
         """Run one transformer layer with full attention/DeltaNet."""
         layer_type = self.layer_types[layer_idx]
         gpu = self.gpu
+
+        PROF.start("residual_copy")
         residual = x.copy()
+        PROF.stop()
 
         # --- Input norm + Attention ---
+        PROF.start("upload_x")
         d_x_gpu = upload_f32(gpu, x)
+        PROF.stop()
+
+        PROF.start("norm")
         self.gpu_norm(d_x_gpu, self.d_zero,
                       self.input_norms[layer_idx], self.d_norm_out)
         gpu.synchronize()
+        PROF.stop()
 
         if layer_type == "full_attention":
+            PROF.start("full_attention")
             self.run_full_attention(layer_idx, self.d_norm_out, position)
+            PROF.stop()
+            PROF.start("download_attn")
             attn_out = download_f32(gpu, self.d_attn_out, HIDDEN_DIM)
+            PROF.stop()
         else:  # linear_attention
+            PROF.start("deltanet")
             self.run_deltanet(layer_idx, self.d_norm_out)
+            PROF.stop()
+            PROF.start("download_attn")
             attn_out = download_f32(gpu, self.d_attn_out, HIDDEN_DIM)
+            PROF.stop()
+
+        PROF.start("residual_add")
         x = residual + attn_out
         residual = x.copy()
+        PROF.stop()
+
+        PROF.start("mem_free_x")
         gpu.mem_free(d_x_gpu)
+        PROF.stop()
 
         # --- MLP sublayer ---
+        PROF.start("upload_mlp_residual")
         gpu.memcpy_htod(self.d_residual,
                         x.ctypes.data_as(ctypes.c_void_p),
                         HIDDEN_DIM * 4)
+        PROF.stop()
+
+        PROF.start("mlp")
         self.run_mlp(layer_idx, self.d_residual)
+        PROF.stop()
+
+        PROF.start("download_mlp")
         mlp_out = download_f32(gpu, self.d_down, HIDDEN_DIM)
+        PROF.stop()
+
+        PROF.start("residual_add")
         x = x + mlp_out
+        PROF.stop()
 
         return x
 
     def process_token(self, token_id: int, token_pos: int, token_text: str) -> np.ndarray:
         """Process a single token through all 64 layers."""
+        PROF.start("embed")
         x = self.gpu_embed(token_id)
+        PROF.stop()
 
         for layer_idx in range(NUM_LAYERS):
             x = self.run_layer(layer_idx, x, token_pos)
@@ -631,13 +732,16 @@ class PrefillEngine:
         banner("GENERATE: Decoding next token")
 
         # Final RMSNorm
+        PROF.start("final_norm")
         x_normed = rms_norm_cpu(x, self.final_norm_w, self.epsilon)
+        PROF.stop()
         print(f"  Final norm: norm={np.linalg.norm(x_normed):.4f}")
 
         # lm_head projection (GPU kernel)
         print(f"  Computing lm_head (248320 x 5120 FP16 matmul on GPU)...")
         t_lm = time.monotonic()
 
+        PROF.start("lm_head")
         vocab_size = 248320
         lm_weight_ptr = self.model.weight_info("lm_head.weight").ptr
         d_normed_input = upload_f32(self.gpu, x_normed)
@@ -656,6 +760,7 @@ class PrefillEngine:
         self.gpu.synchronize()
         logits = download_f32(self.gpu, self.d_lm_head_out, vocab_size)
         self.gpu.mem_free(d_normed_input)
+        PROF.stop()
 
         t_lm_done = time.monotonic()
         print(f"  lm_head: {t_lm_done - t_lm:.2f}s")
@@ -709,6 +814,8 @@ def main() -> int:
         paris_ids.extend(ids)
     is_paris = token_out in paris_ids
     print(f"  Match: {'YES' if is_paris else 'NO'}")
+
+    PROF.report()
 
     engine.close()
     return 0 if is_paris else 1
