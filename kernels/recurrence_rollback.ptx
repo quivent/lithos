@@ -1,0 +1,133 @@
+// recurrence_rollback.ptx -- State checkpoint/restore for DeltaNet speculative decoding
+// Two entry points:
+//   checkpoint: clone state matrices (state -> checkpoint buffer) for all heads at current position
+//   rollback:   restore state from checkpoint (checkpoint buffer -> state) to undo speculative tokens
+//
+// Both are simple bulk copies: 16 heads * 128 * 128 * 4 bytes = 1MB per layer
+// Grid:  blockIdx.x covers 64K-element chunks, blockIdx.y = layer index
+// Block: 256 threads, grid-stride loop over all heads' state
+//
+// The recurrent-rollback technique: before speculative drafting, checkpoint all 48
+// DeltaNet layer states. If verification rejects drafts, rollback restores exact state.
+// Cost: one memcpy per layer (~1MB) -- negligible vs. recomputation.
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+// -- CHECKPOINT: state -> checkpoint_buf --------------------------
+
+.visible .entry checkpoint(
+    .param .u64 state_ptr,          // [num_layers, num_heads, 128, 128] FP32 (source)
+    .param .u64 ckpt_ptr,           // [num_layers, num_heads, 128, 128] FP32 (destination)
+    .param .u32 num_heads,          // 16
+    .param .u32 state_dim           // key_dim * value_dim = 16384
+)
+{
+    .reg .u64   %rd<12>;
+    .reg .u32   %r<16>;
+    .reg .f32   %f<5>;
+    .reg .pred  %p<4>;
+
+    ld.param.u64    %rd0, [state_ptr];
+    ld.param.u64    %rd1, [ckpt_ptr];
+    ld.param.u32    %r0, [num_heads];
+    ld.param.u32    %r1, [state_dim];       // 16384
+
+    mov.u32         %r2, %tid.x;
+    mov.u32         %r3, %ctaid.x;          // chunk index
+    mov.u32         %r4, %ctaid.y;          // layer index
+    mov.u32         %r5, %ntid.x;           // blockDim = 256
+    mov.u32         %r6, %nctaid.x;         // gridDim.x
+
+    // Total elements for this layer = num_heads * state_dim
+    mul.lo.u32      %r7, %r0, %r1;         // total_elems = 16 * 16384 = 262144
+
+    // Layer offset in elements: layer * total_elems
+    mul.lo.u32      %r8, %r4, %r7;
+    shl.b32         %r9, %r8, 2;            // * 4 bytes
+    cvt.u64.u32     %rd2, %r9;
+    add.u64         %rd3, %rd0, %rd2;       // state base for this layer
+    add.u64         %rd4, %rd1, %rd2;       // ckpt base for this layer
+
+    // Global thread index with grid stride
+    mul.lo.u32      %r10, %r3, %r5;
+    add.u32         %r10, %r10, %r2;       // global_tid
+    mul.lo.u32      %r11, %r6, %r5;        // grid_stride
+
+CKPT_LOOP:
+    setp.ge.u32     %p0, %r10, %r7;
+    @%p0 bra        CKPT_DONE;
+
+    // Copy one FP32 element: state -> checkpoint
+    shl.b32         %r12, %r10, 2;
+    cvt.u64.u32     %rd5, %r12;
+    add.u64         %rd6, %rd3, %rd5;
+    add.u64         %rd7, %rd4, %rd5;
+
+    ld.global.f32   %f0, [%rd6];
+    st.global.f32   [%rd7], %f0;
+
+    add.u32         %r10, %r10, %r11;
+    bra             CKPT_LOOP;
+CKPT_DONE:
+    ret;
+}
+
+
+// -- ROLLBACK: checkpoint_buf -> state ----------------------------
+
+.visible .entry rollback(
+    .param .u64 state_ptr,          // [num_layers, num_heads, 128, 128] FP32 (destination)
+    .param .u64 ckpt_ptr,           // [num_layers, num_heads, 128, 128] FP32 (source)
+    .param .u32 num_heads,          // 16
+    .param .u32 state_dim           // 16384
+)
+{
+    .reg .u64   %rd<12>;
+    .reg .u32   %r<16>;
+    .reg .f32   %f<5>;
+    .reg .pred  %p<4>;
+
+    ld.param.u64    %rd0, [state_ptr];
+    ld.param.u64    %rd1, [ckpt_ptr];
+    ld.param.u32    %r0, [num_heads];
+    ld.param.u32    %r1, [state_dim];
+
+    mov.u32         %r2, %tid.x;
+    mov.u32         %r3, %ctaid.x;
+    mov.u32         %r4, %ctaid.y;          // layer index
+    mov.u32         %r5, %ntid.x;
+    mov.u32         %r6, %nctaid.x;
+
+    mul.lo.u32      %r7, %r0, %r1;
+
+    // Layer offset
+    mul.lo.u32      %r8, %r4, %r7;
+    shl.b32         %r9, %r8, 2;
+    cvt.u64.u32     %rd2, %r9;
+    add.u64         %rd3, %rd0, %rd2;       // state base
+    add.u64         %rd4, %rd1, %rd2;       // ckpt base
+
+    mul.lo.u32      %r10, %r3, %r5;
+    add.u32         %r10, %r10, %r2;
+    mul.lo.u32      %r11, %r6, %r5;
+
+ROLL_LOOP:
+    setp.ge.u32     %p0, %r10, %r7;
+    @%p0 bra        ROLL_DONE;
+
+    // Copy one FP32 element: checkpoint -> state
+    shl.b32         %r12, %r10, 2;
+    cvt.u64.u32     %rd5, %r12;
+    add.u64         %rd6, %rd4, %rd5;       // source: checkpoint
+    add.u64         %rd7, %rd3, %rd5;       // dest: state
+
+    ld.global.f32   %f0, [%rd6];
+    st.global.f32   [%rd7], %f0;
+
+    add.u32         %r10, %r10, %r11;
+    bra             ROLL_LOOP;
+ROLL_DONE:
+    ret;
+}

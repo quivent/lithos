@@ -1,0 +1,75 @@
+// activate.ptx --- SiLU activation with elementwise multiply: output = gate * silu(up)
+// SiLU(x) = x / (1 + exp(-x)) = x * sigmoid(x)
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.visible .entry activate(
+    .param .u64 gate_ptr,
+    .param .u64 up_ptr,
+    .param .u64 output_ptr,
+    .param .u32 size
+)
+{
+    .reg .u64   %rd<10>;
+    .reg .u32   %r<10>;
+    .reg .f32   %f<20>;
+    .reg .pred  %p<5>;
+
+    // Load params
+    ld.param.u64    %rd0, [gate_ptr];
+    ld.param.u64    %rd1, [up_ptr];
+    ld.param.u64    %rd2, [output_ptr];
+    ld.param.u32    %r0, [size];
+
+    // Global thread index
+    mov.u32         %r1, %ctaid.x;
+    mov.u32         %r2, %ntid.x;
+    mov.u32         %r3, %tid.x;
+    mul.lo.u32      %r4, %r1, %r2;
+    add.u32         %r4, %r4, %r3;         // global_idx = blockIdx.x * blockDim.x + threadIdx.x
+
+    // Grid stride
+    mov.u32         %r5, %nctaid.x;
+    mul.lo.u32      %r5, %r5, %r2;         // grid_stride = gridDim.x * blockDim.x
+
+LOOP:
+    setp.ge.u32     %p0, %r4, %r0;
+    @%p0 bra        DONE;
+
+    // Compute byte offset
+    shl.b32         %r6, %r4, 2;           // idx * 4
+    cvt.u64.u32     %rd3, %r6;
+
+    // Load gate[idx] and up[idx]
+    add.u64         %rd4, %rd0, %rd3;
+    add.u64         %rd5, %rd1, %rd3;
+    ld.global.f32   %f0, [%rd4];           // gate_val
+    ld.global.f32   %f1, [%rd5];           // up_val
+
+    // Compute SiLU(up_val) = up_val * sigmoid(up_val)
+    // sigmoid(x) = 1 / (1 + exp(-x))
+    neg.f32         %f2, %f1;              // -up_val
+    // Use ex2 and convert: exp(x) = exp2(x * log2(e))
+    // log2(e) = 1.4426950408889634
+    mul.f32         %f3, %f2, 0f3FB8AA3B;  // -up_val * log2(e)
+    ex2.approx.f32  %f4, %f3;             // exp(-up_val) via 2^(...)
+    add.f32         %f5, %f4, 0f3F800000;  // 1.0 + exp(-up_val)
+    rcp.approx.f32  %f6, %f5;             // sigmoid = 1 / (1 + exp(-up_val))
+    mul.f32         %f7, %f1, %f6;         // silu = up_val * sigmoid(up_val)
+
+    // output = gate_val * silu(up_val)
+    mul.f32         %f8, %f0, %f7;
+
+    // Store
+    add.u64         %rd6, %rd2, %rd3;
+    st.global.f32   [%rd6], %f8;
+
+    // Grid stride advance
+    add.u32         %r4, %r4, %r5;
+    bra             LOOP;
+
+DONE:
+    ret;
+}

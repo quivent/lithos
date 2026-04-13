@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos -- Writing on Silicon</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 4.5rem; font-weight: 300; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Forth syntax highlighting */
+pre.forth .comment { color: var(--text-dim); }
+pre.forth .word { color: var(--text); }
+pre.forth .string { color: var(--accent); }
+pre.forth .number { color: var(--cyan); }
+pre.forth .stack { color: var(--text-dim); font-style: italic; }
+pre.forth .keyword { color: var(--accent); }
+pre.forth .def { color: #c0c0d0; font-weight: 600; }
+
+/* PTX syntax highlighting */
+pre.ptx .mnemonic { color: #c0c0d0; font-weight: 600; }
+pre.ptx .register { color: var(--green); }
+pre.ptx .memspace { color: var(--blue); }
+pre.ptx .directive { color: var(--accent); }
+pre.ptx .number { color: var(--cyan); }
+pre.ptx .comment { color: var(--text-dim); }
+pre.ptx .label { color: var(--red); }
+pre.ptx .punct { color: var(--text-faint); }
+
+/* SASS highlighting */
+pre.sass-asm .mnemonic { color: #c0c0d0; font-weight: 600; }
+pre.sass-asm .register { color: var(--green); }
+pre.sass-asm .hex { color: var(--cyan); }
+pre.sass-asm .label { color: var(--text-dim); }
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Problem cards */
+.problem { margin-bottom: 2rem; }
+.problem-header { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 0.5rem; }
+.problem-num { color: var(--accent); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; }
+.problem-title { font-size: 1rem; font-weight: 600; color: var(--text); }
+.problem p { color: var(--text-dim); }
+.problem .numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+
+/* Diagram */
+.diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.diagram .highlight { color: var(--text); }
+.diagram .accent { color: var(--accent); }
+.diagram .dim { color: var(--text-faint); }
+
+/* Vocab layers */
+.vocab-layer { margin-bottom: 2.5rem; }
+.vocab-layer-header {
+  display: flex; align-items: baseline; gap: 0.6rem;
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.layer-num { color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
+.layer-name { font-size: 1rem; font-weight: 300; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text); }
+.layer-desc { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 0.8rem; }
+
+/* Instruction format */
+.byte-map {
+  display: grid; grid-template-columns: repeat(16, 1fr);
+  gap: 1px; margin: 1rem 0;
+}
+.byte-map .cell {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  text-align: center;
+  padding: 0.3rem 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.byte-map .cell.inst { border-color: var(--accent-dim); color: var(--accent); }
+.byte-map .cell.ctrl { border-color: var(--blue); color: var(--blue); }
+.byte-map .header { font-size: 0.68rem; color: var(--text-faint); }
+
+/* Two-column comparison */
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1rem 0; }
+@media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+.comparison > div h4 { margin-top: 0; }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.nowrap { white-space: nowrap; }
+.design-rule { margin-bottom: 0.8rem; }
+.design-rule strong { color: var(--text); }
+.design-rule span { color: var(--text-dim); }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="#" class="nav-brand">Lithos</a>
+  <a href="#what">What</a>
+  <a href="#problems">Problems</a>
+  <a href="#silicon">Silicon</a>
+  <a href="#architecture">Architecture</a>
+  <a href="#vocabulary">Vocabulary</a>
+  <a href="#sass">SASS Encoding</a>
+  <a href="#inference">Inference</a>
+  <a href="#kernel-guide">Kernel Guide</a>
+  <a href="#targets">Targets</a>
+  <a href="#code">Code</a>
+  <a href="pytorch.html">Lithos vs PyTorch</a>
+  <a href="performance.html">Performance</a>
+  <a href="memory.html">Memory</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Lithos</h1>
+  <p>Writing on silicon.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- What Lithos Is -->
+<section id="what">
+<h2>What Lithos Is</h2>
+<p>Lithos is a Forth-derived language that writes computation directly onto GPU silicon. It emits PTX (and eventually SASS) for NVIDIA GPUs, dispatched from ARM64 CPUs. No C++, no nvcc, no framework.</p>
+</section>
+
+<!-- The Problem -->
+<section id="problems">
+<h2>The Problems Lithos Solves</h2>
+
+<div class="problem">
+  <div class="problem-header">
+    <span class="problem-num">01</span>
+    <span class="problem-title">Kernel Granularity</span>
+  </div>
+  <p>Current inference stacks launch 20-50 kernels per transformer layer. Each kernel boundary forces hardware synchronization: drain warps, flush pipeline, re-schedule. Inter-kernel gaps: <span class="numbers">1-5&#xB5;s each</span>. At 64 layers, thousands of gaps.</p>
+  <p>Measured on GH200: <span class="numbers">13% bandwidth utilization at batch=1</span>. The GPU is idle 87% of the time.</p>
+  <p>Lithos eliminates kernel boundaries by fusing entire layers &mdash; or entire models &mdash; into single kernels. Fused RMSNorm+residual, fused attention+softmax, fused GEMV+activation. No inter-kernel gaps. No re-scheduling.</p>
+</div>
+
+<div class="problem">
+  <div class="problem-header">
+    <span class="problem-num">02</span>
+    <span class="problem-title">Compiler Quality</span>
+  </div>
+  <p>nvcc passes through 6-7 intermediate representations. ptxas makes generic scheduling decisions. NVIDIA's own cuBLAS uses hand-written SASS for peak GEMM performance because the compiler can't match it.</p>
+  <p>Lithos emits PTX directly. The programmer controls instruction interleaving, register allocation, shared memory access patterns, and async copy pipelines. Every pattern in the vocabulary encodes a known-good scheduling decision.</p>
+</div>
+
+<div class="problem">
+  <div class="problem-header">
+    <span class="problem-num">03</span>
+    <span class="problem-title">Memory Management on Unified Memory</span>
+  </div>
+  <p><code>cudaMalloc</code>/<code>cudaMemcpy</code> exist for discrete GPUs with separate memory spaces. GH200 has hardware-coherent unified memory. The entire CUDA memory management layer is unnecessary overhead.</p>
+  <p>Lithos on GH200: allocate with <code>mmap</code>, pass the pointer to the kernel. The hardware handles coherence. No cudaMalloc, no memory pools, no transfer scheduling.</p>
+</div>
+
+<div class="problem">
+  <div class="problem-header">
+    <span class="problem-num">04</span>
+    <span class="problem-title">Dispatch Overhead</span>
+  </div>
+  <p>Current path: Python &rarr; PyTorch &rarr; ATen &rarr; cuBLAS &rarr; CUDA Runtime &rarr; Driver &rarr; GPU. Measured: <span class="numbers">10-40&#xB5;s per operation</span>. With CUDA graphs: <span class="numbers">0.3-1&#xB5;s amortized</span>.</p>
+  <p>Lithos: Forth &rarr; driver API (<code>cuLaunchKernel</code>) &rarr; GPU. One call. For the fused mega-kernel approach, one launch per forward pass.</p>
+</div>
+
+<div class="problem">
+  <div class="problem-header">
+    <span class="problem-num">05</span>
+    <span class="problem-title">Compilation Latency</span>
+  </div>
+  <p>nvcc compiles a FlashAttention kernel in <span class="numbers">10-60 seconds</span>. CUTLASS template instantiation takes hours. TensorRT model compilation takes minutes.</p>
+  <p>Lithos compilation is string concatenation. Vocabulary words append PTX text to a buffer. A full inference kernel compiles in <span class="numbers">microseconds</span>. Specialize kernels at runtime for exact model config, sequence length, batch size. Recompile instantly when conditions change.</p>
+</div>
+
+</section>
+
+<!-- Target Silicon -->
+<section id="silicon">
+<h2>Target Silicon &mdash; Hopper SM (GH200)</h2>
+<p class="small mb-1">Every Lithos pattern is designed against these exact numbers. Primary target: NVIDIA GH200 480GB (Hopper die, sm_90).</p>
+
+<h3>Per SM (132 active on GH200)</h3>
+<table>
+<thead>
+  <tr><th>Component</th><th>Count</th><th>Notes</th></tr>
+</thead>
+<tbody>
+  <tr><td>FP32 CUDA cores</td><td class="num">128</td><td>Two 16-wide datapaths per sub-partition &times; 4 sub-partitions</td></tr>
+  <tr><td>FP64 cores</td><td class="num">64</td><td>Full-rate double precision (1:2 of FP32)</td></tr>
+  <tr><td>INT32 cores</td><td class="num">64</td><td>Shares one datapath with FP32</td></tr>
+  <tr><td>Tensor cores (4th gen)</td><td class="num">4</td><td>One per sub-partition</td></tr>
+  <tr><td>Load/store units</td><td class="num">16</td><td>4 per sub-partition</td></tr>
+  <tr><td>Special function units</td><td class="num">16</td><td>rcp, rsqrt, sin, cos, ex2, lg2</td></tr>
+  <tr><td>Warp schedulers</td><td class="num">4</td><td>One per sub-partition, 1 instruction/clock each</td></tr>
+  <tr><td>Register file</td><td class="num">256 KB</td><td>65,536 &times; 32-bit registers, 16,384 per sub-partition</td></tr>
+  <tr><td>L1 cache + shared memory</td><td class="num">256 KB</td><td>Unified, configurable (up to 228 KB shared)</td></tr>
+  <tr><td>Max resident warps</td><td class="num">64</td><td>2,048 threads, 16 warps per sub-partition</td></tr>
+  <tr><td>Max thread blocks</td><td class="num">32</td><td>8 per sub-partition</td></tr>
+  <tr><td>Max registers per thread</td><td class="num">255</td><td></td></tr>
+</tbody>
+</table>
+
+<h3>Tensor Core Throughput Per SM</h3>
+<table>
+<thead>
+  <tr><th>Precision</th><th>FLOPs/clock</th><th>Shape</th></tr>
+</thead>
+<tbody>
+  <tr><td>FP8 (E4M3/E5M2)</td><td class="num">2,048</td><td class="mono">m16n8k32</td></tr>
+  <tr><td>FP16 / BF16</td><td class="num">1,024</td><td class="mono">m16n8k16</td></tr>
+  <tr><td>TF32</td><td class="num">512</td><td class="mono">m16n8k8</td></tr>
+  <tr><td>FP64</td><td class="num">256</td><td class="mono">m16n8k4</td></tr>
+  <tr><td>INT8</td><td class="num">2,048</td><td class="mono">m16n8k32</td></tr>
+</tbody>
+</table>
+
+<h3>GPU-Wide (132 SMs, ~1830 MHz boost)</h3>
+<table>
+<thead>
+  <tr><th>Resource</th><th>Total</th></tr>
+</thead>
+<tbody>
+  <tr><td>SMs</td><td class="num">132 (from 144 on die)</td></tr>
+  <tr><td>Tensor cores</td><td class="num">528</td></tr>
+  <tr><td>L2 cache</td><td class="num">50 MB (12 partitions, 128-byte lines)</td></tr>
+  <tr><td>HBM3e stacks</td><td class="num">6 (4.0 TB/s total, ~667 GB/s per stack)</td></tr>
+  <tr><td>HBM3e capacity</td><td class="num">96 GB + 480 GB LPDDR5X (Grace CPU)</td></tr>
+  <tr><td>NVLink-C2C</td><td class="num">900 GB/s bidirectional (coherent)</td></tr>
+  <tr><td>FP16 tensor TFLOPS</td><td class="num">~990 dense, ~1979 with 2:4 sparsity</td></tr>
+  <tr><td>FP8 tensor TFLOPS</td><td class="num">~1979 dense, ~3958 with 2:4 sparsity</td></tr>
+</tbody>
+</table>
+
+<h3>Memory Hierarchy Latencies</h3>
+<table>
+<thead>
+  <tr><th>Level</th><th>Latency</th><th>Bandwidth</th><th>Line/Sector</th></tr>
+</thead>
+<tbody>
+  <tr><td>Register file</td><td class="num">1 cycle</td><td>&mdash;</td><td>&mdash;</td></tr>
+  <tr><td>Shared memory</td><td class="num">~23 cycles</td><td class="num">128 bytes/clock/SM</td><td>32 banks &times; 4 bytes</td></tr>
+  <tr><td>L1 data cache</td><td class="num">~33 cycles</td><td class="num">128 bytes/clock/SM</td><td>128-byte lines</td></tr>
+  <tr><td>L2 cache</td><td class="num">~200 cycles</td><td class="num">~12 TB/s internal</td><td>128-byte lines</td></tr>
+  <tr><td>HBM3e (global)</td><td class="num">~400 cycles</td><td class="num">4.0 TB/s</td><td>32-byte sectors</td></tr>
+</tbody>
+</table>
+
+<h3>Design Rules for Lithos Patterns</h3>
+<p class="small mb-1">These are not guidelines. They are constraints. Patterns that violate them waste hardware.</p>
+
+<div class="design-rule"><strong>1. Coalesce at 32 bytes.</strong> <span>Every global memory access from a warp must hit contiguous 32-byte sectors. Misaligned access wastes bandwidth 1:1 with the misalignment.</span></div>
+<div class="design-rule"><strong>2. Avoid shared memory bank conflicts.</strong> <span>32 banks, 4 bytes each. If two threads in a warp access the same bank (different addresses), one stalls.</span></div>
+<div class="design-rule"><strong>3. Fill warps for latency hiding.</strong> <span>6-8 warps per sub-partition to hide shared memory latency. 12-16 to hide global memory latency.</span></div>
+<div class="design-rule"><strong>4. Match tensor core shapes.</strong> <span>m16n8k16 for FP16/BF16. m16n8k32 for FP8/INT8. Tiles that don't match waste tensor core cycles.</span></div>
+<div class="design-rule"><strong>5. Use async copy.</strong> <span><code>cp.async</code> and TMA bypass registers. Global memory flows directly to shared memory. Don't waste register file on data staging.</span></div>
+<div class="design-rule"><strong>6. Minimize register pressure.</strong> <span>&le;128 registers/thread for memory-bound, &le;255 for compute-bound. More registers = fewer warps = less latency hiding.</span></div>
+<div class="design-rule"><strong>7. Fuse to eliminate global memory round-trips.</strong> <span>Every kernel boundary writes to HBM and reads back. Fused kernels keep intermediates in registers or shared memory. Savings: 10-100x per intermediate value.</span></div>
+
+</section>
+
+<!-- Architecture -->
+<section id="architecture">
+<h2>Architecture</h2>
+
+<h3>Current Path: Lithos &rarr; PTX &rarr; SASS</h3>
+<div class="diagram"><span class="accent">Lithos Source</span>                          <span class="dim">Forth words that emit PTX</span>
+       <span class="dim">|</span>
+       <span class="dim">|</span> <span class="highlight">microseconds</span>           <span class="dim">string concatenation</span>
+       <span class="dim">v</span>
+<span class="accent">PTX Text Buffer</span>                        <span class="dim">valid PTX, ready to load</span>
+       <span class="dim">|</span>
+       <span class="dim">|</span> <span class="highlight">cuModuleLoadData</span>        <span class="dim">driver JITs to SASS</span>
+       <span class="dim">v</span>
+<span class="accent">SASS on GPU</span>                            <span class="dim">cached after first load</span>
+       <span class="dim">|</span>
+       <span class="dim">|</span> <span class="highlight">cuLaunchKernel</span>          <span class="dim">one call</span>
+       <span class="dim">v</span>
+<span class="accent">GPU Execution</span></div>
+
+<h3>Future Path: Lithos &rarr; SASS Direct</h3>
+<div class="diagram"><span class="accent">Lithos Source</span>
+       <span class="dim">|</span>
+       <span class="dim">|</span> <span class="highlight">emit-sass.fs</span>            <span class="dim">raw 16-byte SASS instructions</span>
+       <span class="dim">v</span>
+<span class="accent">SASS Code Buffer</span>                       <span class="dim">65536 bytes, binary</span>
+       <span class="dim">|</span>
+       <span class="dim">|</span> <span class="highlight">build-cubin</span>             <span class="dim">wrap in ELF, NVIDIA sections</span>
+       <span class="dim">v</span>
+<span class="accent">cubin ELF</span>                              <span class="dim">.text.&lt;kernel&gt; + .nv.info + .nv.constant0</span>
+       <span class="dim">|</span>
+       <span class="dim">|</span> <span class="highlight">cuModuleLoadData</span>        <span class="dim">no JIT, direct load</span>
+       <span class="dim">v</span>
+<span class="accent">GPU Execution</span>                          <span class="dim">skip ptxas entirely</span></div>
+
+<p>The GPU never runs Forth. The GPU runs whatever Lithos compiled for it. The CPU orchestrates: token input, KV cache management, sampling, speculative decode logic. On GH200, both share the same memory. The orchestration is pointer passing, not data copying.</p>
+
+</section>
+
+<!-- Vocabulary -->
+<section id="vocabulary">
+<h2>Vocabulary</h2>
+<p class="small mb-1">Lithos words are organized in layers. Lower layers emit individual PTX instructions. Higher layers compose them into complete kernels. Each word takes register IDs from the Forth stack, allocates new registers, emits PTX, and returns result register IDs.</p>
+
+<!-- Layer 0 -->
+<div class="vocab-layer">
+<div class="vocab-layer-header">
+  <span class="layer-num">L0</span>
+  <span class="layer-name">PTX Primitives</span>
+</div>
+<p class="layer-desc">Direct 1:1 mapping to PTX instructions. ~65 instruction words, ~20 type modifiers, ~6 memory space qualifiers.</p>
+
+<h4><code>add.f32</code> &mdash; Float add</h4>
+<pre class="forth"><span class="stack">( fa fb -- fc )</span>
+<span class="keyword">:</span> <span class="def">add.f32</span>
+  f32+
+  &gt;r &gt;r &gt;r
+  tab <span class="string">s" add.f32 "</span> ptx+ r&gt; %f ,ptx r&gt; %f ,ptx r&gt; %f ;ptx
+  n-f32 @ <span class="number">1</span> - <span class="keyword">;</span></pre>
+<p class="small">Emits: <code class="mono" style="color:var(--green)">add.f32 %f2, %f0, %f1;</code></p>
+
+<h4><code>fma.rn.f32</code> &mdash; Fused multiply-add</h4>
+<pre class="forth"><span class="stack">( fa fb fc -- fd )</span>
+<span class="keyword">:</span> <span class="def">fma.rn.f32</span>
+  f32+
+  &gt;r &gt;r &gt;r &gt;r
+  tab <span class="string">s" fma.rn.f32 "</span> ptx+ r&gt; %f ,ptx r&gt; %f ,ptx r&gt; %f ,ptx r&gt; %f ;ptx
+  n-f32 @ <span class="number">1</span> - <span class="keyword">;</span></pre>
+<p class="small">Emits: <code class="mono" style="color:var(--green)">fma.rn.f32 %f3, %f0, %f1, %f2;</code></p>
+
+<h4><code>rsqrt.f32</code> &mdash; Reciprocal square root</h4>
+<pre class="forth"><span class="stack">( fa -- fb )</span>
+<span class="keyword">:</span> <span class="def">rsqrt.f32</span>
+  f32+
+  swap &gt;r &gt;r
+  tab <span class="string">s" rsqrt.approx.ftz.f32 "</span> ptx+ r&gt; %f ,ptx r&gt; %f ;ptx
+  n-f32 @ <span class="number">1</span> - <span class="keyword">;</span></pre>
+<p class="small">Emits: <code class="mono" style="color:var(--green)">rsqrt.approx.ftz.f32 %f1, %f0;</code></p>
+
+<h4><code>ld-global-f32</code> &mdash; Coalesced global load</h4>
+<pre class="forth"><span class="stack">( rd-base rtid -- fval )</span>
+<span class="keyword">:</span> <span class="def">ld-global-f32</span>
+  r64+ f32+
+  &gt;r &gt;r &gt;r &gt;r
+  tab <span class="string">s" cvt.u64.u32 "</span> ptx+ r&gt; %rd ,ptx r&gt; %r ;ptx
+  drop
+  tab <span class="string">s" mul.wide.u32 "</span> ptx+ r@ %rd ,ptx r@ %rd <span class="string">s" , 4"</span> ptx+ ;ptx
+  tab <span class="string">s" add.u64 "</span> ptx+ r@ %rd ,ptx r@ %rd ,ptx r&gt; %rd ;ptx
+  tab <span class="string">s" ld.global.f32 "</span> ptx+ r&gt; %f <span class="string">s" , ["</span> ptx+ n-r64 @ <span class="number">1</span> - %rd <span class="string">s" ]"</span> ptx+ ;ptx <span class="keyword">;</span></pre>
+</div>
+
+<!-- Layer 1 -->
+<div class="vocab-layer">
+<div class="vocab-layer-header">
+  <span class="layer-num">L1</span>
+  <span class="layer-name">Access Patterns</span>
+</div>
+<p class="layer-desc">Cached optimizations for common GPU memory and compute patterns. ~30 pattern words.</p>
+
+<h4><code>gtid.x</code> &mdash; Global thread ID</h4>
+<pre class="forth"><span class="stack">( -- rtid )</span>
+<span class="keyword">:</span> <span class="def">gtid.x</span>
+  r32+ r32+ r32+ r32+   <span class="comment">\ r0=tid.x r1=ctaid.x r2=ntid.x r3=result</span>
+  dup <span class="number">3</span> - &gt;r
+  tab <span class="string">s" mov.u32 "</span> ptx+ r@ <span class="number">3</span> - %r <span class="string">s" , %tid.x"</span> ptx+ ;ptx
+  tab <span class="string">s" mov.u32 "</span> ptx+ r@ <span class="number">2</span> - %r <span class="string">s" , %ctaid.x"</span> ptx+ ;ptx
+  tab <span class="string">s" mov.u32 "</span> ptx+ r@ <span class="number">1</span> - %r <span class="string">s" , %ntid.x"</span> ptx+ ;ptx
+  tab <span class="string">s" mad.lo.s32 "</span> ptx+ r@ %r ,ptx r@ <span class="number">2</span> - %r ,ptx r@ <span class="number">1</span> - %r ,ptx r@ <span class="number">3</span> - %r ;ptx
+  r&gt; <span class="keyword">;</span></pre>
+<p class="small">Emits PTX for <code>blockIdx.x * blockDim.x + threadIdx.x</code> &mdash; the most common pattern in every kernel.</p>
+
+<h4><code>warp-reduce-sum.f32</code> &mdash; Butterfly reduction</h4>
+<pre class="forth"><span class="stack">( fin -- fout )</span>
+<span class="keyword">:</span> <span class="def">warp-reduce-sum.f32</span>   <span class="comment">\ 5 rounds: offsets 16, 8, 4, 2, 1</span>
+  f32+
+  dup &gt;r swap &gt;r
+  tab <span class="string">s" shfl.sync.bfly.b32 "</span> ptx+ r@ %f ,ptx r&gt; %f
+      <span class="string">s" , 16, 0x1f, 0xffffffff"</span> ptx+ ;ptx
+  tab <span class="string">s" add.f32 "</span> ptx+ ... ,ptx r@ %f ;ptx
+  <span class="comment">\ ... repeat for 8, 4, 2, 1</span>
+  r&gt; <span class="keyword">;</span></pre>
+<p class="small">Full warp-level sum reduction using butterfly shuffles. 10 instructions: 5 shuffles + 5 adds. Returns sum in all lanes.</p>
+
+<h4><code>cp-async-128</code> &mdash; Async global-to-shared copy</h4>
+<pre class="forth"><span class="stack">( rd-smem rd-gmem -- )</span>
+<span class="keyword">:</span> <span class="def">cp-async-128</span>
+  tab <span class="string">s" cp.async.ca.shared.global ["</span> ptx+ swap %rd
+      <span class="string">s" ], ["</span> ptx+ %rd <span class="string">s" ], 128"</span> ptx+ ;ptx <span class="keyword">;</span></pre>
+<p class="small">Emits: <code class="mono" style="color:var(--green)">cp.async.ca.shared.global [%rd0], [%rd1], 128;</code> &mdash; bypasses registers, uses TMA on Hopper.</p>
+</div>
+
+<!-- Layer 2 -->
+<div class="vocab-layer">
+<div class="vocab-layer-header">
+  <span class="layer-num">L2</span>
+  <span class="layer-name">Fused Operations</span>
+</div>
+<p class="layer-desc">Multiple PTX instructions that always appear together in inference kernels. Fusion eliminates intermediate memory traffic. ~30 composite words.</p>
+
+<h4><code>silu-elem.f32</code> &mdash; SiLU activation</h4>
+<pre class="forth"><span class="stack">( fin -- fout )</span>    <span class="comment">\ x * sigmoid(x) = x / (1 + exp(-x))</span>
+<span class="keyword">:</span> <span class="def">silu-elem.f32</span>
+  f32+ f32+ f32+
+  dup <span class="number">3</span> - &gt;r swap &gt;r
+  tab <span class="string">s" neg.f32 "</span> ptx+ r@ %f ,ptx r&gt; %f ;ptx
+  tab <span class="string">s" mul.f32 "</span> ptx+ r@ %f ,ptx r@ %f <span class="string">s" , 0f3FB8AA3B"</span> ptx+ ;ptx  <span class="comment">\ log2(e)</span>
+  tab <span class="string">s" ex2.approx.ftz.f32 "</span> ptx+ r@ %f ,ptx r@ %f ;ptx
+  tab <span class="string">s" add.f32 "</span> ptx+ r@ %f ,ptx r@ %f <span class="string">s" , 0f3F800000"</span> ptx+ ;ptx  <span class="comment">\ + 1.0</span>
+  tab <span class="string">s" rcp.approx.ftz.f32 "</span> ptx+ r@ %f ,ptx r@ %f ;ptx
+  tab <span class="string">s" mul.f32 "</span> ptx+ r@ <span class="number">1</span>+ %f ,ptx n-f32 @ <span class="number">4</span> - %f ,ptx r&gt; %f ;ptx
+  n-f32 @ <span class="number">3</span> - <span class="keyword">;</span></pre>
+<p class="small">6 instructions. No intermediate memory access. Computes <code>x * sigmoid(x)</code> entirely in registers via <code>ex2.approx</code>.</p>
+
+<h4><code>rmsnorm-elem</code> &mdash; RMSNorm</h4>
+<pre class="forth"><span class="stack">( fx fweight feps rlane rwarp -- fout )</span>
+<span class="keyword">:</span> <span class="def">rmsnorm-elem</span>   <span class="comment">\ x * rsqrt(mean(x^2) + eps) * weight</span>
+  <span class="comment">\ x^2</span>
+  f32+ tab <span class="string">s" mul.f32 "</span> ptx+ ...
+  <span class="comment">\ warp-reduce sum of x^2</span>
+  warp-reduce-sum.f32
+  <span class="comment">\ broadcast from lane 0</span>
+  warp-bcast.f32
+  <span class="comment">\ add eps, rsqrt</span>
+  rsqrt.f32
+  <span class="comment">\ x * rsqrt * weight</span>
+  ... <span class="keyword">;</span></pre>
+<p class="small">Fuses square, warp-cooperative reduce, rsqrt, and scale into a single pattern. No shared memory needed for the reduction &mdash; uses butterfly shuffles.</p>
+
+<h4><code>mma-f16-f32</code> &mdash; Tensor core MMA</h4>
+<pre class="forth"><span class="stack">( rA0 rA1 rA2 rA3 rB0 rB1 fC0 fC1 fC2 fC3 -- fD0 fD1 fD2 fD3 )</span>
+<span class="keyword">:</span> <span class="def">mma-f16-f32</span>   <span class="comment">\ m16n8k16, f16 inputs, f32 accumulators</span>
+  f32+ f32+ f32+ f32+
+  tab <span class="string">s" mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32"</span> ptx+
+  tab tab <span class="string">s" {"</span> ptx+ ... %f <span class="string">s" },"</span> ptx+    <span class="comment">\ D accumulators</span>
+  tab tab <span class="string">s" {"</span> ptx+ ... %r <span class="string">s" },"</span> ptx+    <span class="comment">\ A fragments</span>
+  tab tab <span class="string">s" {"</span> ptx+ ... %r <span class="string">s" },"</span> ptx+    <span class="comment">\ B fragments</span>
+  tab tab <span class="string">s" {"</span> ptx+ ... %f <span class="string">s" }"</span> ptx+ ;ptx  <span class="comment">\ C accumulators</span>
+  <span class="keyword">;</span></pre>
+</div>
+
+<!-- Layer 3 -->
+<div class="vocab-layer">
+<div class="vocab-layer-header">
+  <span class="layer-num">L3</span>
+  <span class="layer-name">Layer Kernels</span>
+</div>
+<p class="layer-desc">Complete transformer layer implementations as single kernels. ~10 kernel words.</p>
+
+<table>
+<thead><tr><th>Word</th><th>Description</th></tr></thead>
+<tbody>
+  <tr><td><code>attention-kernel</code></td><td>QKV projection + RoPE + attention scores + softmax + output projection + residual add + RMSNorm. One kernel.</td></tr>
+  <tr><td><code>mlp-kernel</code></td><td>Gate + up projection + SiLU + element-wise multiply + down projection + residual add + RMSNorm. One kernel.</td></tr>
+  <tr><td><code>decoder-layer</code></td><td><code>attention-kernel</code> + <code>mlp-kernel</code> fused.</td></tr>
+  <tr><td><code>mtp-draft-kernel</code></td><td>MTP head for speculative decoding.</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- Layer 4 -->
+<div class="vocab-layer">
+<div class="vocab-layer-header">
+  <span class="layer-num">L4</span>
+  <span class="layer-name">Engine</span>
+</div>
+<p class="layer-desc">Forward pass orchestration. Launches kernels, manages KV cache, handles batching. ~10 engine words.</p>
+
+<table>
+<thead><tr><th>Word</th><th>Description</th></tr></thead>
+<tbody>
+  <tr><td><code>forward-pass</code></td><td>All layers, one token.</td></tr>
+  <tr><td><code>prefill</code></td><td>Process prompt tokens (batched matmul).</td></tr>
+  <tr><td><code>decode-step</code></td><td>Generate one token.</td></tr>
+  <tr><td><code>speculative-draft</code></td><td>Generate K draft tokens via MTP.</td></tr>
+  <tr><td><code>speculative-verify</code></td><td>Verify draft tokens against full model.</td></tr>
+  <tr><td><code>sample-token</code></td><td>Logits to token (CPU-side, 72 Grace cores).</td></tr>
+</tbody>
+</table>
+</div>
+
+</section>
+
+<!-- SASS Encoding -->
+<section id="sass">
+<h2>SASS Encoding &mdash; Hopper Reverse Engineering</h2>
+<p class="small mb-1">Reverse-engineered from probe cubins. Every SASS instruction is 16 bytes (128 bits).</p>
+
+<h3>16-Byte Instruction Format</h3>
+<div class="byte-map">
+  <div class="cell header">0</div><div class="cell header">1</div><div class="cell header">2</div><div class="cell header">3</div>
+  <div class="cell header">4</div><div class="cell header">5</div><div class="cell header">6</div><div class="cell header">7</div>
+  <div class="cell header">8</div><div class="cell header">9</div><div class="cell header">A</div><div class="cell header">B</div>
+  <div class="cell header">C</div><div class="cell header">D</div><div class="cell header">E</div><div class="cell header">F</div>
+  <div class="cell inst">op</div><div class="cell inst">op</div><div class="cell inst">dst</div><div class="cell inst">src</div>
+  <div class="cell inst">src</div><div class="cell inst">src</div><div class="cell inst">mod</div><div class="cell inst">mod</div>
+  <div class="cell ctrl">stl</div><div class="cell ctrl">yld</div><div class="cell ctrl">bar</div><div class="cell ctrl">bar</div>
+  <div class="cell ctrl">reu</div><div class="cell ctrl">reu</div><div class="cell ctrl">reu</div><div class="cell ctrl">reu</div>
+</div>
+<p class="small">Bytes 0-7: instruction word (opcode in bits [15:0], operands, modifiers). Bytes 8-15: control word (stall counts, yield hints, read/write barriers, register reuse flags).</p>
+
+<h3>Opcode Map (Partial)</h3>
+<table>
+<thead>
+  <tr><th>Opcode [15:0]</th><th>Mnemonic</th><th>Category</th></tr>
+</thead>
+<tbody>
+  <tr><td class="num">0x7221</td><td><code>FADD</code></td><td>Float arithmetic</td></tr>
+  <tr><td class="num">0x7223</td><td><code>FFMA</code></td><td>Float fused multiply-add</td></tr>
+  <tr><td class="num">0x7819</td><td><code>SHF</code></td><td>Funnel shift</td></tr>
+  <tr><td class="num">0x7918</td><td><code>NOP</code></td><td>Control</td></tr>
+  <tr><td class="num">0x7919</td><td><code>S2R</code></td><td>Special register read</td></tr>
+  <tr><td class="num">0x7947</td><td><code>BRA</code></td><td>Control flow</td></tr>
+  <tr><td class="num">0x794d</td><td><code>EXIT</code></td><td>Control flow</td></tr>
+  <tr><td class="num">0x7981</td><td><code>LDG</code></td><td>Memory load (global)</td></tr>
+  <tr><td class="num">0x7986</td><td><code>STG</code></td><td>Memory store (global)</td></tr>
+  <tr><td class="num">0x79c3</td><td><code>S2UR</code></td><td>Special register to uniform</td></tr>
+  <tr><td class="num">0x7ab9</td><td><code>ULDC</code></td><td>Uniform load constant</td></tr>
+  <tr><td class="num">0x7b82</td><td><code>LDC</code></td><td>Load constant</td></tr>
+  <tr><td class="num">0x7c0c</td><td><code>ISETP</code></td><td>Integer set predicate</td></tr>
+  <tr><td class="num">0x7c10</td><td><code>IADD3</code></td><td>Integer add (3-input)</td></tr>
+  <tr><td class="num">0x7c24</td><td><code>IMAD</code></td><td>Integer multiply-add</td></tr>
+</tbody>
+</table>
+
+<h3>Observed Encodings</h3>
+
+<h4>S2R &mdash; Special Register Read</h4>
+<pre class="sass-asm"><span class="mnemonic">S2R</span> <span class="register">R0</span>, SR_TID.X
+  inst: <span class="hex">0x0000000000007919</span>     <span class="label">\ opcode [15:0] = 0x7919</span>
+  ctrl: <span class="hex">0x000e6e0000002100</span>     <span class="label">\ SR_TID.X = special register ID 0x21</span></pre>
+
+<h4>IMAD &mdash; Integer Multiply-Add</h4>
+<pre class="sass-asm"><span class="mnemonic">IMAD</span> <span class="register">R0</span>, <span class="register">R3</span>, <span class="register">UR4</span>, <span class="register">R0</span>
+  inst: <span class="hex">0x0000000403007c24</span>     <span class="label">\ Rd=R0 bits[23:16], Ra=R3 bits[31:24]</span>
+  ctrl: <span class="hex">0x002fe2000f8e0200</span></pre>
+
+<h4>FFMA &mdash; Float Fused Multiply-Add</h4>
+<pre class="sass-asm"><span class="mnemonic">FFMA</span> <span class="register">R9</span>, <span class="register">R2</span>, <span class="register">R5</span>, <span class="register">R9</span>
+  inst: <span class="hex">0x0000000502097223</span>     <span class="label">\ opcode = FFMA, Rd=R9, Ra=R2</span>
+  ctrl: <span class="hex">0x000fca0000000009</span></pre>
+
+<h4>LDG.E &mdash; Load Global</h4>
+<pre class="sass-asm"><span class="mnemonic">LDG.E</span> <span class="register">R5</span>, desc[<span class="register">UR4</span>][<span class="register">R4</span>.64]
+  inst: <span class="hex">0x0000000404057981</span>
+  ctrl: <span class="hex">0x000ea8000c1e1900</span></pre>
+
+<h3>Register Encoding</h3>
+<p>Destination register: bits [23:16] (tentative). Source registers: various positions depending on instruction format. <code>RZ</code> (zero register) = <code>0xFF</code>. Uniform registers (UR) use a different encoding space. Predication (<code>@P0</code>) modifies the instruction word, not the control word.</p>
+
+<h3>SASS Emitter (emit-sass.fs)</h3>
+<pre class="forth"><span class="comment">\ Opcode constants from probe disassembly</span>
+<span class="number">$7221</span> constant <span class="def">OP-FADD</span>      <span class="number">$7223</span> constant <span class="def">OP-FFMA</span>
+<span class="number">$7918</span> constant <span class="def">OP-NOP</span>       <span class="number">$7919</span> constant <span class="def">OP-S2R</span>
+<span class="number">$7947</span> constant <span class="def">OP-BRA</span>       <span class="number">$794d</span> constant <span class="def">OP-EXIT</span>
+<span class="number">$7981</span> constant <span class="def">OP-LDG</span>       <span class="number">$7986</span> constant <span class="def">OP-STG</span>
+<span class="number">$7c0c</span> constant <span class="def">OP-ISETP</span>     <span class="number">$7c10</span> constant <span class="def">OP-IADD3</span>
+<span class="number">$7c24</span> constant <span class="def">OP-IMAD</span>
+
+<span class="comment">\ Emit a NOP: inst = 0x7918, ctrl = standard</span>
+<span class="keyword">:</span> <span class="def">nop,</span>  <span class="number">$0000000000007918</span> <span class="number">$000fc00000000000</span> sinst, <span class="keyword">;</span>
+
+<span class="comment">\ Emit EXIT</span>
+<span class="keyword">:</span> <span class="def">exit,</span> <span class="number">$000000000000794d</span> <span class="number">$000fea0003800000</span> sinst, <span class="keyword">;</span></pre>
+
+</section>
+
+<!-- Inference Engine -->
+<section id="inference">
+<h2>Inference Engine</h2>
+<p>The inference engine's job: take model weights and a token sequence, produce the next token. Repeat.</p>
+
+<h3>The Work Per Token</h3>
+<table>
+<thead><tr><th>Step</th><th>Operation</th><th>Notes</th></tr></thead>
+<tbody>
+  <tr><td class="num">1</td><td>Read weights from memory</td><td>~8 GB for 27B W4. Every token.</td></tr>
+  <tr><td class="num">2</td><td>Matrix-vector multiply</td><td>Activation &times; weights. 64 layers.</td></tr>
+  <tr><td class="num">3</td><td>Attention</td><td>Score against all previous tokens' KV cache. Read/write KV entries.</td></tr>
+  <tr><td class="num">4</td><td>Normalize</td><td>RMSNorm before and after attention + MLP. Elementwise.</td></tr>
+  <tr><td class="num">5</td><td>Activate</td><td>SiLU in the MLP. Elementwise.</td></tr>
+  <tr><td class="num">6</td><td>Residual add</td><td>Skip connections. Elementwise.</td></tr>
+  <tr><td class="num">7</td><td>Sample</td><td>Logits to token. Once per forward pass.</td></tr>
+</tbody>
+</table>
+<p class="small">Steps 1-6 repeat per layer. Step 7 once at the end.</p>
+
+<h3>Engine Decisions</h3>
+<table>
+<thead><tr><th>Decision</th><th>Strategy</th></tr></thead>
+<tbody>
+  <tr><td>Weight placement</td><td>HBM for hot layers, CPU memory for cold. Unified memory makes this a soft boundary.</td></tr>
+  <tr><td>KV cache placement</td><td>Starts in HBM, spills to CPU memory at NVLink speed. Not a cliff &mdash; a gradient.</td></tr>
+  <tr><td>CPU vs GPU dispatch</td><td>Matmuls: GPU. Sampling: CPU (72 Grace cores). KV cache management: CPU.</td></tr>
+  <tr><td>Overlap</td><td>Next layer's weight prefetch overlaps current compute. CPU sampling overlaps GPU prefill.</td></tr>
+  <tr><td>Batching</td><td>Multiple requests share weight reads. Linear scaling until compute-bound. Batch=1: 13% BW. Batch=8: approaching ceiling.</td></tr>
+</tbody>
+</table>
+
+<h3>Kernel Structure</h3>
+<p>Instead of 20-50 kernels per layer:</p>
+<table>
+<thead><tr><th>Kernel</th><th>Fuses</th></tr></thead>
+<tbody>
+  <tr><td><code>attention-layer</code></td><td>QKV projection, RoPE, attention scores, softmax, output projection, residual add, RMSNorm</td></tr>
+  <tr><td><code>mlp-layer</code></td><td>Gate projection, up projection, SiLU, element-wise multiply, down projection, residual add, RMSNorm</td></tr>
+  <tr><td><code>forward-pass</code></td><td>All 64 layers fused. One program from token input to logit output.</td></tr>
+</tbody>
+</table>
+
+<h3>Memory Model on GH200</h3>
+<div class="diagram"><span class="accent">Unified Address Space</span>
+
+  <span class="highlight">HBM3 96 GB</span>                    <span class="highlight">LPDDR5X 480 GB</span>
+  <span class="dim">~4 TB/s</span>                        <span class="dim">~500 GB/s</span>
+
+  Weights                        KV cache overflow
+  KV cache                       Cold weights
+  Activations                    CPU-side computation
+
+         <span class="dim">|</span>      <span class="accent">NVLink-C2C</span>      <span class="dim">|</span>
+         <span class="dim">|</span>      <span class="accent">900 GB/s</span>        <span class="dim">|</span>
+         <span class="dim">|</span>      <span class="accent">coherent</span>        <span class="dim">|</span>
+         <span class="dim">+-----------+------------+</span>
+
+  Both CPU and GPU access any address.
+  Hardware maintains coherence.
+  No explicit transfers needed.</div>
+
+<p>Lithos allocates memory once (<code>mmap</code>). Weights load from disk into this space. The GPU reads them directly. No <code>cudaMalloc</code>, no <code>cudaMemcpy</code>, no staging buffers.</p>
+
+</section>
+
+<!-- Kernel Guide -->
+<section id="kernel-guide">
+<h2>Kernel Guide &mdash; Why These Kernels, Why Not Others</h2>
+
+<h3>Why 7 Kernels and Not 1 or 100</h3>
+<p>Each kernel matches a distinct mathematical operation in the transformer. You cannot merge all 7 into 1 because some need fundamentally different parallelism strategies &mdash; <code>PROJECTION</code> tiles matrices across warps, while <code>NORM</code> reduces across a single vector. You do not need 100 because there are only 7 distinct operations. Everything else in the model is repetition with different weight pointers. Seven operations, seven kernels, each with a reason to exist separately.</p>
+
+<h3>The Kernels</h3>
+
+<h4><code>PROJECTION</code> &mdash; Multiplication</h4>
+<p>The model has learned a giant table of numbers (weights). For every token, we multiply the token's representation against this table to transform it. This happens 448 times per token (7 projections &times; 64 layers). It is 90% of all work. The kernel exists because matrix multiplication has a specific optimal pattern on GPUs &mdash; you tile it into blocks that fit in shared memory, feed chunks to tensor cores, and accumulate. No other operation uses this pattern.</p>
+
+<h4><code>ATTENTION-SCORE</code> &mdash; Memory</h4>
+<p>The model looks back at every previous token to decide what matters for the current one. It computes a relevance score for each past token, then combines the past tokens weighted by relevance. This kernel exists separately from <code>PROJECTION</code> because the access pattern is fundamentally different &mdash; it streams through a growing cache rather than reading a fixed matrix. The KV cache grows with every token; the weight matrix does not.</p>
+
+<h4><code>NORM</code> &mdash; Balancing</h4>
+<p>After each transformation, the numbers can drift to extreme ranges. Normalization brings them back to a stable scale. It reads every number in the vector, computes one aggregate statistic (root mean square), and scales everything by it. This kernel exists because it requires a reduction (sum across all elements) followed by a broadcast (multiply all elements by one value) &mdash; a pattern unlike multiplication or attention.</p>
+
+<h4><code>ACTIVATE</code> &mdash; Nonlinearity</h4>
+<p>Without this, stacking 64 layers of multiplication would collapse into a single multiplication. SiLU introduces a curve that lets the network represent complex functions. It is applied to each number independently &mdash; no interaction between elements. This kernel exists because it is embarrassingly parallel (every element is independent) unlike <code>PROJECTION</code> (elements cooperate) or <code>NORM</code> (elements reduce).</p>
+
+<h4><code>ROTATE</code> &mdash; Position Encoding</h4>
+<p>The model needs to know that token 5 came before token 50. RoPE rotates pairs of numbers by angles that depend on position &mdash; different positions get different rotations. This kernel exists separately because it operates on pairs (2D rotation) unlike <code>ACTIVATE</code> (single elements) or <code>NORM</code> (full vector reduction).</p>
+
+<h4><code>RESIDUAL</code> &mdash; Shortcut</h4>
+<p>The output of each layer is added to its input, creating a direct path for information to flow through the network without being transformed. It is one addition per number. In practice it is always fused with <code>NORM</code> &mdash; never launched alone.</p>
+
+<h4><code>DEQUANTIZE</code> &mdash; Unpacking</h4>
+<p>Weights are stored as 4-bit integers to save memory (8 GB instead of 32 GB). Before multiplication, each 4-bit integer must be converted to a 16-bit float. This happens inside <code>PROJECTION</code> &mdash; never standalone. It exists as a concept because the unpacking logic is the main thing that differs between quantization formats (<code>W4</code>, <code>W8</code>, <code>GPTQ</code>, <code>AWQ</code>).</p>
+
+<h4><code>SAMPLE</code> &mdash; Decision</h4>
+<p>After 64 layers of transformation, the model outputs a score for every word in its vocabulary (248,320 scores). <code>SAMPLE</code> picks one word. It can run on CPU because it happens once per token and the data is small enough to fit in CPU cache.</p>
+
+<h4><code>EMBED</code> &mdash; Lookup</h4>
+<p>Convert a token ID (a number like <code>4217</code>) into the model's internal representation (a vector of 5,120 numbers). One table lookup. Trivial.</p>
+
+<h3>Why Not cuBLAS</h3>
+<p>cuBLAS ships 800 MB of pre-compiled kernels for every possible matrix size, data type, and GPU. Lithos generates the exact kernel for your model's dimensions. cuBLAS cannot fuse <code>PROJECTION</code> with <code>DEQUANTIZE</code> or <code>NORM</code> with <code>RESIDUAL</code> because it does not know your model. Lithos does.</p>
+
+<h3>Fusion Explained</h3>
+<p>When two operations run as separate kernels, the result of the first must be written to GPU memory (HBM) and the second reads it back. At 4 TB/s this sounds fast, but the data is often only a few KB &mdash; the overhead of launching a new kernel and reading the data back dominates. Fusion means both operations run in the same kernel. The intermediate result stays in registers (<span class="numbers">1 cycle</span> access) instead of going to HBM (<span class="numbers">400 cycle</span> access). That is a <span class="numbers">400&times;</span> latency reduction on every intermediate value.</p>
+
+<h3>The 3-Kernel Target</h3>
+<p>The ultimate Lithos goal is 3 fused kernels: <code>ATTENTION</code> (norm + rotate + projection&times;4 + attention-score + residual), <code>MLP</code> (norm + projection&times;3 + activate + residual), and <code>SAMPLE</code>. One kernel per major block. No intermediate memory traffic. This is what cuBLAS fundamentally cannot do.</p>
+
+</section>
+
+<!-- Quantitative Targets -->
+<section id="targets">
+<h2>Quantitative Targets</h2>
+
+<table>
+<thead>
+  <tr><th>Metric</th><th>vLLM Current</th><th>Lithos Target</th><th>Why</th></tr>
+</thead>
+<tbody>
+  <tr>
+    <td>Bandwidth utilization (batch=1)</td>
+    <td class="num">13%</td>
+    <td class="num" style="color:var(--accent)">&gt;70%</td>
+    <td>Fused kernels eliminate inter-kernel gaps</td>
+  </tr>
+  <tr>
+    <td>Kernel launches per token</td>
+    <td class="num">~3000</td>
+    <td class="num" style="color:var(--accent)">1-64</td>
+    <td>One per layer or one per forward pass</td>
+  </tr>
+  <tr>
+    <td>Dispatch overhead per token</td>
+    <td class="num">~45 ms / ~50 &#xB5;s (graphs)</td>
+    <td class="num" style="color:var(--accent)">&lt;10 &#xB5;s</td>
+    <td>One launch, no framework</td>
+  </tr>
+  <tr>
+    <td>Compilation time for kernel change</td>
+    <td class="num">10-60 s (nvcc)</td>
+    <td class="num" style="color:var(--accent)">&lt;1 ms</td>
+    <td>String concatenation</td>
+  </tr>
+  <tr>
+    <td>Memory management overhead</td>
+    <td class="num">cudaMalloc pools + transfers</td>
+    <td class="num" style="color:var(--accent)">Zero</td>
+    <td>Unified memory, mmap only</td>
+  </tr>
+  <tr>
+    <td>Single-stream tok/s (Qwen 27B W4)</td>
+    <td class="num">~180</td>
+    <td class="num" style="color:var(--accent)">&gt;400</td>
+    <td>Bandwidth utilization + fused kernels</td>
+  </tr>
+</tbody>
+</table>
+
+</section>
+
+<!-- Code Examples -->
+<section id="code">
+<h2>Code Examples</h2>
+
+<h3>1. Defining a Kernel</h3>
+<p>A Lithos kernel definition using the vocabulary from <code>core.fs</code>:</p>
+
+<pre class="forth"><span class="comment">\ Vector add kernel: output[i] = input_a[i] + input_b[i]</span>
+
+ptx-reset ptx-header
+
+<span class="string">s" vec_add"</span> kernel{
+  <span class="string">s" ptr_a"</span>   param-u64 ,param
+  <span class="string">s" ptr_b"</span>   param-u64 ,param
+  <span class="string">s" ptr_out"</span> param-u64 ,param
+  <span class="string">s" n"</span>       param-u32
+  )params
+
+  <span class="comment">\ Load parameters</span>
+  <span class="string">s" ptr_a"</span>   ld-param-u64    <span class="comment">\ -- rd0</span>
+  <span class="string">s" ptr_b"</span>   ld-param-u64    <span class="comment">\ -- rd0 rd1</span>
+  <span class="string">s" ptr_out"</span> ld-param-u64    <span class="comment">\ -- rd0 rd1 rd2</span>
+
+  <span class="comment">\ Compute global thread ID</span>
+  gtid.x                        <span class="comment">\ -- rd0 rd1 rd2 rtid</span>
+
+  <span class="comment">\ Bounds check</span>
+  <span class="comment">\ bounds-exit</span>
+
+  <span class="comment">\ Load, compute, store</span>
+  <span class="number">2</span> pick over ld-global-f32     <span class="comment">\ -- ... fa</span>
+  <span class="number">3</span> pick over ld-global-f32     <span class="comment">\ -- ... fa fb</span>
+  add.f32                       <span class="comment">\ -- ... fc</span>
+  <span class="number">2</span> pick over st-global-f32     <span class="comment">\ store result</span>
+}kernel</pre>
+
+<h3>2. The PTX It Produces</h3>
+<pre class="ptx"><span class="directive">.version</span> <span class="number">8.0</span>
+<span class="directive">.target</span> sm_90
+<span class="directive">.address_size</span> <span class="number">64</span>
+
+<span class="directive">.visible .entry</span> vec_add <span class="punct">(</span>
+  <span class="directive">.param .u64</span> ptr_a<span class="punct">,</span>
+  <span class="directive">.param .u64</span> ptr_b<span class="punct">,</span>
+  <span class="directive">.param .u64</span> ptr_out<span class="punct">,</span>
+  <span class="directive">.param .u32</span> n
+<span class="punct">)</span>
+<span class="punct">{</span>
+  <span class="directive">.reg .b32</span>  <span class="register">%r</span>&lt;<span class="number">8</span>&gt;;
+  <span class="directive">.reg .b64</span>  <span class="register">%rd</span>&lt;<span class="number">6</span>&gt;;
+  <span class="directive">.reg .f32</span>  <span class="register">%f</span>&lt;<span class="number">4</span>&gt;;
+
+  <span class="comment">// Load parameters</span>
+  <span class="mnemonic">ld.param.u64</span>    <span class="register">%rd0</span>, [ptr_a];
+  <span class="mnemonic">ld.param.u64</span>    <span class="register">%rd1</span>, [ptr_b];
+  <span class="mnemonic">ld.param.u64</span>    <span class="register">%rd2</span>, [ptr_out];
+
+  <span class="comment">// Global thread ID</span>
+  <span class="mnemonic">mov.u32</span>         <span class="register">%r0</span>, %tid.x;
+  <span class="mnemonic">mov.u32</span>         <span class="register">%r1</span>, %ctaid.x;
+  <span class="mnemonic">mov.u32</span>         <span class="register">%r2</span>, %ntid.x;
+  <span class="mnemonic">mad.lo.s32</span>      <span class="register">%r3</span>, <span class="register">%r1</span>, <span class="register">%r2</span>, <span class="register">%r0</span>;
+
+  <span class="comment">// Coalesced load: addr + tid*4</span>
+  <span class="mnemonic">cvt.u64.u32</span>     <span class="register">%rd3</span>, <span class="register">%r3</span>;
+  <span class="mnemonic">mul.wide.u32</span>    <span class="register">%rd3</span>, <span class="register">%rd3</span>, <span class="number">4</span>;
+  <span class="mnemonic">add.u64</span>         <span class="register">%rd3</span>, <span class="register">%rd3</span>, <span class="register">%rd0</span>;
+  <span class="mnemonic">ld.global.f32</span>   <span class="register">%f0</span>, [<span class="register">%rd3</span>];
+
+  <span class="mnemonic">cvt.u64.u32</span>     <span class="register">%rd4</span>, <span class="register">%r3</span>;
+  <span class="mnemonic">mul.wide.u32</span>    <span class="register">%rd4</span>, <span class="register">%rd4</span>, <span class="number">4</span>;
+  <span class="mnemonic">add.u64</span>         <span class="register">%rd4</span>, <span class="register">%rd4</span>, <span class="register">%rd1</span>;
+  <span class="mnemonic">ld.global.f32</span>   <span class="register">%f1</span>, [<span class="register">%rd4</span>];
+
+  <span class="comment">// Add</span>
+  <span class="mnemonic">add.f32</span>         <span class="register">%f2</span>, <span class="register">%f0</span>, <span class="register">%f1</span>;
+
+  <span class="comment">// Coalesced store</span>
+  <span class="mnemonic">cvt.u64.u32</span>     <span class="register">%rd5</span>, <span class="register">%r3</span>;
+  <span class="mnemonic">mul.wide.u32</span>    <span class="register">%rd5</span>, <span class="register">%rd5</span>, <span class="number">4</span>;
+  <span class="mnemonic">add.u64</span>         <span class="register">%rd5</span>, <span class="register">%rd5</span>, <span class="register">%rd2</span>;
+  <span class="mnemonic">st.global.f32</span>   [<span class="register">%rd5</span>], <span class="register">%f2</span>;
+
+  <span class="mnemonic">exit</span>;
+<span class="punct">}</span></pre>
+
+<h3>3. How It Launches</h3>
+<pre class="forth"><span class="comment">\ Compile PTX and launch on GPU</span>
+ptx$                             <span class="comment">\ -- addr u    (PTX text buffer)</span>
+
+<span class="comment">\ Load PTX module via CUDA driver API</span>
+cuModuleLoadData                 <span class="comment">\ -- module</span>
+<span class="string">s" vec_add"</span> cuModuleGetFunction  <span class="comment">\ -- func</span>
+
+<span class="comment">\ Set up launch parameters</span>
+<span class="number">256</span> <span class="number">1</span> <span class="number">1</span>                          <span class="comment">\ block: 256 threads</span>
+n <span class="number">255</span> + <span class="number">256</span> / <span class="number">1</span> <span class="number">1</span>                <span class="comment">\ grid: ceil(n/256) blocks</span>
+
+<span class="comment">\ Launch — one call, one kernel, the GPU executes</span>
+cuLaunchKernel                   <span class="comment">\ GPU runs vec_add</span></pre>
+
+<p class="mt-2">This is the entire path. Forth words concatenate PTX strings. <code>ptx$</code> returns the buffer. The driver JITs it to SASS. One <code>cuLaunchKernel</code> call. No frameworks, no templates, no intermediate representations.</p>
+
+<p class="mt-1">Because compilation is microseconds, kernels specialize at runtime: generate a kernel tuned for the exact <code>hidden_dim</code>, <code>num_heads</code>, <code>head_dim</code>. Regenerate when batch size changes. Inline constants. Unroll loops to exact layer count.</p>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+Lithos &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. Lithos writes on the GPU.
+</div>
+</footer>
+
+</body>
+</html>

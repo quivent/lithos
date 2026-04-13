@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos Architecture &mdash; From Model File to Generated Token</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 2.8rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Comparison */
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1rem 0; }
+@media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+.comparison > div h4 { margin-top: 0; }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+/* ===== Architecture diagram styles ===== */
+
+/* Flow boxes and arrows */
+.flow-diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem;
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.flow-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  margin-bottom: 0.6rem;
+}
+.flow-row:last-child { margin-bottom: 0; }
+
+.flow-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.72rem;
+  color: var(--text);
+  white-space: nowrap;
+  min-height: 2rem;
+}
+.flow-box.accent {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.flow-box.cyan {
+  border-color: #2a5a5e;
+  color: var(--cyan);
+}
+.flow-box.green {
+  border-color: #2a5e2a;
+  color: var(--green);
+}
+.flow-box.blue {
+  border-color: #2a3a5e;
+  color: var(--blue);
+}
+.flow-box.red {
+  border-color: #5e2a2a;
+  color: var(--red);
+}
+.flow-box.dim {
+  border-color: var(--border);
+  color: var(--text-faint);
+  border-style: dashed;
+}
+.flow-box.wide {
+  padding: 0.35rem 1rem;
+}
+.flow-box.kernel {
+  border-color: var(--accent-dim);
+  background: #1a150e;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.flow-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.3rem;
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+.flow-arrow.dim { color: var(--text-faint); }
+.flow-arrow.down {
+  display: flex;
+  justify-content: center;
+  padding: 0.15rem 0;
+  width: 100%;
+  font-size: 0.9rem;
+}
+.flow-arrow.down-left {
+  display: flex;
+  justify-content: flex-start;
+  padding: 0.15rem 0 0.15rem 4rem;
+  width: 100%;
+}
+
+.flow-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  padding: 0 0.4rem;
+  white-space: nowrap;
+}
+
+.flow-group {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.8rem;
+  margin: 0.5rem 0;
+}
+.flow-group-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Memory map styles */
+.mem-map {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem;
+  margin: 1rem 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0;
+  align-items: stretch;
+}
+.mem-region {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.mem-block {
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  margin-bottom: -1px;
+}
+.mem-block.header {
+  background: var(--bg-raised);
+  font-size: 0.68rem;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  text-align: center;
+  border-color: var(--accent-dim);
+}
+.mem-block .label { color: var(--text); }
+.mem-block .size { color: var(--cyan); float: right; }
+.mem-block .note { color: var(--text-faint); font-size: 0.66rem; display: block; margin-top: 0.15rem; }
+.mem-block.hot { border-left: 2px solid var(--accent); }
+.mem-block.warm { border-left: 2px solid var(--blue); }
+.mem-block.cold { border-left: 2px solid var(--text-faint); }
+
+.mem-bridge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1rem;
+  min-width: 7rem;
+}
+.bridge-line {
+  width: 100%;
+  height: 1px;
+  background: var(--accent);
+  margin: 0.3rem 0;
+}
+.bridge-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+  text-align: center;
+  white-space: nowrap;
+}
+.bridge-stat {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6rem;
+  color: var(--cyan);
+  text-align: center;
+}
+
+/* Kernel pipeline comparison */
+.pipeline-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1.5rem;
+  margin: 1rem 0;
+}
+@media (max-width: 800px) { .pipeline-compare { grid-template-columns: 1fr; } }
+
+.pipeline-col {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem;
+}
+.pipeline-col h4 {
+  margin: 0 0 0.8rem 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.pipeline-col h4.current { color: var(--text-dim); }
+.pipeline-col h4.lithos { color: var(--accent); }
+.pipeline-col h4.future { color: var(--cyan); }
+
+.pipeline-step {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.15rem;
+}
+.pipeline-step .step-box {
+  flex: 1;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--text);
+  text-align: center;
+}
+.pipeline-step .step-box.highlight {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.pipeline-step .step-box.dim {
+  border-color: var(--border);
+  color: var(--text-faint);
+}
+.pipeline-down {
+  text-align: center;
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  padding: 0.05rem 0;
+}
+.pipeline-down.dim { color: var(--text-faint); }
+.pipeline-metric {
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+}
+.pipeline-metric .label { color: var(--text-faint); }
+.pipeline-metric .value { color: var(--cyan); }
+
+/* Layer journey */
+.layer-journey {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.2rem;
+  margin: 1rem 0;
+}
+.layer-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #12121e;
+}
+.layer-step:last-child { border-bottom: none; }
+.layer-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  min-width: 4.5rem;
+  flex-shrink: 0;
+  padding-top: 0.1rem;
+}
+.layer-type {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 2px;
+  flex-shrink: 0;
+  min-width: 5.5rem;
+  text-align: center;
+}
+.layer-type.delta { background: #1a1520; color: #c090e0; border: 1px solid #3a2550; }
+.layer-type.attn { background: #1a1a20; color: var(--blue); border: 1px solid #2a3a5e; }
+.layer-ops {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.66rem;
+}
+.layer-ops .op {
+  padding: 0.1rem 0.35rem;
+  color: var(--text-dim);
+}
+.layer-ops .op.kernel {
+  color: var(--accent);
+  font-weight: 600;
+}
+.layer-ops .arrow {
+  color: var(--text-faint);
+  padding: 0 0.1rem;
+}
+.layer-dots {
+  padding: 0.3rem 0 0.3rem 5.5rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+/* Stack comparison */
+.stack-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  margin: 1rem 0;
+}
+@media (max-width: 600px) { .stack-compare { grid-template-columns: 1fr; } }
+
+.stack-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.stack-col-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+.stack-col-title.vllm { color: var(--text-dim); }
+.stack-col-title.lithos { color: var(--accent); }
+
+.stack-layer {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border);
+  margin-bottom: -1px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.stack-layer .name { color: var(--text); }
+.stack-layer .detail { color: var(--text-faint); font-size: 0.66rem; }
+.stack-layer.waste {
+  background: #1a1012;
+  border-color: #3a1a1a;
+}
+.stack-layer.waste .name { color: var(--red); }
+.stack-layer.essential {
+  background: #0e1410;
+  border-color: #1a3a1a;
+}
+.stack-layer.essential .name { color: var(--green); }
+.stack-layer.highlight {
+  background: #1a150e;
+  border-color: var(--accent-dim);
+}
+.stack-layer.highlight .name { color: var(--accent); }
+
+.stack-total {
+  margin-top: 0.6rem;
+  padding: 0.4rem 0.8rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+}
+.stack-total .label { color: var(--text-faint); }
+.stack-total .value { color: var(--cyan); }
+
+/* mmap overlay line */
+.mmap-overlay {
+  position: relative;
+  margin: 0.8rem 0;
+  padding: 0.3rem 0.8rem;
+  border-left: 2px dashed var(--accent-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.66rem;
+  color: var(--text-faint);
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="index.html">Home</a>
+  <a href="#pipeline">Pipeline</a>
+  <a href="#memory-map">Memory</a>
+  <a href="#kernel-compilation">Compilation</a>
+  <a href="#token-journey">Token Journey</a>
+  <a href="#stack-comparison">Stacks</a>
+  <a href="pytorch.html">Lithos vs PyTorch</a>
+  <a href="performance.html">Performance</a>
+  <a href="memory.html">Memory Deep Dive</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Architecture</h1>
+  <p>From model file to generated token. Every step, every kernel, every byte.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- ============================================================ -->
+<!-- 1. FULL PIPELINE -->
+<!-- ============================================================ -->
+<section id="pipeline">
+<h2>1. The Full Pipeline</h2>
+
+<p>Two inputs converge: weight files and user text. They meet inside GPU kernels that Lithos compiles in under a second.</p>
+
+<h3>Weight Loading</h3>
+<div class="flow-diagram">
+  <div class="flow-row">
+    <span class="flow-box cyan">model.safetensors</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box">mmap()</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box green">weight pointers</span>
+    <span class="flow-label">zero-copy, no cudaMalloc</span>
+  </div>
+</div>
+
+<h3>Kernel Compilation</h3>
+<div class="flow-diagram">
+  <div class="flow-row">
+    <span class="flow-box cyan">config.json</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box accent">kernel factory</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box">PTX text</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box">ptxas</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box green">cubins</span>
+    <span class="flow-label">(cached)</span>
+  </div>
+  <div class="flow-arrow down" style="text-align: left; padding-left: 18rem;">&darr; <span class="flow-label">future</span></div>
+  <div class="flow-row" style="padding-left: 12.5rem;">
+    <span class="flow-box dim">SASS emitter</span>
+    <span class="flow-arrow dim">&rarr;</span>
+    <span class="flow-box dim">cubins</span>
+    <span class="flow-label">(direct, no ptxas)</span>
+  </div>
+</div>
+
+<h3>Inference Path</h3>
+<div class="flow-diagram">
+  <div class="flow-row">
+    <span class="flow-box cyan">User text</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box">tokenizer</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box">token IDs</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box kernel">EMBED</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box green">activation vector</span>
+  </div>
+
+  <div class="flow-arrow down">&darr;</div>
+
+  <div class="flow-group">
+    <div class="flow-group-label">64 layers</div>
+    <div class="flow-row" style="margin-bottom: 0.3rem;">
+      <span class="flow-label" style="min-width: 8rem; padding-left: 0;">DeltaNet (48 layers)</span>
+      <span class="flow-box kernel">FUSED-DELTANET</span>
+      <span class="flow-arrow">&rarr;</span>
+      <span class="flow-box kernel">FUSED-MLP</span>
+    </div>
+    <div class="flow-row">
+      <span class="flow-label" style="min-width: 8rem; padding-left: 0;">Attention (16 layers)</span>
+      <span class="flow-box kernel">FUSED-ATTENTION</span>
+      <span class="flow-arrow">&rarr;</span>
+      <span class="flow-box kernel">FUSED-MLP</span>
+    </div>
+  </div>
+
+  <div class="flow-arrow down">&darr;</div>
+
+  <div class="flow-row">
+    <span class="flow-box green">logits</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box">SAMPLE (CPU)</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box">token ID</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box">tokenizer</span>
+    <span class="flow-arrow">&rarr;</span>
+    <span class="flow-box cyan">text out</span>
+  </div>
+</div>
+
+<p class="small mt-1">Total kernels per token: <code>2</code> per layer + <code>1</code> embed + <code>1</code> sample = <code>129</code>. Compare vLLM: 20-50 per layer = <code>1,280&ndash;3,200</code>.</p>
+
+</section>
+
+<!-- ============================================================ -->
+<!-- 2. MEMORY MAP ON GH200 -->
+<!-- ============================================================ -->
+<section id="memory-map">
+<h2>2. Memory Map on GH200</h2>
+
+<p>GH200 provides unified virtual address space across HBM3e and LPDDR5X. The NVLink-C2C bridge makes both visible to GPU kernels. Lithos uses <code>mmap</code> to place safetensors files directly in this space.</p>
+
+<div class="mem-map">
+  <!-- HBM3e region -->
+  <div class="mem-region">
+    <div class="mem-block header">HBM3e &mdash; 96 GB</div>
+    <div class="mem-block hot">
+      <span class="label">Activations</span>
+      <span class="size">~2 GB</span>
+      <span class="note">hot path, every token</span>
+    </div>
+    <div class="mem-block hot">
+      <span class="label">Weight tensors (primary)</span>
+      <span class="size">~16 GB</span>
+      <span class="note">mmap'd safetensors, 8-bit</span>
+    </div>
+    <div class="mem-block hot">
+      <span class="label">Hot KV cache</span>
+      <span class="size">~8 GB</span>
+      <span class="note">recent context window</span>
+    </div>
+    <div class="mem-block warm">
+      <span class="label">Cubin cache</span>
+      <span class="size">~64 MB</span>
+      <span class="note">compiled kernels</span>
+    </div>
+    <div class="mem-block warm">
+      <span class="label">Page tables / metadata</span>
+      <span class="size">~128 MB</span>
+    </div>
+  </div>
+
+  <!-- NVLink bridge -->
+  <div class="mem-bridge">
+    <div class="bridge-label">NVLink-C2C</div>
+    <div class="bridge-line"></div>
+    <div class="bridge-stat">450 GB/s</div>
+    <div class="bridge-line"></div>
+    <div class="bridge-stat">bidirectional</div>
+    <div class="bridge-line"></div>
+    <div class="bridge-label">coherent</div>
+    <div class="bridge-line"></div>
+    <div class="bridge-stat">unified VA</div>
+  </div>
+
+  <!-- LPDDR5X region -->
+  <div class="mem-region">
+    <div class="mem-block header">LPDDR5X &mdash; 480 GB</div>
+    <div class="mem-block cold">
+      <span class="label">Cold KV cache</span>
+      <span class="size">~64 GB</span>
+      <span class="note">older context, overflow</span>
+    </div>
+    <div class="mem-block cold">
+      <span class="label">Weight overflow</span>
+      <span class="size">~32 GB</span>
+      <span class="note">rarely-accessed layers</span>
+    </div>
+    <div class="mem-block cold">
+      <span class="label">Safetensors file (full)</span>
+      <span class="size">~16 GB</span>
+      <span class="note">mmap backing store</span>
+    </div>
+    <div class="mem-block cold">
+      <span class="label">OS / CPU workspace</span>
+      <span class="size">~16 GB</span>
+    </div>
+    <div class="mem-block cold">
+      <span class="label">Available</span>
+      <span class="size">~352 GB</span>
+      <span class="note">additional models / batches</span>
+    </div>
+  </div>
+</div>
+
+<div class="mmap-overlay">
+  mmap'd safetensors span both regions &mdash; the kernel accesses page-faulted into HBM3e for hot weights, LPDDR5X for cold. No explicit transfers. The hardware page migration engine handles placement.
+</div>
+
+</section>
+
+<!-- ============================================================ -->
+<!-- 3. KERNEL COMPILATION PIPELINE -->
+<!-- ============================================================ -->
+<section id="kernel-compilation">
+<h2>3. Kernel Compilation Pipeline</h2>
+
+<p>Three paths to GPU machine code. The standard CUDA path has 6+ stages. Lithos PTX path has 3. The future SASS path will have 2.</p>
+
+<div class="pipeline-compare">
+  <!-- CUDA path -->
+  <div class="pipeline-col">
+    <h4 class="current">CUDA (nvcc)</h4>
+    <div class="pipeline-step"><span class="step-box dim">CUDA C++</span></div>
+    <div class="pipeline-down dim">&darr;</div>
+    <div class="pipeline-step"><span class="step-box dim">nvcc frontend</span></div>
+    <div class="pipeline-down dim">&darr;</div>
+    <div class="pipeline-step"><span class="step-box dim">LLVM IR</span></div>
+    <div class="pipeline-down dim">&darr;</div>
+    <div class="pipeline-step"><span class="step-box dim">PTX</span></div>
+    <div class="pipeline-down dim">&darr;</div>
+    <div class="pipeline-step"><span class="step-box dim">ptxas</span></div>
+    <div class="pipeline-down dim">&darr;</div>
+    <div class="pipeline-step"><span class="step-box dim">SASS &rarr; fatbin</span></div>
+    <div class="pipeline-down dim">&darr;</div>
+    <div class="pipeline-step"><span class="step-box dim">cudaLaunchKernel</span></div>
+    <div class="pipeline-metric">
+      <span class="label">Steps: </span><span class="value">6&ndash;7</span><br>
+      <span class="label">Time: </span><span class="value">seconds to minutes</span><br>
+      <span class="label">Control: </span><span class="value">none</span>
+    </div>
+  </div>
+
+  <!-- Lithos PTX path -->
+  <div class="pipeline-col">
+    <h4 class="lithos">Lithos PTX (current)</h4>
+    <div class="pipeline-step"><span class="step-box highlight">Lithos words</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box highlight">PTX text</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box">ptxas</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box">cubin</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box">cuModuleLoadData</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box highlight">cuLaunchKernel</span></div>
+    <div class="pipeline-metric">
+      <span class="label">Steps: </span><span class="value">3</span><br>
+      <span class="label">Time: </span><span class="value">~1 second</span><br>
+      <span class="label">Control: </span><span class="value">full ISA</span>
+    </div>
+  </div>
+
+  <!-- Lithos SASS path -->
+  <div class="pipeline-col">
+    <h4 class="future">Lithos SASS (future)</h4>
+    <div class="pipeline-step"><span class="step-box highlight">Lithos words</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box" style="color: var(--cyan); border-color: #2a5a5e;">SASS binary</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box">cubin</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box">cuModuleLoadData</span></div>
+    <div class="pipeline-down">&darr;</div>
+    <div class="pipeline-step"><span class="step-box highlight">cuLaunchKernel</span></div>
+    <div style="height: 2.2rem;"></div>
+    <div class="pipeline-metric">
+      <span class="label">Steps: </span><span class="value">2</span><br>
+      <span class="label">Time: </span><span class="value">microseconds</span><br>
+      <span class="label">Control: </span><span class="value">individual instructions</span>
+    </div>
+  </div>
+</div>
+
+<p class="small">The critical difference: Lithos words <em>are</em> the compiler. Each word emits known-good instruction sequences. No optimizer guessing. No template instantiation. No intermediate representations to lower.</p>
+
+</section>
+
+<!-- ============================================================ -->
+<!-- 4. ONE TOKEN'S JOURNEY -->
+<!-- ============================================================ -->
+<section id="token-journey">
+<h2>4. One Token's Journey</h2>
+
+<p>Step by step through 64 layers. Each layer runs exactly 2 kernel launches: one for the sequence mixer (DeltaNet or Attention) and one for the MLP.</p>
+
+<div class="layer-journey">
+  <!-- Embed -->
+  <div class="layer-step">
+    <span class="layer-num">embed</span>
+    <span class="layer-type" style="background: #10161a; color: var(--cyan); border: 1px solid #2a5a5e;">EMBED</span>
+    <span class="layer-ops">
+      <span class="op">token ID</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">EMBED kernel</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">activation [1, 4096]</span>
+    </span>
+  </div>
+
+  <!-- Layer 0 DeltaNet -->
+  <div class="layer-step">
+    <span class="layer-num">layer 0</span>
+    <span class="layer-type delta">DeltaNet</span>
+    <span class="layer-ops">
+      <span class="op">input</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">RMSNorm</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">conv1d</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">recurrence</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out_proj</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">residual</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">MLP</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out</span>
+    </span>
+  </div>
+
+  <!-- Layer 1 DeltaNet -->
+  <div class="layer-step">
+    <span class="layer-num">layer 1</span>
+    <span class="layer-type delta">DeltaNet</span>
+    <span class="layer-ops">
+      <span class="op">input</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">RMSNorm</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">conv1d</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">recurrence</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out_proj</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">residual</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">MLP</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out</span>
+    </span>
+  </div>
+
+  <!-- Layer 2 DeltaNet -->
+  <div class="layer-step">
+    <span class="layer-num">layer 2</span>
+    <span class="layer-type delta">DeltaNet</span>
+    <span class="layer-ops">
+      <span class="op">input</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">RMSNorm</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">conv1d</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">recurrence</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out_proj</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">residual</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">MLP</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out</span>
+    </span>
+  </div>
+
+  <!-- Layer 3 Attention -->
+  <div class="layer-step">
+    <span class="layer-num">layer 3</span>
+    <span class="layer-type attn">Attention</span>
+    <span class="layer-ops">
+      <span class="op">input</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">RMSNorm</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">QKV proj</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">RoPE</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">flash attn</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out_proj</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">residual</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">MLP</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out</span>
+    </span>
+  </div>
+
+  <!-- Dots -->
+  <div class="layer-dots">&middot;&middot;&middot; layers 4&ndash;62 follow the same pattern: 3 DeltaNet then 1 Attention, repeating &middot;&middot;&middot;</div>
+
+  <!-- Layer 63 Attention -->
+  <div class="layer-step">
+    <span class="layer-num">layer 63</span>
+    <span class="layer-type attn">Attention</span>
+    <span class="layer-ops">
+      <span class="op">input</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">RMSNorm</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">QKV proj</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">RoPE</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">flash attn</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out_proj</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">residual</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">MLP</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">out</span>
+    </span>
+  </div>
+
+  <!-- Final -->
+  <div class="layer-step">
+    <span class="layer-num">output</span>
+    <span class="layer-type" style="background: #10161a; color: var(--cyan); border: 1px solid #2a5a5e;">HEAD</span>
+    <span class="layer-ops">
+      <span class="op">RMSNorm</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">lm_head GEMV</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">logits [1, vocab]</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op kernel">SAMPLE (CPU)</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">token ID</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op">detokenize</span>
+      <span class="arrow">&rarr;</span>
+      <span class="op" style="color: var(--cyan);">text</span>
+    </span>
+  </div>
+</div>
+
+<p class="small mt-1">Key insight: in DeltaNet layers, RMSNorm + conv1d + recurrence + output projection are <em>all fused</em> into the single FUSED-DELTANET kernel launch. Similarly, RMSNorm + QKV + RoPE + attention + output projection fuse into FUSED-ATTENTION. The MLP (gate + up + SiLU + down) fuses into FUSED-MLP. This is why 2 kernel launches per layer, not 10&ndash;20.</p>
+
+</section>
+
+<!-- ============================================================ -->
+<!-- 5. STACK COMPARISON -->
+<!-- ============================================================ -->
+<section id="stack-comparison">
+<h2>5. vLLM Stack vs Lithos Stack</h2>
+
+<p>Every layer in the vLLM stack that is not "Driver" or "GPU" exists to translate between abstractions. Lithos removes the translations.</p>
+
+<div class="stack-compare">
+  <!-- vLLM -->
+  <div>
+    <div class="stack-col-title vllm">vLLM / PyTorch stack</div>
+    <div class="stack-col">
+      <div class="stack-layer waste">
+        <span class="name">Python (vLLM)</span>
+        <span class="detail">scheduling, batching</span>
+      </div>
+      <div class="stack-layer waste">
+        <span class="name">Python (PyTorch)</span>
+        <span class="detail">tensor ops, autograd graph</span>
+      </div>
+      <div class="stack-layer waste">
+        <span class="name">ATen / C++ dispatcher</span>
+        <span class="detail">operator dispatch</span>
+      </div>
+      <div class="stack-layer waste">
+        <span class="name">cuBLAS / cuDNN</span>
+        <span class="detail">GEMM, conv, attention</span>
+      </div>
+      <div class="stack-layer waste">
+        <span class="name">CUDA Runtime</span>
+        <span class="detail">cudaMalloc, streams</span>
+      </div>
+      <div class="stack-layer essential">
+        <span class="name">CUDA Driver</span>
+        <span class="detail">cuLaunchKernel</span>
+      </div>
+      <div class="stack-layer essential">
+        <span class="name">GPU Hardware</span>
+        <span class="detail">SMs, HBM, L2</span>
+      </div>
+    </div>
+    <div class="stack-total">
+      <span class="label">Layers: </span><span class="value">7</span><br>
+      <span class="label">Overhead layers: </span><span class="value" style="color: var(--red);">5</span><br>
+      <span class="label">Languages: </span><span class="value">Python, C++, CUDA C++</span>
+    </div>
+  </div>
+
+  <!-- Lithos -->
+  <div>
+    <div class="stack-col-title lithos">Lithos stack</div>
+    <div class="stack-col">
+      <div class="stack-layer highlight">
+        <span class="name">Lithos</span>
+        <span class="detail">words &rarr; PTX &rarr; cubin</span>
+      </div>
+      <div class="stack-layer essential">
+        <span class="name">CUDA Driver</span>
+        <span class="detail">cuLaunchKernel</span>
+      </div>
+      <div class="stack-layer essential">
+        <span class="name">GPU Hardware</span>
+        <span class="detail">SMs, HBM, L2</span>
+      </div>
+    </div>
+    <div class="stack-total">
+      <span class="label">Layers: </span><span class="value">3</span><br>
+      <span class="label">Overhead layers: </span><span class="value" style="color: var(--green);">0</span><br>
+      <span class="label">Languages: </span><span class="value">Forth, PTX</span>
+    </div>
+  </div>
+</div>
+
+<h3>What Each Removed Layer Costs</h3>
+<table>
+  <tr>
+    <th>Removed Layer</th>
+    <th>Overhead Type</th>
+    <th class="num">Cost</th>
+  </tr>
+  <tr>
+    <td>Python (vLLM)</td>
+    <td>GIL contention, object allocation, scheduler latency</td>
+    <td class="num">50&ndash;200 &micro;s/token</td>
+  </tr>
+  <tr>
+    <td>Python (PyTorch)</td>
+    <td>Tensor creation, dispatch, reference counting</td>
+    <td class="num">20&ndash;100 &micro;s/op</td>
+  </tr>
+  <tr>
+    <td>ATen dispatcher</td>
+    <td>Virtual dispatch, dtype/device checks, schema matching</td>
+    <td class="num">5&ndash;15 &micro;s/op</td>
+  </tr>
+  <tr>
+    <td>cuBLAS</td>
+    <td>Heuristic selection, workspace alloc, generic kernels</td>
+    <td class="num">10&ndash;50 &micro;s/call</td>
+  </tr>
+  <tr>
+    <td>CUDA Runtime</td>
+    <td>cudaMalloc pool, stream sync, error checking</td>
+    <td class="num">5&ndash;30 &micro;s/call</td>
+  </tr>
+</table>
+
+<p class="small">At batch=1, these overheads dominate: 3,200 kernel launches &times; 40 &micro;s average overhead = 128 ms of pure waste per token. Lithos has 129 launches &times; ~0 overhead = the GPU does real work.</p>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+Lithos &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. Lithos writes on the GPU.
+</div>
+</footer>
+
+</body>
+</html>

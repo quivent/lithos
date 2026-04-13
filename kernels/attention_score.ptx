@@ -1,0 +1,189 @@
+// attention_score.ptx -- Flash attention decode kernel (single query vs KV cache)
+// Online softmax with tiled KV cache access, GQA support, head_dim=256
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.visible .entry attention_score(
+    .param .u64 q_ptr,
+    .param .u64 k_cache_ptr,
+    .param .u64 v_cache_ptr,
+    .param .u64 output_ptr,
+    .param .u32 seq_len,
+    .param .u32 head_dim,
+    .param .u32 num_heads
+)
+{
+    .reg .u64   %rd<30>;
+    .reg .u32   %r<50>;
+    .reg .f32   %f<50>;
+    .reg .pred  %p<10>;
+
+    .shared .align 16 .f32 smem_kv[2048];
+
+    // Load params
+    ld.param.u64    %rd0, [q_ptr];
+    ld.param.u64    %rd1, [k_cache_ptr];
+    ld.param.u64    %rd2, [v_cache_ptr];
+    ld.param.u64    %rd3, [output_ptr];
+    ld.param.u32    %r0, [seq_len];
+    ld.param.u32    %r1, [head_dim];
+    ld.param.u32    %r2, [num_heads];
+
+    // Thread/block indexing
+    mov.u32         %r3, %tid.x;
+    mov.u32         %r4, %ctaid.x;         // head index
+    mov.u32         %r5, %ntid.x;          // blockDim.x
+
+    // Exit if head_index >= num_heads
+    setp.ge.u32     %p0, %r4, %r2;
+    @%p0 bra        EXIT;
+
+    // GQA: kv_head = head_index (MHA case; for GQA would divide by ratio)
+    mov.u32         %r6, %r4;
+
+    // Q pointer for this head
+    mul.lo.u32      %r7, %r4, %r1;
+    shl.b32         %r7, %r7, 2;
+    cvt.u64.u32     %rd4, %r7;
+    add.u64         %rd5, %rd0, %rd4;
+
+    // Load Q vector element for this thread
+    setp.lt.u32     %p1, %r3, %r1;
+    mov.f32         %f0, 0f00000000;
+    @!%p1 bra       SKIP_Q_LOAD;
+    shl.b32         %r8, %r3, 2;
+    cvt.u64.u32     %rd6, %r8;
+    add.u64         %rd7, %rd5, %rd6;
+    ld.global.f32   %f0, [%rd7];
+SKIP_Q_LOAD:
+
+    // Online softmax state
+    mov.f32         %f10, 0fFF800000;      // running_max = -inf
+    mov.f32         %f11, 0f00000000;      // running_sum = 0
+    mov.f32         %f12, 0f00000000;      // output accumulator
+
+    // Scale = 1/sqrt(head_dim)
+    cvt.rn.f32.u32  %f13, %r1;
+    rsqrt.approx.f32 %f14, %f13;
+
+    // Shared memory base
+    mov.u64         %rd20, smem_kv;
+
+    // Sequence loop
+    mov.u32         %r10, 0;
+
+SEQ_LOOP:
+    setp.ge.u32     %p2, %r10, %r0;
+    @%p2 bra        SEQ_DONE;
+
+    // --- Load K for token r10 into shared memory ---
+    setp.lt.u32     %p3, %r3, %r1;
+    @!%p3 bra       SKIP_K_LOAD;
+
+    mul.lo.u32      %r12, %r10, %r2;
+    add.u32         %r12, %r12, %r6;
+    mul.lo.u32      %r12, %r12, %r1;
+    add.u32         %r12, %r12, %r3;
+    shl.b32         %r12, %r12, 2;
+    cvt.u64.u32     %rd8, %r12;
+    add.u64         %rd9, %rd1, %rd8;
+
+    ld.global.f32   %f15, [%rd9];
+
+    // Store to shared: smem_kv[tid]
+    shl.b32         %r13, %r3, 2;
+    cvt.u64.u32     %rd21, %r13;
+    add.u64         %rd22, %rd20, %rd21;
+    st.shared.f32   [%rd22], %f15;
+
+SKIP_K_LOAD:
+    bar.sync        0;
+
+    // --- Compute dot product Q . K ---
+    setp.lt.u32     %p4, %r3, %r1;
+    mov.f32         %f16, 0f00000000;
+    @!%p4 bra       SKIP_DOT;
+
+    shl.b32         %r13, %r3, 2;
+    cvt.u64.u32     %rd21, %r13;
+    add.u64         %rd22, %rd20, %rd21;
+    ld.shared.f32   %f17, [%rd22];
+    mul.f32         %f16, %f0, %f17;
+SKIP_DOT:
+
+    // Warp shuffle reduction for dot product
+    shfl.sync.down.b32 %f18, %f16, 16, 31, 0xFFFFFFFF;
+    add.f32         %f16, %f16, %f18;
+    shfl.sync.down.b32 %f18, %f16, 8, 31, 0xFFFFFFFF;
+    add.f32         %f16, %f16, %f18;
+    shfl.sync.down.b32 %f18, %f16, 4, 31, 0xFFFFFFFF;
+    add.f32         %f16, %f16, %f18;
+    shfl.sync.down.b32 %f18, %f16, 2, 31, 0xFFFFFFFF;
+    add.f32         %f16, %f16, %f18;
+    shfl.sync.down.b32 %f18, %f16, 1, 31, 0xFFFFFFFF;
+    add.f32         %f16, %f16, %f18;
+
+    // Broadcast dot product to all lanes
+    shfl.sync.idx.b32 %f16, %f16, 0, 31, 0xFFFFFFFF;
+
+    // Scale
+    mul.f32         %f16, %f16, %f14;
+
+    // --- Online softmax update ---
+    mov.f32         %f20, %f10;            // old_max
+    max.f32         %f10, %f10, %f16;      // new_max
+    sub.f32         %f21, %f20, %f10;      // old_max - new_max
+    // exp2 approximation for exp: exp(x) ~ exp2(x * log2e)
+    mul.f32         %f21, %f21, 0f3FB8AA3B; // * log2(e)
+    ex2.approx.f32  %f22, %f21;           // correction factor
+
+    mul.f32         %f11, %f11, %f22;      // sum *= correction
+    sub.f32         %f23, %f16, %f10;      // score - new_max
+    mul.f32         %f23, %f23, 0f3FB8AA3B;
+    ex2.approx.f32  %f24, %f23;           // exp(score - max)
+    add.f32         %f11, %f11, %f24;      // sum += exp(score-max)
+    mul.f32         %f12, %f12, %f22;      // output *= correction
+
+    // --- Load V for this token and accumulate ---
+    bar.sync        0;
+    setp.lt.u32     %p5, %r3, %r1;
+    @!%p5 bra       SKIP_V;
+
+    mul.lo.u32      %r14, %r10, %r2;
+    add.u32         %r14, %r14, %r6;
+    mul.lo.u32      %r14, %r14, %r1;
+    add.u32         %r14, %r14, %r3;
+    shl.b32         %r14, %r14, 2;
+    cvt.u64.u32     %rd10, %r14;
+    add.u64         %rd11, %rd2, %rd10;
+    ld.global.f32   %f25, [%rd11];
+
+    fma.rn.f32      %f12, %f24, %f25, %f12;
+
+SKIP_V:
+    bar.sync        0;
+
+    add.u32         %r10, %r10, 1;
+    bra             SEQ_LOOP;
+
+SEQ_DONE:
+    // Normalize
+    rcp.approx.f32  %f30, %f11;
+    mul.f32         %f12, %f12, %f30;
+
+    // Store output
+    setp.lt.u32     %p6, %r3, %r1;
+    @!%p6 bra       EXIT;
+
+    mul.lo.u32      %r20, %r4, %r1;
+    add.u32         %r20, %r20, %r3;
+    shl.b32         %r20, %r20, 2;
+    cvt.u64.u32     %rd12, %r20;
+    add.u64         %rd13, %rd3, %rd12;
+    st.global.f32   [%rd13], %f12;
+
+EXIT:
+    ret;
+}

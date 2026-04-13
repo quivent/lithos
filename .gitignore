@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Rust
+cli/target/
+
+# CUDA build artifacts (keep .cubin and .sass as they're the product)
+*.o
+*.fatbin
+
+# OS
+.DS_Store
+*.swp
+
+# Vercel
+.vercel/
+
+# Cache
+/tmp/

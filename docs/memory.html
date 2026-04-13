@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos Memory &mdash; Why mmap Replaces cudaMalloc on GH200</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 4.5rem; font-weight: 300; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Diagram */
+.diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.diagram .highlight { color: var(--text); }
+.diagram .accent { color: var(--accent); }
+.diagram .dim { color: var(--text-faint); }
+
+/* Two-column comparison */
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1rem 0; }
+@media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+.comparison > div h4 { margin-top: 0; }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.nowrap { white-space: nowrap; }
+
+/* Problem cards (reused for memory strategy cards) */
+.problem { margin-bottom: 2rem; }
+.problem-header { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 0.5rem; }
+.problem-num { color: var(--accent); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; }
+.problem-title { font-size: 1rem; font-weight: 600; color: var(--text); }
+.problem p { color: var(--text-dim); }
+.problem .numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="index.html">Home</a>
+  <a href="#old-model">Old Model</a>
+  <a href="#gh200-reality">GH200 Reality</a>
+  <a href="#strategy">Strategy</a>
+  <a href="#why-together">Why Together</a>
+  <a href="#why-no-one-else">Why No One Else</a>
+  <a href="#comparison">Comparison</a>
+  <a href="#kv-solved">KV Cache Solved</a>
+  <a href="#page-placement">Page Placement</a>
+  <a href="pytorch.html">Lithos vs PyTorch</a>
+  <a href="performance.html">Performance</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Memory</h1>
+  <p>Why mmap replaces cudaMalloc on GH200.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Section 1: The Old Model -->
+<section id="old-model">
+<h2>The Old Model (Every Other Engine)</h2>
+
+<p>CUDA assumes separate memory spaces. <code>cudaMalloc</code> for the GPU. <code>malloc</code> for the CPU. <code>cudaMemcpy</code> to move data between them. This model was designed for discrete GPUs connected over PCIe, where CPU and GPU memory are physically separate chips on separate boards.</p>
+
+<h3>PyTorch's CUDACachingAllocator</h3>
+<p>PyTorch wraps <code>cudaMalloc</code> in a caching allocator that manages memory pools, handles fragmentation, runs garbage collection, and provides memory profiling. Thousands of lines of C++ to manage memory that the GPU never directly controls.</p>
+
+<h3>vLLM's KV Cache</h3>
+<p>Pre-allocated as one contiguous <code>cudaMalloc</code> block. Size determined by profiling free memory at startup. Fixed for the lifetime of the server. Want to resize? Restart. That takes <span class="numbers">~2 minutes</span>.</p>
+
+<h3>What cudaMalloc Actually Does</h3>
+<p>Internally, <code>cudaMalloc</code> issues an <code>ioctl</code> to <code>/dev/nvidiaX</code>. The kernel driver manipulates GPU page tables. Each call costs <span class="numbers">10&ndash;500&micro;s</span> depending on allocation size and fragmentation state. The driver maintains separate page tables for a memory separation that, on GH200, does not physically exist.</p>
+
+<h3>The Result</h3>
+<p>Complex memory management code. Fragmentation problems. OOM errors on machines with plenty of physical memory. Restart-to-resize. All to maintain the fiction of separate address spaces on hardware that shares one.</p>
+</section>
+
+<!-- Section 2: The GH200 Reality -->
+<section id="gh200-reality">
+<h2>The GH200 Reality</h2>
+
+<p>Hardware-coherent unified memory via NVLink-C2C at <span class="numbers">900 GB/s</span>.</p>
+
+<p>CPU and GPU share the same physical address space. Any pointer that the CPU can read, the GPU can read. The hardware handles coherence &mdash; no software intervention, no explicit transfers, no synchronization primitives for memory consistency.</p>
+
+<p><code>cudaMalloc</code> still works. But it is unnecessary overhead. It maintains separate page tables for a separation that doesn't physically exist. It issues kernel driver ioctls for an allocation that <code>mmap</code> can do in userspace.</p>
+
+<p><code>mmap</code> returns a pointer. Both processors can use it. That is the entire memory management story on GH200.</p>
+
+<div class="diagram"><span class="accent">Discrete GPU (A100, H100 PCIe):</span>
+CPU Memory &lt;---PCIe 64 GB/s---&gt; GPU Memory
+     |                                |
+  malloc                          cudaMalloc
+  cudaMemcpy to move data between them
+
+<span class="accent">GH200:</span>
+<span class="highlight">One Address Space</span>
+     |
+  <span class="highlight">mmap</span>
+     |
+  Both CPU and GPU read/write the same pointer
+  Hardware coherence via NVLink-C2C @ 900 GB/s</div>
+</section>
+
+<!-- Section 3: Lithos Memory Strategy -->
+<section id="strategy">
+<h2>Lithos Memory Strategy</h2>
+
+<h3>Weights: mmap (lazy)</h3>
+<pre>fd = open("model.safetensors")
+base = mmap(fd, size, PROT_READ, MAP_PRIVATE)
+<span style="color: var(--text-dim)">// No data loaded yet. Just a virtual mapping.</span>
+<span style="color: var(--text-dim)">// First GPU access faults in pages from SSD on demand.</span>
+<span style="color: var(--text-dim)">// After first forward pass: all pages resident.</span>
+<span style="color: var(--text-dim)">// Pointer arithmetic gives direct access to any tensor.</span></pre>
+
+<p>Why mmap for weights: <span class="numbers">18 GB</span> from SSD. Don't wait for all of it. Let the first inference request start immediately. Pages load as the GPU touches them. After warmup, everything is resident at full speed.</p>
+
+<h3>KV Cache: Pre-allocate (eager)</h3>
+<pre>kv_size = layers &times; kv_heads &times; head_dim &times; 2 &times; max_tokens &times; sizeof(f16)
+ptr = mmap(NULL, kv_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0)
+memset(ptr, 0, kv_size)  <span style="color: var(--text-dim)">// touch every page, force physical allocation</span>
+<span style="color: var(--text-dim)">// ptr is fully backed. First access is full speed. No faults during inference.</span></pre>
+
+<p>Why pre-allocate for KV cache: this is hot memory hit every token. Cannot afford page faults during generation. Know the size from arithmetic: <span class="numbers">64 layers &times; 4 heads &times; 256 dim &times; 2 bytes &times; 2 (K+V) = 262 KB per token</span>. Want 300K tokens? Pre-allocate <span class="numbers">77 GB</span>.</p>
+
+<h3>Activations: Pre-allocate (eager)</h3>
+<pre>act_size = hidden_dim &times; sizeof(f16) &times; num_buffers
+ptr = mmap(NULL, act_size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0)
+memset(ptr, 0, act_size)</pre>
+
+<p>Fixed size. Known at model load. Pre-allocate. Zero runtime allocation cost.</p>
+</section>
+
+<!-- Section 4: Why mmap + Pre-allocate Together -->
+<section id="why-together">
+<h2>Why mmap + Pre-allocate Together</h2>
+
+<div class="problem">
+  <div class="problem-header">
+    <span class="problem-num">LAZY</span>
+    <span class="problem-title">mmap for things loaded from disk (weights)</span>
+  </div>
+  <p>Large and loaded from SSD. Lazy is fine &mdash; startup is fast. Pages fault in on first access. After one forward pass, fully resident.</p>
+</div>
+
+<div class="problem">
+  <div class="problem-header">
+    <span class="problem-num">EAGER</span>
+    <span class="problem-title">Pre-allocate for things written during inference (KV cache, activations)</span>
+  </div>
+  <p>Cannot tolerate page faults during token generation. Touch every page at allocation time. First inference access is full speed.</p>
+</div>
+
+<p>Both use <code>mmap</code> as the underlying mechanism. One maps a file. The other maps anonymous memory. No <code>cudaMalloc</code> anywhere. No <code>CUDACachingAllocator</code>. No memory pools. No fragmentation management. No garbage collection.</p>
+</section>
+
+<!-- Section 5: Why No One Else Does This -->
+<section id="why-no-one-else">
+<h2>Why No One Else Does This</h2>
+
+<p>The CUDA programming model assumes separate memory spaces. It was designed for discrete GPUs where CPU and GPU memory are physically different chips. Every abstraction in the ecosystem &mdash; <code>cudaMalloc</code>, <code>cudaMemcpy</code>, unified memory with managed hints &mdash; exists to bridge that gap.</p>
+
+<p>PyTorch, TensorRT, vLLM: all built on <code>cudaMalloc</code> because it works on every NVIDIA GPU from the GTX 1080 to the H100. Correctness across hardware generations is the priority.</p>
+
+<p>GH200 broke the fundamental assumption &mdash; memory is no longer separate &mdash; but the frameworks have not caught up. They cannot special-case for GH200 without maintaining two complete codepaths: one for discrete GPUs, one for unified memory. The engineering cost is prohibitive when GH200 is one SKU among dozens.</p>
+
+<p>Everyone builds on PyTorch. So everyone inherits PyTorch's memory model. Even vLLM, which rewrites the serving layer, still uses PyTorch tensors backed by <code>cudaMalloc</code> under the hood.</p>
+
+<p>Lithos has no legacy. No backward compatibility requirement. No discrete GPU support to maintain. Built for this machine from scratch. The memory model follows from the hardware, not from twenty years of CUDA convention.</p>
+</section>
+
+<!-- Section 6: Concrete Comparison -->
+<section id="comparison">
+<h2>Concrete Comparison</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Operation</th>
+      <th>vLLM / PyTorch</th>
+      <th>Lithos</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Load 18 GB weights</td>
+      <td><code>torch.load</code> &rarr; <code>cudaMalloc</code> &rarr; <code>cudaMemcpy</code> (3&ndash;5s)</td>
+      <td>mmap file, first pass faults in pages (~5s lazy, 0s startup)</td>
+    </tr>
+    <tr>
+      <td>Allocate KV cache</td>
+      <td>Profile free memory &rarr; <code>cudaMalloc</code> contiguous block (36s)</td>
+      <td>Arithmetic &rarr; mmap + memset (&lt; 1s)</td>
+    </tr>
+    <tr>
+      <td>Resize KV cache</td>
+      <td>Restart server (~2 min)</td>
+      <td><code>munmap</code> + <code>mmap</code> new size (milliseconds)</td>
+    </tr>
+    <tr>
+      <td>Activation buffers</td>
+      <td>CUDACachingAllocator pool (&micro;s per alloc, fragmentation risk)</td>
+      <td>Pre-allocated once (0 runtime cost)</td>
+    </tr>
+    <tr>
+      <td>Total memory overhead</td>
+      <td>CUDACachingAllocator metadata, PyTorch tensor objects, pool fragmentation gaps</td>
+      <td>Zero overhead. Pointers to mmap'd regions.</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<!-- Section 7: The KV Cache Problem Solved -->
+<section id="kv-solved">
+<h2>The KV Cache Problem Solved</h2>
+
+<p>vLLM's KV cache is fixed at startup because <code>cudaMalloc</code> cannot resize. The block is contiguous. Growing it means allocating a new, larger block, copying, and freeing the old one. In practice, you restart the server.</p>
+
+<p>Lithos KV cache can grow: <code>mmap</code> more anonymous memory. The OS finds physical pages. No copy. No restart. Milliseconds.</p>
+
+<h3>The GH200 Advantage</h3>
+<p>On GH200, the KV cache can seamlessly span both memory tiers:</p>
+
+<div class="diagram"><span class="accent">HBM3e</span>:  <span class="highlight">96 GB</span> @ <span class="numbers">4 TB/s</span>   &larr; hot KV cache (recent tokens)
+<span class="accent">LPDDR5X</span>: <span class="highlight">480 GB</span> @ <span class="numbers">500 GB/s</span> &larr; cold KV cache (old context)
+
+Total addressable: <span class="highlight">~480 GB</span> = <span class="numbers">~1.8 million tokens</span> of context</div>
+
+<p>Hot pages &mdash; recent tokens accessed every generation step &mdash; stay in HBM. Cold pages &mdash; old context rarely touched &mdash; drift to LPDDR5X. The hardware manages this automatically. No code needed. No "offloading strategy." No tiered caching logic.</p>
+
+<p>Total addressable KV cache: <span class="numbers">~480 GB</span>. At <span class="numbers">262 KB per token</span>, that is <span class="numbers">~1.8 million tokens</span> of context. Without a single line of memory management code.</p>
+</section>
+
+<!-- Section 8: Page Placement on GH200 -->
+<section id="page-placement">
+<h2>Page Placement on GH200</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Tier</th>
+      <th>Capacity</th>
+      <th>Bandwidth</th>
+      <th>Role</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>HBM3e</td>
+      <td class="num">96 GB</td>
+      <td class="num">4 TB/s</td>
+      <td>Weights, activations, hot KV cache</td>
+    </tr>
+    <tr>
+      <td>LPDDR5X</td>
+      <td class="num">480 GB</td>
+      <td class="num">500 GB/s</td>
+      <td>Cold KV cache, weight overflow</td>
+    </tr>
+    <tr>
+      <td>NVLink-C2C</td>
+      <td>&mdash;</td>
+      <td class="num">900 GB/s</td>
+      <td>Coherent bridge between tiers</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>First access to a page: the OS places it. GPU access favors HBM. CPU access favors LPDDR5X. Subsequent accesses can trigger hardware migration &mdash; pages move to whichever tier is accessing them most frequently.</p>
+
+<p><code>cudaMemAdvise</code> can hint placement for known access patterns. Or let the hardware migrate automatically. Either way: no explicit transfers. Just pointers.</p>
+
+<div class="diagram"><span class="accent">Lithos memory map (typical Qwen 27B W4 on GH200 480GB):</span>
+
+<span class="highlight">HBM3e (96 GB)</span>
+  Weights (W4):       ~18 GB   <span class="dim">mmap'd from safetensors, lazy load</span>
+  Activations:         ~1 GB   <span class="dim">pre-allocated, memset</span>
+  Hot KV cache:       ~77 GB   <span class="dim">pre-allocated, memset, recent tokens</span>
+
+<span class="highlight">LPDDR5X (480 GB)</span>
+  Cold KV cache:     ~400 GB   <span class="dim">grows on demand, old context</span>
+  <span class="dim">Available for OS, CPU compute, future models</span>
+
+<span class="dim">No cudaMalloc. No cudaMemcpy. No CUDACachingAllocator.</span>
+<span class="dim">Every allocation is mmap. Every access is a pointer dereference.</span></div>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+Lithos &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. Lithos writes on the GPU.
+</div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,99 @@
+// embed.ptx --- Token embedding lookup with vectorized loads
+// Params: token_id (u32), embed_table_ptr (u64), output_ptr (u64), hidden_dim (u32)
+// Indexed load from embedding table, vectorized 128-bit stores
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.visible .entry embed(
+    .param .u32 token_id,
+    .param .u64 embed_table_ptr,
+    .param .u64 output_ptr,
+    .param .u32 hidden_dim
+)
+{
+    .reg .u64   %rd<10>;
+    .reg .u32   %r<15>;
+    .reg .f32   %f<10>;
+    .reg .pred  %p<5>;
+
+    // Load params
+    ld.param.u32    %r0, [token_id];
+    ld.param.u64    %rd0, [embed_table_ptr];
+    ld.param.u64    %rd1, [output_ptr];
+    ld.param.u32    %r1, [hidden_dim];
+
+    // Thread indexing: grid-stride loop, vectorized (4 f32 = 16 bytes per thread per iteration)
+    mov.u32         %r2, %ctaid.x;
+    mov.u32         %r3, %ntid.x;
+    mov.u32         %r4, %tid.x;
+    mul.lo.u32      %r5, %r2, %r3;
+    add.u32         %r5, %r5, %r4;         // global_idx
+
+    // Grid stride
+    mov.u32         %r6, %nctaid.x;
+    mul.lo.u32      %r6, %r6, %r3;         // grid_stride
+
+    // Compute base address for this token's embedding row
+    // row_offset = token_id * hidden_dim * sizeof(f32)
+    mul.lo.u32      %r7, %r0, %r1;
+    shl.b32         %r7, %r7, 2;           // * 4
+    cvt.u64.u32     %rd2, %r7;
+    add.u64         %rd3, %rd0, %rd2;      // embed_row_ptr
+
+    // Vectorized loop: each thread handles 4 elements at a time
+    shl.b32         %r8, %r5, 2;           // element_idx = global_idx * 4
+
+VEC_LOOP:
+    setp.ge.u32     %p0, %r8, %r1;
+    @%p0 bra        SCALAR_CHECK;
+
+    // Check if we can do a full vector load (4 elements remaining)
+    add.u32         %r9, %r8, 4;
+    setp.gt.u32     %p1, %r9, %r1;
+    @%p1 bra        SCALAR_LOOP_INIT;
+
+    // Byte offset for vectorized load
+    shl.b32         %r10, %r8, 2;          // element_idx * 4
+    cvt.u64.u32     %rd4, %r10;
+
+    // Vectorized load: 4 x f32 = 128 bits
+    add.u64         %rd5, %rd3, %rd4;
+    ld.global.v4.f32 {%f0, %f1, %f2, %f3}, [%rd5];
+
+    // Vectorized store
+    add.u64         %rd6, %rd1, %rd4;
+    st.global.v4.f32 [%rd6], {%f0, %f1, %f2, %f3};
+
+    // Advance by grid_stride * 4
+    shl.b32         %r11, %r6, 2;
+    add.u32         %r8, %r8, %r11;
+    bra             VEC_LOOP;
+
+SCALAR_CHECK:
+    bra             DONE;
+
+SCALAR_LOOP_INIT:
+    // Fall back to scalar for remaining elements
+    mov.u32         %r8, %r8;              // element_idx already set
+
+SCALAR_LOOP:
+    setp.ge.u32     %p2, %r8, %r1;
+    @%p2 bra        DONE;
+
+    shl.b32         %r10, %r8, 2;
+    cvt.u64.u32     %rd4, %r10;
+
+    add.u64         %rd5, %rd3, %rd4;
+    ld.global.f32   %f0, [%rd5];
+
+    add.u64         %rd6, %rd1, %rd4;
+    st.global.f32   [%rd6], %f0;
+
+    add.u32         %r8, %r8, 1;
+    bra             SCALAR_LOOP;
+
+DONE:
+    ret;
+}

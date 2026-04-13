@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos vs PyTorch &mdash; Why the Inference Stack Doesn't Need a Training Framework</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 2.8rem; font-weight: 300; letter-spacing: 0.06em;
+  color: var(--text); margin-bottom: 0.5rem; line-height: 1.2;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+ul { margin: 0.5rem 0 1.2rem 1.5rem; }
+li { margin-bottom: 0.4rem; color: var(--text-dim); }
+li strong { color: var(--text); }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Call chain styling */
+pre .step { color: var(--text-dim); }
+pre .component { color: var(--text); }
+pre .latency { color: var(--cyan); font-style: italic; }
+pre .gpu { color: var(--green); }
+pre .lithos-step { color: var(--accent); }
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Two-column comparison */
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1rem 0; }
+@media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+.comparison > div h4 { margin-top: 0; }
+
+/* Diagram */
+.diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.diagram .highlight { color: var(--text); }
+.diagram .accent { color: var(--accent); }
+.diagram .dim { color: var(--text-faint); }
+
+/* Callout box */
+.callout {
+  background: var(--bg-raised);
+  border-left: 3px solid var(--accent);
+  padding: 1.2rem 1.5rem;
+  margin: 1.5rem 0;
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+.callout p { color: var(--text-dim); }
+.callout p:last-child { margin-bottom: 0; }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.nowrap { white-space: nowrap; }
+.numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="index.html">Home</a>
+  <a href="#what-pytorch-is">PyTorch</a>
+  <a href="#inference-work">Inference Work</a>
+  <a href="#inference-waste">Inference Waste</a>
+  <a href="#pytorch-path">PyTorch Path</a>
+  <a href="#lithos-path">Lithos Path</a>
+  <a href="#replacement-table">Replacements</a>
+  <a href="#memory">Memory</a>
+  <a href="#startup">Startup</a>
+  <a href="#the-point">The Point</a>
+  <a href="performance.html">Performance</a>
+  <a href="memory.html">Memory</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Lithos vs PyTorch</h1>
+  <p>Why the inference stack doesn't need a training framework.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- What PyTorch Is -->
+<section id="what-pytorch-is">
+<h2>What PyTorch Is</h2>
+<p>PyTorch is a tensor math library with automatic differentiation, built for training neural networks. Installed size: <span class="numbers">2+ GB</span>. It loads cuBLAS (<span class="numbers">800 MB</span>), cuDNN (hundreds of MB), the Python runtime, and dozens of C++ dispatch layers.</p>
+<p>It is an excellent training framework. It is the standard for research. It is also what most of the industry uses for inference, because it was already there when inference became a product.</p>
+<p>That does not make it the right tool.</p>
+</section>
+
+<!-- What PyTorch Does During Inference -->
+<section id="inference-work">
+<h2>What PyTorch Does During Inference</h2>
+<p class="small mb-1">The parts that matter.</p>
+
+<ul>
+  <li><strong>Loads weight tensors</strong> from <code>.safetensors</code> files</li>
+  <li><strong>Dispatches matrix multiplications</strong> to cuBLAS</li>
+  <li><strong>Dispatches attention, norm, activation</strong> to cuDNN or custom CUDA kernels</li>
+  <li><strong>Manages GPU memory allocation</strong> via <code>CUDACachingAllocator</code></li>
+  <li><strong>Manages tensor metadata</strong> &mdash; shapes, strides, dtypes</li>
+</ul>
+
+<p>Five things. Everything else PyTorch does during inference is overhead from its training heritage.</p>
+</section>
+
+<!-- What PyTorch Does That Is Waste -->
+<section id="inference-waste">
+<h2>What PyTorch Does During Inference That Is Waste</h2>
+
+<ul>
+  <li><strong>Autograd engine</strong> &mdash; gradient computation. Disabled for inference but still present in the codepath, checked on every operation.</li>
+  <li><strong>Computation graph recording</strong> &mdash; unnecessary for inference. The model is frozen.</li>
+  <li><strong>Python GIL</strong> &mdash; serializes all CPU-side dispatch. One thread at a time, always.</li>
+  <li><strong>Dispatcher overhead</strong> &mdash; <span class="numbers">1-3&#xB5;s per operation</span> through a virtual dispatch chain (Autograd, BackendSelect, CUDA, etc.).</li>
+  <li><strong>Dynamic shape handling</strong> &mdash; reshaping, broadcasting rules checked at runtime when shapes are fixed.</li>
+  <li><strong>Memory allocator complexity</strong> &mdash; pool management, fragmentation handling, when <code>mmap</code> would suffice on GH200.</li>
+  <li><strong>Error checking and validation</strong> on every tensor operation.</li>
+  <li><strong>Module system</strong> &mdash; <code>nn.Module</code>, parameters, buffers, hooks. Training abstractions carried into inference.</li>
+</ul>
+
+<p>Every one of these exists because PyTorch must support training: dynamic shapes, arbitrary graphs, gradient tracking, flexible memory. Inference needs none of it.</p>
+</section>
+
+<!-- PyTorch Inference Path -->
+<section id="pytorch-path">
+<h2>The PyTorch Inference Path &mdash; Step by Step</h2>
+<p>One matrix multiplication. The actual call chain:</p>
+
+<pre>
+<span class="component">Python:</span> model.linear(x)                            <span class="latency">~1&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="component">torch.nn.functional.linear(x, weight, bias)</span>   <span class="latency">~0.5&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="component">torch._C._TensorBase.mm(x, weight)</span>            <span class="latency">~0.5&#xB5;s  Python &rarr; C++ boundary</span>
+  <span class="step">&rarr;</span> <span class="component">PyTorch C++ dispatcher</span>                         <span class="latency">~2&#xB5;s   5+ dispatch keys checked</span>
+  <span class="step">&rarr;</span> <span class="component">ATen::mm implementation</span>                        <span class="latency">~1&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="component">validates shapes, dtypes, contiguity</span>           <span class="latency">~1&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="component">allocates output tensor via CUDACachingAllocator</span> <span class="latency">~2&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="component">cuBLAS workspace setup</span>                         <span class="latency">~1&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="component">cublasGemmEx()</span>                                 <span class="latency">~1&#xB5;s   selects kernel from atlas</span>
+  <span class="step">&rarr;</span> <span class="component">CUDA Runtime: cudaLaunchKernel</span>                 <span class="latency">~0.5&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="component">CUDA Driver: cuLaunchKernel</span>                    <span class="latency">~0.5&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="gpu">GPU executes</span>
+</pre>
+
+<p>Total overhead before the GPU does anything: <span class="numbers">10-40&#xB5;s</span>. Per operation. Thousands of operations per token.</p>
+</section>
+
+<!-- Lithos Inference Path -->
+<section id="lithos-path">
+<h2>The Lithos Inference Path &mdash; Same Operation</h2>
+
+<pre>
+<span class="lithos-step">Lithos:</span> PROJECTION                                   <span class="latency">~1&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="component">cuLaunchKernel (pre-loaded cubin, pre-packed args)</span> <span class="latency">~1-2&#xB5;s</span>
+  <span class="step">&rarr;</span> <span class="gpu">GPU executes</span>
+</pre>
+
+<p>Total overhead: <span class="numbers">2-5&#xB5;s</span>.</p>
+<p>No Python. No dispatcher. No shape validation. No memory allocator. No cuBLAS atlas lookup. The kernel is already compiled. The arguments are already packed. One driver call.</p>
+</section>
+
+<!-- Replacement Table -->
+<section id="replacement-table">
+<h2>What Lithos Replaces from PyTorch</h2>
+
+<table>
+<thead>
+<tr>
+  <th>PyTorch Component</th>
+  <th>Size</th>
+  <th>What It Does</th>
+  <th>Lithos Replacement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>torch</code> (Python)</td>
+  <td class="num">~150 MB</td>
+  <td>Tensor API, module system</td>
+  <td>Nothing &mdash; no tensors, just memory pointers</td>
+</tr>
+<tr>
+  <td><code>libtorch</code> (C++)</td>
+  <td class="num">~800 MB</td>
+  <td>Dispatcher, ATen ops, autograd</td>
+  <td>Nothing &mdash; Lithos dispatches directly</td>
+</tr>
+<tr>
+  <td>cuBLAS</td>
+  <td class="num">800 MB</td>
+  <td>Pre-compiled GEMM atlas</td>
+  <td>7 purpose-built cubins (32 KB)</td>
+</tr>
+<tr>
+  <td>cuDNN</td>
+  <td class="num">~500 MB</td>
+  <td>Pre-compiled conv/norm/attention</td>
+  <td>Fused into Lithos kernels</td>
+</tr>
+<tr>
+  <td><code>CUDACachingAllocator</code></td>
+  <td class="num">part of libtorch</td>
+  <td>GPU memory pool</td>
+  <td><code>mmap</code> (GH200 unified memory)</td>
+</tr>
+<tr>
+  <td><code>torch.compile</code> / Inductor</td>
+  <td class="num">part of torch</td>
+  <td>JIT fusion of Python ops</td>
+  <td>Lithos patterns (compile-time fusion)</td>
+</tr>
+<tr>
+  <td>CUDA Runtime</td>
+  <td class="num">~100 MB</td>
+  <td>High-level launch API</td>
+  <td>CUDA Driver API only (<code>libcuda.so</code>)</td>
+</tr>
+<tr>
+  <td>Python</td>
+  <td class="num">~30 MB</td>
+  <td>Interpreter</td>
+  <td>Forth / Lithos (KB)</td>
+</tr>
+</tbody>
+</table>
+</section>
+
+<!-- What Lithos Keeps -->
+<section id="keeps">
+<h2>What Lithos Keeps</h2>
+
+<p><strong><code>libcuda.so</code></strong> &mdash; the driver. Approximately <span class="numbers">30 MB</span>. This is the only interface to the GPU hardware. It translates API calls into command buffers the GPU understands. Cannot be eliminated without reverse-engineering the GPU's command buffer protocol.</p>
+
+<p><strong>The weight files</strong> &mdash; <code>.safetensors</code> is just a flat array of numbers with a JSON header. Lithos reads it directly with <code>mmap</code>. No PyTorch deserialization. No <code>pickle</code>. No <code>torch.load()</code>. The file maps into the unified address space and the GPU reads it in place.</p>
+</section>
+
+<!-- Memory Comparison -->
+<section id="memory">
+<h2>Memory Comparison</h2>
+
+<div class="comparison">
+<div>
+  <h4>PyTorch inference server (vLLM)</h4>
+<pre>
+Libraries + framework    ~4 GB
+Model weights           ~18 GB
+<span class="step">────────────────────────────</span>
+Total before first token <span class="latency">~22 GB</span>
+</pre>
+</div>
+<div>
+  <h4>Lithos</h4>
+<pre>
+libcuda.so              ~30 MB
+7 cubins                 32 KB
+Model weights           ~18 GB
+<span class="step">────────────────────────────</span>
+Total before first token <span class="lithos-step">~18 GB</span>
+</pre>
+</div>
+</div>
+
+<p>Savings: <span class="numbers">~4 GB</span> of framework code eliminated. That is 4 GB of memory that can hold more KV cache, larger batches, or a bigger model.</p>
+</section>
+
+<!-- Startup Comparison -->
+<section id="startup">
+<h2>Startup Comparison</h2>
+
+<div class="comparison">
+<div>
+  <h4>PyTorch / vLLM</h4>
+<pre>
+Python init                  500 ms
+import torch                   2 s
+import vllm                    1 s
+Load model                     3 s
+torch.compile                 30 s
+CUDA graph capture            90 s
+<span class="step">────────────────────────────────</span>
+Total                      <span class="latency">~2 minutes</span>
+</pre>
+</div>
+<div>
+  <h4>Lithos</h4>
+<pre>
+mmap weights                   1 s
+Load 7 cubins                 &lt;1 ms
+Create CUDA context          100 ms
+<span class="step">────────────────────────────────</span>
+Total                      <span class="lithos-step">~1.5 seconds</span>
+</pre>
+</div>
+</div>
+
+<p>Two minutes versus 1.5 seconds. That is the difference between a framework designed for training flexibility and an engine designed for inference.</p>
+</section>
+
+<!-- The Point -->
+<section id="the-point">
+<h2>The Point</h2>
+
+<div class="callout">
+<p>PyTorch is a training framework pressed into service for inference. Every abstraction it provides &mdash; autograd, dynamic graphs, the module system, the dispatcher &mdash; is designed to make training flexible. Inference is not flexible. The model is frozen. The shapes are fixed. The operations are known.</p>
+<p class="mt-1">Lithos is built for this: a fixed model, fixed shapes, known operations, maximum throughput. No training abstractions. No dispatcher. No Python. Just the math, on the metal.</p>
+</div>
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+Lithos &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. Lithos writes on the GPU.
+</div>
+</footer>
+
+</body>
+</html>

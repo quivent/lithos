@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos Performance &mdash; How to Own the Hardware</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Layout */
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3.5rem; font-weight: 300; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+/* Code */
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Problem cards */
+.problem { margin-bottom: 2rem; }
+.problem-header { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 0.5rem; }
+.problem-num { color: var(--accent); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; }
+.problem-title { font-size: 1rem; font-weight: 600; color: var(--text); }
+.problem p { color: var(--text-dim); }
+.problem .numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; }
+
+/* Engine cards */
+.engine { margin-bottom: 2.5rem; }
+.engine-name { font-size: 1rem; font-weight: 600; color: var(--text); margin-bottom: 0.3rem; }
+.engine-stack { font-size: 0.82rem; color: var(--text-faint); font-family: 'JetBrains Mono', 'Fira Code', monospace; margin-bottom: 0.6rem; }
+.engine h4 { color: var(--green); font-size: 0.82rem; font-weight: 400; letter-spacing: 0.06em; text-transform: uppercase; margin: 0.6rem 0 0.3rem 0; }
+.engine .shortfall h4 { color: var(--red); }
+.engine ul { list-style: none; padding-left: 1.2rem; margin-bottom: 0.4rem; }
+.engine ul li { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 0.2rem; }
+.engine ul li::before { content: "\2013\00a0"; color: var(--text-faint); }
+
+/* Optimization cards */
+.opt { margin-bottom: 2.5rem; }
+.opt-header { display: flex; align-items: baseline; gap: 0.8rem; margin-bottom: 0.5rem; }
+.opt-num { color: var(--accent); font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em; font-family: 'JetBrains Mono', monospace; }
+.opt-title { font-size: 1rem; font-weight: 600; color: var(--text); }
+.opt-section { margin-bottom: 0.4rem; }
+.opt-section strong { color: var(--text-dim); font-size: 0.82rem; font-weight: 400; letter-spacing: 0.06em; text-transform: uppercase; }
+.opt-section p { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 0.3rem; }
+.opt-cant { color: var(--text-faint); font-size: 0.84rem; font-style: italic; margin-top: 0.3rem; }
+
+/* Limitation list */
+.limitations { list-style: none; padding: 0; }
+.limitations li { color: var(--text-dim); font-size: 0.92rem; margin-bottom: 0.6rem; padding-left: 1.2rem; position: relative; }
+.limitations li::before { content: "\2014"; position: absolute; left: 0; color: var(--text-faint); }
+
+/* Diagram */
+.diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.diagram .highlight { color: var(--text); }
+.diagram .accent { color: var(--accent); }
+.diagram .dim { color: var(--text-faint); }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+.nowrap { white-space: nowrap; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="#resources">Resources</a>
+  <a href="#engines">Existing Engines</a>
+  <a href="#optimizations">Optimizations</a>
+  <a href="#targets">Targets</a>
+  <a href="#limitations">Limitations</a>
+  <a href="index.html">Home</a>
+  <a href="pytorch.html">Lithos vs PyTorch</a>
+  <a href="memory.html">Memory</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Performance</h1>
+  <p>How to own the hardware.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Section 1: The Three Resources -->
+<section id="resources">
+<h2>The Three Resources That Determine Performance</h2>
+
+<p>GPU performance comes down to three physical resources. Every kernel is a bet on how to balance them. Understanding these resources is understanding why Lithos exists.</p>
+
+<h3>Registers</h3>
+
+<p>Each SM has <span class="mono" style="color: var(--cyan);">65,536</span> registers &mdash; 256 KB of the fastest storage on the chip. Each thread can claim up to 255 of them. A register access takes <span class="mono" style="color: var(--cyan);">1 cycle</span>.</p>
+
+<p>When a thread needs more data than its registers can hold, the excess <em>spills</em> to memory. The nearest fallback is shared memory at 23 cycles. The real fallback is HBM at <span class="mono" style="color: var(--cyan);">400 cycles</span>. That is a 400x penalty for running out of register space.</p>
+
+<p>But here is the tradeoff: more registers per thread means fewer threads can run simultaneously on the SM. Fewer threads means the warp scheduler has less work to choose from, which means it cannot hide memory latency by switching to another warp while one waits. This is THE fundamental tradeoff in GPU kernel optimization.</p>
+
+<p>cuBLAS picks a generic balance &mdash; one that works reasonably well across thousands of possible problem sizes. Lithos picks the <em>exact</em> balance for each specific kernel, because it knows the model dimensions at compile time.</p>
+
+<h3>Memory Bandwidth</h3>
+
+<p>HBM3e delivers <span class="mono" style="color: var(--cyan);">4 TB/s</span>. But you only get that number if every warp's memory access is <em>coalesced</em>: 32 threads reading 32 consecutive bytes, aligned to a 32-byte sector boundary. Misaligned access wastes bandwidth in direct proportion to the misalignment. A half-misaligned access pattern gets half the bandwidth.</p>
+
+<p>Between HBM and registers sits shared memory: <span class="mono" style="color: var(--cyan);">256 KB per SM</span>, accessible in <span class="mono" style="color: var(--cyan);">~23 cycles</span>. It is the staging area. Data arrives from HBM into shared memory, then threads pull it into registers for computation. But shared memory has its own pitfall: 32 banks, 4 bytes each. If two threads in a warp hit the same bank at different addresses, one of them stalls. This is a bank conflict, and it serializes what should be parallel.</p>
+
+<p>Every Lithos access pattern is designed for conflict-free shared memory access and fully coalesced global memory access. Not as a best practice. As a guarantee.</p>
+
+<h3>Compute Units</h3>
+
+<p>Each SM has <span class="mono" style="color: var(--cyan);">128</span> FP32 CUDA cores and <span class="mono" style="color: var(--cyan);">4</span> tensor cores. The tensor cores are the heavy lifters: <code>mma.sync.m16n8k16</code> at FP16 delivers <span class="mono" style="color: var(--cyan);">1,024 FLOPs/clock/SM</span>.</p>
+
+<p>At batch=1, compute is almost irrelevant. The GPU finishes the arithmetic before memory can deliver the next chunk of data. The kernel is <em>memory-bound</em> &mdash; the bottleneck is how fast you can read weights from HBM, not how fast you can multiply them.</p>
+
+<p>At batch=8 and above, the arithmetic starts to matter. Multiple requests share the same weight read, so you do more math per byte fetched. Tensor core utilization becomes the constraint. The kernel's job shifts to keeping data flowing to tensor cores without stalls &mdash; every gap between <code>mma</code> instructions is wasted throughput.</p>
+
+</section>
+
+
+<!-- Section 2: Existing Engines -->
+<section id="engines">
+<h2>What Every Existing Engine Does &mdash; And Where It Falls Short</h2>
+
+<p>Every major inference engine makes real optimizations. None of them go far enough. Here is what each one does well and where it stops.</p>
+
+<div class="engine">
+  <div class="engine-name">vLLM</div>
+  <div class="engine-stack">Python + PyTorch + cuBLAS + FlashAttention</div>
+
+  <h4>Optimizations</h4>
+  <ul>
+    <li>PagedAttention &mdash; virtual memory management for KV cache, eliminates fragmentation</li>
+    <li>Continuous batching &mdash; new requests join a running batch without waiting</li>
+    <li>CUDA graphs &mdash; record and replay kernel launch sequences to cut dispatch overhead</li>
+    <li>Prefix caching &mdash; reuse KV cache across requests with shared prompts</li>
+    <li>Speculative decoding &mdash; draft tokens with a smaller model, verify in parallel</li>
+  </ul>
+
+  <div class="shortfall">
+    <h4>Falls Short</h4>
+    <ul>
+      <li>Python dispatch overhead on every operation, even with CUDA graphs</li>
+      <li><code>torch.compile</code> JIT warmup adds seconds before first token</li>
+      <li>Cannot fuse across cuBLAS calls &mdash; each GEMM is an island</li>
+      <li>cuBLAS selects kernels from a generic atlas &mdash; no model-specific specialization</li>
+      <li>PyTorch memory allocator (caching allocator, fragmentation, OOM handling) adds overhead</li>
+      <li>Measured on GH200: <span class="mono" style="color: var(--cyan);">13%</span> bandwidth utilization at batch=1, <span class="mono" style="color: var(--cyan);">179 tok/s</span> single stream</li>
+    </ul>
+  </div>
+</div>
+
+<div class="engine">
+  <div class="engine-name">TensorRT-LLM</div>
+  <div class="engine-stack">C++ + cuBLAS + custom kernels</div>
+
+  <h4>Optimizations</h4>
+  <ul>
+    <li>Layer fusion &mdash; attention + norm combined into single kernels</li>
+    <li>INT8/FP8 quantization with calibrated scaling</li>
+    <li>In-flight batching for continuous request serving</li>
+    <li>Multi-GPU tensor parallelism across NVLink</li>
+    <li>Compiled execution plan &mdash; fixed graph, no runtime decisions</li>
+  </ul>
+
+  <div class="shortfall">
+    <h4>Falls Short</h4>
+    <ul>
+      <li>Minutes-long build phase before first inference &mdash; recompile for different batch sizes</li>
+      <li>Fixed execution plan &mdash; rebuild the entire engine when batch size changes</li>
+      <li>Still uses the cuBLAS atlas for GEMMs &mdash; no model-specific GEMM kernels</li>
+      <li>No custom SASS &mdash; relies on ptxas for final instruction scheduling</li>
+    </ul>
+  </div>
+</div>
+
+<div class="engine">
+  <div class="engine-name">llama.cpp</div>
+  <div class="engine-stack">C++ + custom CUDA kernels</div>
+
+  <h4>Optimizations</h4>
+  <ul>
+    <li>Quantization-aware kernels (Q4_K, Q5_K, etc.) with custom dequantization</li>
+    <li>Fused operations where hand-written</li>
+    <li>Minimal dependencies &mdash; single-file CUDA kernels, no framework</li>
+  </ul>
+
+  <div class="shortfall">
+    <h4>Falls Short</h4>
+    <ul>
+      <li>Kernels written in CUDA C++ &mdash; nvcc compiles them through 6-7 IR stages</li>
+      <li>Generic tile sizes that do not adapt to specific model dimensions</li>
+      <li>No tensor core usage for some quantization formats</li>
+      <li>No SASS-level control over scheduling or register assignment</li>
+    </ul>
+  </div>
+</div>
+
+<div class="engine">
+  <div class="engine-name">MLX</div>
+  <div class="engine-stack">Apple Metal + Swift</div>
+
+  <h4>Optimizations</h4>
+  <ul>
+    <li>Unified memory &mdash; no CPU-GPU transfers on Apple Silicon</li>
+    <li>Lazy evaluation &mdash; operations fuse before execution</li>
+    <li>Fused Metal kernels with compile-time specialization</li>
+  </ul>
+
+  <div class="shortfall">
+    <h4>Falls Short</h4>
+    <ul>
+      <li>Metal-only &mdash; no NVIDIA GPU support</li>
+      <li>Apple controls the Metal compiler &mdash; no SASS equivalent, no ISA-level access</li>
+      <li><code>simdgroup_matrix</code> is opaque &mdash; cannot control the hardware matrix units directly</li>
+    </ul>
+  </div>
+</div>
+
+<div class="engine">
+  <div class="engine-name">FlashAttention</div>
+  <div class="engine-stack">Tri Dao &mdash; CUDA C++ + inline PTX</div>
+
+  <h4>Optimizations</h4>
+  <ul>
+    <li>Tiled attention that never materializes the full N&times;N attention matrix</li>
+    <li>O(N) memory instead of O(N&sup2;) &mdash; the key insight that makes long contexts feasible</li>
+    <li>Inline PTX for <code>wgmma</code> and <code>cp.async</code> &mdash; reaches past CUDA C++ for critical paths</li>
+  </ul>
+
+  <div class="shortfall">
+    <h4>Falls Short</h4>
+    <ul>
+      <li>Written in CUDA C++ with inline PTX &mdash; not full PTX control, still goes through nvcc</li>
+      <li>One kernel for attention only &mdash; does not fuse with MLP or normalization</li>
+      <li>Compile time: 10-60 seconds per kernel variant</li>
+    </ul>
+  </div>
+</div>
+
+</section>
+
+
+<!-- Section 3: Lithos Optimizations -->
+<section id="optimizations">
+<h2>Lithos Optimizations &mdash; What We Can Do</h2>
+
+<p>Each technique below is something Lithos can do that existing engines cannot, or cannot do as well. The common thread: Lithos controls the full path from model definition to GPU instruction.</p>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">01</span>
+    <span class="opt-title">Register Allocation Control</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>Choose exactly how many registers each thread uses. More registers means more data stays on-chip. Fewer registers means more concurrent threads for latency hiding.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p>Lithos emits PTX with explicit register declarations &mdash; <code>.reg .b32 %r&lt;N&gt;</code> with N chosen per kernel. Eventually, the SASS emitter will assign physical registers directly, bypassing ptxas allocation entirely.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Memory-bound kernels (projection at batch=1): maximize registers to 255, minimize threads. Compute-bound kernels (projection at batch=8): balance for occupancy with ~128 registers per thread. The right choice depends on the workload, and Lithos makes a different choice for each kernel.</p>
+  </div>
+  <p class="opt-cant">cuBLAS cannot do this &mdash; it uses one-size-fits-all register allocation per kernel variant from the atlas.</p>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">02</span>
+    <span class="opt-title">Kernel Fusion</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>Combine multiple operations into one kernel launch. Intermediate values stay in registers instead of round-tripping through HBM.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p>Lithos vocabulary words compose. <code>fused-add-rmsnorm</code> emits one kernel that does residual add + RMSNorm in a single pass. The 3-kernel target (ATTENTION, MLP, SAMPLE) eliminates all intermediate memory traffic within a layer.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Each eliminated kernel boundary saves one HBM write + one HBM read of the full activation vector. At hidden_dim=5120 and FP16: 10 KB per boundary. With 40+ boundaries per forward pass in a conventional stack, that is 400+ KB of eliminated memory traffic per token &mdash; and more importantly, 40+ fewer pipeline drains and kernel launch gaps.</p>
+  </div>
+  <p class="opt-cant">cuBLAS cannot do this &mdash; it only does GEMM. It has no concept of the operations before or after.</p>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">03</span>
+    <span class="opt-title">Constant Specialization</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>Bake model dimensions into the kernel as compile-time constants instead of runtime parameters.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p>Lithos generates kernels for specific <code>hidden_dim</code>, <code>head_dim</code>, <code>num_heads</code>. Loop bounds become known constants. Branch conditions resolve at compile time. Dead code disappears. Because Lithos compilation takes microseconds, re-specializing for a different model is instant.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Eliminates parameter loads, enables full loop unrolling, and lets the compiler (ptxas or the future Lithos SASS emitter) schedule optimally with no runtime ambiguity about trip counts or branch targets.</p>
+  </div>
+  <p class="opt-cant">cuBLAS cannot do this &mdash; its kernels must handle arbitrary dimensions, so loop bounds and tile sizes remain runtime variables.</p>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">04</span>
+    <span class="opt-title">Memory Access Pattern Control</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>Guarantee that every global memory load is coalesced (32 consecutive bytes per warp, aligned to sector boundaries) and that every shared memory access is bank-conflict-free.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p>Lithos patterns encode the correct access patterns structurally. <code>coalesced-f16@</code> guarantees alignment by construction. Shared memory swizzling is built into the tile load patterns &mdash; not bolted on as an optimization pass.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Full <span class="mono" style="color: var(--cyan);">4 TB/s</span> bandwidth utilization, versus the <span class="mono" style="color: var(--cyan);">13%</span> measured in vLLM at batch=1. Conflict-free shared memory means 32 threads access 32 banks simultaneously every cycle, with no serialization.</p>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">05</span>
+    <span class="opt-title">Async Copy Pipelining</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>While tensor cores compute on the current tile, the next tile is being loaded from HBM to shared memory asynchronously. Double or triple buffering keeps the pipeline full.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p><code>cp.async</code> and TMA instructions in the Lithos patterns. The software pipeline uses multiple shared memory buffers: one being consumed by compute, one being filled by async copy, one waiting. <code>LDGSTS</code> at the SASS level (opcode <code>0xfae</code>) flows data directly from global to shared memory without touching the register file.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Hides memory latency entirely when compute is long enough to cover the load. Eliminates stalls between tiles. The GPU never waits for data &mdash; the next tile is always ready.</p>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">06</span>
+    <span class="opt-title">Warp-Level Programming</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>Use warp shuffle instructions instead of shared memory for small reductions and broadcasts. <span class="mono" style="color: var(--cyan);">1 cycle</span> versus <span class="mono" style="color: var(--cyan);">23 cycles</span>.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p><code>warp-reduce-add</code> and <code>warp-broadcast</code> patterns emit <code>shfl.sync.bfly</code> chains. At the SASS level, this is the <code>SHFL</code> instruction (opcode <code>0xf89</code> for immediate lane source) with butterfly mode in bits [59:58]. Five shuffles reduce 32 values. No shared memory needed.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>RMSNorm, softmax, and other reductions become 5x faster within a warp. For operations that are dominated by reduction (normalization, softmax denominator), this is the difference between compute-bound and memory-bound.</p>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">07</span>
+    <span class="opt-title">Tensor Core Utilization</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>Keep the tensor cores fed continuously. <code>mma.sync.m16n8k16</code> at FP16 delivers <span class="mono" style="color: var(--cyan);">1,024 FLOPs/clock/SM</span>. If there is any stall between <code>mma</code> instructions, throughput drops proportionally.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p>Lithos interleaves <code>mma</code> with async loads in the software pipeline. The schedule ensures the next operands are in shared memory (via <code>cp.async</code>) and loaded into registers (via <code>ldmatrix</code> / <code>LDSM</code>) before the current <code>mma</code> completes. At the SASS level, <code>HMMA.16816.F32</code> (opcode <code>0x23c</code>) is the instruction that must never stall.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Sustained tensor core throughput instead of burst-and-stall. At batch=8+, this is the difference between 50% and 90% of peak compute utilization.</p>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">08</span>
+    <span class="opt-title">GH200-Specific: Unified Memory</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>On the GH200, CPU and GPU share the same physical memory with hardware-level coherence via NVLink-C2C at <span class="mono" style="color: var(--cyan);">900 GB/s</span>. No <code>cudaMalloc</code>. No <code>cudaMemcpy</code>. No staging buffers.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p>Lithos uses <code>mmap</code> to allocate memory. Pointers are passed directly to GPU kernels. The hardware maintains coherence between CPU and GPU address spaces at page granularity. No driver calls for memory management.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Eliminates memory management overhead entirely. KV cache can seamlessly spill from HBM (<span class="mono" style="color: var(--cyan);">96 GB</span> at <span class="mono" style="color: var(--cyan);">4 TB/s</span>) to LPDDR5X (<span class="mono" style="color: var(--cyan);">480 GB</span> at <span class="mono" style="color: var(--cyan);">500 GB/s</span>) without explicit transfers. It is not a cliff &mdash; it is a gradient.</p>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">09</span>
+    <span class="opt-title">CPU Offload (72 Grace Cores)</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>Run sampling, KV cache management, and speculative decode verification on the Grace CPU while the GPU computes the next matmul.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p>CPU and GPU share memory. The CPU reads GPU output directly &mdash; coherent, no copy. No synchronization needed beyond the kernel completing. The CPU starts sampling the moment the GPU writes the logits. While the CPU picks a token, the GPU begins the next token's first layer.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Overlap CPU work with GPU work. Sampling time is hidden behind GPU compute. For speculative decoding, the CPU verifies draft tokens while the GPU generates the next draft batch.</p>
+  </div>
+</div>
+
+<div class="opt">
+  <div class="opt-header">
+    <span class="opt-num">10</span>
+    <span class="opt-title">Direct SASS Emission (future)</span>
+  </div>
+  <div class="opt-section">
+    <strong>What</strong>
+    <p>Skip ptxas entirely. Emit SASS binary directly into cubin ELF files. Control instruction scheduling, register bank assignment, and reuse flags at the hardware level.</p>
+  </div>
+  <div class="opt-section">
+    <strong>How</strong>
+    <p>47 SASS opcodes mapped and verified through systematic probing (see the <a href="index.html#sass">SASS Encoding</a> section). Every instruction is 16 bytes: 8-byte instruction word (opcode, registers, immediates) + 8-byte control word (stall counts, barriers, reuse flags). The Lithos SASS emitter writes cubin ELF directly.</p>
+  </div>
+  <div class="opt-section">
+    <strong>Impact</strong>
+    <p>Eliminates ptxas JIT time (<span class="mono" style="color: var(--cyan);">100ms&ndash;2s</span> per kernel). Potentially beats ptxas scheduling for memory-bound workloads where manual interleaving of loads and computes &mdash; with precise stall counts in the control word &mdash; outperforms the generic scheduler.</p>
+  </div>
+</div>
+
+</section>
+
+
+<!-- Section 4: Quantitative Targets -->
+<section id="targets">
+<h2>Quantitative Targets</h2>
+
+<p>Concrete numbers. Measured baselines compared to Lithos engineering targets on GH200 with Qwen 27B W4A16.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Metric</th>
+      <th>vLLM (current)</th>
+      <th>TensorRT-LLM</th>
+      <th>Lithos Target</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Bandwidth utilization (batch=1)</td>
+      <td class="num">13%</td>
+      <td class="num">~30-40%</td>
+      <td class="num" style="color: var(--green);">&gt;70%</td>
+    </tr>
+    <tr>
+      <td>Single-stream tok/s (Qwen 27B W4)</td>
+      <td class="num">179</td>
+      <td class="num">~250 (est.)</td>
+      <td class="num" style="color: var(--green);">&gt;400</td>
+    </tr>
+    <tr>
+      <td>Batch=8 tok/s</td>
+      <td class="num">~1,000</td>
+      <td class="num">~1,500</td>
+      <td class="num" style="color: var(--green);">&gt;2,000</td>
+    </tr>
+    <tr>
+      <td>Startup time</td>
+      <td class="num">2 min</td>
+      <td class="num">5-30 min (build)</td>
+      <td class="num" style="color: var(--green);">&lt;2 sec</td>
+    </tr>
+    <tr>
+      <td>Framework size</td>
+      <td class="num">~4 GB</td>
+      <td class="num">~2 GB</td>
+      <td class="num" style="color: var(--green);">~30 MB</td>
+    </tr>
+    <tr>
+      <td>Kernel binary size</td>
+      <td class="num">800 MB (cuBLAS)</td>
+      <td class="num">similar</td>
+      <td class="num" style="color: var(--green);">32 KB</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="small">Framework size for Lithos is libcuda.so only &mdash; no PyTorch, no cuBLAS atlas, no framework runtime. Kernel binary size reflects specialized kernels versus the generic atlas that cuBLAS ships to cover all possible GEMM shapes.</p>
+
+</section>
+
+
+<!-- Section 5: Limitations -->
+<section id="limitations">
+<h2>What Lithos Cannot Do (Yet)</h2>
+
+<ul class="limitations">
+  <li><strong>Training.</strong> No autograd, no optimizer, no backward pass. Lithos is inference-only. Training requires gradient tracking through every operation &mdash; a fundamentally different architecture.</li>
+  <li><strong>Multi-GPU tensor parallelism.</strong> Currently targets a single GH200. The 96 GB HBM + 480 GB LPDDR5X is enough for most models up to ~70B parameters at W4 quantization. Multi-GPU support is a future goal.</li>
+  <li><strong>Dynamic model architectures.</strong> Lithos specializes kernels at compile time for specific model dimensions. Mixture-of-experts routing or dynamic sparse architectures would require runtime kernel selection &mdash; possible but not yet implemented.</li>
+  <li><strong>Non-NVIDIA GPUs.</strong> PTX and SASS are NVIDIA-specific instruction sets. AMD (RDNA/CDNA), Intel (Xe), and Apple (Metal) each have their own ISA. Lithos would need a separate backend for each.</li>
+</ul>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+Lithos &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. Lithos writes on the GPU.
+</div>
+</footer>
+
+</body>
+</html>
