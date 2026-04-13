@@ -1,3 +1,6 @@
+# LEGACY: .li dialect. Replaced by kernels.ls (.ls dialect).
+# Multi-function .li files produced broken cubins (only last function kept).
+
 \ recur.li — DeltaNet recurrence: conv1d, gating, state update, rollback
 \ Replaces: recurrence.ptx, recurrence_rollback.ptx, conv1d.ptx, fused_deltanet.ptx
 

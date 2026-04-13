@@ -1,3 +1,6 @@
+# LEGACY: .li dialect. Replaced by kernels.ls (.ls dialect).
+# Multi-function .li files produced broken cubins (only last function kept).
+
 \ reduce.li — Reduction operations for LLM inference
 \ Replaces: norm.ptx, sample.ptx
 \

@@ -1,3 +1,6 @@
+# LEGACY: .li dialect. Replaced by kernels.ls (.ls dialect).
+# Multi-function .li files produced broken cubins (only last function kept).
+
 \ elementwise.li — Per-element operations for LLM inference
 \ Replaces: activate.ptx, add_store.ptx, elemwise_mul.ptx, residual_add.ptx
 \

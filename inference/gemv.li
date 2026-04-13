@@ -1,3 +1,6 @@
+# LEGACY: .li dialect. Replaced by kernels.ls (.ls dialect).
+# Multi-function .li files produced broken cubins (only last function kept).
+
 \ gemv.li — GPTQ W4A16 matrix-vector multiply
 \ Replaces: gptq_matvec.ptx, projection.ptx, lm_head.ptx
 \

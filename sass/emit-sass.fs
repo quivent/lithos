@@ -279,6 +279,9 @@ $27 constant SR-CTAID-Z
   $7223 or r> or r> or
   r> ctrl-ffma sinst, ;
 
+\ FMUL Rd, Rs1, Rs2 — float multiply (= FFMA with RZ accumulator)
+: fmul,  ( rd rs1 rs2 -- )  255 ffma, ;
+
 \ SHFL.BFLY PT, Rd, Rs, delta  — warp butterfly shuffle (imm delta, mask=0x1f)
 \ Verified: SHFL.BFLY PT, R5, R0, 0x1, 0x1f -> inst=0x0c201f0000057f89
 \   bits[63:56] = (log2(delta)<<4)|0x0c  (BFLY mode + delta-log2)

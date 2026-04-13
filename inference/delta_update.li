@@ -1,3 +1,6 @@
+# LEGACY: .li dialect. Replaced by kernels.ls (.ls dialect).
+# Multi-function .li files produced broken cubins (only last function kept).
+
 \ delta_update.li — GatedDeltaNet state recurrence (step 35 of STEPS decomposition)
 \
 \ S <- decay * S + beta * (V outer K - S . (K outer K))
