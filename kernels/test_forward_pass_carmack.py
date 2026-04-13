@@ -381,6 +381,16 @@ def main():
         if ae / denom > 0.05:
             act_wrong += 1
     print(f"  Activation check: {act_wrong}/{act_check} differ >5%")
+    print(f"  Sample activations (first 5):")
+    for i in range(5):
+        rv = struct.unpack_from('<f', act_ref_buf, i * 4)[0]
+        nv = struct.unpack_from('<f', act_new_buf, i * 4)[0]
+        print(f"    [{i}] ref={rv:.8e} new={nv:.8e}")
+    print(f"  Sample mid_scratch (first 5):")
+    for i in range(5):
+        rv = struct.unpack_from('<f', mid_ref_buf, i * 4)[0]
+        nv = struct.unpack_from('<f', mid_new_buf, i * 4)[0]
+        print(f"    [{i}] ref={rv:.8e} new={nv:.8e}")
 
     # =========================================================================
     # BENCHMARK
@@ -392,8 +402,8 @@ def main():
     _check("evCreate", cuda.cuEventCreate(byref(ev_start), 0))
     _check("evCreate", cuda.cuEventCreate(byref(ev_stop), 0))
 
-    WARMUP = 2
-    ITERS = 5
+    WARMUP = 5
+    ITERS = 20
 
     for label, func, ptrs, d_sync, d_act, d_mid_buf, d_log, d_nor, d_par in [
         ("Original (forward_pass_multi)", ref_func, ref_ptrs,

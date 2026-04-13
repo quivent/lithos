@@ -1,50 +1,83 @@
-// forward_pass_cray.ptx -- Optimized multi-block cooperative fused forward pass
+// forward_pass_cray.ptx -- Multi-block cooperative fused forward pass
 //
-// Cray optimization: cache input vectors in shared memory scratchpad.
-// The normed[5120] vector (20KB) is loaded once per block into shared memory.
-// All 256 threads then read from scratchpad instead of global memory.
-// This eliminates ~99% of redundant global memory reads on the input side.
-//
-// For down projection (K=17408), input is too large for shared memory,
-// so we keep global reads but use the working scalar load pattern.
-//
-// Same API signature as forward_pass_multi.ptx -- drop-in replacement.
+// Qwen 3.5-27B MLP-only path with ALL 132 SMs active.
+// Uses grid-wide synchronization via atomic counters to coordinate
+// between projections within a single kernel launch.
 //
 // Grid:  (132, 1, 1)  -- one block per SM
 // Block: (256, 1, 1)  -- 8 warps of 32 threads
+//
+// Must be launched with cuLaunchCooperativeKernel.
+//
+// Architecture constants:
+//   hidden_dim      = 5120
+//   intermediate    = 17408
+//   num_layers      = 64
+//   vocab_size      = 248320
+//   group_size      = 128  (GPTQ W4A16)
+//   epsilon         = 1e-6
+//   num_blocks      = 132
+//   threads_per_blk = 256
+//   total_threads   = 132 * 256 = 33792
+//
+// Global memory layout (preallocated by host):
+//   activation[5120]      -- f32, the residual stream
+//   normed[5120]          -- f32, RMSNorm output
+//   mid_scratch[17408]    -- f32, gate*up intermediate
+//   sync_workspace[4]     -- u32, grid sync counters
+//                            [0] = arrival counter
+//                            [1] = sense flag (alternates 0/1)
+//                            [2] = partial sum scratch (f32, for norm reduction)
+//                            [3] = rms_inv broadcast (f32)
+//   norm_partials[132]    -- f32, per-block partial sums for RMSNorm
+//
+// Grid sync protocol (sense-reversing barrier):
+//   Each sync epoch has a "sense" bit (0 or 1).
+//   Thread 0 of each block does atomicAdd on arrival counter.
+//   The last block to arrive (counter == grid_size) resets counter to 0,
+//   flips sense, and does a threadfence. All blocks spin on sense change.
+//   This avoids the reset race of simple counter-based sync.
 
 .version 8.5
 .target sm_90
 .address_size 64
 
 .visible .entry forward_pass_cray(
-    .param .u64 weight_table_ptr,
-    .param .u64 embed_table_ptr,
-    .param .u32 token_id,
-    .param .u64 mid_scratch_ptr,
-    .param .u64 output_logits_ptr,
-    .param .u64 final_norm_ptr,
-    .param .u64 lm_head_qw_ptr,
-    .param .u64 lm_head_scales_ptr,
-    .param .u64 lm_head_zeros_ptr,
-    .param .u64 activation_ptr,
-    .param .u64 normed_ptr,
-    .param .u64 sync_workspace_ptr,
-    .param .u64 norm_partials_ptr
+    .param .u64 weight_table_ptr,      // [64] layer weight descriptors (88 bytes each)
+    .param .u64 embed_table_ptr,       // [1, 5120] f32 (pre-extracted row)
+    .param .u32 token_id,              // index into embed table (usually 0)
+    .param .u64 mid_scratch_ptr,       // [17408] f32
+    .param .u64 output_logits_ptr,     // [vocab_size] f32
+    .param .u64 final_norm_ptr,        // [5120] f32
+    .param .u64 lm_head_qw_ptr,       // lm_head qweight
+    .param .u64 lm_head_scales_ptr,    // lm_head scales
+    .param .u64 lm_head_zeros_ptr,     // lm_head zeros
+    .param .u64 activation_ptr,        // [5120] f32 -- residual stream in global mem
+    .param .u64 normed_ptr,            // [5120] f32 -- norm output in global mem
+    .param .u64 sync_workspace_ptr,    // [4] u32 -- sync counters
+    .param .u64 norm_partials_ptr      // [132] f32 -- per-block partial sums
 )
 {
+    // =========================================================================
+    // Register declarations
+    // =========================================================================
     .reg .u64   %rd<64>;
     .reg .u32   %r<64>;
     .reg .f32   %f<48>;
     .reg .pred  %p<16>;
     .reg .b16   %htmp;
 
-    // Shared memory: 5120 f32 for input cache + 32 f32 for reduction + 1 u32 sense
-    .shared .align 16 .f32 smem_input[5120];
+    // =========================================================================
+    // Shared memory (per-block)
+    // =========================================================================
+    // Warp reduction scratch (8 warps)
     .shared .align 4 .f32 smem_reduce[32];
+    // Local sense for grid sync
     .shared .align 4 .u32 smem_local_sense[1];
 
+    // =========================================================================
     // Load parameters
+    // =========================================================================
     ld.param.u64    %rd0, [weight_table_ptr];
     ld.param.u64    %rd1, [embed_table_ptr];
     ld.param.u32    %r0, [token_id];
@@ -54,20 +87,22 @@
     ld.param.u64    %rd5, [lm_head_qw_ptr];
     ld.param.u64    %rd6, [lm_head_scales_ptr];
     ld.param.u64    %rd7, [lm_head_zeros_ptr];
-    ld.param.u64    %rd8, [activation_ptr];
-    ld.param.u64    %rd9, [normed_ptr];
-    ld.param.u64    %rd10, [sync_workspace_ptr];
-    ld.param.u64    %rd11, [norm_partials_ptr];
+    ld.param.u64    %rd8, [activation_ptr];       // global activation buffer
+    ld.param.u64    %rd9, [normed_ptr];            // global normed buffer
+    ld.param.u64    %rd10, [sync_workspace_ptr];   // sync counters
+    ld.param.u64    %rd11, [norm_partials_ptr];    // per-block partial sums
 
-    mov.u32         %r1, %tid.x;
-    mov.u32         %r2, %ctaid.x;
-    mov.u32         %r3, 256;
+    mov.u32         %r1, %tid.x;          // thread id 0..255
+    mov.u32         %r2, %ctaid.x;        // block id 0..131
+    mov.u32         %r3, 256;             // blockDim
 
+    // Compute global thread id: block_id * 256 + tid
     mul.lo.u32      %r4, %r2, 256;
     add.u32         %r4, %r4, %r1;        // global_tid
+    // Total threads = 132 * 256 = 33792
     mov.u32         %r5, 33792;           // total threads
 
-    // Init local sense
+    // Initialize local sense to 0 (only thread 0 of each block)
     setp.eq.u32     %p0, %r1, 0;
     @!%p0 bra       SKIP_SENSE_INIT;
     mov.u32         %r6, 0;
@@ -76,52 +111,85 @@ SKIP_SENSE_INIT:
     bar.sync        0;
 
     // =========================================================================
-    // PHASE 0: Embedding lookup -> activation[]
+    // PHASE 0: Embedding lookup -> activation[] (global memory)
+    // All 132 blocks cooperate: each block handles a stride of elements.
+    // Total: 5120 elements, 33792 threads -> each thread handles ~0.15 elements
+    // Use global_tid stride loop.
     // =========================================================================
+    // Compute embed row base: token_id * 5120 * 4
     mul.lo.u32      %r6, %r0, 5120;
     shl.b32         %r6, %r6, 2;
     cvt.u64.u32     %rd12, %r6;
-    add.u64         %rd13, %rd1, %rd12;
+    add.u64         %rd13, %rd1, %rd12;    // embed_row_ptr
 
-    mov.u32         %r7, %r4;
+    mov.u32         %r7, %r4;             // i = global_tid
 EMBED_LOOP:
     setp.ge.u32     %p1, %r7, 5120;
     @%p1 bra        EMBED_DONE;
+
     shl.b32         %r8, %r7, 2;
     cvt.u64.u32     %rd14, %r8;
     add.u64         %rd15, %rd13, %rd14;
     ld.global.f32   %f0, [%rd15];
+
+    // Store to activation in global memory
     add.u64         %rd16, %rd8, %rd14;
     st.global.f32   [%rd16], %f0;
-    add.u32         %r7, %r7, %r5;
+
+    add.u32         %r7, %r7, %r5;        // i += total_threads
     bra             EMBED_LOOP;
 EMBED_DONE:
 
-    // GRID SYNC 0
+    // =========================================================================
+    // GRID SYNC 0: Ensure embedding is complete before layer loop
+    // =========================================================================
+    // First, block-level sync
     bar.sync        0;
+    // Grid-level sync: thread 0 of each block participates
     setp.eq.u32     %p1, %r1, 0;
     @!%p1 bra       GSYNC0_WAIT;
+
+    // Load current sense
     ld.shared.u32   %r50, [smem_local_sense];
+
+    // Compute expected new sense (flip bit)
     xor.b32         %r51, %r50, 1;
+
+    // atomicAdd arrival counter (offset 0 in sync_workspace)
     atom.global.add.u32 %r52, [%rd10], 1;
+
+    // If we are the last block (counter was 131, now becomes 132)
     setp.eq.u32     %p2, %r52, 131;
     @!%p2 bra       GSYNC0_SPIN;
+
+    // Last block: reset counter to 0, flip sense flag
     st.global.u32   [%rd10], 0;
     membar.gl;
     st.global.release.gpu.u32 [%rd10+4], %r51;
+
+    // Update local sense
     st.shared.u32   [smem_local_sense], %r51;
     bra             GSYNC0_DONE;
+
 GSYNC0_SPIN:
+    // Spin until sense flag changes
     ld.global.acquire.gpu.u32 %r53, [%rd10+4];
     setp.ne.u32     %p3, %r53, %r51;
     @%p3 bra        GSYNC0_SPIN;
+
+    // Update local sense
     st.shared.u32   [smem_local_sense], %r51;
+    bra             GSYNC0_DONE;
+
 GSYNC0_DONE:
 GSYNC0_WAIT:
     bar.sync        0;
+    // All threads in all blocks are now synchronized
 
     // =========================================================================
-    // LAYER LOOP
+    // LAYER LOOP: 64 iterations
+    // %r10 = layer counter (0..63)
+    // %rd20 = current layer descriptor pointer
     // =========================================================================
     mov.u32         %r10, 0;
     mov.u64         %rd20, %rd0;
@@ -130,37 +198,52 @@ LAYER_LOOP:
     setp.ge.u32     %p1, %r10, 64;
     @%p1 bra        LAYER_DONE;
 
-    // Load layer weight pointers
-    ld.global.u64   %rd30, [%rd20+0];     // norm_weight
-    ld.global.u64   %rd31, [%rd20+8];     // gate_qw
-    ld.global.u64   %rd32, [%rd20+16];    // gate_sc
-    ld.global.u64   %rd33, [%rd20+24];    // gate_zr
-    ld.global.u64   %rd34, [%rd20+32];    // up_qw
-    ld.global.u64   %rd35, [%rd20+40];    // up_sc
-    ld.global.u64   %rd36, [%rd20+48];    // up_zr
-    ld.global.u64   %rd37, [%rd20+56];    // down_qw
-    ld.global.u64   %rd38, [%rd20+64];    // down_sc
-    ld.global.u64   %rd39, [%rd20+72];    // down_zr
-    ld.global.u64   %rd40, [%rd20+80];    // post_attn_norm
+    // =====================================================================
+    // Load layer weight pointers (all threads load, it's in L2)
+    // =====================================================================
+    ld.global.u64   %rd30, [%rd20+0];     // norm_weight_ptr
+    ld.global.u64   %rd31, [%rd20+8];     // gate_qweight_ptr
+    ld.global.u64   %rd32, [%rd20+16];    // gate_scales_ptr
+    ld.global.u64   %rd33, [%rd20+24];    // gate_zeros_ptr
+    ld.global.u64   %rd34, [%rd20+32];    // up_qweight_ptr
+    ld.global.u64   %rd35, [%rd20+40];    // up_scales_ptr
+    ld.global.u64   %rd36, [%rd20+48];    // up_zeros_ptr
+    ld.global.u64   %rd37, [%rd20+56];    // down_qweight_ptr
+    ld.global.u64   %rd38, [%rd20+64];    // down_scales_ptr
+    ld.global.u64   %rd39, [%rd20+72];    // down_zeros_ptr
+    ld.global.u64   %rd40, [%rd20+80];    // mlp_norm_weight_ptr (unused, using norm_weight_ptr)
 
     // =====================================================================
-    // RMSNORM Phase A: partial sum of squares
+    // RMSNORM: activation[5120] -> normed[5120] (all in global memory)
+    //
+    // Phase A: Each block computes partial sum of squares over its slice
+    //          of the 5120 elements (grid-stride). Store partial to
+    //          norm_partials[block_id].
+    // Grid sync (with atomic reduction).
+    // Phase B: Block 0 thread 0 computes total sum, broadcasts rms_inv.
+    // Grid sync.
+    // Phase C: All blocks cooperatively apply norm.
+    // Grid sync.
     // =====================================================================
-    mov.f32         %f1, 0f00000000;
-    mov.u32         %r11, %r4;
+
+    // Phase A: partial sum of squares
+    mov.f32         %f1, 0f00000000;       // partial_ss = 0
+    mov.u32         %r11, %r4;             // i = global_tid
 NORM_SS_LOOP:
     setp.ge.u32     %p2, %r11, 5120;
     @%p2 bra        NORM_SS_DONE;
+
     shl.b32         %r12, %r11, 2;
     cvt.u64.u32     %rd41, %r12;
-    add.u64         %rd42, %rd8, %rd41;
+    add.u64         %rd42, %rd8, %rd41;    // activation_ptr + i*4
     ld.global.f32   %f2, [%rd42];
     fma.rn.f32      %f1, %f2, %f2, %f1;
-    add.u32         %r11, %r11, %r5;
+
+    add.u32         %r11, %r11, %r5;      // i += total_threads
     bra             NORM_SS_LOOP;
 NORM_SS_DONE:
 
-    // Warp reduction
+    // Intra-warp reduction
     shfl.sync.down.b32 %f3, %f1, 16, 31, 0xFFFFFFFF;
     add.f32         %f1, %f1, %f3;
     shfl.sync.down.b32 %f3, %f1, 8, 31, 0xFFFFFFFF;
@@ -172,6 +255,7 @@ NORM_SS_DONE:
     shfl.sync.down.b32 %f3, %f1, 1, 31, 0xFFFFFFFF;
     add.f32         %f1, %f1, %f3;
 
+    // Lane 0 of each warp stores to smem_reduce
     and.b32         %r14, %r1, 31;
     shr.b32         %r15, %r1, 5;
     setp.eq.u32     %p3, %r14, 0;
@@ -183,8 +267,10 @@ NORM_SS_DONE:
 SKIP_STORE_SS:
     bar.sync        0;
 
+    // Cross-warp reduction within block (first warp)
     setp.lt.u32     %p4, %r1, 32;
     @!%p4 bra       SKIP_CROSS_WARP_SS;
+
     mov.f32         %f4, 0f00000000;
     setp.lt.u32     %p5, %r1, 8;
     @!%p5 bra       SKIP_LOAD_PARTIAL_SS;
@@ -193,6 +279,7 @@ SKIP_STORE_SS:
     add.u32         %r17, %r17, %r16;
     ld.shared.f32   %f4, [%r17];
 SKIP_LOAD_PARTIAL_SS:
+
     shfl.sync.down.b32 %f5, %f4, 16, 31, 0xFFFFFFFF;
     add.f32         %f4, %f4, %f5;
     shfl.sync.down.b32 %f5, %f4, 8, 31, 0xFFFFFFFF;
@@ -203,24 +290,32 @@ SKIP_LOAD_PARTIAL_SS:
     add.f32         %f4, %f4, %f5;
     shfl.sync.down.b32 %f5, %f4, 1, 31, 0xFFFFFFFF;
     add.f32         %f4, %f4, %f5;
+
+    // Thread 0 of each block: store block partial sum to norm_partials[block_id]
     setp.eq.u32     %p6, %r1, 0;
     @!%p6 bra       SKIP_CROSS_WARP_SS;
-    shl.b32         %r16, %r2, 2;
+
+    shl.b32         %r16, %r2, 2;         // block_id * 4
     cvt.u64.u32     %rd41, %r16;
-    add.u64         %rd42, %rd11, %rd41;
+    add.u64         %rd42, %rd11, %rd41;   // norm_partials + block_id*4
     st.global.f32   [%rd42], %f4;
+
 SKIP_CROSS_WARP_SS:
 
-    // GRID SYNC 1
+    // =====================================================================
+    // GRID SYNC 1: All blocks have written their partial sums
+    // =====================================================================
     bar.sync        0;
     setp.eq.u32     %p1, %r1, 0;
     @!%p1 bra       GSYNC1_WAIT;
+
     ld.shared.u32   %r50, [smem_local_sense];
     xor.b32         %r51, %r50, 1;
     atom.global.add.u32 %r52, [%rd10], 1;
     setp.eq.u32     %p2, %r52, 131;
     @!%p2 bra       GSYNC1_SPIN;
 
+    // Last block: compute total sum from all 132 partials
     mov.f32         %f6, 0f00000000;
     mov.u32         %r16, 0;
 NORM_TOTAL_LOOP:
@@ -234,158 +329,186 @@ NORM_TOTAL_LOOP:
     add.u32         %r16, %r16, 1;
     bra             NORM_TOTAL_LOOP;
 NORM_TOTAL_DONE:
-    mul.f32         %f6, %f6, 0f394CCCCD;
-    add.f32         %f6, %f6, 0f358637BD;
+
+    // Compute rms_inv = rsqrt(sum_sq / 5120 + 1e-6)
+    mul.f32         %f6, %f6, 0f394CCCCD;  // 1.0/5120 = 0.0001953125
+    add.f32         %f6, %f6, 0f358637BD;  // 1e-6
     rsqrt.approx.f32 %f6, %f6;
+    // Broadcast rms_inv via sync_workspace[3]
     st.global.f32   [%rd10+12], %f6;
+
+    // Reset counter, flip sense
     st.global.u32   [%rd10], 0;
     membar.gl;
     st.global.release.gpu.u32 [%rd10+4], %r51;
     st.shared.u32   [smem_local_sense], %r51;
     bra             GSYNC1_DONE;
+
 GSYNC1_SPIN:
     ld.global.acquire.gpu.u32 %r53, [%rd10+4];
     setp.ne.u32     %p3, %r53, %r51;
     @%p3 bra        GSYNC1_SPIN;
     st.shared.u32   [smem_local_sense], %r51;
+    bra             GSYNC1_DONE;
+
 GSYNC1_DONE:
 GSYNC1_WAIT:
     bar.sync        0;
 
+    // All threads load rms_inv from global broadcast slot
     ld.global.f32   %f7, [%rd10+12];
 
-    // =====================================================================
-    // Apply norm AND write to global normed buffer
-    // =====================================================================
-    mov.u32         %r11, %r4;
+    // Phase C: Apply norm -- all blocks cooperate over 5120 elements
+    mov.u32         %r11, %r4;             // i = global_tid
 NORM_APPLY_LOOP:
     setp.ge.u32     %p7, %r11, 5120;
     @%p7 bra        NORM_APPLY_DONE;
+
     shl.b32         %r12, %r11, 2;
     cvt.u64.u32     %rd41, %r12;
+
+    // Load activation
     add.u64         %rd42, %rd8, %rd41;
     ld.global.f32   %f8, [%rd42];
+
+    // Normalize
     mul.f32         %f9, %f8, %f7;
+
+    // Load norm weight from global
     add.u64         %rd43, %rd30, %rd41;
     ld.global.f32   %f10, [%rd43];
+
+    // normed = x * rms_inv * weight
     mul.f32         %f9, %f9, %f10;
+
+    // Store to normed buffer
     add.u64         %rd44, %rd9, %rd41;
     st.global.f32   [%rd44], %f9;
+
     add.u32         %r11, %r11, %r5;
     bra             NORM_APPLY_LOOP;
 NORM_APPLY_DONE:
 
-    // GRID SYNC 2
+    // =====================================================================
+    // GRID SYNC 2: Norm complete, ready for gate+up projection
+    // =====================================================================
     bar.sync        0;
     setp.eq.u32     %p1, %r1, 0;
     @!%p1 bra       GSYNC2_WAIT;
+
     ld.shared.u32   %r50, [smem_local_sense];
     xor.b32         %r51, %r50, 1;
     atom.global.add.u32 %r52, [%rd10], 1;
     setp.eq.u32     %p2, %r52, 131;
     @!%p2 bra       GSYNC2_SPIN;
+
     st.global.u32   [%rd10], 0;
     membar.gl;
     st.global.release.gpu.u32 [%rd10+4], %r51;
     st.shared.u32   [smem_local_sense], %r51;
     bra             GSYNC2_DONE;
+
 GSYNC2_SPIN:
     ld.global.acquire.gpu.u32 %r53, [%rd10+4];
     setp.ne.u32     %p3, %r53, %r51;
     @%p3 bra        GSYNC2_SPIN;
     st.shared.u32   [smem_local_sense], %r51;
+    bra             GSYNC2_DONE;
+
 GSYNC2_DONE:
 GSYNC2_WAIT:
     bar.sync        0;
 
     // =====================================================================
-    // CACHE normed[5120] into shared memory
-    // 5120 / 256 = 20 elements per thread
+    // MLP GATE+UP PROJECTION: normed[5120] -> mid_scratch[17408]
+    //
+    // Each thread computes output elements via grid-stride.
+    // global_tid starts, stride = total_threads (33792).
+    // 17408 elements, ~1 per 2 threads. Perfect distribution.
+    //
+    // For each output element m:
+    //   gate_out = dot(normed, gate_weight[m,:])  (W4 dequant)
+    //   up_out   = dot(normed, up_weight[m,:])
+    //   mid_scratch[m] = silu(gate_out) * up_out
+    //
+    // K = 5120, packed W4 = 640 u32 per row
+    // Groups = 40
+    // Row stride qweight: 2560 bytes
+    // Row stride scales: 80 bytes (f16)
+    // Row stride zeros: 160 bytes (u32)
     // =====================================================================
-    mov.u32         %r11, %r1;
-CACHE_NORMED_LOOP:
-    setp.ge.u32     %p2, %r11, 5120;
-    @%p2 bra        CACHE_NORMED_DONE;
-    shl.b32         %r12, %r11, 2;
-    cvt.u64.u32     %rd41, %r12;
-    add.u64         %rd42, %rd9, %rd41;
-    ld.global.f32   %f0, [%rd42];
-    mov.u32         %r17, smem_input;
-    add.u32         %r17, %r17, %r12;
-    st.shared.f32   [%r17], %f0;
-    add.u32         %r11, %r11, 256;
-    bra             CACHE_NORMED_LOOP;
-CACHE_NORMED_DONE:
-    bar.sync        0;
 
-    // =====================================================================
-    // MLP GATE+UP PROJECTION: smem_input[5120] -> mid_scratch[17408]
-    // Input reads from shared memory instead of global
-    // =====================================================================
-    mov.u32         %r20, %r4;
+    mov.u32         %r20, %r4;             // out_idx = global_tid
 GATE_UP_TILE_LOOP:
     setp.ge.u32     %p8, %r20, 17408;
     @%p8 bra        GATE_UP_DONE;
 
-    mul.lo.u32      %r21, %r20, 2560;
+    // Row base addresses for this output element
+    mul.lo.u32      %r21, %r20, 2560;     // gate qw row stride
     cvt.u64.u32     %rd41, %r21;
     add.u64         %rd42, %rd31, %rd41;   // gate_qw_row
 
-    mul.lo.u32      %r22, %r20, 80;
+    mul.lo.u32      %r22, %r20, 80;       // gate scales row stride
     cvt.u64.u32     %rd43, %r22;
     add.u64         %rd44, %rd32, %rd43;   // gate_sc_row
 
-    mul.lo.u32      %r23, %r20, 160;
+    mul.lo.u32      %r23, %r20, 160;      // gate zeros row stride
     cvt.u64.u32     %rd45, %r23;
     add.u64         %rd46, %rd33, %rd45;   // gate_zr_row
 
+    // Up proj rows (same strides)
     add.u64         %rd47, %rd34, %rd41;   // up_qw_row
     add.u64         %rd48, %rd35, %rd43;   // up_sc_row
     add.u64         %rd49, %rd36, %rd45;   // up_zr_row
 
+    // Accumulators
     mov.f32         %f10, 0f00000000;      // gate_acc
     mov.f32         %f11, 0f00000000;      // up_acc
 
+    // K loop: 40 groups of 128 elements
     mov.u32         %r24, 0;
 K_GROUP_LOOP:
     setp.ge.u32     %p9, %r24, 40;
     @%p9 bra        K_GROUP_DONE;
 
-    // Load gate scale/zero
+    // Load gate scale (f16) and zero (u32)
     shl.b32         %r25, %r24, 1;
     cvt.u64.u32     %rd50, %r25;
     add.u64         %rd51, %rd44, %rd50;
     ld.global.b16   %htmp, [%rd51];
-    cvt.f32.f16     %f12, %htmp;
+    cvt.f32.f16     %f12, %htmp;           // gate_scale
+
     shl.b32         %r25, %r24, 2;
     cvt.u64.u32     %rd50, %r25;
     add.u64         %rd51, %rd46, %rd50;
     ld.global.u32   %r26, [%rd51];
-    cvt.rn.f32.u32  %f13, %r26;
+    cvt.rn.f32.u32  %f13, %r26;           // gate_zero_f
 
-    // Load up scale/zero
+    // Up scale and zero
     shl.b32         %r25, %r24, 1;
     cvt.u64.u32     %rd50, %r25;
     add.u64         %rd51, %rd48, %rd50;
     ld.global.b16   %htmp, [%rd51];
-    cvt.f32.f16     %f14, %htmp;
+    cvt.f32.f16     %f14, %htmp;           // up_scale
+
     shl.b32         %r25, %r24, 2;
     cvt.u64.u32     %rd50, %r25;
     add.u64         %rd51, %rd49, %rd50;
     ld.global.u32   %r27, [%rd51];
-    cvt.rn.f32.u32  %f15, %r27;
+    cvt.rn.f32.u32  %f15, %r27;           // up_zero_f
 
-    // Packed word offsets
+    // Packed word offset: group_idx * 64 bytes
     shl.b32         %r28, %r24, 6;
     cvt.u64.u32     %rd52, %r28;
-    add.u64         %rd53, %rd42, %rd52;   // gate_qw group base
-    add.u64         %rd54, %rd47, %rd52;   // up_qw group base
+    add.u64         %rd53, %rd42, %rd52;   // gate_qw_ptr
+    add.u64         %rd54, %rd47, %rd52;   // up_qw_ptr
 
-    // Shared memory input base: smem_input + group * 128 * 4
-    shl.b32         %r29, %r24, 9;         // group * 512 bytes
-    mov.u32         %r60, smem_input;
-    add.u32         %r60, %r60, %r29;
+    // Input base: normed_ptr + group * 128 * 4
+    shl.b32         %r29, %r24, 9;         // group * 512
+    cvt.u64.u32     %rd55, %r29;
+    add.u64         %rd56, %rd9, %rd55;    // normed + group*128*4
 
+    // Inner loop: 16 packed words per group
     mov.u32         %r31, 0;
 PACKED_LOOP:
     setp.ge.u32     %p10, %r31, 16;
@@ -395,18 +518,19 @@ PACKED_LOOP:
     shl.b32         %r32, %r31, 2;
     cvt.u64.u32     %rd57, %r32;
     add.u64         %rd58, %rd53, %rd57;
-    ld.global.u32   %r33, [%rd58];
+    ld.global.u32   %r33, [%rd58];         // 8 packed nibbles (gate)
 
     // Load packed up weight
     add.u64         %rd58, %rd54, %rd57;
-    ld.global.u32   %r34, [%rd58];
+    ld.global.u32   %r34, [%rd58];         // 8 packed nibbles (up)
 
-    // Input offset in shared memory
+    // Input elements: 8 per packed word
     shl.b32         %r35, %r31, 5;         // packed_idx * 32 bytes
-    add.u32         %r36, %r60, %r35;
+    cvt.u64.u32     %rd59, %r35;
+    add.u64         %rd60, %rd56, %rd59;   // input ptr
 
     // --- Nibble 0 ---
-    ld.shared.f32   %f16, [%r36+0];
+    ld.global.f32   %f16, [%rd60+0];
     and.b32         %r37, %r33, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
     sub.f32         %f17, %f17, %f13;
@@ -419,7 +543,7 @@ PACKED_LOOP:
     fma.rn.f32      %f11, %f18, %f16, %f11;
 
     // --- Nibble 1 ---
-    ld.shared.f32   %f16, [%r36+4];
+    ld.global.f32   %f16, [%rd60+4];
     shr.b32         %r38, %r33, 4;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -434,7 +558,7 @@ PACKED_LOOP:
     fma.rn.f32      %f11, %f18, %f16, %f11;
 
     // --- Nibble 2 ---
-    ld.shared.f32   %f16, [%r36+8];
+    ld.global.f32   %f16, [%rd60+8];
     shr.b32         %r38, %r33, 8;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -449,7 +573,7 @@ PACKED_LOOP:
     fma.rn.f32      %f11, %f18, %f16, %f11;
 
     // --- Nibble 3 ---
-    ld.shared.f32   %f16, [%r36+12];
+    ld.global.f32   %f16, [%rd60+12];
     shr.b32         %r38, %r33, 12;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -464,7 +588,7 @@ PACKED_LOOP:
     fma.rn.f32      %f11, %f18, %f16, %f11;
 
     // --- Nibble 4 ---
-    ld.shared.f32   %f16, [%r36+16];
+    ld.global.f32   %f16, [%rd60+16];
     shr.b32         %r38, %r33, 16;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -479,7 +603,7 @@ PACKED_LOOP:
     fma.rn.f32      %f11, %f18, %f16, %f11;
 
     // --- Nibble 5 ---
-    ld.shared.f32   %f16, [%r36+20];
+    ld.global.f32   %f16, [%rd60+20];
     shr.b32         %r38, %r33, 20;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -494,7 +618,7 @@ PACKED_LOOP:
     fma.rn.f32      %f11, %f18, %f16, %f11;
 
     // --- Nibble 6 ---
-    ld.shared.f32   %f16, [%r36+24];
+    ld.global.f32   %f16, [%rd60+24];
     shr.b32         %r38, %r33, 24;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -509,7 +633,7 @@ PACKED_LOOP:
     fma.rn.f32      %f11, %f18, %f16, %f11;
 
     // --- Nibble 7 ---
-    ld.shared.f32   %f16, [%r36+28];
+    ld.global.f32   %f16, [%rd60+28];
     shr.b32         %r38, %r33, 28;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -531,76 +655,99 @@ PACKED_DONE:
     bra             K_GROUP_LOOP;
 
 K_GROUP_DONE:
-    // SiLU(gate) * up
+    // Compute SiLU(gate) * up
+    // SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
     neg.f32         %f20, %f10;
-    mul.f32         %f21, %f20, 0f3FB8AA3B;
-    ex2.approx.f32  %f22, %f21;
-    add.f32         %f23, %f22, 0f3F800000;
-    rcp.approx.f32  %f24, %f23;
-    mul.f32         %f25, %f10, %f24;
-    mul.f32         %f26, %f25, %f11;
+    mul.f32         %f21, %f20, 0f3FB8AA3B; // * log2(e)
+    ex2.approx.f32  %f22, %f21;            // exp(-gate)
+    add.f32         %f23, %f22, 0f3F800000; // 1 + exp(-gate)
+    rcp.approx.f32  %f24, %f23;            // sigmoid(gate)
+    mul.f32         %f25, %f10, %f24;       // silu(gate)
+    mul.f32         %f26, %f25, %f11;       // silu(gate) * up
 
+    // Store to mid_scratch[out_idx]
     shl.b32         %r40, %r20, 2;
     cvt.u64.u32     %rd57, %r40;
     add.u64         %rd58, %rd2, %rd57;
     st.global.f32   [%rd58], %f26;
 
-    add.u32         %r20, %r20, %r5;
+    // Advance to next element (grid stride)
+    add.u32         %r20, %r20, %r5;      // += total_threads
     bra             GATE_UP_TILE_LOOP;
 
 GATE_UP_DONE:
 
-    // GRID SYNC 3
+    // =====================================================================
+    // GRID SYNC 3: gate+up done, ready for down projection
+    // =====================================================================
     bar.sync        0;
     setp.eq.u32     %p1, %r1, 0;
     @!%p1 bra       GSYNC3_WAIT;
+
     ld.shared.u32   %r50, [smem_local_sense];
     xor.b32         %r51, %r50, 1;
     atom.global.add.u32 %r52, [%rd10], 1;
     setp.eq.u32     %p2, %r52, 131;
     @!%p2 bra       GSYNC3_SPIN;
+
     st.global.u32   [%rd10], 0;
     membar.gl;
     st.global.release.gpu.u32 [%rd10+4], %r51;
     st.shared.u32   [smem_local_sense], %r51;
     bra             GSYNC3_DONE;
+
 GSYNC3_SPIN:
     ld.global.acquire.gpu.u32 %r53, [%rd10+4];
     setp.ne.u32     %p3, %r53, %r51;
     @%p3 bra        GSYNC3_SPIN;
     st.shared.u32   [smem_local_sense], %r51;
+    bra             GSYNC3_DONE;
+
 GSYNC3_DONE:
 GSYNC3_WAIT:
     bar.sync        0;
 
     // =====================================================================
-    // MLP DOWN PROJECTION + RESIDUAL
-    // K=17408, same pattern as original (global reads for mid_scratch)
+    // MLP DOWN PROJECTION + RESIDUAL: mid_scratch[17408] -> activation[5120]
+    //
+    // Each thread computes output elements via grid-stride over hidden_dim.
+    // 5120 elements / 33792 threads = each thread handles 0-1 elements.
+    //
+    // K = 17408, packed = 2176 u32 per row
+    // Groups = 136 per row
+    // Row stride qweight: 8704 bytes
+    // Row stride scales: 272 bytes (f16)
+    // Row stride zeros: 544 bytes (u32)
     // =====================================================================
-    mov.u32         %r20, %r4;
+
+    mov.u32         %r20, %r4;             // out_idx = global_tid
 DOWN_TILE_LOOP:
     setp.ge.u32     %p11, %r20, 5120;
     @%p11 bra       DOWN_DONE;
 
+    // Row base addresses
     mul.lo.u32      %r21, %r20, 8704;
     cvt.u64.u32     %rd41, %r21;
-    add.u64         %rd42, %rd37, %rd41;
+    add.u64         %rd42, %rd37, %rd41;   // down_qw_row
 
     mul.lo.u32      %r22, %r20, 272;
     cvt.u64.u32     %rd43, %r22;
-    add.u64         %rd44, %rd38, %rd43;
+    add.u64         %rd44, %rd38, %rd43;   // down_sc_row
 
     mul.lo.u32      %r23, %r20, 544;
     cvt.u64.u32     %rd45, %r23;
-    add.u64         %rd46, %rd39, %rd45;
+    add.u64         %rd46, %rd39, %rd45;   // down_zr_row
 
+    // Accumulator
     mov.f32         %f10, 0f00000000;
 
+    // K loop: 136 groups
     mov.u32         %r24, 0;
 DOWN_K_GROUP_LOOP:
     setp.ge.u32     %p12, %r24, 136;
     @%p12 bra       DOWN_K_GROUP_DONE;
 
+    // Load scale and zero
     shl.b32         %r25, %r24, 1;
     cvt.u64.u32     %rd50, %r25;
     add.u64         %rd51, %rd44, %rd50;
@@ -613,14 +760,16 @@ DOWN_K_GROUP_LOOP:
     ld.global.u32   %r26, [%rd51];
     cvt.rn.f32.u32  %f13, %r26;
 
+    // packed_offset = group * 64 bytes
     shl.b32         %r28, %r24, 6;
     cvt.u64.u32     %rd52, %r28;
     add.u64         %rd53, %rd42, %rd52;
 
+    // Input from mid_scratch: k_base = group * 128
     shl.b32         %r29, %r24, 7;
-    shl.b32         %r29, %r29, 2;
+    shl.b32         %r29, %r29, 2;         // * 4 bytes
     cvt.u64.u32     %rd54, %r29;
-    add.u64         %rd55, %rd2, %rd54;
+    add.u64         %rd55, %rd2, %rd54;    // mid_scratch + k_base*4
 
     mov.u32         %r31, 0;
 DOWN_PACKED_LOOP:
@@ -708,6 +857,7 @@ DOWN_PACKED_DONE:
     bra             DOWN_K_GROUP_LOOP;
 
 DOWN_K_GROUP_DONE:
+    // Residual add: activation[out_idx] += down_out
     shl.b32         %r40, %r20, 2;
     cvt.u64.u32     %rd41, %r40;
     add.u64         %rd42, %rd8, %rd41;
@@ -715,35 +865,44 @@ DOWN_K_GROUP_DONE:
     add.f32         %f20, %f20, %f10;
     st.global.f32   [%rd42], %f20;
 
-    add.u32         %r20, %r20, %r5;
+    add.u32         %r20, %r20, %r5;      // += total_threads
     bra             DOWN_TILE_LOOP;
 
 DOWN_DONE:
 
-    // GRID SYNC 4
+    // =====================================================================
+    // GRID SYNC 4: Down projection + residual done
+    // =====================================================================
     bar.sync        0;
     setp.eq.u32     %p1, %r1, 0;
     @!%p1 bra       GSYNC4_WAIT;
+
     ld.shared.u32   %r50, [smem_local_sense];
     xor.b32         %r51, %r50, 1;
     atom.global.add.u32 %r52, [%rd10], 1;
     setp.eq.u32     %p2, %r52, 131;
     @!%p2 bra       GSYNC4_SPIN;
+
     st.global.u32   [%rd10], 0;
     membar.gl;
     st.global.release.gpu.u32 [%rd10+4], %r51;
     st.shared.u32   [smem_local_sense], %r51;
     bra             GSYNC4_DONE;
+
 GSYNC4_SPIN:
     ld.global.acquire.gpu.u32 %r53, [%rd10+4];
     setp.ne.u32     %p3, %r53, %r51;
     @%p3 bra        GSYNC4_SPIN;
     st.shared.u32   [smem_local_sense], %r51;
+    bra             GSYNC4_DONE;
+
 GSYNC4_DONE:
 GSYNC4_WAIT:
     bar.sync        0;
 
-    // Advance layer
+    // =====================================================================
+    // Advance to next layer
+    // =====================================================================
     add.u64         %rd20, %rd20, 88;
     add.u32         %r10, %r10, 1;
     bra             LAYER_LOOP;
@@ -751,22 +910,28 @@ GSYNC4_WAIT:
 LAYER_DONE:
 
     // =========================================================================
-    // FINAL RMSNORM
+    // FINAL RMSNORM: activation[] -> normed[]
+    // Same multi-block pattern as per-layer norm but with final_norm_ptr
     // =========================================================================
+
+    // Phase A: partial sum of squares
     mov.f32         %f1, 0f00000000;
     mov.u32         %r11, %r4;
 FINAL_SS_LOOP:
     setp.ge.u32     %p2, %r11, 5120;
     @%p2 bra        FINAL_SS_DONE;
+
     shl.b32         %r12, %r11, 2;
     cvt.u64.u32     %rd41, %r12;
     add.u64         %rd42, %rd8, %rd41;
     ld.global.f32   %f2, [%rd42];
     fma.rn.f32      %f1, %f2, %f2, %f1;
+
     add.u32         %r11, %r11, %r5;
     bra             FINAL_SS_LOOP;
 FINAL_SS_DONE:
 
+    // Warp reduction
     shfl.sync.down.b32 %f3, %f1, 16, 31, 0xFFFFFFFF;
     add.f32         %f1, %f1, %f3;
     shfl.sync.down.b32 %f3, %f1, 8, 31, 0xFFFFFFFF;
@@ -791,6 +956,7 @@ FINAL_SKIP_STORE_SS:
 
     setp.lt.u32     %p4, %r1, 32;
     @!%p4 bra       FINAL_SKIP_CROSS_SS;
+
     mov.f32         %f4, 0f00000000;
     setp.lt.u32     %p5, %r1, 8;
     @!%p5 bra       FINAL_SKIP_LOAD_SS;
@@ -799,6 +965,7 @@ FINAL_SKIP_STORE_SS:
     add.u32         %r17, %r17, %r16;
     ld.shared.f32   %f4, [%r17];
 FINAL_SKIP_LOAD_SS:
+
     shfl.sync.down.b32 %f5, %f4, 16, 31, 0xFFFFFFFF;
     add.f32         %f4, %f4, %f5;
     shfl.sync.down.b32 %f5, %f4, 8, 31, 0xFFFFFFFF;
@@ -809,23 +976,28 @@ FINAL_SKIP_LOAD_SS:
     add.f32         %f4, %f4, %f5;
     shfl.sync.down.b32 %f5, %f4, 1, 31, 0xFFFFFFFF;
     add.f32         %f4, %f4, %f5;
+
     setp.eq.u32     %p6, %r1, 0;
     @!%p6 bra       FINAL_SKIP_CROSS_SS;
     shl.b32         %r16, %r2, 2;
     cvt.u64.u32     %rd41, %r16;
     add.u64         %rd42, %rd11, %rd41;
     st.global.f32   [%rd42], %f4;
+
 FINAL_SKIP_CROSS_SS:
 
+    // Grid sync for final norm partial sums
     bar.sync        0;
     setp.eq.u32     %p1, %r1, 0;
     @!%p1 bra       GSYNC5_WAIT;
+
     ld.shared.u32   %r50, [smem_local_sense];
     xor.b32         %r51, %r50, 1;
     atom.global.add.u32 %r52, [%rd10], 1;
     setp.eq.u32     %p2, %r52, 131;
     @!%p2 bra       GSYNC5_SPIN;
 
+    // Last block: sum all partials
     mov.f32         %f6, 0f00000000;
     mov.u32         %r16, 0;
 FINAL_TOTAL_LOOP:
@@ -839,87 +1011,91 @@ FINAL_TOTAL_LOOP:
     add.u32         %r16, %r16, 1;
     bra             FINAL_TOTAL_LOOP;
 FINAL_TOTAL_DONE:
-    mul.f32         %f6, %f6, 0f394CCCCD;
-    add.f32         %f6, %f6, 0f358637BD;
+
+    mul.f32         %f6, %f6, 0f394CCCCD;  // 1.0/5120
+    add.f32         %f6, %f6, 0f358637BD;  // 1e-6
     rsqrt.approx.f32 %f6, %f6;
     st.global.f32   [%rd10+12], %f6;
+
     st.global.u32   [%rd10], 0;
     membar.gl;
     st.global.release.gpu.u32 [%rd10+4], %r51;
     st.shared.u32   [smem_local_sense], %r51;
     bra             GSYNC5_DONE;
+
 GSYNC5_SPIN:
     ld.global.acquire.gpu.u32 %r53, [%rd10+4];
     setp.ne.u32     %p3, %r53, %r51;
     @%p3 bra        GSYNC5_SPIN;
     st.shared.u32   [smem_local_sense], %r51;
+    bra             GSYNC5_DONE;
+
 GSYNC5_DONE:
 GSYNC5_WAIT:
     bar.sync        0;
 
     ld.global.f32   %f7, [%rd10+12];
 
+    // Apply final norm
     mov.u32         %r11, %r4;
 FINAL_NORM_LOOP:
     setp.ge.u32     %p7, %r11, 5120;
     @%p7 bra        FINAL_NORM_DONE;
+
     shl.b32         %r12, %r11, 2;
     cvt.u64.u32     %rd41, %r12;
+
     add.u64         %rd42, %rd8, %rd41;
     ld.global.f32   %f8, [%rd42];
     mul.f32         %f9, %f8, %f7;
+
     add.u64         %rd43, %rd4, %rd41;
     ld.global.f32   %f10, [%rd43];
     mul.f32         %f9, %f9, %f10;
+
     add.u64         %rd44, %rd9, %rd41;
     st.global.f32   [%rd44], %f9;
+
     add.u32         %r11, %r11, %r5;
     bra             FINAL_NORM_LOOP;
 FINAL_NORM_DONE:
 
-    // GRID SYNC 6
+    // Grid sync before LM head
     bar.sync        0;
     setp.eq.u32     %p1, %r1, 0;
     @!%p1 bra       GSYNC6_WAIT;
+
     ld.shared.u32   %r50, [smem_local_sense];
     xor.b32         %r51, %r50, 1;
     atom.global.add.u32 %r52, [%rd10], 1;
     setp.eq.u32     %p2, %r52, 131;
     @!%p2 bra       GSYNC6_SPIN;
+
     st.global.u32   [%rd10], 0;
     membar.gl;
     st.global.release.gpu.u32 [%rd10+4], %r51;
     st.shared.u32   [smem_local_sense], %r51;
     bra             GSYNC6_DONE;
+
 GSYNC6_SPIN:
     ld.global.acquire.gpu.u32 %r53, [%rd10+4];
     setp.ne.u32     %p3, %r53, %r51;
     @%p3 bra        GSYNC6_SPIN;
     st.shared.u32   [smem_local_sense], %r51;
+    bra             GSYNC6_DONE;
+
 GSYNC6_DONE:
 GSYNC6_WAIT:
     bar.sync        0;
 
     // =========================================================================
-    // LM HEAD: cache normed in smem, then compute logits
+    // LM HEAD: normed[5120] -> logits[248320]
+    // Grid-stride: 248320 / 33792 ~ 7.3 elements per thread
+    // Same W4 dequant as gate/up projection.
+    // Row stride qweight: 2560 bytes, scales: 80, zeros: 160
     // =========================================================================
-    mov.u32         %r11, %r1;
-LM_CACHE_LOOP:
-    setp.ge.u32     %p2, %r11, 5120;
-    @%p2 bra        LM_CACHE_DONE;
-    shl.b32         %r12, %r11, 2;
-    cvt.u64.u32     %rd41, %r12;
-    add.u64         %rd42, %rd9, %rd41;
-    ld.global.f32   %f0, [%rd42];
-    mov.u32         %r17, smem_input;
-    add.u32         %r17, %r17, %r12;
-    st.shared.f32   [%r17], %f0;
-    add.u32         %r11, %r11, 256;
-    bra             LM_CACHE_LOOP;
-LM_CACHE_DONE:
-    bar.sync        0;
 
-    mov.u32         %r20, %r4;
+    mov.u32         %r20, %r4;             // out_idx = global_tid
 LM_HEAD_TILE_LOOP:
     setp.ge.u32     %p8, %r20, 248320;
     @%p8 bra        LM_HEAD_DONE;
@@ -959,10 +1135,10 @@ LM_K_GROUP_LOOP:
     cvt.u64.u32     %rd52, %r28;
     add.u64         %rd53, %rd42, %rd52;
 
-    // Input from shared memory
+    // Input from normed (global memory)
     shl.b32         %r29, %r24, 9;
-    mov.u32         %r60, smem_input;
-    add.u32         %r60, %r60, %r29;
+    cvt.u64.u32     %rd54, %r29;
+    add.u64         %rd55, %rd9, %rd54;
 
     mov.u32         %r31, 0;
 LM_PACKED_LOOP:
@@ -975,17 +1151,18 @@ LM_PACKED_LOOP:
     ld.global.u32   %r33, [%rd57];
 
     shl.b32         %r35, %r31, 5;
-    add.u32         %r36, %r60, %r35;
+    cvt.u64.u32     %rd58, %r35;
+    add.u64         %rd59, %rd55, %rd58;
 
-    // 8 nibbles from shared memory
-    ld.shared.f32   %f16, [%r36+0];
+    // 8 nibbles
+    ld.global.f32   %f16, [%rd59+0];
     and.b32         %r37, %r33, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
     sub.f32         %f17, %f17, %f13;
     mul.f32         %f17, %f17, %f12;
     fma.rn.f32      %f10, %f17, %f16, %f10;
 
-    ld.shared.f32   %f16, [%r36+4];
+    ld.global.f32   %f16, [%rd59+4];
     shr.b32         %r38, %r33, 4;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -993,7 +1170,7 @@ LM_PACKED_LOOP:
     mul.f32         %f17, %f17, %f12;
     fma.rn.f32      %f10, %f17, %f16, %f10;
 
-    ld.shared.f32   %f16, [%r36+8];
+    ld.global.f32   %f16, [%rd59+8];
     shr.b32         %r38, %r33, 8;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -1001,7 +1178,7 @@ LM_PACKED_LOOP:
     mul.f32         %f17, %f17, %f12;
     fma.rn.f32      %f10, %f17, %f16, %f10;
 
-    ld.shared.f32   %f16, [%r36+12];
+    ld.global.f32   %f16, [%rd59+12];
     shr.b32         %r38, %r33, 12;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -1009,7 +1186,7 @@ LM_PACKED_LOOP:
     mul.f32         %f17, %f17, %f12;
     fma.rn.f32      %f10, %f17, %f16, %f10;
 
-    ld.shared.f32   %f16, [%r36+16];
+    ld.global.f32   %f16, [%rd59+16];
     shr.b32         %r38, %r33, 16;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -1017,7 +1194,7 @@ LM_PACKED_LOOP:
     mul.f32         %f17, %f17, %f12;
     fma.rn.f32      %f10, %f17, %f16, %f10;
 
-    ld.shared.f32   %f16, [%r36+20];
+    ld.global.f32   %f16, [%rd59+20];
     shr.b32         %r38, %r33, 20;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -1025,7 +1202,7 @@ LM_PACKED_LOOP:
     mul.f32         %f17, %f17, %f12;
     fma.rn.f32      %f10, %f17, %f16, %f10;
 
-    ld.shared.f32   %f16, [%r36+24];
+    ld.global.f32   %f16, [%rd59+24];
     shr.b32         %r38, %r33, 24;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -1033,7 +1210,7 @@ LM_PACKED_LOOP:
     mul.f32         %f17, %f17, %f12;
     fma.rn.f32      %f10, %f17, %f16, %f10;
 
-    ld.shared.f32   %f16, [%r36+28];
+    ld.global.f32   %f16, [%rd59+28];
     shr.b32         %r38, %r33, 28;
     and.b32         %r37, %r38, 0x0F;
     cvt.rn.f32.u32  %f17, %r37;
@@ -1049,12 +1226,13 @@ LM_PACKED_DONE:
     bra             LM_K_GROUP_LOOP;
 
 LM_K_GROUP_DONE:
+    // Store logit to global memory
     shl.b32         %r40, %r20, 2;
     cvt.u64.u32     %rd56, %r40;
     add.u64         %rd57, %rd3, %rd56;
     st.global.f32   [%rd57], %f10;
 
-    add.u32         %r20, %r20, %r5;
+    add.u32         %r20, %r20, %r5;      // += total_threads
     bra             LM_HEAD_TILE_LOOP;
 
 LM_HEAD_DONE:

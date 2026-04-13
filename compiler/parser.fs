@@ -451,33 +451,35 @@ variable 'parse-expr
     src-pos @ >r  src-token  r> swap >r src-pos !  r> ;
 
 \ Emit a float constant, returns freg
+variable fc-freg
+variable fc-hex
 : emit-fconst ( addr u -- freg )
     2dup fconst-find if
-        >r 2drop freg+ dup >r
-        ptx-indent s" mov.f32 " ptx+  r@ ptx-freg  s" , 0f" ptx+
-        r> drop
-        r> emit-hex32
+        fc-hex ! 2drop freg+ dup fc-freg !
+        ptx-indent s" mov.f32 " ptx+  fc-freg @ ptx-freg  s" , 0f" ptx+
+        fc-hex @ emit-hex32
         s" ;" ptx+ ptx-nl
+        fc-freg @
     else
-        \ Unknown float — emit as 0.0 and print warning
-        2drop freg+ dup >r
-        ptx-indent s" mov.f32 " ptx+  r@ ptx-freg  s" , 0f00000000;" ptx+ ptx-nl
-        r>
+        2drop freg+ dup fc-freg !
+        ptx-indent s" mov.f32 " ptx+  fc-freg @ ptx-freg  s" , 0f00000000;" ptx+ ptx-nl
+        fc-freg @
     then ;
 
 \ Emit an integer constant into an r32 register
+variable ic-rreg
 : emit-iconst ( n -- rreg )
-    rreg+ dup >r
-    ptx-indent s" mov.u32 " ptx+  r@ ptx-r32  s" , " ptx+
+    rreg+ ic-rreg !
+    ptx-indent s" mov.u32 " ptx+  ic-rreg @ ptx-r32  s" , " ptx+
     dup 0< if
-        \ Negative: emit as unsigned representation
         s" 0x" ptx+ emit-hex32
     else
         ptx-num ptx+
     then
     s" ;" ptx+ ptx-nl
-    r> ;
+    ic-rreg @ ;
 
+variable pa-saved-pos
 : parse-atom  ( -- freg )
     src-token dup 0= if 2drop -1 exit then
 
@@ -500,32 +502,32 @@ variable 'parse-expr
     2dup sym-find dup -1 = if
         \ Unknown — emit zero
         drop 2drop
-        freg+ dup >r
-        ptx-indent s" mov.f32 " ptx+  r@ ptx-freg  s" , 0f00000000;" ptx+ ptx-nl
-        r> exit
+        freg+ dup pa-saved-pos !
+        ptx-indent s" mov.f32 " ptx+  pa-saved-pos @ ptx-freg  s" , 0f00000000;" ptx+ ptx-nl
+        pa-saved-pos @ exit
     then
-    >r 2drop r>           \ ( sym-idx )
+    nip nip               \ ( sym-idx )
     \ Peek next token for "["
-    src-pos @ >r
+    src-pos @ pa-saved-pos !
     src-token dup 0= if
-        2drop r> src-pos !
+        2drop pa-saved-pos @ src-pos !
         dup sym-kind@ 2 = if  sym-reg@  else
-        dup sym-kind@ 3 = if  drop -1  else  \ each-var shouldn't appear as atom value
-        dup sym-kind@ 4 = if  sym-reg@  else  \ local-u32 returns rreg
-        dup sym-kind@ 5 = if  sym-reg@  else  \ scalar-u32 returns rreg
-        dup sym-kind@ 6 = if  sym-reg@  else  \ scalar-f32 returns freg
+        dup sym-kind@ 3 = if  drop -1  else
+        dup sym-kind@ 4 = if  sym-reg@  else
+        dup sym-kind@ 5 = if  sym-reg@  else
+        dup sym-kind@ 6 = if  sym-reg@  else
         sym-reg@
         then then then then then exit
     then
     2dup k-lbrack 1 li-tok= if
-        2drop r> drop
+        2drop
         src-token 2drop          \ consume index var (the "i")
         src-token 2drop          \ consume "]"
         sym-reg@ emit-iload      \ emit load, returns freg
         exit
     then
     \ Not "[" — put token back
-    2drop r> src-pos !
+    2drop pa-saved-pos @ src-pos !
     dup sym-kind@ 2 = if  sym-reg@  else
     dup sym-kind@ 3 = if  drop -1  else
     dup sym-kind@ 4 = if  sym-reg@  else
@@ -534,51 +536,57 @@ variable 'parse-expr
     sym-reg@
     then then then then then ;
 
+variable pt-saved-pos
+variable pt-result-freg
+
 : parse-term  ( -- freg )
     parse-atom
     begin
-        src-pos @ >r
-        src-token dup 0= if 2drop r> src-pos ! exit then
+        src-pos @ pt-saved-pos !
+        src-token dup 0= if 2drop pt-saved-pos @ src-pos ! exit then
         2dup k-star 1 li-tok= if
-            2drop r> drop
-            parse-atom swap       ( freg2 freg1 )
-            freg+ >r
-            ptx-indent s" mul.f32 " ptx+  r@ ptx-freg  s" , " ptx+
-            ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
-            r>
-        else 2dup k-slash 1 li-tok= if
-            2drop r> drop
+            2drop
             parse-atom swap
-            freg+ >r
-            ptx-indent s" div.approx.f32 " ptx+  r@ ptx-freg  s" , " ptx+
+            freg+ pt-result-freg !
+            ptx-indent s" mul.f32 " ptx+  pt-result-freg @ ptx-freg  s" , " ptx+
             ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
-            r>
+            pt-result-freg @
+        else 2dup k-slash 1 li-tok= if
+            2drop
+            parse-atom swap
+            freg+ pt-result-freg !
+            ptx-indent s" div.approx.f32 " ptx+  pt-result-freg @ ptx-freg  s" , " ptx+
+            ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
+            pt-result-freg @
         else
-            2drop r> src-pos ! exit
+            2drop pt-saved-pos @ src-pos ! exit
         then then
     again ;
+
+variable pe-saved-pos
+variable pe-result-freg
 
 : parse-expr  ( -- freg )
     parse-term
     begin
-        src-pos @ >r
-        src-token dup 0= if 2drop r> src-pos ! exit then
+        src-pos @ pe-saved-pos !
+        src-token dup 0= if 2drop pe-saved-pos @ src-pos ! exit then
         2dup k-plus 1 li-tok= if
-            2drop r> drop
+            2drop
             parse-term swap
-            freg+ >r
-            ptx-indent s" add.f32 " ptx+  r@ ptx-freg  s" , " ptx+
+            freg+ pe-result-freg !
+            ptx-indent s" add.f32 " ptx+  pe-result-freg @ ptx-freg  s" , " ptx+
             ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
-            r>
+            pe-result-freg @
         else 2dup k-minus 1 li-tok= if
-            2drop r> drop
+            2drop
             parse-term swap
-            freg+ >r
-            ptx-indent s" sub.f32 " ptx+  r@ ptx-freg  s" , " ptx+
+            freg+ pe-result-freg !
+            ptx-indent s" sub.f32 " ptx+  pe-result-freg @ ptx-freg  s" , " ptx+
             ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
-            r>
+            pe-result-freg @
         else
-            2drop r> src-pos ! exit
+            2drop pe-saved-pos @ src-pos ! exit
         then then
     again ;
 
@@ -1384,103 +1392,64 @@ create k-raw 3 allot  s" raw" k-raw swap move
 \ ---- Statement parser --------------------------------------------------------
 \ Extended to handle all new features
 
-: parse-stmt  ( addr u -- continue? )
-    \ Check for "fn" (starts a new function, so current one is done)
-    2dup k-fn 2 li-tok= if 2drop 0 exit then
+variable stmt-matched   \ -1 if a keyword matched
 
-    \ Check for "each"
+\ Dispatch keyword group 1: control flow + bitwise
+: stmt-dispatch1 ( addr u -- result | addr u )
+    2dup k-fn 2 li-tok= if 2drop 0 -1 stmt-matched ! exit then
     2dup k-each 4 li-tok= if
-        2drop
-        src-token                    \ variable name
-        3 3 sym-add drop            \ kind=3 (each-var), reg=%r3
-        emit-each-tid
-        -1 exit
+        2drop src-token 3 3 sym-add drop emit-each-tid -1 -1 stmt-matched ! exit
     then
+    2dup k-endfor 6 li-tok= if 2drop emit-endfor -1 -1 stmt-matched ! exit then
+    2dup k-for 3 li-tok= if 2drop emit-for-v2 -1 -1 stmt-matched ! exit then
+    2dup k-shr 3 li-tok= if 2drop emit-shr -1 -1 stmt-matched ! exit then
+    2dup k-shl 3 li-tok= if 2drop emit-shl -1 -1 stmt-matched ! exit then
+    2dup k-and 3 li-tok= if 2drop emit-and -1 -1 stmt-matched ! exit then
+    2dup k-or  2 li-tok= if 2drop emit-or  -1 -1 stmt-matched ! exit then
+    2dup k-xor 3 li-tok= if 2drop emit-xor -1 -1 stmt-matched ! exit then
+    2dup k-shfl 9 li-tok= if 2drop emit-shfl-bfly -1 -1 stmt-matched ! exit then
+    2dup k-shared 6 li-tok= if 2drop parse-shared-v2 -1 -1 stmt-matched ! exit then
+    2dup k-param 5 li-tok= if 2drop parse-scalar-param -1 -1 stmt-matched ! exit then
+    ;
 
-    \ Check for "endfor"
-    2dup k-endfor 6 li-tok= if
-        2drop emit-endfor -1 exit
-    then
+\ Dispatch keyword group 2: math + conversions
+: stmt-dispatch2 ( addr u -- result | addr u )
+    2dup k-exp   3 li-tok= if 2drop emit-exp   -1 -1 stmt-matched ! exit then
+    2dup k-rcp   3 li-tok= if 2drop emit-rcp   -1 -1 stmt-matched ! exit then
+    2dup k-rsqrt 5 li-tok= if 2drop emit-rsqrt -1 -1 stmt-matched ! exit then
+    2dup k-sqrt  4 li-tok= if 2drop emit-sqrt  -1 -1 stmt-matched ! exit then
+    2dup k-sin   3 li-tok= if 2drop emit-sin   -1 -1 stmt-matched ! exit then
+    2dup k-cos   3 li-tok= if 2drop emit-cos   -1 -1 stmt-matched ! exit then
+    2dup k-neg   3 li-tok= if 2drop emit-neg   -1 -1 stmt-matched ! exit then
+    2dup k-fma   3 li-tok= if 2drop emit-fma   -1 -1 stmt-matched ! exit then
+    2dup k-f32s32 7 li-tok= if 2drop emit-f32-to-s32 -1 -1 stmt-matched ! exit then
+    2dup k-f32u32 7 li-tok= if 2drop emit-f32-to-u32 -1 -1 stmt-matched ! exit then
+    2dup k-u32f32 7 li-tok= if 2drop emit-u32-to-f32 -1 -1 stmt-matched ! exit then
+    2dup k-s32f32 7 li-tok= if 2drop emit-s32-to-f32 -1 -1 stmt-matched ! exit then
+    ;
 
-    \ Check for "for"
-    2dup k-for 3 li-tok= if
-        2drop emit-for-v2 -1 exit
-    then
+\ Dispatch keyword group 3: control + memory + misc
+: stmt-dispatch3 ( addr u -- result | addr u )
+    2dup k-setp 4 li-tok= if 2drop emit-setp -1 -1 stmt-matched ! exit then
+    2dup k-ifge 4 li-tok= if 2drop emit-ifge-exit -1 -1 stmt-matched ! exit then
+    2dup k-iflt 4 li-tok= if 2drop emit-iflt-exit -1 -1 stmt-matched ! exit then
+    2dup k-label 5 li-tok= if 2drop emit-label -1 -1 stmt-matched ! exit then
+    2dup k-bra 3 li-tok= if 2drop emit-bra -1 -1 stmt-matched ! exit then
+    2dup k-bar 7 li-tok= if 2drop emit-barrier -1 -1 stmt-matched ! exit then
+    2dup k-mov 3 li-tok= if 2drop emit-mov -1 -1 stmt-matched ! exit then
+    2dup k-add 3 li-tok= if 2drop emit-add-u32 -1 -1 stmt-matched ! exit then
+    2dup k-sub 3 li-tok= if 2drop emit-sub-u32 -1 -1 stmt-matched ! exit then
+    2dup k-mul 3 li-tok= if 2drop emit-mul-u32 -1 -1 stmt-matched ! exit then
+    2dup k-mad 3 li-tok= if 2drop emit-mad     -1 -1 stmt-matched ! exit then
+    2dup k-ldg 8 li-tok= if 2drop emit-ld-global-v2 -1 -1 stmt-matched ! exit then
+    2dup k-stg 8 li-tok= if 2drop emit-st-global-v2 -1 -1 stmt-matched ! exit then
+    2dup k-lds 9 li-tok= if 2drop emit-ld-shared -1 -1 stmt-matched ! exit then
+    2dup k-sts 9 li-tok= if 2drop emit-st-shared -1 -1 stmt-matched ! exit then
+    ;
 
-    \ Check for bitwise ops
-    2dup k-shr 3 li-tok= if 2drop emit-shr -1 exit then
-    2dup k-shl 3 li-tok= if 2drop emit-shl -1 exit then
-    2dup k-and 3 li-tok= if 2drop emit-and -1 exit then
-    2dup k-or  2 li-tok= if 2drop emit-or  -1 exit then
-    2dup k-xor 3 li-tok= if 2drop emit-xor -1 exit then
-
-    \ Check for warp shuffle
-    2dup k-shfl 9 li-tok= if 2drop emit-shfl-bfly -1 exit then
-
-    \ Check for shared memory
-    2dup k-shared 6 li-tok= if 2drop parse-shared-v2 -1 exit then
-
-    \ Check for scalar params
-    2dup k-param 5 li-tok= if 2drop parse-scalar-param -1 exit then
-
-    \ Check for math intrinsics
-    2dup k-exp   3 li-tok= if 2drop emit-exp   -1 exit then
-    2dup k-rcp   3 li-tok= if 2drop emit-rcp   -1 exit then
-    2dup k-rsqrt 5 li-tok= if 2drop emit-rsqrt -1 exit then
-    2dup k-sqrt  4 li-tok= if 2drop emit-sqrt  -1 exit then
-    2dup k-sin   3 li-tok= if 2drop emit-sin   -1 exit then
-    2dup k-cos   3 li-tok= if 2drop emit-cos   -1 exit then
-    2dup k-neg   3 li-tok= if 2drop emit-neg   -1 exit then
-    2dup k-fma   3 li-tok= if 2drop emit-fma   -1 exit then
-
-    \ Check for type conversions
-    2dup k-f32s32 7 li-tok= if 2drop emit-f32-to-s32 -1 exit then
-    2dup k-f32u32 7 li-tok= if 2drop emit-f32-to-u32 -1 exit then
-    2dup k-u32f32 7 li-tok= if 2drop emit-u32-to-f32 -1 exit then
-    2dup k-s32f32 7 li-tok= if 2drop emit-s32-to-f32 -1 exit then
-
-    \ Check for setp
-    2dup k-setp 4 li-tok= if 2drop emit-setp -1 exit then
-
-    \ Check for bounds check / early exit
-    2dup k-ifge 4 li-tok= if 2drop emit-ifge-exit -1 exit then
-    2dup k-iflt 4 li-tok= if 2drop emit-iflt-exit -1 exit then
-
-    \ Check for label
-    2dup k-label 5 li-tok= if 2drop emit-label -1 exit then
-
-    \ Check for bra
-    2dup k-bra 3 li-tok= if 2drop emit-bra -1 exit then
-
-    \ Check for barrier
-    2dup k-bar 7 li-tok= if 2drop emit-barrier -1 exit then
-
-    \ Check for mov
-    2dup k-mov 3 li-tok= if 2drop emit-mov -1 exit then
-
-    \ Check for integer add/sub/mul/mad
-    2dup k-add 3 li-tok= if 2drop emit-add-u32 -1 exit then
-    2dup k-sub 3 li-tok= if 2drop emit-sub-u32 -1 exit then
-    2dup k-mul 3 li-tok= if 2drop emit-mul-u32 -1 exit then
-    2dup k-mad 3 li-tok= if 2drop emit-mad     -1 exit then
-
-    \ Check for ld.global / st.global
-    2dup k-ldg 8 li-tok= if 2drop emit-ld-global-v2 -1 exit then
-    2dup k-stg 8 li-tok= if 2drop emit-st-global-v2 -1 exit then
-
-    \ Check for ld.shared / st.shared
-    2dup k-lds 9 li-tok= if 2drop emit-ld-shared -1 exit then
-    2dup k-sts 9 li-tok= if 2drop emit-st-shared -1 exit then
-
-    \ Check for predicated instruction (@pN ...)
-    over c@ [char] @ = if
-        emit-predicated -1 exit
-    then
-
-    \ Check for cvt (direct)
+: stmt-dispatch4 ( addr u -- result | addr u )
     2dup k-cvt 3 li-tok= if 2drop
-        \ cvt SUFFIX DST SRC
-        src-token   \ suffix like "rn.f32.u32"
+        src-token
         src-token 2dup sym-find dup -1 = if
             drop freg+ >r 2 r@ sym-add >r r> drop r>
         else >r 2drop r> sym-reg@ then
@@ -1488,46 +1457,54 @@ create k-raw 3 allot  s" raw" k-raw swap move
             drop 2dup is-number? if parse-uint emit-iconst
             else 2drop 0 then
         else >r 2drop r> sym-reg@ then
-        \ ( suffix-addr suffix-u dst src )
         >r >r
         ptx-indent s" cvt." ptx+ ptx+ s"  " ptx+
         r> ptx-freg s" , " ptx+ r> ptx-r32 s" ;" ptx+ ptx-nl
-        -1 exit
+        -1 -1 stmt-matched ! exit
     then
+    over c@ [char] @ = if emit-predicated -1 -1 stmt-matched ! exit then
+    ;
+
+variable ps-dst-freg
+variable ps-saved-pos
+
+: parse-stmt  ( addr u -- continue? )
+    0 stmt-matched !
+    stmt-dispatch1  stmt-matched @ if exit then
+    stmt-dispatch2  stmt-matched @ if exit then
+    stmt-dispatch3  stmt-matched @ if exit then
+    stmt-dispatch4  stmt-matched @ if exit then
 
     \ ---- Original expression-based statements ----
-    \ Must be NAME ... = expr  or  NAME [ ... ] = expr
     2dup sym-find dup -1 = if
         \ New name — peek for "=" (local assignment)
         drop
-        src-pos @ >r
-        src-token dup 0= if 2drop r> src-pos ! 2drop -1 exit then
+        src-pos @ ps-saved-pos !
+        src-token dup 0= if 2drop ps-saved-pos @ src-pos ! 2drop -1 exit then
         2dup k-eq 1 li-tok= if
-            2drop r> drop
-            \ New local variable — allocate freg, parse expr, copy
-            freg+ >r
-            2 r@ sym-add drop       \ kind=2 (local), reg=freg
-            parse-expr               ( src-freg ) R: dst-freg
-            dup r@ = if
-                drop r> drop
+            2drop
+            freg+ ps-dst-freg !
+            2 ps-dst-freg @ sym-add drop
+            parse-expr
+            dup ps-dst-freg @ = if
+                drop
             else
-                ptx-indent s" mov.f32 " ptx+  r@ ptx-freg  s" , " ptx+
+                ptx-indent s" mov.f32 " ptx+  ps-dst-freg @ ptx-freg  s" , " ptx+
                 ptx-freg s" ;" ptx+ ptx-nl
-                r> drop
             then
             -1 exit
         then
         2dup k-lbrack 1 li-tok= if
-            2drop r> src-pos ! 2drop -1 exit
+            2drop ps-saved-pos @ src-pos ! 2drop -1 exit
         then
-        2drop r> src-pos ! 2drop -1 exit
+        2drop ps-saved-pos @ src-pos ! 2drop -1 exit
     then
-    >r 2drop r>                     \ ( sym-idx )
+    nip nip                         \ ( sym-idx ) drop addr u
     \ Known symbol — peek for "[" or "="
-    src-pos @ >r
-    src-token dup 0= if 2drop r> src-pos ! drop -1 exit then
+    src-pos @ ps-saved-pos !
+    src-token dup 0= if 2drop ps-saved-pos @ src-pos ! drop -1 exit then
     2dup k-lbrack 1 li-tok= if
-        2drop r> drop               ( sym-idx )
+        2drop                       ( sym-idx )
         src-token 2drop             \ consume index var
         src-token 2drop             \ consume "]"
         src-token 2drop             \ consume "="
@@ -1537,17 +1514,16 @@ create k-raw 3 allot  s" raw" k-raw swap move
         -1 exit
     then
     2dup k-eq 1 li-tok= if
-        2drop r> drop               ( sym-idx )
+        2drop                       ( sym-idx )
         parse-expr                  ( sym-idx freg )
         over sym-kind@ 2 = if
-            \ Reassign local
             ptx-indent s" mov.f32 " ptx+
             over sym-reg@ ptx-freg  s" , " ptx+  ptx-freg  s" ;" ptx+ ptx-nl
             drop
         else 2drop then
         -1 exit
     then
-    2drop r> src-pos ! drop -1 ;
+    2drop ps-saved-pos @ src-pos ! drop -1 ;
 
 \ ---- Parse a complete function -----------------------------------------------
 
@@ -1567,13 +1543,13 @@ create k-raw 3 allot  s" raw" k-raw swap move
         then
     again ;
 
+variable pfb-saved-pos
 : parse-fn-body  ( -- )
     begin
-        src-pos @ >r
-        src-token dup 0= if 2drop r> drop exit then
+        src-pos @ pfb-saved-pos !
+        src-token dup 0= if 2drop exit then
         parse-stmt
-        0= if r> src-pos ! exit then
-        r> drop
+        0= if pfb-saved-pos @ src-pos ! exit then
     again ;
 
 \ Check if token is a body keyword (returns -1 if yes, 0 if no)
