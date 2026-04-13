@@ -11,73 +11,71 @@ A composition is a name, its inputs, and its body. The colon begins the body.
 ```
 rmsnorm x w D :
     each i
-        sq -> 32 x i * x i
-        sum Σ sq
-        rms sqrt sum / D
-        <- 32 out i rms * w i
+        sq → 32 x i * x i
+        s Σ sq
+        rms sqrt s / D
+        ← 32 out i rms * w i
 ```
 
-No `fn` keyword. No return arrow. The compiler inlines everything.
-A composition of compositions is still just a flat instruction stream:
+The compiler inlines everything. A composition of compositions is a flat
+instruction stream.
+
+## The symbols
 
 ```
-deltanet_layer x X :
-    rmsnorm x w_norm D
-    project W_q x q
-    project W_k x k
-    project W_v x v
-    l2norm k
-    silu q
-    l2norm q
-    matvec S k recall
-    <- 32 out recall
+→    load from memory     (data flows to you)
+←    store to memory      (data flows away)
+↑    read from register   (pull value up out of register)
+↓    write to register    (push value down into register)
+$    register marker      ($0, $8, $TID_X)
+Σ    sum                  (sum a vector)
+△    max                  (max of a vector)
+▽    min                  (min of a vector)
+#    index                (position, not value — composable with △ ▽)
+trap syscall              (invoke the operating system)
+\\   comment              (to end of line)
 ```
 
-## Memory: `->` and `<-`
+## Memory: `→` and `←`
 
-`->` loads (data flows to you). `<-` stores (data flows to memory).
-The number is the bit width.
-
-```
--> 8 addr            load 8 bits    → ARM64: LDRB  / GPU: LDS.U8
--> 16 addr           load 16 bits   → ARM64: LDRH  / GPU: LDS.U16
--> 32 addr           load 32 bits   → ARM64: LDR W / GPU: LDG
--> 64 addr           load 64 bits   → ARM64: LDR X / GPU: LDG.64
-
-<- 8 addr val        store 8 bits   → ARM64: STRB  / GPU: STS.U8
-<- 16 addr val       store 16 bits  → ARM64: STRH  / GPU: STS.U16
-<- 32 addr val       store 32 bits  → ARM64: STR W / GPU: STG
-<- 64 addr val       store 64 bits  → ARM64: STR X / GPU: STG.64
-```
-
-Two symbols, one dispatch on a constant, one instruction on the silicon.
-
-## Registers: `^`
-
-`^` marks a hardware register. `^N` is register N. Not an operator — a noun.
-The instruction around it decides what happens.
-
-A register is a numbered slot on the silicon. It holds bits.
-The register does not know if the bits are an address, an integer, or a float.
-The next instruction decides what the bits mean.
+`→` loads. `←` stores. The number is the bit width.
 
 ```
-^8 56                put 56 in register 8         → ARM64: MOV X8, #56
-^0 addr              put addr in register 0       → ARM64: MOV X0, addr
-result ^0            read register 0 into result  → ARM64: MOV Xd, X0
+→ 8 addr            load 8 bits    → ARM64: LDRB  / GPU: LDS.U8
+→ 16 addr           load 16 bits   → ARM64: LDRH  / GPU: LDS.U16
+→ 32 addr           load 32 bits   → ARM64: LDR W / GPU: LDG
+→ 64 addr           load 64 bits   → ARM64: LDR X / GPU: LDG.64
+
+← 8 addr val        store 8 bits   → ARM64: STRB  / GPU: STS.U8
+← 16 addr val       store 16 bits  → ARM64: STRH  / GPU: STS.U16
+← 32 addr val       store 32 bits  → ARM64: STR W / GPU: STG
+← 64 addr val       store 64 bits  → ARM64: STR X / GPU: STG.64
 ```
 
-Special registers (hardware state, read-only) are named in per-architecture
-dictionaries. The name is the register. The compiler emits the right instruction.
+## Registers: `↑` `↓` `$`
+
+`$N` names a register. `↑` reads it. `↓` writes it.
 
 ```
-tid ^TID_X           GPU: S2R rd, SR_TID_X    (which thread am I?)
-lane ^LANEID         GPU: S2R rd, SR_LANEID   (which lane in the warp?)
-blk ^CTAID_X         GPU: S2R rd, SR_CTAID_X  (which block?)
-cycles ^CNTVCT_EL0   ARM64: MRS xd, CNTVCT_EL0 (cycle counter)
+↑ $8                 read register 8
+↓ $8 56              write 56 into register 8
+↑ $0                 read register 0
+↓ $0 addr            write addr into register 0
 ```
 
-Architecture dictionaries live in `arch/`:
+`$N` is the same on CPU and GPU. The target determines the register file:
+- Host composition: $0 = ARM64 X0 (64-bit, 0-30)
+- GPU composition: $0 = Hopper R0 (32-bit, 0-255)
+
+Special registers use names from the architecture dictionary:
+
+```
+↑ $TID_X             GPU: S2R (which thread am I?)
+↑ $LANEID            GPU: S2R (which lane in the warp?)
+↑ $CNTVCT_EL0        ARM64: MRS (cycle counter)
+```
+
+Architecture dictionaries:
 
 ```
 arch/hopper.dict:
@@ -91,26 +89,38 @@ arch/arm64.dict:
     MPIDR_EL1   MRS  0xC005
 ```
 
+NOTE: GPU cores are more complex than CPU cores (warp scheduling,
+predication, control words, shared memory). Needs its own design session.
+
 ## Trap: `trap`
 
-Invoke the operating system. One instruction. One word.
-
-```
-trap                 → ARM64: SVC #0
-```
-
-Syscall convention is register setup before the trap:
+Invoke the operating system. One instruction, one word.
 
 ```
 open path flags mode :
-    ^8 56            syscall number (openat)
-    ^0 -100          AT_FDCWD
-    ^1 path
-    ^2 flags
-    ^3 mode
+    ↓ $8 56
+    ↓ $0 -100
+    ↓ $1 path
+    ↓ $2 flags
+    ↓ $3 mode
     trap
-    fd ^0            return value
+    ↑ $0
 ```
+
+## Reductions: `Σ` `△` `▽` `#`
+
+Four symbols. `Σ` sums. `△` finds max. `▽` finds min. `#` returns position.
+
+```
+Σ x                  sum all elements of x
+△ x                  max value in x
+▽ x                  min value in x
+# △ x                index of max (argmax — the token ID for sampling)
+# ▽ x                index of min (argmin)
+```
+
+On GPU, all reductions compile to shuffle trees (O(log N), not loops).
+`#` modifies any reduction to return the position instead of the value.
 
 ## Arithmetic
 
@@ -127,7 +137,6 @@ open path flags mode :
 *    scalar      one instruction
 **   vector      loop of instructions (elementwise)
 ***  matrix      nested loop
-Σ    reduction   shuffle tree (O(log N))
 ```
 
 ## Math intrinsics (GPU: MUFU family)
@@ -144,36 +153,23 @@ cos    → MUFU.COS
 
 ## Composites
 
-Named sequences of primitives. Not built-in — defined as compositions:
+Named sequences of primitives, defined as compositions:
 
 ```
 sigmoid x :
     neg x * -1
     ex exp neg
-    sum 1 + ex
-    rcp sum
+    s 1 + ex
+    rcp s
 
 silu x :
     sig sigmoid x
     x * sig
 
-softplus x :
-    ex exp x
-    sum 1 + ex
-    log sum
-
-normalise x w D :
-    sq x ** x
-    sum Σ sq
-    mean sum / D
-    rms sqrt mean
-    x // rms
-    x ** w
-
 l2norm x :
     sq x ** x
-    sum Σ sq
-    irs rsqrt sum
+    s Σ sq
+    irs rsqrt s
     x ** irs
 ```
 
@@ -190,14 +186,12 @@ if< a b                       conditional
 
 ## Memory-mapped I/O
 
-Same `->` and `<-` — BAR0 registers are just memory addresses:
+Same `→` and `←` — BAR0 registers are just memory addresses:
 
 ```
 gsp_poke bar0 offset val :
-    <- 32 bar0 + offset val
+    ← 32 bar0 + offset val
 
 gsp_read bar0 offset :
-    -> 32 bar0 + offset
+    → 32 bar0 + offset
 ```
-
-No special MMIO primitives. Memory is memory. GPU registers are addresses.
