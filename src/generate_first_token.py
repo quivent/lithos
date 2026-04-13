@@ -27,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cuda_driver import CUDADriver, CUdeviceptr
 from loader import LithosModel
 from tokenizer import Tokenizer
+from kv_cache import KVCache
+from attention import attention_prefill, process_qkv_with_rope
 
 MODEL_DIR = "/home/ubuntu/models/Huihui-Qwen3.5-27B-abliterated-GPTQ-W4A16"
 KERNEL_DIR = str(Path(__file__).resolve().parent.parent / "kernels")
@@ -319,19 +321,38 @@ class InferenceEngine:
 
         self.gpu.synchronize()
 
-    def run_full_attention_first_token(self, layer_idx: int, d_normed: CUdeviceptr):
-        """Run full attention for the first token (trivial: output = V through o_proj).
+    def run_full_attention(self, layer_idx: int, d_normed: CUdeviceptr,
+                           position: int):
+        """Run full attention with KV cache for a token at the given position.
 
-        For a single token attending only to itself:
-          - softmax of 1 element = 1.0
-          - attention output per head = V_head
-          - With GQA: 4 KV heads expanded to 24 Q heads (6 Q per KV)
-          - Concat -> 24 * 256 = 6144 -> o_proj -> 5120
+        Steps:
+          1. Project Q (5120 -> 6144), K (5120 -> 1024), V (5120 -> 1024)
+          2. Apply RoPE to Q and K
+          3. Store K, V in the KV cache at this position
+          4. Retrieve cached K, V for positions 0..position
+          5. Compute scaled dot-product attention with GQA
+          6. O projection (6144 -> 5120)
 
         d_normed: input (after input_layernorm), on GPU
+        position: sequence position (0-based)
         Writes result to self.d_attn_out
         """
         prefix = f"model.language_model.layers.{layer_idx}.self_attn"
+
+        # Q projection: 5120 -> 6144 (24 q_heads * 256 head_dim)
+        self.gpu_gptq_matvec(f"{prefix}.q_proj",
+                              d_normed, self.d_attn_scratch1,
+                              HIDDEN_DIM, 6144)
+
+        # K projection: 5120 -> 1024 (4 kv_heads * 256 head_dim)
+        # Reuse d_attn_scratch2 for K temporarily
+        self.gpu_gptq_matvec(f"{prefix}.k_proj",
+                              d_normed, self.d_attn_scratch2,
+                              HIDDEN_DIM, 1024)
+        self.gpu.synchronize()
+
+        q_raw = download_f32(self.gpu, self.d_attn_scratch1, 6144)
+        k_raw = download_f32(self.gpu, self.d_attn_scratch2, 1024)
 
         # V projection: 5120 -> 1024 (4 kv_heads * 256 head_dim)
         self.gpu_gptq_matvec(f"{prefix}.v_proj",
@@ -339,20 +360,24 @@ class InferenceEngine:
                               HIDDEN_DIM, 1024)
         self.gpu.synchronize()
 
-        # Download V, expand with GQA, upload for o_proj
         v_raw = download_f32(self.gpu, self.d_attn_scratch1, 1024)
 
-        # GQA expansion: 4 KV heads -> 24 Q heads (each KV head serves 6 Q heads)
-        # v_raw is [4, 256] flattened. Expand to [24, 256] = 6144
-        v_heads = v_raw.reshape(4, 256)  # 4 KV heads, 256 dim each
-        # Each KV head repeated 6 times (24 / 4 = 6)
-        v_expanded = np.repeat(v_heads, 6, axis=0)  # -> [24, 256]
-        v_flat = v_expanded.flatten()  # -> 6144
-        assert v_flat.shape[0] == 6144, f"Expected 6144, got {v_flat.shape[0]}"
+        # Apply RoPE to Q and K
+        q_rope, k_rope = process_qkv_with_rope(q_raw, k_raw, position)
 
-        # Upload expanded V as o_proj input
+        # Store K (with RoPE) and V (no RoPE) in the cache
+        self.kv_cache.store(layer_idx, position, k_rope, v_raw)
+
+        # Retrieve all cached K, V for positions 0..position
+        k_cached, v_cached = self.kv_cache.get(layer_idx, position)
+
+        # Compute attention
+        attn_output = attention_prefill(q_rope, k_cached, v_cached, position)
+        # attn_output shape: [6144] = [24 * 256]
+
+        # Upload for O projection
         self.gpu.memcpy_htod(self.d_attn_scratch2,
-                             v_flat.ctypes.data_as(ctypes.c_void_p),
+                             attn_output.ctypes.data_as(ctypes.c_void_p),
                              6144 * 4)
 
         # O projection: 6144 -> 5120
