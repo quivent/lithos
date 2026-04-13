@@ -273,6 +273,16 @@ class CUDADriver:
         """Block until all work on the current context completes."""
         _check("cuCtxSynchronize", self._lib.cuCtxSynchronize())
 
+    def set_max_dynamic_shared(self, func: CUfunction, size: int) -> None:
+        """Set CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES for a kernel."""
+        CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES = 8
+        _check(
+            "cuFuncSetAttribute",
+            self._lib.cuFuncSetAttribute(
+                func, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, size
+            ),
+        )
+
     # -- Kernel launch -------------------------------------------------------
     def launch(
         self,

@@ -138,6 +138,8 @@ class PrefillEngine:
 
         proj_mod = gpu.load_cubin(f"{KERNEL_DIR}/gptq_matvec_tc.cubin")
         self.proj_func = gpu.get_function(proj_mod, "gptq_matvec_tc")
+        # Allow dynamic shared memory up to 70KB for K=17408 (down_proj)
+        gpu.set_max_dynamic_shared(self.proj_func, 69632)
 
         proj_mod_old = gpu.load_cubin(f"{KERNEL_DIR}/gptq_matvec.cubin")
         self.proj_func_old = gpu.get_function(proj_mod_old, "gptq_matvec")
@@ -145,7 +147,10 @@ class PrefillEngine:
         activate_mod = gpu.load_cubin(f"{CACHE_DIR}/activate.cubin")
         self.activate_func = gpu.get_function(activate_mod, "activate")
 
-        print("    embed_f16, norm, gptq_matvec_tc (+ fallback), activate: loaded")
+        lm_head_mod = gpu.load_cubin(f"{KERNEL_DIR}/lm_head.cubin")
+        self.lm_head_func = gpu.get_function(lm_head_mod, "lm_head")
+
+        print("    embed_f16, norm, gptq_matvec_tc, activate, lm_head: loaded")
 
     def _alloc_buffers(self):
         gpu = self.gpu
@@ -161,6 +166,7 @@ class PrefillEngine:
         self.d_attn_scratch1 = gpu.mem_alloc(12288 * 4)
         self.d_attn_scratch2 = gpu.mem_alloc(6144 * 4)
         self.d_attn_out = gpu.mem_alloc(HIDDEN_DIM * 4)
+        self.d_lm_head_out = gpu.mem_alloc(248320 * 4)
         self.d_zero = gpu.mem_alloc(HIDDEN_DIM * 4)
         gpu.memcpy_htod(self.d_zero,
                         np.zeros(HIDDEN_DIM, dtype=np.float32).ctypes.data_as(ctypes.c_void_p),
@@ -295,38 +301,21 @@ class PrefillEngine:
         self.gpu.memcpy_htod(d_output,
                              np.zeros(N, dtype=np.float32).ctypes.data_as(ctypes.c_void_p),
                              N * 4)
-        if K <= 5120:
-            # Use optimized tiled kernel (128 cols/block, smem input)
-            self.gpu.launch(
-                self.proj_func,
-                grid=(math.ceil(N / 128), 1, 1),
-                block=(256, 1, 1),
-                args=[
-                    ctypes.c_uint64(qw_ptr),
-                    ctypes.c_uint64(sc_ptr),
-                    ctypes.c_uint64(d_input.value),
-                    ctypes.c_uint64(d_output.value),
-                    ctypes.c_uint32(N),
-                    ctypes.c_uint32(K),
-                ],
-                shared_mem=20480,
-            )
-        else:
-            # Fallback to old kernel for K > 5120 (smem buffer limited to 5120)
-            self.gpu.launch(
-                self.proj_func_old,
-                grid=(N, 1, 1),
-                block=(256, 1, 1),
-                args=[
-                    ctypes.c_uint64(qw_ptr),
-                    ctypes.c_uint64(sc_ptr),
-                    ctypes.c_uint64(d_input.value),
-                    ctypes.c_uint64(d_output.value),
-                    ctypes.c_uint32(N),
-                    ctypes.c_uint32(K),
-                ],
-                shared_mem=32,
-            )
+        # Optimized tiled kernel with dynamic shared memory (K * 4 bytes for input vector)
+        self.gpu.launch(
+            self.proj_func,
+            grid=(math.ceil(N / 128), 1, 1),
+            block=(256, 1, 1),
+            args=[
+                ctypes.c_uint64(qw_ptr),
+                ctypes.c_uint64(sc_ptr),
+                ctypes.c_uint64(d_input.value),
+                ctypes.c_uint64(d_output.value),
+                ctypes.c_uint32(N),
+                ctypes.c_uint32(K),
+            ],
+            shared_mem=K * 4,
+        )
 
 
     def gpu_activate(self, d_gate, d_up, d_output, size):
@@ -645,25 +634,28 @@ class PrefillEngine:
         x_normed = rms_norm_cpu(x, self.final_norm_w, self.epsilon)
         print(f"  Final norm: norm={np.linalg.norm(x_normed):.4f}")
 
-        # lm_head projection
-        print(f"  Computing lm_head (248320 x 5120 FP16 matmul on CPU)...")
+        # lm_head projection (GPU kernel)
+        print(f"  Computing lm_head (248320 x 5120 FP16 matmul on GPU)...")
         t_lm = time.monotonic()
 
-        lm_head_raw = bytes(self.model.weight_bytes("lm_head.weight"))
         vocab_size = 248320
+        lm_weight_ptr = self.model.weight_info("lm_head.weight").ptr
+        d_normed_input = upload_f32(self.gpu, x_normed)
 
-        CHUNK = 8192
-        logits = np.zeros(vocab_size, dtype=np.float32)
-        for start in range(0, vocab_size, CHUNK):
-            end = min(start + CHUNK, vocab_size)
-            chunk_size = end - start
-            offset = start * HIDDEN_DIM * 2
-            chunk_bytes = chunk_size * HIDDEN_DIM * 2
-            w_chunk = np.frombuffer(
-                lm_head_raw[offset:offset + chunk_bytes],
-                dtype=np.float16
-            ).reshape(chunk_size, HIDDEN_DIM).astype(np.float32)
-            logits[start:end] = w_chunk @ x_normed
+        self.gpu.launch(
+            self.lm_head_func,
+            grid=(62080, 1, 1),
+            block=(128, 1, 1),
+            args=[
+                ctypes.c_uint64(lm_weight_ptr),
+                ctypes.c_uint64(d_normed_input.value),
+                ctypes.c_uint64(self.d_lm_head_out.value),
+            ],
+            shared_mem=20544,
+        )
+        self.gpu.synchronize()
+        logits = download_f32(self.gpu, self.d_lm_head_out, vocab_size)
+        self.gpu.mem_free(d_normed_input)
 
         t_lm_done = time.monotonic()
         print(f"  lm_head: {t_lm_done - t_lm:.2f}s")

@@ -16,11 +16,12 @@ from typing import Dict, Tuple
 
 BLOCK_SIZE = 128       # weights per block (for product quantization)
 SUPERBLOCK_SIZE = 4096  # weights per super-block (for FP64 centroids)
-N_CODEBOOK_ENTRIES = 16  # 4-bit index into each sub-codebook
-SUB_DIM = 8            # dimension of each sub-space for product quantization
+N_CODEBOOK_ENTRIES = 256  # 8-bit index per sub-codebook
+SUB_DIM = 8            # dimension of each sub-space
 N_SUBSPACES = BLOCK_SIZE // SUB_DIM  # 16 sub-spaces per block
-RESIDUAL_GROUP = 32    # weights per residual group
-HARMONIC_FRACTION = 0.038  # fraction of weights receiving FP16 correction
+# 16 sub-spaces * 8 bits / 128 weights = 1.0 bpw for PQ indices
+RESIDUAL_GROUP = 128   # weights per residual group (aligned with block)
+HARMONIC_FRACTION = 0.02  # fraction of weights receiving FP16 correction (reduced)
 
 
 def _train_codebook(data: np.ndarray, n_entries: int, n_iter: int = 20) -> np.ndarray:
