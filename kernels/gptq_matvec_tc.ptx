@@ -207,8 +207,6 @@ K_LOOP:
     @%p2 ld.global.b32 %r62, [%rd42];
 
     // ---- Read scale for this column ----
-    ld.shared.b16   %htmp1, [%r41 + 0];   // temp: will compute proper offset
-    // Actually, packed_col * 2 offset:
     add.u32         %r64, %r41, %r43;     // S_smem + packed_col * 2
     ld.shared.b16   %htmp1, [%r64];
     cvt.f32.f16     %f10, %htmp1;
@@ -228,7 +226,7 @@ K_LOOP:
     cvt.rn.f32.u32  %f22, %r72; sub.f32 %f22, %f22, 0f40E00000; mul.f32 %f22, %f22, %f10;
     cvt.rn.f32.u32  %f23, %r73; sub.f32 %f23, %f23, 0f40E00000; mul.f32 %f23, %f23, %f10;
     cvt.rn.f32.u32  %f24, %r74; sub.f32 %f24, %f24, 0f40E00000; mul.f32 %f24, %f24, %f10;
-    cvt.rn.f32.u32  %f25, %r75; sub.f32 %f25, %f75, 0f40E00000; mul.f32 %f25, %f25, %f10;
+    cvt.rn.f32.u32  %f25, %r75; sub.f32 %f25, %f25, 0f40E00000; mul.f32 %f25, %f25, %f10;
     cvt.rn.f32.u32  %f26, %r76; sub.f32 %f26, %f26, 0f40E00000; mul.f32 %f26, %f26, %f10;
     cvt.rn.f32.u32  %f27, %r77; sub.f32 %f27, %f27, 0f40E00000; mul.f32 %f27, %f27, %f10;
 

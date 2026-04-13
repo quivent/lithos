@@ -448,25 +448,28 @@ class InferenceEngine:
         # Apply conv: for first token, output = qkv * conv_w[:, 0, 3]
         qkv_conv = qkv * conv_w[:, 0, 3]
 
+        # Apply SiLU activation after conv1d (matches reference: F.silu(conv1d(x)))
+        qkv_conv = silu_cpu(qkv_conv)
+
         # Re-split after conv
         q = qkv_conv[:2048].reshape(16, 128)    # 16 key heads, 128 dim
         k = qkv_conv[2048:4096].reshape(16, 128)
         v = qkv_conv[4096:].reshape(48, 128)    # 48 value heads, 128 dim
 
         # --- Step 3: Compute beta (controls state update) ---
-        # beta = sigmoid(in_proj_a @ x)  -- shape [48] (one per value head)
-        a_w_raw = bytes(model.weight_bytes(f"{prefix}.in_proj_a.weight"))
-        a_weight = bf16_to_f32(a_w_raw).reshape(48, HIDDEN_DIM)
-        beta = 1.0 / (1.0 + np.exp(-(a_weight @ normed_cpu).clip(-80, 80)))  # [48]
-
-        # --- Step 4: Compute dt (timestep) from in_proj_b ---
-        # dt controls the gating/decay
+        # beta = sigmoid(in_proj_b @ x)  -- shape [48] (one per value head)
         b_w_raw = bytes(model.weight_bytes(f"{prefix}.in_proj_b.weight"))
         b_weight = bf16_to_f32(b_w_raw).reshape(48, HIDDEN_DIM)
+        beta = 1.0 / (1.0 + np.exp(-(b_weight @ normed_cpu).clip(-80, 80)))  # [48]
+
+        # --- Step 4: Compute dt (timestep) from in_proj_a ---
+        # dt controls the gating/decay: g = -exp(A_log) * softplus(a + dt_bias)
+        a_w_raw = bytes(model.weight_bytes(f"{prefix}.in_proj_a.weight"))
+        a_weight = bf16_to_f32(a_w_raw).reshape(48, HIDDEN_DIM)
         dt_bias_raw = bytes(model.weight_bytes(f"{prefix}.dt_bias"))
         dt_bias = bf16_to_f32(dt_bias_raw)  # [48]
 
-        dt = b_weight @ normed_cpu + dt_bias  # [48]
+        dt = a_weight @ normed_cpu + dt_bias  # [48]
         dt = np.log1p(np.exp(dt.clip(-20, 20)))  # softplus
 
         # --- Step 5: Compute decay (A) ---
