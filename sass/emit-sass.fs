@@ -40,7 +40,7 @@
 \ S2R: stall=7 yield=1 wbar=1 rbar=7 — verified 0x000e6e0000002100
 \ extra41 = sr-id << 8  (probe: SR_TID.X=0x21 -> extra41=0x2100)
 : ctrl-s2r  ( sr-id -- ctrl64 )
-  8 lshift   7 1 1 7 0 0 rot make-ctrl ;
+  8 lshift >r  7 1 1 7 0 0 r> make-ctrl ;
 
 \ LDG.E: stall=4 yield=1 wbar=2 rbar=7 — verified 0x000ea8000c1e1900
 \ extra41 = 0x0c1e1900 (opaque cache-line / descriptor fields from probe)
@@ -192,12 +192,14 @@ $27 constant SR-CTAID-Z
 \ FADD Rd, Ra, Rb
 \ From probe: FADD R9, R2, R5 = inst 0x0000000502097221
 \ Rd = bits[23:16] = 0x09 (R9)
-\ Ra = bits[31:24] = 0x02 (R2) — tentative
-\ Rb encoded elsewhere
+\ Ra = bits[31:24] = 0x02 (R2)
+\ Rb = bits[39:32] = 0x05 (R5)
 : fadd,  ( rd ra rb -- )
-  \ TODO: full encoding once register fields are mapped
-  drop drop drop
-  $0000000502097221 ctrl-fadd sinst, ;
+  32 lshift >r              \ rb -> bits[39:32]
+  24 lshift >r              \ ra -> bits[31:24]
+  track-rd 16 lshift        \ rd -> bits[23:16]
+  $7221 or r> or r> or
+  ctrl-fadd sinst, ;
 
 \ FFMA Rd, Ra, Rb, Rc (fused multiply-add)  [stub — real impl below]
 : ffma,  ( rd ra rb rc -- )
@@ -306,6 +308,30 @@ $7c0c constant OP-ISETP
   r> or                    \ mode_byte
   ctrl-shfl sinst, ;
 
+\ SHFL.DOWN PT, Rd, Rs, delta  — warp down-shuffle (lane N gets lane N+delta)
+\ Encoding mirrors SHFL.BFLY but mode nibble = 0x0d (DOWN) instead of 0x0c (BFLY).
+\ bits[63:56] = (log2(delta)<<4)|0x0d  (DOWN mode + delta-log2)
+\ bits[55:48] = clamp = mask+1 = 0x20
+\ bits[47:40] = mask = 0x1f
+\ bits[31:24] = Rs, bits[23:16] = Rd, bits[15:0] = opcode $7f89
+\ ctrl: same as shfl-bfly (stall=14 yield=0 wbar=3 rbar=7)
+: shfl-down,  ( rd rs delta -- )
+  dup 1 = if drop 0 else
+  dup 2 = if drop 1 else
+  dup 4 = if drop 2 else
+  dup 8 = if drop 3 else
+             drop 4        \ delta=16
+  then then then then
+  4 lshift $0d or          \ mode_byte = (log2_delta<<4)|0x0d
+  56 lshift >r             \ mode_byte -> bits[63:56]
+  24 lshift >r             \ rs -> bits[31:24]
+  track-rd 16 lshift       \ rd -> bits[23:16]
+  $7f89 or r> or           \ rs
+  $1f 40 lshift or          \ mask=0x1f at bits[47:40]
+  $20 48 lshift or          \ clamp=0x20 at bits[55:48]
+  r> or                    \ mode_byte
+  ctrl-shfl sinst, ;
+
 \ BRA offset32  — branch PC-relative (signed byte offset from next instruction)
 \ Verified: BRA loop -> inst=0xfffffffc00fc7947 ctrl=0x000fc0000383ffff
 \ bits[63:32]=signed_offset, bits[23:16]=0xfc, bits[31:24]=0x00
@@ -359,14 +385,13 @@ $7c0c constant OP-ISETP
   4 1 2 7 0 0 $0c1e1f00 make-ctrl sinst, ;
 
 \ S2R Rd, sr-id  — read special register into Rd
-\ Opcode 0x919 -> $7919; sr-id in bits[39:32].
-\ Verified: S2R R0, SR_TID.X -> inst=0x0000002100007919 ctrl=0x000e6e0000002100
-\ ctrl-s2r packs sr-id into extra41[15:8] (low byte kept for mode $00).
+\ Opcode 0x919 -> $7919; sr-id encoded ONLY in ctrl extra41[15:8].
+\ inst word carries no sr-id field — it lives solely in the ctrl word.
+\ Verified: S2R R0, SR_TID.X -> inst=0x0000000000007919 ctrl=0x000e6e0000002100
 : s2r,  ( rd sr-id -- )
-  dup >r                    \ save sr-id for ctrl
-  32 lshift >r              \ sr-id -> bits[39:32]
+  >r                        \ save sr-id for ctrl
   track-rd 16 lshift        \ rd    -> bits[23:16]
-  $7919 or r> or
+  $7919 or
   r> ctrl-s2r sinst, ;
 
 \ MOV Rd, imm32  — move 32-bit immediate into register
