@@ -311,29 +311,11 @@ variable cbs-saved
     exit
   then
 
-  \ PRIM_MUL (0): multiply; scalar form if next token is a literal
-  dup PRIM_MUL = if
-    drop
-    ls-peek-type dup LIT_INT = swap LIT_FLOAT = or if
-      ls-next-token drop  ls-token-val    \ consume literal
-      emit-mul-scalar                     \ ( ra imm -- rd )
-    else
-      emit-mul                            \ ( ra rb -- rd )
-    then
-    exit
-  then
+  \ PRIM_MUL (0): scalar multiply
+  dup PRIM_MUL = if drop  emit-mul  exit then
 
-  \ PRIM_ADD (1): add; scalar form if next token is a literal
-  dup PRIM_ADD = if
-    drop
-    ls-peek-type dup LIT_INT = swap LIT_FLOAT = or if
-      ls-next-token drop  ls-token-val
-      emit-add-scalar                     \ ( ra imm -- rd )
-    else
-      emit-add                            \ ( ra rb -- rd )
-    then
-    exit
-  then
+  \ PRIM_ADD (1): scalar add
+  dup PRIM_ADD = if drop  emit-add  exit then
 
   dup PRIM_SUB   = if drop  emit-sub    exit then   \ (2)
   dup PRIM_DIV   = if drop  emit-div    exit then   \ (3)
@@ -343,8 +325,20 @@ variable cbs-saved
   dup PRIM_RCP   = if drop  emit-rcp    exit then   \ (7)
   dup PRIM_RSQRT = if drop  emit-rsqrt  exit then   \ (8)
 
-  \ PRIM_OUTER (9): outer product body element — per-element multiply
-  dup PRIM_OUTER = if drop  emit-mul  exit then
+  \ PRIM_OUTER (9): legacy — maps to PRIM_MUL_MAT (outer product)
+  dup PRIM_OUTER = if drop  emit-mul-mat  exit then
+
+  \ Dimensional operators — repeated symbol forms (20-29)
+  dup PRIM_MUL_VEC = if drop  emit-mul-vec  exit then   \ **
+  dup PRIM_MUL_MAT = if drop  emit-mul-mat  exit then   \ ***
+  dup PRIM_MUL_TEN = if drop  emit-mul-ten  exit then   \ ****
+  dup PRIM_ADD_VEC = if drop  emit-add-vec  exit then   \ ++
+  dup PRIM_ADD_MAT = if drop  emit-add-mat  exit then   \ +++
+  dup PRIM_ADD_TEN = if drop  emit-add-ten  exit then   \ ++++
+  dup PRIM_SUB_VEC = if drop  emit-sub-vec  exit then   \ --
+  dup PRIM_SUB_MAT = if drop  emit-sub-mat  exit then   \ ---
+  dup PRIM_DIV_VEC = if drop  emit-div-vec  exit then   \ //
+  dup PRIM_DIV_MAT = if drop  emit-div-mat  exit then   \ ///
 
   \ PRIM_PROJECT (10): GPTQ W4A16 quantized GEMV
   \ Value stack: ( W-reg scales-reg x-reg y-reg K N )

@@ -24,7 +24,7 @@
  6 constant PRIM_SQRT
  7 constant PRIM_RCP
  8 constant PRIM_RSQRT
- 9 constant PRIM_OUTER
+ 9 constant PRIM_OUTER    \ (retained for compatibility — compiler maps to PRIM_MUL_MAT)
 10 constant PRIM_PROJECT
 11 constant PRIM_MATVEC
 12 constant PRIM_SUM      \ Σ — reduce-sum over a vector (full warp+cross-warp reduce)
@@ -37,6 +37,20 @@
 19 constant TOK_REPEAT   \ NAME × N — inline a definition N times with grid-sync barriers
                          \ token.val      = N (repeat count)
                          \ token.name-addr/len = name of definition to repeat
+
+\ ---- Dimensional operator tokens ---------------------------------------------
+\ The number of repeated operator symbols encodes the loop nesting depth.
+\ Single-symbol forms (scalar) use the existing PRIM_* constants above.
+20 constant PRIM_MUL_VEC  \ **   — element-wise multiply over a vector (one stride loop)
+21 constant PRIM_MUL_MAT  \ ***  — outer product (nested stride loops; replaces PRIM_OUTER)
+22 constant PRIM_MUL_TEN  \ **** — tensor outer product (three nested stride loops)
+23 constant PRIM_ADD_VEC  \ ++   — element-wise add over a vector
+24 constant PRIM_ADD_MAT  \ +++  — outer add (nested stride loops)
+25 constant PRIM_ADD_TEN  \ ++++ — tensor outer add
+26 constant PRIM_SUB_VEC  \ --   — element-wise subtract over a vector
+27 constant PRIM_SUB_MAT  \ ---  — outer subtract (nested stride loops)
+28 constant PRIM_DIV_VEC  \ //   — element-wise divide over a vector
+29 constant PRIM_DIV_MAT  \ ///  — outer divide (nested stride loops)
 
 \ ---- Token buffer ------------------------------------------------------------
 \ Each token record: 5 cells = type, value, name-addr, name-len, operand-offset
@@ -61,7 +75,18 @@ variable op-pool-pos  0 op-pool-pos !
   1 tok-count +! ;
 
 : tok-simple  ( type -- )  0 0 0 0 tok-emit-raw ;
-: tok-with-name  ( type addr u -- )  0 -rot 0 tok-emit-raw ;
+
+\ name-intern ( src u -- dst u )
+\ Copies src string into op-pool so the name survives line-buf rewrites.
+variable ni-src  variable ni-u  variable ni-dst
+: name-intern  ( src u -- dst u )
+  ni-u !  ni-src !
+  op-pool  op-pool-pos @  +  ni-dst !          \ dst = op-pool + pos
+  ni-src @  ni-dst @  ni-u @  move             \ copy bytes
+  ni-u @  op-pool-pos  +!                      \ advance pool cursor
+  ni-dst @  ni-u @ ;                           \ return ( dst u )
+
+: tok-with-name  ( type addr u -- )  name-intern  0 -rot 0 tok-emit-raw ;
 : tok-with-val   ( type n -- )  0 0 0 tok-emit-raw ;
 
 \ Store operand string in pool, return offset
@@ -130,13 +155,12 @@ variable ls-src-pos  0 ls-src-pos !
 \ Match first word of body line against known primitives.
 \ UTF-8 aware: sqrt is U+221A = E2 88 9A (3 bytes).
 
-create p-mul     1 allot  [char] * p-mul c!
-create p-add     1 allot  [char] + p-add c!
-create p-sub     1 allot  [char] - p-sub c!
-create p-div     1 allot  [char] / p-div c!
+create p-mul     1 allot  char * p-mul c!
+create p-add     1 allot  char + p-add c!
+create p-sub     1 allot  char - p-sub c!
+create p-div     1 allot  char / p-div c!
 create p-exp     3 allot  s" exp"     p-exp     swap move
 create p-log     3 allot  s" log"     p-log     swap move
-create p-outer   5 allot  s" outer"   p-outer   swap move
 create p-project 7 allot  s" project" p-project swap move
 create p-matvec  6 allot  s" matvec"  p-matvec  swap move
 
@@ -149,11 +173,11 @@ create p-sqrt 3 allot
 226 p-sqrt c!  136 p-sqrt 1+ c!  154 p-sqrt 2 + c!
 
 \ 1/ (2 bytes)
-create p-rcp 2 allot  [char] 1 p-rcp c!  [char] / p-rcp 1+ c!
+create p-rcp 2 allot  char 1 p-rcp c!  char / p-rcp 1+ c!
 
 \ 1/sqrt: 1/ + sqrt = "1/" + 3-byte-sqrt = 5 bytes
 create p-rsqrt 5 allot
-[char] 1 p-rsqrt c!  [char] / p-rsqrt 1+ c!
+char 1 p-rsqrt c!  char / p-rsqrt 1+ c!
 226 p-rsqrt 2 + c!  136 p-rsqrt 3 + c!  154 p-rsqrt 4 + c!
 
 \ UTF-8 multiply sign: U+00D7 = C3 97 (2 bytes)
@@ -163,21 +187,54 @@ create p-times 2 allot
 \ is-times? ( addr u -- flag )  True when the string is exactly the × glyph.
 : is-times?  ( addr u -- flag )  p-times 2 ls-str= ;
 
+\ count-leading ( addr u ch -- n )
+\ Count how many leading bytes in the string equal ch.
+variable cl-addr  variable cl-u  variable cl-ch
+: count-leading  ( addr u ch -- n )
+  cl-ch !  cl-u !  cl-addr !
+  0                              \ n = 0
+  begin
+    dup cl-u @ <                 \ n < length
+    over cl-addr @ + c@ cl-ch @ = and   \ and char[n] = ch
+  while
+    1+                           \ n++
+  repeat ;
+
+\ match-dim-op ( addr u first-ch scalar-tok vec-tok mat-tok ten-tok -- type true | false )
+\ If every byte in addr/u equals first-ch, emit the token for the run length.
+\   length 1 -> scalar-tok
+\   length 2 -> vec-tok
+\   length 3 -> mat-tok
+\   length 4 -> ten-tok
+\   else     -> false
+variable mdo-s  variable mdo-v  variable mdo-m  variable mdo-t
+: match-dim-op  ( addr u ch s v m t -- type true | false )
+  mdo-t !  mdo-m !  mdo-v !  mdo-s !   \ save tok types; stack: addr u ch
+  >r 2dup r> count-leading              \ ( addr u n )
+  over = 0= if 2drop 0 exit then       \ not all same char -> no match
+  drop                                  \ drop addr; stack: ( n )
+  dup 1 = if drop mdo-s @ -1 exit then
+  dup 2 = if drop mdo-v @ -1 exit then
+  dup 3 = if drop mdo-m @ -1 exit then
+      4 = if      mdo-t @ -1 exit then
+  0 ;
+
 : match-prim  ( addr u -- type true | false )
-  2dup p-mul     1 ls-str= if 2drop PRIM_MUL   -1 exit then
-  2dup p-times   2 ls-str= if 2drop PRIM_MUL   -1 exit then
-  2dup p-add     1 ls-str= if 2drop PRIM_ADD   -1 exit then
-  2dup p-sub     1 ls-str= if 2drop PRIM_SUB   -1 exit then
-  2dup p-div     1 ls-str= if 2drop PRIM_DIV   -1 exit then
-  2dup p-exp     3 ls-str= if 2drop PRIM_EXP   -1 exit then
-  2dup p-log     3 ls-str= if 2drop PRIM_LOG   -1 exit then
-  2dup p-rsqrt   5 ls-str= if 2drop PRIM_RSQRT -1 exit then
-  2dup p-rcp     2 ls-str= if 2drop PRIM_RCP   -1 exit then
-  2dup p-sqrt    3 ls-str= if 2drop PRIM_SQRT  -1 exit then
-  2dup p-outer   5 ls-str= if 2drop PRIM_OUTER   -1 exit then
+  \ Named keywords first (before single-char tests)
+  2dup p-exp     3 ls-str= if 2drop PRIM_EXP     -1 exit then
+  2dup p-log     3 ls-str= if 2drop PRIM_LOG     -1 exit then
+  2dup p-rsqrt   5 ls-str= if 2drop PRIM_RSQRT   -1 exit then
+  2dup p-rcp     2 ls-str= if 2drop PRIM_RCP     -1 exit then
+  2dup p-sqrt    3 ls-str= if 2drop PRIM_SQRT    -1 exit then
   2dup p-project 7 ls-str= if 2drop PRIM_PROJECT -1 exit then
   2dup p-matvec  6 ls-str= if 2drop PRIM_MATVEC  -1 exit then
   2dup p-sum     2 ls-str= if 2drop PRIM_SUM     -1 exit then
+  2dup p-times   2 ls-str= if 2drop PRIM_MUL     -1 exit then
+  \ Dimensional symbol operators: repeated *, +, -, /
+  2dup [char] * PRIM_MUL PRIM_MUL_VEC PRIM_MUL_MAT PRIM_MUL_TEN match-dim-op if exit then
+  2dup [char] + PRIM_ADD PRIM_ADD_VEC PRIM_ADD_MAT PRIM_ADD_TEN match-dim-op if exit then
+  2dup [char] - PRIM_SUB PRIM_SUB_VEC PRIM_SUB_MAT 0           match-dim-op if exit then
+  2dup [char] / PRIM_DIV PRIM_DIV_VEC PRIM_DIV_MAT 0           match-dim-op if exit then
   2drop 0 ;
 
 \ ---- Line parsing ------------------------------------------------------------
@@ -394,8 +451,7 @@ variable in-def  0 in-def !
   dup PRIM_LOG     = if drop ." PRIM_LOG"     exit then
   dup PRIM_SQRT    = if drop ." PRIM_SQRT"    exit then
   dup PRIM_RCP     = if drop ." PRIM_RCP"     exit then
-  dup PRIM_RSQRT   = if drop ." PRIM_RSQRT"  exit then
-  dup PRIM_OUTER   = if drop ." PRIM_OUTER"   exit then
+  dup PRIM_RSQRT   = if drop ." PRIM_RSQRT"   exit then
   dup PRIM_PROJECT = if drop ." PRIM_PROJECT" exit then
   dup PRIM_MATVEC  = if drop ." PRIM_MATVEC"  exit then
   dup PRIM_SUM     = if drop ." PRIM_SUM"     exit then
@@ -405,7 +461,17 @@ variable in-def  0 in-def !
   dup DEF_START    = if drop ." DEF_START"    exit then
   dup DEF_END      = if drop ." DEF_END"      exit then
   dup OPERAND      = if drop ." OPERAND"      exit then
-  dup TOK_REPEAT   = if drop ." TOK_REPEAT"  exit then
+  dup TOK_REPEAT   = if drop ." TOK_REPEAT"   exit then
+  dup PRIM_MUL_VEC = if drop ." PRIM_MUL_VEC" exit then
+  dup PRIM_MUL_MAT = if drop ." PRIM_MUL_MAT" exit then
+  dup PRIM_MUL_TEN = if drop ." PRIM_MUL_TEN" exit then
+  dup PRIM_ADD_VEC = if drop ." PRIM_ADD_VEC" exit then
+  dup PRIM_ADD_MAT = if drop ." PRIM_ADD_MAT" exit then
+  dup PRIM_ADD_TEN = if drop ." PRIM_ADD_TEN" exit then
+  dup PRIM_SUB_VEC = if drop ." PRIM_SUB_VEC" exit then
+  dup PRIM_SUB_MAT = if drop ." PRIM_SUB_MAT" exit then
+  dup PRIM_DIV_VEC = if drop ." PRIM_DIV_VEC" exit then
+  dup PRIM_DIV_MAT = if drop ." PRIM_DIV_MAT" exit then
   . ;
 
 \ ---- Test --------------------------------------------------------------------

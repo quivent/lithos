@@ -7,23 +7,36 @@ Constants: D (hidden dimension), w (learned weight vector per norm — one scala
 PRIMITIVES
 ==========
 
-Every operation is a multiply, add, divide, or function.
-The operand decides what it does.
+Dimensional notation: number of repeated symbols = loop depth.
+Scalar = one instruction. Every extra symbol = one more nested loop.
 
-  *           multiply by self (square)
-  * -1        multiply by -1 (negate)
-  * w     multiply by learned weight (scale)
-  +           sum all elements (reduction)
-  + 1         add scalar 1
-  /           divide by another value
-  / D         divide by constant
-  1 /         reciprocal (1 / x)
-  exp         e to the x
-  log         natural log
-  √           square root
-  project     matrix-vector multiply (learned weights)
-  delta-update  state recurrence
-  matvec      matrix-vector multiply (state @ query)
+  *           scalar multiply — one FMUL
+  **          vector multiply — loop of FMULs (elementwise)
+  ***         matrix multiply — loop of loop of FMULs (outer product)
+  ****        tensor multiply — loop of loop of loop of FMULs
+
+  +           scalar add — one FADD
+  ++          vector add — loop of FADDs (elementwise)
+  +++         matrix add — loop of loop of FADDs
+
+  -           scalar subtract
+  --          vector subtract (elementwise)
+
+  /           scalar divide
+  //          vector divide (elementwise)
+
+  Σ           reduction — collapse one dimension (shuffle tree) — O(log N), NOT a loop
+
+  exp         e^x  (scalar; wrap in ** to apply elementwise)
+  log         ln(x) (scalar; wrap in ** to apply elementwise)
+  1/          reciprocal (scalar; wrap in ** to apply elementwise)
+  1/√         reciprocal square root (scalar; wrap in ** to apply elementwise)
+  √           square root (scalar; wrap in ** to apply elementwise)
+
+  project     W4A16 dequant GEMV — effectively ****Σ with dequant
+  matvec      FP32 state GEMV — effectively ***Σ
+
+`outer` is gone. It is ***.
 
 
 COMPOSITES
@@ -31,11 +44,11 @@ COMPOSITES
 
 These are not primitives. They are names for sequences of primitives.
 
-  sigmoid   = * -1, exp, + 1, 1 /
-  silu      = * -1, exp, + 1, 1 /, *
-  softplus  = exp, + 1, log
-  normalise = *, +, / D, √, /, * w
-  l2norm    = *, +, √, /
+  sigmoid   = * -1, exp, ++, //
+  silu      = * -1, exp, ++, //, **
+  softplus  = exp, ++, log
+  normalise = **, Σ, / D, 1/√, ** w
+  l2norm    = **, Σ, 1/√, **
 
   project (W4A16 GPTQ):
     for each output element:
@@ -48,7 +61,7 @@ These are not primitives. They are names for sequences of primitives.
             - * scale
             - * input element
             + accumulate
-      + reduce across threads     (sum partial products)
+      Σ across threads            (sum partial products)
 
 
 FULL DECOMPOSITION — 66 STEPS
@@ -56,12 +69,12 @@ FULL DECOMPOSITION — 66 STEPS
 
 RMSNorm on input hidden state
 
- 1  *                square each element
- 2  +                sum all squares
+ 1  **               square each element
+ 2  Σ                sum all squares
  3  / D              mean of squares
- 4  √             root mean square
- 5  /                x / rms
- 6  * w          scale by learned weight
+ 4  √                root mean square
+ 5  //               x / rms (elementwise)
+ 6  ** w             scale by learned weight (elementwise)
 
  7  project          Q projection
  8  project          K projection
@@ -69,94 +82,108 @@ RMSNorm on input hidden state
 
 L2-norm on K (after projection, before delta-update)
 
-10  *                square each element of K
-11  +                sum all squares
-12  √             √(sum)
-13  /                K / sqrt(sum)    =  L2-norm(K)
+10  **               square each element of K
+11  Σ                sum all squares
+12  √                √(sum)
+13  //               K / sqrt(sum)    =  L2-norm(K)
 
 SiLU on Q
 
 14  * -1             -Q
 15  exp              e^(-Q)
-16  + 1              1 + e^(-Q)
-17  1 /              1 / (1 + e^(-Q))  =  sigmoid(Q)
-18  *                Q * sigmoid(Q)    =  SiLU(Q)
+16  ++               1 + e^(-Q)  (elementwise add scalar)
+17  //               1 / (1 + e^(-Q))  =  sigmoid(Q)  (elementwise reciprocal)
+18  **               Q * sigmoid(Q)    =  SiLU(Q)  (elementwise multiply)
 
 L2-norm on Q (after SiLU, before matvec)
 
-19  *                square each element of Q
-20  +                sum all squares
-21  √             √(sum)
-22  /                Q / sqrt(sum)    =  L2-norm(Q)
+19  **               square each element of Q
+20  Σ                sum all squares
+21  √                √(sum)
+22  //               Q / sqrt(sum)    =  L2-norm(Q)
 
 Sigmoid on beta
 
 23  * -1             -beta
 24  exp              e^(-beta)
-25  + 1              1 + e^(-beta)
-26  1 /              1 / (1 + e^(-beta))  =  sigmoid(beta)
+25  ++               1 + e^(-beta)
+26  //               1 / (1 + e^(-beta))  =  sigmoid(beta)
 
 Decay gate (GatedDeltaNet)
   a_proj = in_proj_a @ x  (already computed as part of in_proj)
   g = -exp(A_log) * softplus(a_proj + dt_bias)
   decay = exp(g)
 
-27  +                t = a_proj + dt_bias
+27  ++               t = a_proj + dt_bias  (elementwise add)
 28  exp              exp(t)
-29  + 1              1 + exp(t)
+29  ++               1 + exp(t)
 30  log              log(1 + exp(t))      =  softplus(t)
 31  exp              exp(A_log)
 32  * -1             -exp(A_log)
-33  *                g = -exp(A_log) * softplus(t)
+33  **               g = -exp(A_log) * softplus(t)  (elementwise multiply)
 34  exp              decay = exp(g)
 
 Delta rule (with decay)
 
-35  delta-update     S = decay * S + beta * (V ⊗ K - S · (K ⊗ K))
-36  matvec           output = S @ Q
+  State update decomposes to:
+    recall     = matvec      S @ K  (FP32 GEMV — ***Σ)
+    correction = --          V - recall  (elementwise subtract)
+    correction = **          beta * correction  (elementwise multiply)
+    update_mat = ***         correction ⊗ K  (outer product — loop of loop of FMULs)
+    decay_S    = **          decay * S  (elementwise multiply)
+    S'         = +++         decay_S + update_mat  (matrix add — loop of loop of FADDs)
+    output     = matvec      S' @ Q  (FP32 GEMV — ***Σ)
+
+35  matvec           recall = S @ K
+36  --               correction_v = V - recall  (elementwise)
+37  **               correction = beta * correction_v  (elementwise)
+38  ***              update_mat = correction ⊗ K  (outer product)
+39  **               decay_S = decay * S  (elementwise)
+40  +++              S = decay_S + update_mat  (matrix add)
+41  matvec           output = S @ Q
 
 Output gate (g_proj)
 
-37  project          z = W_z @ x  (output gate projection)
-38  * -1             -z
-39  exp              e^(-z)
-40  + 1              1 + e^(-z)
-41  1 /              1 / (1 + e^(-z))  =  sigmoid(z)
-42  *                output * sigmoid(z)  (gate multiply)
+42  project          z = W_z @ x  (output gate projection)
+43  * -1             -z
+44  exp              e^(-z)
+45  ++               1 + e^(-z)
+46  //               1 / (1 + e^(-z))  =  sigmoid(z)
+47  **               output * sigmoid(z)  (gate multiply, elementwise)
 
 RMSNorm on gated output
 
-43  *                square each element
-44  +                sum all squares
-45  / D              mean of squares
-46  √             root mean square
-47  /                output / rms
-48  * w          scale by learned weight
+48  **               square each element
+49  Σ                sum all squares
+50  / D              mean of squares
+51  √                root mean square
+52  //               output / rms  (elementwise)
+53  ** w             scale by learned weight (elementwise)
 
-49  project          output projection
-50  +                residual into X
+54  project          output projection
+55  ++               residual into X  (elementwise add)
 
 RMSNorm on X (MLP input)
 
-51  *                square each element
-52  +                sum all squares
-53  / D              mean of squares
-54  √             root mean square
-55  /                X / rms
-56  * w          scale by learned weight
+56  **               square each element
+57  Σ                sum all squares
+58  / D              mean of squares
+59  √                root mean square
+60  //               X / rms  (elementwise)
+61  ** w             scale by learned weight (elementwise)
 
-57  project          gate projection
-58  project          up projection
+62  project          gate projection
+63  project          up projection
 
 SiLU on gate
 
-59  * -1             -gate
-60  exp              e^(-gate)
-61  + 1              1 + e^(-gate)
-62  1 /              1 / (1 + e^(-gate))  =  sigmoid(gate)
-63  *                gate * sigmoid(gate) =  SiLU(gate)
+64  * -1             -gate
+65  exp              e^(-gate)
+66  ++               1 + e^(-gate)
+67  //               1 / (1 + e^(-gate))  =  sigmoid(gate)
+68  **               gate * sigmoid(gate) =  SiLU(gate)  (elementwise)
 
-64  *                gate * up  (element-wise multiply)
+69  **               gate * up  (elementwise multiply)
 
-65  project          down projection
-66  +                residual into X
+70  project          down projection
+71  ++               residual into X  (elementwise add)

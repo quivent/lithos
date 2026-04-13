@@ -379,5 +379,175 @@ variable patch-addr   variable patch-off
   patch-forward-bra ;
 
 \ ============================================================
+\ DIMENSIONAL VECTOR EMITTERS  (** / ++ / -- / //)
+\ ============================================================
+\ Each "vec" emitter wraps one stride loop around a scalar op.
+\ Calling convention: value stack carries pointer registers for
+\ the input arrays and the output array.  The emitter consumes
+\ those registers and leaves the output-array register on the stack.
+\
+\ Stack for binary ops: ( a-base b-base result-base bound step -- )
+\ (bound = element count, step = gridDim.x * blockDim.x)
+\
+\ For the dimensional emitters the caller is expected to push:
+\   a-ptr b-ptr out-ptr n step
+\ where n is the element count and step is the grid stride.
+\ The loop index register is allocated internally.
+
+\ emit-vec-binary ( a-ptr b-ptr out-ptr n step op-xt -- )
+\ Generic one-loop stride vector operation.
+\ op-xt is the scalar emitter word to call: ( ra rb -- rd )
+\ op-xt is passed on the data stack (execution token).
+
+variable evb-a    variable evb-b    variable evb-out
+variable evb-n    variable evb-step variable evb-op
+variable evb-idx  variable evb-va   variable evb-vb   variable evb-rd
+
+: emit-vec-binary  ( a-ptr b-ptr out-ptr n step op-xt -- )
+  evb-op !  evb-step !  evb-n !
+  evb-out !  evb-b !  evb-a !
+  rreg+ evb-idx !                        \ allocate loop index register
+  \ Copy global thread index (R0) into evb-idx as starting index
+  evb-idx @  0  mov-imm,                 \ idx = 0 (placeholder; real: MOV idx, R0)
+  evb-idx @  evb-n @  evb-step @         \ ( idx-reg bound-reg step-reg )
+  emit-stride-begin
+    evb-a @  evb-idx @  emit-array-load  evb-va !
+    evb-b @  evb-idx @  emit-array-load  evb-vb !
+    evb-va @  evb-vb @  evb-op @ execute evb-rd !
+    evb-out @  evb-idx @  evb-rd @  emit-array-store
+  emit-stride-end ;
+
+\ emit-mul-vec ( a-ptr b-ptr out-ptr n step -- )
+: emit-mul-vec  ( a-ptr b-ptr out-ptr n step -- )
+  ['] emit-mul  emit-vec-binary ;
+
+\ emit-add-vec ( a-ptr b-ptr out-ptr n step -- )
+: emit-add-vec  ( a-ptr b-ptr out-ptr n step -- )
+  ['] emit-add  emit-vec-binary ;
+
+\ emit-sub-vec ( a-ptr b-ptr out-ptr n step -- )
+: emit-sub-vec  ( a-ptr b-ptr out-ptr n step -- )
+  ['] emit-sub  emit-vec-binary ;
+
+\ emit-div-vec ( a-ptr b-ptr out-ptr n step -- )
+: emit-div-vec  ( a-ptr b-ptr out-ptr n step -- )
+  ['] emit-div  emit-vec-binary ;
+
+\ ============================================================
+\ DIMENSIONAL MATRIX EMITTERS  (*** / +++ / --- / ///)
+\ ============================================================
+\ Outer-product style: for each (i, j) pair:
+\   result[i*N + j] = a[i] op b[j]
+\
+\ Stack: ( a-ptr b-ptr out-ptr M N step -- )
+\ M = length of a (rows), N = length of b (cols)
+\ step = gridDim.x * blockDim.x (shared for both loop levels)
+\
+\ Two nested stride loops — outer over i, inner over j.
+\ We save/restore stride-loop state across nesting manually
+\ because emit-stride-begin/end use single shared variables.
+
+\ Saved outer-loop state
+variable slx-top    variable slx-step
+variable slx-idx    variable slx-bound  variable slx-bra
+
+: save-stride-state  ( -- )
+  stride-loop-top @   slx-top !
+  stride-loop-step @  slx-step !
+  stride-loop-idx @   slx-idx !
+  stride-loop-bound @ slx-bound !
+  stride-loop-bra @   slx-bra ! ;
+
+: restore-stride-state  ( -- )
+  slx-top @   stride-loop-top !
+  slx-step @  stride-loop-step !
+  slx-idx @   stride-loop-idx !
+  slx-bound @ stride-loop-bound !
+  slx-bra @   stride-loop-bra ! ;
+
+variable ema-a    variable ema-b    variable ema-out
+variable ema-M    variable ema-N    variable ema-step
+variable ema-i    variable ema-j
+variable ema-va   variable ema-vb   variable ema-rd
+variable ema-row-off variable ema-addr
+
+\ emit-mat-binary ( a-ptr b-ptr out-ptr M N step op-xt -- )
+: emit-mat-binary  ( a-ptr b-ptr out-ptr M N step op-xt -- )
+  ema-step swap  >r   \ save op-xt on R-stack
+  ema-step !  ema-N !  ema-M !
+  ema-out !  ema-b !  ema-a !
+
+  rreg+ ema-i !                     \ outer loop index (i)
+  ema-i @  0  mov-imm,              \ i = 0 (placeholder for R0)
+
+  ema-i @  ema-M @  ema-step @
+  emit-stride-begin                 \ outer loop: for i in [0, M)
+
+    save-stride-state                \ save outer loop vars
+
+    rreg+ ema-j !                   \ inner loop index (j)
+    ema-j @  0  mov-imm,            \ j = 0 (placeholder for R0)
+
+    ema-j @  ema-N @  ema-step @
+    emit-stride-begin               \ inner loop: for j in [0, N)
+
+      \ Load a[i] and b[j]
+      ema-a @  ema-i @  emit-array-load  ema-va !
+      ema-b @  ema-j @  emit-array-load  ema-vb !
+
+      \ Apply scalar op
+      ema-va @  ema-vb @  r@ execute  ema-rd !
+
+      \ Compute flat index: i*N + j into a temp register
+      rreg+ ema-row-off !
+      ema-row-off @  ema-i @  ema-N @  RZ  imad,   \ IMAD row-off, i, N, RZ
+      rreg+ ema-addr !
+      ema-addr @  ema-row-off @  ema-j @  RZ  iadd3,  \ addr = row-off + j
+
+      \ Store result[i*N + j]
+      ema-out @  ema-addr @  ema-rd @  emit-array-store
+
+    emit-stride-end                 \ end inner loop
+
+    restore-stride-state            \ restore outer loop vars
+
+  emit-stride-end                   \ end outer loop
+
+  r> drop ;                         \ discard saved op-xt
+
+\ emit-mul-mat ( a-ptr b-ptr out-ptr M N step -- )  — outer product
+: emit-mul-mat  ( a-ptr b-ptr out-ptr M N step -- )
+  ['] emit-mul  emit-mat-binary ;
+
+\ emit-add-mat ( a-ptr b-ptr out-ptr M N step -- )
+: emit-add-mat  ( a-ptr b-ptr out-ptr M N step -- )
+  ['] emit-add  emit-mat-binary ;
+
+\ emit-sub-mat ( a-ptr b-ptr out-ptr M N step -- )
+: emit-sub-mat  ( a-ptr b-ptr out-ptr M N step -- )
+  ['] emit-sub  emit-mat-binary ;
+
+\ emit-div-mat ( a-ptr b-ptr out-ptr M N step -- )
+: emit-div-mat  ( a-ptr b-ptr out-ptr M N step -- )
+  ['] emit-div  emit-mat-binary ;
+
+\ ============================================================
+\ TENSOR EMITTERS  (**** / ++++)
+\ ============================================================
+\ Three-nested-loop forms — outer product over three axes.
+\ Stack: ( a-ptr b-ptr out-ptr M N P step op-xt -- )
+\ result[i*N*P + j*P + k] = a[i] op b[j] op ... (placeholder)
+\
+\ For now we emit a scalar stub via the mat emitter with the k-loop
+\ dimension fixed to 1, giving a correct but non-maximally-efficient
+\ sequence. Full three-loop specialisation is left for a later pass.
+
+: emit-mul-ten  ( a-ptr b-ptr out-ptr M N step -- )
+  ['] emit-mul  emit-mat-binary ;
+
+: emit-add-ten  ( a-ptr b-ptr out-ptr M N step -- )
+  ['] emit-add  emit-mat-binary ;
+
+\ ============================================================
 \ END
 \ ============================================================
