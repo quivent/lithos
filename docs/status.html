@@ -93,13 +93,13 @@ ol.blockers strong { color: var(--red); }
 <h2>TOP-LEVEL PROGRESS</h2>
 
 <pre class="code"><code>
-FOUNDATIONS   [████████] complete   language, kernels, grammar, dicts, docs
-COMPILER      [██████░░] wired, not compiling   compiler.ls self-parse blocked
-BOOTSTRAP     [███░░░░░] smoke test works, parser gap blocks compiler.ls
-RUNTIME       [████░░░░] all .ls written, untested, cbuf0 register_count unknown
-HARDWARE      [██░░░░░░] GSP mostly asm, FSP not wired, QMD builder exists untested
-INTEGRATION   [░░░░░░░░] launcher.ls writing, not compiled, nothing executes end-to-end
-FIRST TOKEN   [░░░░░░░░] blocked on all above
+FOUNDATIONS   [<span style="color:#7ec87e">████</span><span style="color:#7ec87e">████</span>] complete   language, kernels, grammar, dicts, docs
+COMPILER      [<span style="color:#7ec87e">████</span>██░░] wired, not compiling   compiler.ls self-parse blocked
+BOOTSTRAP     [███<span style="color:#d06e6e">░░░░</span>░] smoke test works, parser gap blocks compiler.ls
+RUNTIME       [<span style="color:#7ec87e">████</span><span style="color:#d06e6e">░░░░</span>] all .ls written, untested, cbuf0 register_count unknown
+HARDWARE      [██<span style="color:#d06e6e">░░░░</span>░░] GSP mostly asm, FSP not wired, QMD builder exists untested
+INTEGRATION   [<span style="color:#d06e6e">░░░░</span><span style="color:#d06e6e">░░░░</span>] launcher.ls writing, not compiled, nothing executes end-to-end
+FIRST TOKEN   [<span style="color:#d06e6e">░░░░</span><span style="color:#d06e6e">░░░░</span>] blocked on all above
 </code></pre>
 
 <hr>
@@ -107,15 +107,15 @@ FIRST TOKEN   [░░░░░░░░] blocked on all above
 <h2>BOOTSTRAP (pure ARM64 assembly, `bootstrap/*.s`)</h2>
 
 <pre class="code"><code>
-[✓] Lithos bootstrap binary builds, 35KB .bss (not 528MB)
-[✓] Entry, memory, DTC runtime wired (_start in driver.s, not lithos-bootstrap.s)
-[✓] 7 stack-alignment SIGBUS bugs in lithos-elf-writer.s fixed
-[✓] Smoke test: `var x 42` → valid ARM64 ELF produced
-[✓] Build: bootstrap/build.sh, Makefile, macros prelude working
-[ ] Parser: expression parsing (IDENT = expr, IDENT[i] = expr)  ← BLOCKING
-[ ] Parser: `fn NAME ARGS -&gt;` OR new composition syntax               ← BLOCKING
-[ ] Parser: hundreds of lines of expression precedence + ARM64 emit   ← BLOCKING
-[ ] Audit: compiler.ls parses cleanly through bootstrap               ← BLOCKING
+<span style="color:#7ec87e">✓</span> Lithos bootstrap binary builds, 35KB .bss (not 528MB)
+<span style="color:#7ec87e">✓</span> Entry, memory, DTC runtime wired (_start in driver.s, not lithos-bootstrap.s)
+<span style="color:#7ec87e">✓</span> 7 stack-alignment SIGBUS bugs in lithos-elf-writer.s fixed
+<span style="color:#7ec87e">✓</span> Smoke test: `var x 42` → valid ARM64 ELF produced
+<span style="color:#7ec87e">✓</span> Build: bootstrap/build.sh, Makefile, macros prelude working
+<span style="color:#d06e6e">○</span> Parser: expression parsing (IDENT = expr, IDENT[i] = expr)  <span style="color:#d06e6e;font-weight:600">← BLOCKING</span>
+<span style="color:#d06e6e">○</span> Parser: `fn NAME ARGS -&gt;` OR new composition syntax               <span style="color:#d06e6e;font-weight:600">← BLOCKING</span>
+<span style="color:#d06e6e">○</span> Parser: hundreds of lines of expression precedence + ARM64 emit   <span style="color:#d06e6e;font-weight:600">← BLOCKING</span>
+<span style="color:#d06e6e">○</span> Audit: compiler.ls parses cleanly through bootstrap               <span style="color:#d06e6e;font-weight:600">← BLOCKING</span>
 </code></pre>
 
 <p>Without bootstrap parser work, <code>\1</code> cannot be compiled to <code>\1</code>.</p>
@@ -126,25 +126,25 @@ FIRST TOKEN   [░░░░░░░░] blocked on all above
 <h2>COMPILER (`compiler/compiler.ls`, 4739 lines)</h2>
 
 <pre class="code"><code>
-[✓] Lexer (Section 3): UTF-8 multi-byte for → ← ↑ ↓ Σ △ ▽ √ ≅ ≡
-[✓] ARM64 backend (Section 1): 90+ emitters, syscalls, branch patching
-[✓] GPU backend (Section 2): 35+ opcodes from probes, ctrl words, grid-sync
-[✓] Safetensors reader (Section 5): JSON header + tensor index
-[✓] ELF writer (Section 6): 9-section cubin ELF64 structure
-[✓] Parser (Section 4): recursive descent, dual backend routing
-[✓] Main entry (Section 7): argv → mmap → lex → parse → emit → write
+<span style="color:#7ec87e">✓</span> Lexer (Section 3): UTF-8 multi-byte for → ← ↑ ↓ Σ △ ▽ √ ≅ ≡
+<span style="color:#7ec87e">✓</span> ARM64 backend (Section 1): 90+ emitters, syscalls, branch patching
+<span style="color:#7ec87e">✓</span> GPU backend (Section 2): 35+ opcodes from probes, ctrl words, grid-sync
+<span style="color:#7ec87e">✓</span> Safetensors reader (Section 5): JSON header + tensor index
+<span style="color:#7ec87e">✓</span> ELF writer (Section 6): 9-section cubin ELF64 structure
+<span style="color:#7ec87e">✓</span> Parser (Section 4): recursive descent, dual backend routing
+<span style="color:#7ec87e">✓</span> Main entry (Section 7): argv → mmap → lex → parse → emit → write
 
 Internal inconsistencies (Scout 2):
-[ ] Parser handles superset: `goto`, `label`, `endfor`, `load_u8/16/32/64`,
+<span style="color:#d06e6e">○</span> Parser handles superset: `goto`, `label`, `endfor`, `load_u8/16/32/64`,
     `syscall`, `if!=`, 3-operand stmts — compiler uses them but lexer rejects
-[ ] `param NAME TYPE` lexed but never parsed → n_kparams always 0
-[ ] No config.json reader (separate from safetensors; needed for layer_types)
-[ ] No per-layer dispatch loop (the hybrid-layers.md design is unimplemented)
-[ ] No megakernel linker
-[ ] cubin_buf is 512KB; 64-layer megakernel needs ~300MB (600× too small)
-[ ] `$` register prefix not a lexer token
-[ ] arch/hopper.dict and arch/arm64.dict never read
-[ ] ARM64 ELF wrapper absent (main writes raw bytes for host output)
+<span style="color:#d06e6e">○</span> `param NAME TYPE` lexed but never parsed → n_kparams always 0
+<span style="color:#d06e6e">○</span> No config.json reader (separate from safetensors; needed for layer_types)
+<span style="color:#d06e6e">○</span> No per-layer dispatch loop (the hybrid-layers.md design is unimplemented)
+<span style="color:#d06e6e">○</span> No megakernel linker
+<span style="color:#d06e6e">○</span> cubin_buf is 512KB; 64-layer megakernel needs ~300MB (600× too small)
+<span style="color:#d06e6e">○</span> `$` register prefix not a lexer token
+<span style="color:#d06e6e">○</span> arch/hopper.dict and arch/arm64.dict never read
+<span style="color:#d06e6e">○</span> ARM64 ELF wrapper absent (main writes raw bytes for host output)
 </code></pre>
 
 <hr>
@@ -152,22 +152,22 @@ Internal inconsistencies (Scout 2):
 <h2>INFERENCE KERNELS (`inference/*.ls`, new grammar)</h2>
 
 <pre class="code"><code>
-[✓] attend.ls — DeltaNet attention, RoPE (theta 10M, partial rotary 0.25)
-[✓] attend_full.ls — full attention kernel for hybrid layers (GQA 24/4, output gate)
-[✓] decay_gate.ls — softplus + exp decay
-[✓] delta_update.ls — delta rule state update
-[✓] deltanet_fused.ls — fused kernel with beta param
-[✓] elementwise.ls — residual_add, elemwise_mul, activate_silu, scale
-[✓] embed.ls — token embedding (FP16 and FP32 variants)
-[✓] gemv.ls — W4A16 GEMV, GPTQ dequant chain CORRECT (scale + zero-point fixed)
-[✓] recur.ls — conv1d, gate_sigmoid, deltanet_step, state_rollback
-[✓] reduce.ls — rmsnorm, rmsnorm_residual, l2norm, sample_argmax
+<span style="color:#7ec87e">✓</span> attend.ls — DeltaNet attention, RoPE (theta 10M, partial rotary 0.25)
+<span style="color:#7ec87e">✓</span> attend_full.ls — full attention kernel for hybrid layers (GQA 24/4, output gate)
+<span style="color:#7ec87e">✓</span> decay_gate.ls — softplus + exp decay
+<span style="color:#7ec87e">✓</span> delta_update.ls — delta rule state update
+<span style="color:#7ec87e">✓</span> deltanet_fused.ls — fused kernel with beta param
+<span style="color:#7ec87e">✓</span> elementwise.ls — residual_add, elemwise_mul, activate_silu, scale
+<span style="color:#7ec87e">✓</span> embed.ls — token embedding (FP16 and FP32 variants)
+<span style="color:#7ec87e">✓</span> gemv.ls — W4A16 GEMV, GPTQ dequant chain CORRECT (scale + zero-point fixed)
+<span style="color:#7ec87e">✓</span> recur.ls — conv1d, gate_sigmoid, deltanet_step, state_rollback
+<span style="color:#7ec87e">✓</span> reduce.ls — rmsnorm, rmsnorm_residual, l2norm, sample_argmax
 
 Still open from minds-revisited:
-[ ] Apply v7 software pipelining to gemv.ls
-[ ] Apply v2 v4.u32 K-wise weight loads
-[ ] Per-projection shape selection (compile-time specialization per layer)
-[ ] Transposed [N, K/8] weight layout (preprocess step)
+<span style="color:#d06e6e">○</span> Apply v7 software pipelining to gemv.ls
+<span style="color:#d06e6e">○</span> Apply v2 v4.u32 K-wise weight loads
+<span style="color:#d06e6e">○</span> Per-projection shape selection (compile-time specialization per layer)
+<span style="color:#d06e6e">○</span> Transposed [N, K/8] weight layout (preprocess step)
 </code></pre>
 
 <hr>
@@ -177,17 +177,17 @@ Still open from minds-revisited:
 <p>Replaces all 42 libcuda call sites in <code>\1</code>.</p>
 
 <pre class="code"><code>
-[✓] init.ls — vfio-pci + BAR0/BAR4 mmap, PMC sanity, GSP boot dispatch
-[✓] mem.ls — BAR4 bump allocator (coherent HBM, no dma_alloc_coherent)
-[✓] elf_load.ls — parse compiled GPU ELF, extract entry_pc via .symtab walk
-[✓] qmd.ls — 528-byte descriptor with empirically-probed offsets
-[✓] cbuf0.ls — constant buffer (register_count offset UNKNOWN — TODO(probe))
-[✓] pushbuffer.ls — 6-method GPFIFO submission sequence
-[✓] doorbell.ls — USERD+0x8c GPPut write + USERD+0x90 doorbell
-[✓] launch.ls — kernel dispatch, ties QMD+cbuf0+pushbuffer+doorbell
-[✓] sync.ls — completion polling (flag-based + GPGet)
-[✓] teardown.ls — munmap + close
-[✓] dispatch.ls — top-level dispatch_kernel composition
+<span style="color:#7ec87e">✓</span> init.ls — vfio-pci + BAR0/BAR4 mmap, PMC sanity, GSP boot dispatch
+<span style="color:#7ec87e">✓</span> mem.ls — BAR4 bump allocator (coherent HBM, no dma_alloc_coherent)
+<span style="color:#7ec87e">✓</span> elf_load.ls — parse compiled GPU ELF, extract entry_pc via .symtab walk
+<span style="color:#7ec87e">✓</span> qmd.ls — 528-byte descriptor with empirically-probed offsets
+<span style="color:#7ec87e">✓</span> cbuf0.ls — constant buffer (register_count offset UNKNOWN — TODO(probe))
+<span style="color:#7ec87e">✓</span> pushbuffer.ls — 6-method GPFIFO submission sequence
+<span style="color:#7ec87e">✓</span> doorbell.ls — USERD+0x8c GPPut write + USERD+0x90 doorbell
+<span style="color:#7ec87e">✓</span> launch.ls — kernel dispatch, ties QMD+cbuf0+pushbuffer+doorbell
+<span style="color:#7ec87e">✓</span> sync.ls — completion polling (flag-based + GPGet)
+<span style="color:#7ec87e">✓</span> teardown.ls — munmap + close
+<span style="color:#7ec87e">✓</span> dispatch.ls — top-level dispatch_kernel composition
 
 None of these have been executed yet — the compiler must work first.
 </code></pre>
@@ -197,20 +197,20 @@ None of these have been executed yet — the compiler must work first.
 <h2>HARDWARE PATH (`GSP/*.s` — ARM64 assembly)</h2>
 
 <pre class="code"><code>
-[✓] bar_map.s — sysfs resource0/resource4 mmap (BDF hard-coded)
-[✓] pmc_check.s — PMC_BOOT_0 read, PMC_INTR_0 clear
-[✓] falcon_reset.s — Falcon reset/deassert sequence
-[✓] hbm_alloc.s — bump allocator from BAR4
-[✓] fw_load.s — ELF64 parse, PT_LOAD copy to HBM
-[✓] bcr_start.s — RISC-V BCR register programming
-[✓] poll_lockdown.s — PRIV_LOCKDOWN release polling
-[✓] rpc_channel.s — channel allocation via GSP RPC
+<span style="color:#7ec87e">✓</span> bar_map.s — sysfs resource0/resource4 mmap (BDF hard-coded)
+<span style="color:#7ec87e">✓</span> pmc_check.s — PMC_BOOT_0 read, PMC_INTR_0 clear
+<span style="color:#7ec87e">✓</span> falcon_reset.s — Falcon reset/deassert sequence
+<span style="color:#7ec87e">✓</span> hbm_alloc.s — bump allocator from BAR4
+<span style="color:#7ec87e">✓</span> fw_load.s — ELF64 parse, PT_LOAD copy to HBM
+<span style="color:#7ec87e">✓</span> bcr_start.s — RISC-V BCR register programming
+<span style="color:#7ec87e">✓</span> poll_lockdown.s — PRIV_LOCKDOWN release polling
+<span style="color:#7ec87e">✓</span> rpc_channel.s — channel allocation via GSP RPC
 
 FSP subsystem drafted (~2800 LoC in GSP/fsp/) but:
-[ ] FSP not wired into GSP/boot.s (TODO stub at step 7)  ← BLOCKING
-[ ] BCR/FSP ordering inverted vs NVIDIA reference        ← verify then fix
-[ ] vfio-pci: not implemented (sysfs mmap only)
-[ ] register_count byte offset in cbuf0 unknown          ← needs differential probe
+<span style="color:#d06e6e">○</span> FSP not wired into GSP/boot.s (TODO stub at step 7)  <span style="color:#d06e6e;font-weight:600">← BLOCKING</span>
+<span style="color:#d06e6e">○</span> BCR/FSP ordering inverted vs NVIDIA reference        ← verify then fix
+<span style="color:#d06e6e">○</span> vfio-pci: not implemented (sysfs mmap only)
+<span style="color:#d06e6e">○</span> register_count byte offset in cbuf0 unknown          ← needs differential probe
 </code></pre>
 
 <hr>
@@ -218,10 +218,10 @@ FSP subsystem drafted (~2800 LoC in GSP/fsp/) but:
 <h2>LAUNCHER INTEGRATION</h2>
 
 <pre class="code"><code>
-[ ] src/launcher.ls — writing now (W8 worker). Replaces src/launcher.s
-[ ] Removes all 42 libcuda call sites
-[ ] Single dispatch per token (megakernel, not per-kernel)
-[ ] Tokenize + emit stubs (full tokenizer later)
+<span style="color:#d06e6e">○</span> src/launcher.ls — writing now (W8 worker). Replaces src/launcher.s
+<span style="color:#d06e6e">○</span> Removes all 42 libcuda call sites
+<span style="color:#d06e6e">○</span> Single dispatch per token (megakernel, not per-kernel)
+<span style="color:#d06e6e">○</span> Tokenize + emit stubs (full tokenizer later)
 </code></pre>
 
 <hr>
@@ -229,22 +229,22 @@ FSP subsystem drafted (~2800 LoC in GSP/fsp/) but:
 <h2>DOCUMENTATION</h2>
 
 <pre class="code"><code>
-[✓] docs/language-primitives.md — grammar spec
-[✓] docs/model-config.md — Qwen 3.5 27B (num_layers 64, vocab 248320)
-[✓] docs/hybrid-layers.md — 3+1 schedule, dims CORRECTED (24/4 heads, MLP 17408)
-[✓] docs/gpu-register-model.md — $U, @P, $0:1, @smem, regcap
-[✓] docs/qmd_fields.md — empirically probed offsets
-[✓] docs/arm64-encodings.md — every instruction Lithos uses
-[✓] docs/launcher-audit.md — 42 libcuda sites mapped
-[✓] docs/minds-revisited.md — 12 GPTQ variants ranked under weights-as-code
-[✓] docs/bootstrap-compile.md + v2 — bootstrap diagnosis
-[✓] docs/weights-as-code-{compiler,language,inference}.md — corrected analyses
-[✓] docs/gsp-native.md — eliminate C via vfio-pci
-[✓] docs/self-hosting-compiler.md — architecture
-[✓] docs/regalloc_design.md
-[✓] HTML versions live on Vercel: /language, /pipeline, /roadmap, architecture,
+<span style="color:#7ec87e">✓</span> docs/language-primitives.md — grammar spec
+<span style="color:#7ec87e">✓</span> docs/model-config.md — Qwen 3.5 27B (num_layers 64, vocab 248320)
+<span style="color:#7ec87e">✓</span> docs/hybrid-layers.md — 3+1 schedule, dims CORRECTED (24/4 heads, MLP 17408)
+<span style="color:#7ec87e">✓</span> docs/gpu-register-model.md — $U, @P, $0:1, @smem, regcap
+<span style="color:#7ec87e">✓</span> docs/qmd_fields.md — empirically probed offsets
+<span style="color:#7ec87e">✓</span> docs/arm64-encodings.md — every instruction Lithos uses
+<span style="color:#7ec87e">✓</span> docs/launcher-audit.md — 42 libcuda sites mapped
+<span style="color:#7ec87e">✓</span> docs/minds-revisited.md — 12 GPTQ variants ranked under weights-as-code
+<span style="color:#7ec87e">✓</span> docs/bootstrap-compile.md + v2 — bootstrap diagnosis
+<span style="color:#7ec87e">✓</span> docs/weights-as-code-{compiler,language,inference}.md — corrected analyses
+<span style="color:#7ec87e">✓</span> docs/gsp-native.md — eliminate C via vfio-pci
+<span style="color:#7ec87e">✓</span> docs/self-hosting-compiler.md — architecture
+<span style="color:#7ec87e">✓</span> docs/regalloc_design.md
+<span style="color:#7ec87e">✓</span> HTML versions live on Vercel: /language, /pipeline, /roadmap, architecture,
    compiler, kernels, quantization, performance, bandwidth, glossary (26 pages, all 200)
-[ ] PLAN/STATUS as HTML
+<span style="color:#d06e6e">○</span> PLAN/STATUS as HTML
 </code></pre>
 
 <hr>
@@ -252,13 +252,13 @@ FSP subsystem drafted (~2800 LoC in GSP/fsp/) but:
 <h2>DEAD CODE REMOVED</h2>
 
 <pre class="code"><code>
-[✓] 21 Forth files deleted (compiler/*.fs, gpu/*.fs, core.fs, patterns.fs, etc.)
-[✓] 34 Python files deleted (src/, bench/, compiler/, kernels/, quantization/, tools/)
-[✓] 21 orphan cubins deleted
-[✓] 36 sass/ probe files deleted
-[✓] Fake inference claims deleted (index.html "Paris" logit 18.057, cosine 1.0)
-[ ] kernel/ (C kernel module) — keep until GSP boot fully runs, then delete
-[ ] src/launcher.s (4096 lines) — delete when src/launcher.ls compiled + running
+<span style="color:#7ec87e">✓</span> 21 Forth files deleted (compiler/*.fs, gpu/*.fs, core.fs, patterns.fs, etc.)
+<span style="color:#7ec87e">✓</span> 34 Python files deleted (src/, bench/, compiler/, kernels/, quantization/, tools/)
+<span style="color:#7ec87e">✓</span> 21 orphan cubins deleted
+<span style="color:#7ec87e">✓</span> 36 sass/ probe files deleted
+<span style="color:#7ec87e">✓</span> Fake inference claims deleted (index.html "Paris" logit 18.057, cosine 1.0)
+<span style="color:#d06e6e">○</span> kernel/ (C kernel module) — keep until GSP boot fully runs, then delete
+<span style="color:#d06e6e">○</span> src/launcher.s (4096 lines) — delete when src/launcher.ls compiled + running
 </code></pre>
 
 <hr>
@@ -285,7 +285,7 @@ FSP subsystem drafted (~2800 LoC in GSP/fsp/) but:
 <li>`bin/check-site` — verifies all 26 nav links return 200 before deploy</li>
 <li>Run before every `vercel --prod`</li>
 </ul>
-<p class="timestamp">Generated from PLAN.md — 2026-04-13 20:01 UTC</p>
+<p class="timestamp">Generated from PLAN.md — 2026-04-13 20:04 UTC</p>
 </div>
 </body>
 </html>

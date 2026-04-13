@@ -66,6 +66,15 @@ in_code { gsub(/&/,"\\&amp;"); gsub(/</,"\\&lt;"); gsub(/>/,"\\&gt;"); print; ne
 END { if (in_list) print "</ul>" }
 ' PLAN.md)
 
+# Post-process: colorize checkmarks and BLOCKING inside code blocks
+body=$(echo "$body" | sed \
+  -e 's/\[✓\]/<span style="color:#7ec87e">✓<\/span>/g' \
+  -e 's/\[x\]/<span style="color:#7ec87e">✓<\/span>/g' \
+  -e 's/\[ \]/<span style="color:#d06e6e">○<\/span>/g' \
+  -e 's/← BLOCKING/<span style="color:#d06e6e;font-weight:600">← BLOCKING<\/span>/g' \
+  -e 's/████/<span style="color:#7ec87e">████<\/span>/g' \
+  -e 's/░░░░/<span style="color:#d06e6e">░░░░<\/span>/g')
+
 cat > docs/status.html << HTMLEOF
 <!DOCTYPE html>
 <html lang="en">
