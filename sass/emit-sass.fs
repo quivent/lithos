@@ -3,6 +3,16 @@
 \ No PTX, no ptxas, no driver JIT.
 
 \ ============================================================
+\ KERNEL NAME METADATA (shared with parser.fs / ls-compiler.fs)
+\ ============================================================
+\ These are the canonical definitions. parser.fs references them
+\ without redefining (they are loaded here first, before parser.fs).
+create li-name-buf 64 allot
+variable li-name-len  0 li-name-len !
+: li-set-name  ( addr u -- )  dup li-name-len !  li-name-buf swap move ;
+: li-name$  ( -- addr u )  li-name-buf  li-name-len @ ;
+
+\ ============================================================
 \ CONTROL WORD SCHEDULER  (sm_90 128-bit instruction format)
 \ ============================================================
 \ Each 16-byte instruction = 8-byte inst word + 8-byte ctrl word.
@@ -157,14 +167,6 @@ variable gridsync-count  0 gridsync-count !
 
 : sass-reset  0 sass-pos !  0 max-reg-used !  coop-reset ;
 
-\ Emit one 16-byte instruction from four u32 values.
-\ DEPRECATED — use sinst, instead. Fixed to delegate rather than use
-\ broken r-stack manipulation that corrupted ctrl word.
-: sass,  ( inst-lo inst-hi ctrl-lo ctrl-hi -- )
-  swap 32 lshift swap or >r    \ combine ctrl-hi|ctrl-lo -> ctrl64
-  swap 32 lshift swap or       \ combine inst-hi|inst-lo -> inst64
-  r> sinst, ;
-
 \ Simpler: emit raw bytes
 : sb,  ( byte -- )  sass-buf sass-pos @ + c!  1 sass-pos +! ;
 : sw,  ( u32 -- )   dup sb, 8 rshift dup sb, 8 rshift dup sb, 8 rshift sb, ;
@@ -172,6 +174,13 @@ variable gridsync-count  0 gridsync-count !
 
 \ Emit a full 16-byte instruction from two 64-bit values
 : sinst,  ( inst64 ctrl64 -- )  swap sq, sq, ;
+
+\ Emit one 16-byte instruction from four u32 values.
+\ DEPRECATED — use sinst, instead.
+: sass,  ( inst-lo inst-hi ctrl-lo ctrl-hi -- )
+  swap 32 lshift swap or >r    \ combine ctrl-hi|ctrl-lo -> ctrl64
+  swap 32 lshift swap or       \ combine inst-hi|inst-lo -> inst64
+  r> sinst, ;
 
 \ ============================================================
 \ HOPPER OPCODE TABLE (from probe disassembly)
@@ -197,13 +206,26 @@ $7984 constant OP-LDS
 $7988 constant OP-STS
 $7b1d constant OP-BAR-SYNC
 
-\ Special register IDs (from S2R encoding)
+\ Special register IDs — SR selector field in S2R ctrl extra41[15:8]
+\ Verified from probe_s2r2 and probe_s2r3 (O0) nvdisasm output.
+\ The inst word for S2R is always 0x00000000000r7919 (rd in bits[23:16]).
+\ The SR ID is carried ONLY in the ctrl word extra41[15:8], not in the inst word.
+\
+\ S2R ctrl formula: ctrl-s2r sr-id  where sr-id goes into extra41[15:8] = sr-id << 8.
+\   SR_TID.X   ctrl=0x000e6e0000002100  (extra41=0x2100, sr-id=0x21)
+\   SR_TID.Y   ctrl=0x000e620000002200  (extra41=0x2200, sr-id=0x22)
+\   SR_CTAID.X ctrl=0x000eaa0000002500  (extra41=0x2500, sr-id=0x25)
+\   SR_CTAID.Y ctrl=0x000f220000002600  (extra41=0x2600, sr-id=0x26)
+\   SR_LANEID  ctrl=0x000f620000000000  (extra41=0x0000, sr-id=0x00)
+\
+\ Note: %nctaid.x / %warpid are lowered to constant-bank loads by ptxas (not S2R).
 $21 constant SR-TID-X
 $22 constant SR-TID-Y
 $23 constant SR-TID-Z
 $25 constant SR-CTAID-X
 $26 constant SR-CTAID-Y
 $27 constant SR-CTAID-Z
+$00 constant SR-LANEID     \ lane within warp (0..31)
 
 \ ============================================================
 \ INSTRUCTION BUILDERS
@@ -310,53 +332,68 @@ $27 constant SR-CTAID-Z
 : fmul,  ( rd rs1 rs2 -- )  255 ffma, ;
 
 \ SHFL.BFLY PT, Rd, Rs, delta  — warp butterfly shuffle (imm delta, mask=0x1f)
-\ Verified: SHFL.BFLY PT, R5, R0, 0x1, 0x1f -> inst=0x0c201f0000057f89
-\   bits[63:56] = (log2(delta)<<4)|0x0c  (BFLY mode + delta-log2)
-\   bits[55:48] = clamp = mask+1 = 0x20
-\   bits[47:40] = mask = 0x1f
-\   bits[31:24] = Rs, bits[23:16] = Rd, bits[15:0] = opcode $7f89
-\ ctrl from probe_6b: stall=14 yield=0 wbar=3 rbar=7
+\ Verified from probe_6b (delta=1) and probe_reduce (all 5 reduction deltas).
+\
+\ ENCODING (128-bit = inst64 + ctrl64):
+\   inst bits[15:0]  = 0x7f89  (opcode: SHFL, PT pred, immediate-delta form)
+\   inst bits[23:16] = Rd      (destination register)
+\   inst bits[31:24] = Rs      (source register)
+\   inst bits[39:32] = 0x00    (unused in immediate form)
+\   inst bits[47:40] = 0x1f    (mask = warp_width - 1 = 31)
+\   inst bits[55:48] = clamp   = (delta * 32) & 0xff
+\   inst bits[63:56] = mode    = 0x0c | ((delta * 32) >> 8)
+\
+\ Delta encoding: delta_enc = delta * 32 (a 10-bit field split across bits[57:48])
+\   delta=1:  delta_enc=0x020, mode=0x0c, clamp=0x20 -> top16=0x0c20
+\   delta=2:  delta_enc=0x040, mode=0x0c, clamp=0x40 -> top16=0x0c40
+\   delta=4:  delta_enc=0x080, mode=0x0c, clamp=0x80 -> top16=0x0c80
+\   delta=8:  delta_enc=0x100, mode=0x0d, clamp=0x00 -> top16=0x0d00
+\   delta=16: delta_enc=0x200, mode=0x0e, clamp=0x00 -> top16=0x0e00
+\
+\ Shuffle type bits[3:2] of mode byte:
+\   0b11 = BFLY (butterfly XOR), 0b10 = DOWN, 0b01 = UP, 0b00 = IDX
+\
+\ Verified encodings (rd=R5, rs=R0 shown):
+\   SHFL.BFLY PT, R5, R0, 0x01, 0x1f -> 0x0c201f0000057f89 (probe_6b ✓)
+\   SHFL.BFLY PT, R5, R0, 0x02, 0x1f -> 0x0c401f0000057f89 (probe_reduce ✓)
+\   SHFL.BFLY PT, R5, R0, 0x04, 0x1f -> 0x0c801f0000057f89 (probe_reduce ✓)
+\   SHFL.BFLY PT, R5, R0, 0x08, 0x1f -> 0x0d001f0000057f89 (probe_reduce ✓)
+\   SHFL.BFLY PT, R5, R0, 0x10, 0x1f -> 0x0e001f0000057f89 (probe_reduce ✓)
+\
+\ ctrl from probe_6b: stall=14 yield=0 wbar=3 rbar=7 = 0x001e6800000e0000
 : shfl-bfly,  ( rd rs delta -- )
-  \ Compute mode byte: (log2(delta)<<4)|0x0c
-  \ Use successive halving to find log2 (delta must be power of 2: 1,2,4,8,16)
-  dup 1 = if drop 0 else
-  dup 2 = if drop 1 else
-  dup 4 = if drop 2 else
-  dup 8 = if drop 3 else
-             drop 4        \ delta=16
-  then then then then
-  4 lshift $0c or          \ mode_byte = (log2_delta<<4)|0x0c
-  56 lshift >r             \ mode_byte -> bits[63:56]
-  24 lshift >r             \ rs -> bits[31:24]
-  track-rd 16 lshift       \ rd -> bits[23:16]
-  $7f89 or r> or           \ rs
+  \ delta_enc = delta * 32; split into clamp (low 8) and mode (high bits | 0x0c)
+  32 *                      \ delta_enc = delta * 32  (e.g. delta=8 -> 256=0x100)
+  dup $ff and 48 lshift >r  \ clamp = delta_enc & 0xff -> save for bits[55:48]
+  8 rshift $0c or           \ mode  = 0x0c | (delta_enc >> 8)
+  56 lshift >r              \ mode_byte -> bits[63:56]
+  24 lshift >r              \ rs -> bits[31:24]
+  track-rd 16 lshift        \ rd -> bits[23:16]
+  $7f89 or r> or            \ merge rs
   $1f 40 lshift or          \ mask=0x1f at bits[47:40]
-  $20 48 lshift or          \ clamp=0x20 at bits[55:48]
-  r> or                    \ mode_byte
+  r> or                     \ clamp at bits[55:48]
+  r> or                     \ mode_byte at bits[63:56]
   ctrl-shfl sinst, ;
 
-\ SHFL.DOWN PT, Rd, Rs, delta  — warp down-shuffle (lane N gets lane N+delta)
-\ Encoding mirrors SHFL.BFLY but mode nibble = 0x0d (DOWN) instead of 0x0c (BFLY).
-\ bits[63:56] = (log2(delta)<<4)|0x0d  (DOWN mode + delta-log2)
-\ bits[55:48] = clamp = mask+1 = 0x20
-\ bits[47:40] = mask = 0x1f
-\ bits[31:24] = Rs, bits[23:16] = Rd, bits[15:0] = opcode $7f89
+\ SHFL.DOWN PT, Rd, Rs, delta  — warp down-shuffle (lane N gets value from lane N+delta)
+\ Same encoding as SHFL.BFLY but shuffle type = DOWN (mode bits[3:2] = 0b10 -> base 0x08).
+\
+\ Verified encodings (rd=R7, rs=R0 shown):
+\   SHFL.DOWN PT, R7, R0, 0x01, 0x1f -> 0x08201f0000077f89 (probe_6b ✓)
+\   For delta=2: top16=0x0840, delta=4: 0x0880, delta=8: 0x0900, delta=16: 0x0a00
+\
 \ ctrl: same as shfl-bfly (stall=14 yield=0 wbar=3 rbar=7)
 : shfl-down,  ( rd rs delta -- )
-  dup 1 = if drop 0 else
-  dup 2 = if drop 1 else
-  dup 4 = if drop 2 else
-  dup 8 = if drop 3 else
-             drop 4        \ delta=16
-  then then then then
-  4 lshift $0d or          \ mode_byte = (log2_delta<<4)|0x0d
-  56 lshift >r             \ mode_byte -> bits[63:56]
-  24 lshift >r             \ rs -> bits[31:24]
-  track-rd 16 lshift       \ rd -> bits[23:16]
-  $7f89 or r> or           \ rs
-  $1f 40 lshift or          \ mask=0x1f at bits[47:40]
-  $20 48 lshift or          \ clamp=0x20 at bits[55:48]
-  r> or                    \ mode_byte
+  32 *                      \ delta_enc = delta * 32
+  dup $ff and 48 lshift >r  \ clamp at bits[55:48]
+  8 rshift $08 or           \ mode = 0x08 | (delta_enc >> 8)  [DOWN type]
+  56 lshift >r
+  24 lshift >r              \ rs -> bits[31:24]
+  track-rd 16 lshift        \ rd -> bits[23:16]
+  $7f89 or r> or
+  $1f 40 lshift or
+  r> or
+  r> or
   ctrl-shfl sinst, ;
 
 \ BRA offset32  — branch PC-relative (signed byte offset from next instruction)
@@ -455,15 +492,15 @@ $27 constant SR-CTAID-Z
 \ tmp: scratch register index for shfl destination
 \ ============================================================
 : warp-reduce,  ( acc tmp -- )
-  over over  16 shfl-bfly   \ tmp = shfl(acc, 16)
-  over over swap fadd,      \ acc = acc + tmp
-  over over   8 shfl-bfly
+  over over  16 shfl-bfly,   \ tmp = shfl(acc, 16)
+  over over swap fadd,       \ acc = acc + tmp
+  over over   8 shfl-bfly,
   over over swap fadd,
-  over over   4 shfl-bfly
+  over over   4 shfl-bfly,
   over over swap fadd,
-  over over   2 shfl-bfly
+  over over   2 shfl-bfly,
   over over swap fadd,
-  over over   1 shfl-bfly
+  over over   1 shfl-bfly,
   over over swap fadd,
   2drop ;
 
@@ -516,33 +553,61 @@ $27 constant SR-CTAID-Z
   $7812 or r> or r> or
   $c0 ctrl-lop3 sinst, ;    \ LUT=0xC0 = AND(A,B,C)=A&B
 
-\ --- I2F.F32.S32 (signed int to float32) ---
-\ Opcode: 0x306 (unverified against probe; canonical sm_90 I2F)
+\ --- I2FP.F32.S32 (signed int32 to float32) ---
+\ Opcode: 0x7245  — VERIFIED by probe (ptxas sm_90a, nvdisasm 12.8.90)
+\ PTX:    cvt.rn.f32.s32 Rd, Rs
+\ SASS:   I2FP.F32.S32 Rd, Rs
 \ Encoding:
-\   bits[15:0]  = 0x7306 (opcode 0x306, pred=PT)
-\   bits[23:16] = Rd (float destination)
-\   bits[31:24] = Rs1 (int source)
-\ Scheduling: stall=4 yield=0 wbar=7 rbar=7 (conversion latency ~4 cycles)
-: ctrl-i2f  4 0 7 7 0 0 0 make-ctrl ;
+\   bits[15:0]  = 0x7245 (I2FP opcode)
+\   bits[23:16] = Rd (float32 destination)
+\   bits[39:32] = Rs (int32 source)    <-- NOTE: src at bits[39:32], not [31:24]
+\ Probe: inst=0x0000000200077245  ctrl=0x004fca0000201400
+\   stall=5 yield=0 wbar=7 rbar=7 wait=4 extra41=0x00201400
+\ Scheduling: stall=5 yield=0 wbar=7 rbar=7 (FP conversion latency)
+: ctrl-i2f  5 0 7 7 4 0 $201400 make-ctrl ;
 
 : i2f-s32-f32,  ( rd rs -- )
-  \ I2F.F32.S32 Rd, Rs
-  24 lshift >r              \ rs -> bits[31:24]
+  \ I2FP.F32.S32 Rd, Rs
+  32 lshift >r              \ rs -> bits[39:32]
   track-rd 16 lshift        \ rd -> bits[23:16]
-  $7306 or r> or
+  $7245 or r> or
   ctrl-i2f sinst, ;
+
+\ --- F2I.TRUNC.NTZ (float32 to signed int32, truncate toward zero) ---
+\ Opcode: 0x7305  — VERIFIED by probe (ptxas sm_90a, nvdisasm 12.8.90)
+\ PTX:    cvt.rzi.s32.f32 Rd, Rs
+\ SASS:   F2I.TRUNC.NTZ Rd, Rs
+\ Encoding:
+\   bits[15:0]  = 0x7305 (F2I opcode)
+\   bits[23:16] = Rd (int32 destination)
+\   bits[39:32] = Rs (float32 source)
+\ Probe: inst=0x0000000200077305  ctrl=0x004e24000020f100
+\   stall=2 yield=1 wbar=0 rbar=7 wait=4 extra41=0x0020f100
+: ctrl-f2i  2 1 0 7 4 0 $20f100 make-ctrl ;
+
+: f2i-f32-s32,  ( rd rs -- )
+  \ F2I.TRUNC.NTZ Rd, Rs
+  32 lshift >r              \ rs -> bits[39:32]
+  track-rd 16 lshift        \ rd -> bits[23:16]
+  $7305 or r> or
+  ctrl-f2i sinst, ;
 
 \ ============================================================
 \ MUFU — Multi-Function Unit (special math, opcode 0x308)
 \ ============================================================
 \ Inst format: src << 32 | dst << 16 | 0x7308
-\ Sub-function is in ctrl extra41 bits[13:10]:
+\   bits[15:0]  = 0x7308  (opcode, identical for all MUFU sub-functions)
+\   bits[23:16] = Rd  (destination register)
+\   bits[39:32] = Rs  (source register)
+\
+\ Sub-function is in ctrl extra41 bits[13:8] (NOT in the instruction word):
 \   COS=0x0000  SIN=0x0400  EX2=0x0800  LG2=0x0c00
 \   RCP=0x1000  RSQ=0x1400  SQRT=0x2000
-\ Scheduling: all stall=8 yield=1 rbar=7; wbar varies (probed):
+\
+\ Scheduling: stall=8 yield=1 rbar=7; wbar varies per sub-function.
 \   EX2->7  RCP->1  RSQ->2  LG2->3  SQRT->4  SIN->5  COS->5
 \
-\ Probe verification (probe_2b.sass sm_90):
+\ Probe verification (probe_2b.sass sm_90, stall=8 scheduling context):
 \   MUFU.EX2  R9,R6   inst=0x0000000600097308 ctrl=0x000ff00000000800
 \   MUFU.RCP  R4,R4   inst=0x0000000400047308 ctrl=0x000e700000001000
 \   MUFU.RSQ  R7,R0   inst=0x0000000000077308 ctrl=0x000eb00000001400
@@ -550,6 +615,16 @@ $27 constant SR-CTAID-Z
 \   MUFU.SQRT R17,R0  inst=0x0000000000117308 ctrl=0x000f300000002000
 \   MUFU.SIN  R13,R8  inst=0x00000008000d7308 ctrl=0x000f700000000400
 \   MUFU.COS  R15,R8  inst=0x00000008000f7308 ctrl=0x000f620000000000
+\
+\ Additional probe verification (ptxas sm_90a, nvdisasm 12.8.90, minimal context):
+\   MUFU.RCP  R0,R0   inst=0x0000000000007308 ctrl=0x000e640000001000
+\   MUFU.EX2  R7,R0   inst=0x0000000000077308 ctrl=0x000e640000000800
+\   MUFU.RSQ  R7,R0   inst=0x0000000000077308 ctrl=0x000e640000001400
+\   MUFU.LG2  R7,R0   inst=0x0000000000077308 ctrl=0x000e640000000c00
+\   MUFU.SIN  R7,R7   inst=0x0000000700077308 ctrl=0x000e240000000400
+\   MUFU.COS  R7,R7   inst=0x0000000700077308 ctrl=0x000e240000000000
+\   MUFU.SQRT R7,R0   inst=0x0000000000077308 ctrl=0x000e640000002000
+\ Extra41 subop bits confirmed identical across both probe sessions.
 
 : ctrl-mufu  ( subfn-extra41 wbar -- ctrl64 )
   swap >r                       \ R: subfn-extra41; stack: wbar
@@ -661,49 +736,57 @@ $27 constant SR-CTAID-Z
   $0000000000007992 $000fec0000003000 sinst, ;
 
 \ ============================================================
-\ ATOM.E.ADD — global atomic add u32
+\ ATOMG.E.ADD — global atomic add (Hopper descriptor-based)
 \ ============================================================
 \
-\ ATOMG.E.ADD u32 — atomically adds Rs to the 32-bit word at [Ra],
-\ returns the old value in Rd.  Use Rd=RZ (0xFF) to discard the return.
+\ ATOMG.E.ADD.STRONG.GPU Rd, desc[UR][Ra], Rs
+\   — atomically adds Rs to the 32-bit word at [Ra], returns old value in Rd.
+\   Use Rd=RZ (0xFF) to discard the return value (e.g. for arrive-only sync).
 \
-\ Opcode: 0x98b (bits[11:0]) — UNVERIFIED stub.
-\ This value is derived from:
-\   1. ENCODING.md opcode table: 0x981=LDG, 0x986=STG, 0x988=STS, 0x984=LDS,
-\      0x992=MEMBAR, 0x98f=CCTL — the 0x98x block is the global/shared memory
-\      and sync cluster. ATOM global operations fit here.
-\   2. cublas-catalog/README.md: ATOMG.E.MAX.S32.STRONG.GPU is the known
-\      Hopper global atomic instruction family (ATOMG = atomic global).
-\   3. ATOMG.E.ADD and ATOMG.E.MAX differ in a sub-opcode modifier bit,
-\      not the base opcode (analogous to how MUFU sub-function lives in ctrl).
-\ STATUS: MUST verify against nvdisasm output of:
-\   .version 8.0 / .target sm_90 / atom.global.add.u32 rd, [ra], 1;
-\ before running on real hardware.  Correct binary will arrive from
-\ probe_atom.sass once that probe is built.
+\ Verified empirically via ptxas + nvdisasm --print-instruction-encoding
+\ (docs/sass/integer_atomic.md).  Probe: atom.global.add.u32 / atom.global.add.f32
 \
-\ ctrl: stall=15 yield=1 wbar=7 rbar=7 extra41=0x00100000
-\   (long-latency global atomic; STRONG.GPU semantic sets a scope bit)
-\   extra41=0x00100000: bit 20 is the STRONG.GPU scope modifier
-\   (derived from cuBLAS ATOMG.E.MAX.S32.STRONG.GPU ctrl word pattern)
-\ Computed: (15<<41)|(1<<45)|(7<<46)|(7<<49)|0x00100000
-\         = 0x001ffc0000100000
-\ NOTE: the extra41 value 0x00100000 is speculative; verify from disassembly.
+\ word0 field layout:
+\   bits[15: 0] = opcode
+\   bits[23:16] = Rd (destination; 0xff=RZ for no-return)
+\   bits[31:24] = Ra (address-offset register, 64-bit pair)
+\   bits[39:32] = Rs (source data register)
+\   Uniform descriptor register (UR) is NOT in word0; it lives in the ctrl word.
+\
+\ Opcodes (bits[15:0]):
+\   ATOMG.ADD.U32 = 0x79a8   (integer counter, used for grid sync)
+\   ATOMG.ADD.F32 = 0x79a3   (floating-point add with FTZ+RN)
+\   ATOMG.EXCH    = 0x79a8   (same base opcode as ADD.U32; differs in ctrl)
+\   REDG.ADD.F32  = 0x79a6   (reduction, no return)
+\
+\ ctrl words (fully verified):
+\   ATOMG.ADD.U32: 0x004e2800081ee1c4
+\   ATOMG.ADD.F32: 0x004e2800081ef3c4  (byte[1]=0xf3 encodes FTZ+RN)
+\   ATOMG.EXCH:    0x004e28000c1ee1c4
+\   REDG.ADD.F32:  0x004fe2000c10f384
+\
+\ The old ctrl-atom computed 0x001ffc0000100000 — that was wrong.
+\ The old OP-ATOM-ADD = 0x798b — that was also wrong.
 
-: ctrl-atom   15 1 7 7 0 0 $00100000   make-ctrl ;
+$79a8 constant OP-ATOM-ADD-U32   \ ATOMG.E.ADD.STRONG.GPU — integer u32 counter
+$79a3 constant OP-ATOM-ADD-F32   \ ATOMG.E.ADD.F32.FTZ.RN.STRONG.GPU
+$004e2800081ee1c4 constant CTRL-ATOM-U32   \ verified: nvdisasm probe p19
+$004e2800081ef3c4 constant CTRL-ATOM-F32   \ verified: nvdisasm probe p18
+$004fe2000c10f384 constant CTRL-REDG-F32   \ verified: nvdisasm probe p21
 
-$798b constant OP-ATOM-ADD   \ ATOMG.E.ADD u32 global — UNVERIFIED (see above)
+\ Compatibility alias — grid sync uses U32 counter
+$79a8 constant OP-ATOM-ADD   \ was 0x798b (WRONG) — now 0x79a8 (ATOMG.ADD.U32)
 
 \ atom-add,  ( rd ra rs -- )
-\ ATOM.E.ADD Rd, [Ra], Rs
-\ Rd = old value returned (use RZ=0xFF to discard); Ra = 64-bit address reg pair;
-\ Rs = 32-bit value to add.
-\ STUB: opcode 0x798b is unverified. Interface is correct; binary needs empirical check.
+\ ATOMG.E.ADD.STRONG.GPU Rd, desc[UR][Ra], Rs
+\ Rd = old value (use RZ=0xff to discard); Ra = 64-bit address offset reg;
+\ Rs = 32-bit value to add.  Ctrl word uses UR4 descriptor (hardcoded for now).
 : atom-add,  ( rd ra rs -- )
   32 lshift >r              \ rs -> bits[39:32]
   24 lshift >r              \ ra -> bits[31:24]
   track-rd 16 lshift        \ rd -> bits[23:16]
   OP-ATOM-ADD or r> or r> or
-  ctrl-atom sinst, ;
+  CTRL-ATOM-U32 sinst, ;
 
 \ ============================================================
 \ LD-ACQUIRE / ST-RELEASE via MEMBAR+LDG / MEMBAR+STG protocol
@@ -787,6 +870,16 @@ $798b constant OP-ATOM-ADD   \ ATOMG.E.ADD u32 global — UNVERIFIED (see above)
 \   done-flag-addr-reg    : register (or reg pair) holding GPU VA of u32 flag
 \   grid-size             : compile-time constant = total CTA count
 \ All three arguments consumed.  No value returned.
+
+\ Register allocator stubs — overridden by ls-compiler.fs at load time.
+\ emit-grid-sync is compiled against these stubs; ls-compiler.fs
+\ redefines rreg+/freg+/preg+ for all code compiled after it loads.
+variable _gs-r  4 _gs-r !
+variable _gs-f  0 _gs-f !
+variable _gs-p  0 _gs-p !
+: rreg+  ( -- n )  _gs-r @ dup 1+ _gs-r ! ;
+: freg+  ( -- n )  _gs-f @ dup 1+ _gs-f ! ;
+: preg+  ( -- n )  _gs-p @ dup 1+ _gs-p ! ;
 
 variable gs-ctr   variable gs-flag  variable gs-grid
 variable gs-old   variable gs-exp   variable gs-poll

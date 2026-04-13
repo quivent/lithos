@@ -7,12 +7,15 @@ cd /home/ubuntu/lithos
 echo '[lithos] Assembling launcher.s...'
 as -o bin/launcher.o src/launcher.s
 
-echo '[lithos] Linking against libcuda.so.1...'
+echo '[lithos] Linking against libcuda.so.1 + libc + libm...'
 ld -dynamic-linker /lib/ld-linux-aarch64.so.1 \
    -o bin/lithos-launch \
    bin/launcher.o \
    -lcuda \
-   -L/usr/lib/aarch64-linux-gnu
+   -lm \
+   -lc \
+   -L/usr/lib/aarch64-linux-gnu \
+   -L/lib/aarch64-linux-gnu
 
 chmod +x bin/lithos-launch
 

@@ -1,0 +1,278 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * lithos_channel.c — GPFIFO channel creation and USERD doorbell setup
+ *
+ * A GPFIFO channel is the ring buffer through which the CPU submits GPU work.
+ * Each entry in the ring is 8 bytes (a GPFIFO descriptor) pointing to a
+ * pushbuffer segment and its length.
+ *
+ * On Hopper the channel class is 0xC86F (HOPPER_CHANNEL_GPFIFO_A, defined in
+ * nvidia-srv-580.105.08/nvidia-uvm/clc86f.h).  The USERD page layout is
+ * given by Nvc86fControl (same file):
+ *   offset 0x040: Put      — pushbuffer put index  (unused, GPFIFO uses GPPut)
+ *   offset 0x044: Get      — pushbuffer get index  (read-only)
+ *   offset 0x088: GPGet    — GPFIFO get index      (read-only for CPU)
+ *   offset 0x08c: GPPut    — GPFIFO put index      (CPU writes to submit work)
+ *
+ * The launch sequence after filling N GPFIFO entries is:
+ *   1. Write the N GPFIFO descriptors to the GPFIFO ring (CPU writes to HBM)
+ *   2. Increment local put pointer: gpfifo_put = (gpfifo_put + N) & (ENTRIES-1)
+ *   3. Store gpfifo_put to USERD+0x08c  ← this is the doorbell, 0 syscalls
+ *
+ * Channel hardware registration:
+ *   NVIDIA's RM uses the GSP RPC mechanism (NV0080_CTRL_CMD_GPU_GET_CLASSLIST,
+ *   then NVC86F allocation via the object model) to allocate channels on Hopper.
+ *   Without GSP, direct MMIO channel allocation is blocked — Hopper requires GSP
+ *   for all resource manager operations.
+ *
+ *   For now this file implements:
+ *     (a) GPFIFO ring buffer allocation (kzalloc, page-aligned)
+ *     (b) Software channel tracking
+ *     (c) The MMIO write sequence that WOULD be required if GSP were bypassed
+ *         (stubbed with TODO comments pointing to exact RM source locations)
+ *
+ *   The stub prints clearly so the missing hardware steps are obvious.
+ *
+ * Source references:
+ *   nvidia-srv-580.105.08/nvidia-uvm/clc86f.h      — Hopper USERD layout
+ *   nvidia-srv-580.105.08/nvidia-uvm/uvm_channel.h — channel manager structure
+ *   Open-GPU-Kernel-Modules GitHub:
+ *     src/nvidia/src/kernel/gpu/fifo/kernel_fifo.c — kfifoConstructChannel
+ *     src/nvidia/src/kernel/gpu/fifo/kernel_channel.c — channel allocation
+ *     src/nvidia/src/kernel/gpu/fifo/arch/hopper/    — Hopper-specific FIFO
+ */
+
+#include <linux/kernel.h>
+#include <linux/slab.h>
+#include <linux/dma-mapping.h>
+#include <linux/spinlock.h>
+#include <linux/io.h>
+#include <linux/pci.h>
+
+#include "lithos.h"
+#include "lithos_channel.h"
+
+/* -----------------------------------------------------------------------
+ * MMIO helpers for channel registration
+ *
+ * These register offsets control the channel engine (PFIFO / NV_PFIFO).
+ * On Hopper all PFIFO operations are proxied through GSP.  The offsets
+ * below are the BAR0 addresses for direct MMIO access (pre-GSP path,
+ * retained as documentation of what GSP does internally).
+ *
+ * TODO: Verify against:
+ *   open-gpu-kernel-modules/src/nvidia/arch/nvalloc/common/inc/hopper/
+ *   gh100/dev_fifo.h  (NV_PFIFO_* register definitions for GH100)
+ * ----------------------------------------------------------------------- */
+
+/*
+ * NV_PFIFO_CHANNEL_INST — channel instance block base (one per channel).
+ * The instance block describes the channel to the GPU MMU and FIFO engine.
+ * Layout is defined in:
+ *   open-gpu-kernel-modules/src/nvidia/arch/nvalloc/common/inc/hopper/
+ *   gh100/dev_ram.h  (NV_RAMFC_* fields = channel instance block)
+ *
+ * Key RAMFC fields (byte offsets within the 4KB instance block):
+ *   0x00: GP_BASE_LO    — GPFIFO ring base address [31:0]
+ *   0x04: GP_BASE_HI    — GPFIFO ring base address [39:32] | flags
+ *   0x08: GP_ENTRIES    — number of GPFIFO entries (log2 or count)
+ *   0x10: USERD_ADDR_LO — USERD page physical address [31:0]
+ *   0x14: USERD_ADDR_HI — USERD page physical address [39:32]
+ *
+ * TODO: Read exact offsets from:
+ *   open-gpu-kernel-modules/src/nvidia/arch/nvalloc/common/inc/hopper/
+ *   gh100/dev_ram.h
+ *   Function: kfifoChannelInstBuildHopper() or equivalent
+ */
+
+/* Forward declaration — bar0_write is defined in lithos_main.c */
+extern void bar0_write_fn(void __iomem *bar0, uint32_t off, uint32_t val);
+
+static inline void bar0_write_ch(void __iomem *bar0, uint32_t off, uint32_t val)
+{
+    iowrite32(val, bar0 + off);
+}
+
+static inline uint32_t bar0_read_ch(void __iomem *bar0, uint32_t off)
+{
+    return ioread32(bar0 + off);
+}
+
+/* -----------------------------------------------------------------------
+ * Allocate a free channel slot
+ * ----------------------------------------------------------------------- */
+
+static int alloc_channel_id(struct lithos_device *ldev)
+{
+    unsigned long flags;
+    int i;
+
+    spin_lock_irqsave(&ldev->chan_lock, flags);
+    for (i = 0; i < LITHOS_MAX_CHANNELS; i++) {
+        if (!ldev->channels[i].valid) {
+            ldev->channels[i].valid = true;
+            spin_unlock_irqrestore(&ldev->chan_lock, flags);
+            return i;
+        }
+    }
+    spin_unlock_irqrestore(&ldev->chan_lock, flags);
+    return -ENOSPC;
+}
+
+/* -----------------------------------------------------------------------
+ * lithos_create_channel — allocate GPFIFO and register channel
+ * ----------------------------------------------------------------------- */
+
+int lithos_create_channel(struct lithos_device *ldev,
+                           struct lithos_channel *out)
+{
+    struct lithos_chan *ch;
+    void              *gpfifo_cpu;
+    dma_addr_t         gpfifo_dma;
+    int                chid;
+
+    chid = alloc_channel_id(ldev);
+    if (chid < 0) {
+        pr_err("lithos/channel: no free channel slots\n");
+        return -ENOSPC;
+    }
+
+    ch = &ldev->channels[chid];
+
+    /*
+     * Allocate the GPFIFO ring.
+     *
+     * The ring must be GPU-visible.  On GH200 with ATS the physical address
+     * of a kernel allocation IS the GPU VA — no explicit DMA mapping needed.
+     *
+     * We use dma_alloc_coherent so the allocation is:
+     *   - physically contiguous
+     *   - cache-coherent from both CPU and GPU perspectives
+     *   - below the 4 GB DMA boundary (safe for 32-bit GPU VA fields)
+     *
+     * dma_alloc_coherent on ARM64 with ATS returns a CPU VA whose PA is
+     * directly usable as a GPU VA (the GPU MMU identity-maps system memory
+     * through C2C on GH200).
+     */
+    gpfifo_cpu = dma_alloc_coherent(&ldev->pdev->dev,
+                                     LITHOS_GPFIFO_SIZE,
+                                     &gpfifo_dma,
+                                     GFP_KERNEL | __GFP_ZERO);
+    if (!gpfifo_cpu) {
+        pr_err("lithos/channel: dma_alloc_coherent failed for GPFIFO "
+               "(size=%u)\n", LITHOS_GPFIFO_SIZE);
+        ch->valid = false;
+        return -ENOMEM;
+    }
+
+    ch->gpfifo_cpu   = gpfifo_cpu;
+    ch->gpfifo_phys  = (uint64_t)gpfifo_dma;
+    ch->gpfifo_gpu_va = (uint64_t)gpfifo_dma;  /* ATS: PA == GPU VA */
+    ch->gpfifo_put   = 0;
+
+    pr_info("lithos/channel: ch%d GPFIFO cpu=%px phys=0x%llx entries=%d\n",
+            chid, gpfifo_cpu,
+            (unsigned long long)ch->gpfifo_phys,
+            LITHOS_GPFIFO_ENTRIES);
+
+    /*
+     * Hardware channel registration.
+     *
+     * On Hopper (GH100), the FIFO engine is managed by GSP firmware.
+     * Direct MMIO channel allocation (writing instance block addresses
+     * to PFIFO registers) is NOT possible without GSP — the hardware
+     * faults if the CPU touches PFIFO registers that GSP owns.
+     *
+     * The correct flow (which lithos_init.c must implement) is:
+     *
+     *   1. GSP is already running (loaded by lithos_init.c).
+     *   2. Send GSP RPC: NV_RM_RPC_ALLOC_OBJECT with class=0xC86F
+     *      (HOPPER_CHANNEL_GPFIFO_A) and the GPFIFO base + entries.
+     *      Source: open-gpu-kernel-modules/src/nvidia/src/kernel/gpu/
+     *              fifo/kernel_channel.c:kchannelAlloc()
+     *   3. GSP responds with the assigned channel ID.
+     *   4. GSP also configures the USERD aperture for this channel.
+     *
+     * TODO: implement the GSP RPC path.  Key source files:
+     *   open-gpu-kernel-modules/src/nvidia/src/kernel/gpu/gsp/
+     *   kernel_gsp.c                    — gspRpcSendMessage / gspRpcRecv
+     *   src/nvidia/interface/deprecated/
+     *   rmapi_deprecated_allocobject.c  — NvRmAlloc dispatch
+     *   src/nvidia/arch/nvalloc/unix/src/
+     *   escape.c:RmAllocObject()
+     *
+     * For now: we register the channel in our software table and document
+     * the MMIO steps that would be used on a pre-GSP Ampere/Turing GPU.
+     * These steps are BLOCKED on Hopper without GSP.
+     */
+
+    /*
+     * ---- PRE-GSP MMIO PATH (Turing/Ampere, NOT valid on Hopper) ----
+     *
+     * Step 1: Write channel instance block base to PFIFO.
+     *   The instance block is a 4 KB page describing the channel.
+     *   On Turing/Ampere it lives in vidmem and is addressed via
+     *   NV_PFIFO_CHANNEL_INST_{LO,HI} registers.
+     *
+     *   bar0_write_ch(ldev->bar0, 0x002634 + chid*8,      // CHANNEL_INST_LO
+     *                 (uint32_t)(gpfifo_dma & 0xfffff000) | 0x1);
+     *   bar0_write_ch(ldev->bar0, 0x002634 + chid*8 + 4,  // CHANNEL_INST_HI
+     *                 (uint32_t)(gpfifo_dma >> 32));
+     *
+     *   TODO: Verify offsets for GH100 from:
+     *   gh100/dev_fifo.h NV_PFIFO_CHANNEL_INST offset
+     *
+     * Step 2: Enable the channel.
+     *   bar0_write_ch(ldev->bar0, NV_PFIFO_CHANNEL_ENABLE,
+     *                 bar0_read_ch(ldev->bar0, NV_PFIFO_CHANNEL_ENABLE) | BIT(chid));
+     *
+     *   TODO: GH100 channel enable register:
+     *   gh100/dev_fifo.h NV_PFIFO_PBDMA_CHANNEL_LOAD
+     *
+     * Step 3: Submit channel to runlist.
+     *   Construct a runlist entry (8 bytes: channel ID + type bits),
+     *   write to PFIFO_RUNLIST_BASE and toggle PFIFO_RUNLIST to reload.
+     *   TODO: Runlist entry format for GH100:
+     *   src/nvidia/arch/nvalloc/common/inc/hopper/gh100/dev_pbdma.h
+     * ---- END PRE-GSP PATH ----
+     */
+
+    pr_warn("lithos/channel: ch%d hardware registration via GSP RPC is "
+            "NOT YET IMPLEMENTED — channel is software-only\n", chid);
+    pr_warn("lithos/channel: see TODO in lithos_channel.c for GSP RPC path\n");
+
+    out->gpfifo_gpu_va  = ch->gpfifo_gpu_va;
+    out->gpfifo_entries = LITHOS_GPFIFO_ENTRIES;
+    out->channel_id     = (uint32_t)chid;
+
+    return 0;
+}
+
+/*
+ * lithos_destroy_channel — release a channel's resources
+ */
+void lithos_destroy_channel(struct lithos_device *ldev, int chid)
+{
+    struct lithos_chan *ch;
+
+    if (chid < 0 || chid >= LITHOS_MAX_CHANNELS)
+        return;
+
+    ch = &ldev->channels[chid];
+
+    if (!ch->valid)
+        return;
+
+    if (ch->gpfifo_cpu) {
+        dma_free_coherent(&ldev->pdev->dev,
+                          LITHOS_GPFIFO_SIZE,
+                          ch->gpfifo_cpu,
+                          (dma_addr_t)ch->gpfifo_phys);
+        ch->gpfifo_cpu   = NULL;
+        ch->gpfifo_phys  = 0;
+        ch->gpfifo_gpu_va = 0;
+    }
+
+    ch->valid = false;
+    pr_info("lithos/channel: ch%d destroyed\n", chid);
+}

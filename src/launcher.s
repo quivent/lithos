@@ -494,6 +494,9 @@ _start:
     // ---- Allocate activation buffers via mmap ----
     bl      alloc_buffers
 
+    // ---- Precompute RoPE cos/sin tables (CPU, one-time at startup) ----
+    bl      precompute_rope_tables
+
     // ---- Load and mmap model weights ----
     adrp    x1, msg_weights
     add     x1, x1, :lo12:msg_weights
@@ -862,6 +865,9 @@ decode_one_token:
 .do_full_attention:
     // ---- Full attention path (RoPE required) ----
     bl      launch_rope
+    mov     x0, #15; bl debug_sync_tag
+    // ---- Write K and V into KV cache at current seq_pos ----
+    bl      launch_kv_cache_write
     mov     x0, #15; bl debug_sync_tag
     bl      launch_attention
     mov     x0, #16; bl debug_sync_tag
@@ -1663,14 +1669,16 @@ launch_proj_fa_qkv_parallel:
     ldr     x9, [sp, #0]            // reload act_buf_a from stack snap (x20 = proj_state ptr)
     str     x9, [x1, #16]
 .pqkv_k_in_done:
-    // K output: other act buffer (serial path writes K after Q to same "other" buf region)
-    // K output offset into other buf = Q_N * DTYPE_BYTES = 6144 * 2 = 12288 bytes past Q output
+    // K output: other act buffer at f32 offset past Q
+    // K output offset = Q_N * sizeof(f32) = 6144 * 4 = 24576 bytes
     cbz     x27, .pqkv_k_out_b
     ldr     x3, [sp, #0]            // reload act_buf_a
-    add     x3, x3, #12288          // act_buf_a + Q_output_size
+    movz    x9, #24576
+    add     x3, x3, x9              // act_buf_a + 24576
     b       .pqkv_k_out_done
 .pqkv_k_out_b:
-    add     x3, x21, #12288         // act_buf_b + Q_output_size
+    movz    x9, #24576
+    add     x3, x21, x9             // act_buf_b + 24576
 .pqkv_k_out_done:
     str     x3, [x1, #24]
     movz    w9, #1024
@@ -1737,15 +1745,15 @@ launch_proj_fa_qkv_parallel:
     ldr     x9, [sp, #0]            // reload act_buf_a from stack snap (x20 = proj_state ptr)
     str     x9, [x1, #16]
 .pqkv_v_in_done:
-    // V output: other buf + Q_N*2 + K_N*2 = 12288 + 2048 = 14336 bytes
+    // V output: other buf + Q_N*4 + K_N*4 = 24576 + 4096 = 28672 bytes
     cbz     x27, .pqkv_v_out_b
     ldr     x3, [sp, #0]            // reload act_buf_a
-    mov     x9, #14336
-    add     x3, x3, x9              // act_buf_a + V_output_offset
+    movz    x9, #28672
+    add     x3, x3, x9              // act_buf_a + 28672
     b       .pqkv_v_out_done
 .pqkv_v_out_b:
-    mov     x3, #14336
-    add     x3, x21, x3
+    movz    x9, #28672
+    add     x3, x21, x9
 .pqkv_v_out_done:
     str     x3, [x1, #24]
     movz    w9, #1024
@@ -2136,6 +2144,105 @@ launch_activate:
 
 .act_skip:
     ldp     x11, x12, [sp], #16
+    ldp     x29, x30, [sp], #16
+    ret
+
+// ============================================================
+// launch_kv_cache_write -- copy K and V from act buffer into KV cache
+// ============================================================
+// Called after launch_rope in full-attention layers.
+// Copies K and V from the "other" act buffer into the KV cache at
+// position seq_pos (x26).
+//
+// FA QKV buffer layout in other act buffer (f32 output):
+//   Q: offset 0,     size num_heads*head_dim*4      = 6144*4  = 24576 bytes
+//   K: offset 24576, size num_kv_heads*head_dim*4   = 1024*4  = 4096  bytes
+//   V: offset 28672, size num_kv_heads*head_dim*4   = 1024*4  = 4096  bytes
+//
+// KV cache layout (per FA layer, KV_PER_LAYER = 256MB):
+//   K half: first 128MB  [0 .. 128MB)
+//   V half: second 128MB [128MB .. 256MB)
+//   Within each half: position p at offset p * num_kv_heads * head_dim * 4
+//                                        = p * 1024 * 4 = p * 4096
+//
+// Uses cuMemcpyAsync(dst, src, bytes, stream) — 4 args on ARM64.
+// Signature: cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src,
+//                          size_t ByteCount, CUstream stream)
+//
+// Callee-saved registers used (preserved across bl cuMemcpyAsync):
+//   x19 = other act buffer pointer
+//   x20 = stream handle
+//   x21 = k_cache + write_offset  (dst for K copy)
+//   x22 = v_cache + write_offset  (dst for V copy)
+// NOTE: x21/x22 are also used by decode_one_token (act_buf_b, layer_counter
+// area), so we save/restore them.
+.align 4
+launch_kv_cache_write:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    stp     x19, x20, [sp, #-16]!
+    stp     x21, x22, [sp, #-16]!
+
+    // Compute QKV "other" act buffer pointer
+    // x27=0 -> input is act_buf_a (x20), other is act_buf_b (x21)
+    // x27=1 -> input is act_buf_b (x21), other is act_buf_a (x20)
+    // NOTE: x20/x21 are about to be overwritten; use them before saving new values
+    cbz     x27, .kvcw_other_is_b
+    mov     x19, x20                // x27=1 -> other = act_buf_a  [save before overwrite]
+    b       .kvcw_other_done
+.kvcw_other_is_b:
+    mov     x19, x21                // x27=0 -> other = act_buf_b
+.kvcw_other_done:
+    // x19 = other act buffer (callee-saved, survives bl)
+
+    // Compute fa_layer_idx * KV_PER_LAYER
+    adrp    x9, fa_layer_counter
+    add     x9, x9, :lo12:fa_layer_counter
+    ldr     x9, [x9]               // x9 = fa_layer_idx
+    movz    x10, #0x1000, lsl #16  // 0x10000000 = KV_PER_LAYER = 256MB
+    mul     x10, x9, x10           // x10 = fa_layer_idx * KV_PER_LAYER
+
+    // k_cache = kv_cache_ptr + fa_layer_idx * KV_PER_LAYER
+    adrp    x9, kv_cache_ptr
+    add     x9, x9, :lo12:kv_cache_ptr
+    ldr     x9, [x9]               // kv_cache base
+    add     x9, x9, x10            // x9 = k_cache
+
+    // write_offset = seq_pos * 4096  (= x26 * num_kv_heads*head_dim*4 = x26*4096)
+    movz    x10, #4096
+    mul     x10, x26, x10          // x10 = write_offset
+
+    // k_dst = k_cache + write_offset
+    add     x21, x9, x10           // x21 = k_dst  [callee-saved, survives bl]
+
+    // v_dst = k_dst + KV_PER_LAYER/2 = k_dst + 128MB
+    // (v_cache = k_cache + 128MB; v_dst = v_cache + write_offset = k_dst + 128MB)
+    movz    x9, #0x0800, lsl #16   // 0x08000000 = 128MB
+    add     x22, x21, x9           // x22 = v_dst = k_dst + 128MB  [callee-saved]
+
+    // Stream handle
+    adrp    x20, cuda_stream
+    add     x20, x20, :lo12:cuda_stream
+    ldr     x20, [x20]             // x20 = stream  [callee-saved]
+
+    // ---- Copy K: src = other_buf + 24576, dst = k_dst, bytes = 4096 ----
+    mov     x0, x21                // dst = k_dst
+    movz    x9, #24576
+    add     x1, x19, x9            // src = other_buf + 24576
+    mov     x2, #4096              // bytes
+    mov     x3, x20                // stream
+    bl      cuMemcpyAsync          // x9-x18 clobbered; x19-x22, x26, x27 survive
+
+    // ---- Copy V: src = other_buf + 28672, dst = v_dst, bytes = 4096 ----
+    mov     x0, x22                // dst = v_dst  [callee-saved, still valid]
+    movz    x9, #28672
+    add     x1, x19, x9            // src = other_buf + 28672  [x19 callee-saved]
+    mov     x2, #4096              // bytes
+    mov     x3, x20                // stream  [x20 callee-saved]
+    bl      cuMemcpyAsync
+
+    ldp     x21, x22, [sp], #16
+    ldp     x19, x20, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -3025,6 +3132,132 @@ alloc_buffers:
     movk    x1, #0x2800
     bl      cuMemAlloc
 
+    ldp     x29, x30, [sp], #16
+    ret
+
+// ============================================================
+// precompute_rope_tables -- fill rope_cos_table / rope_sin_table
+// ============================================================
+// Called once at startup, after alloc_buffers.
+// Allocates two buffers of MAX_SEQ_LEN * HEAD_DIM/2 * sizeof(f32) = 16MB each.
+//
+// Table layout: cos_table[p * 128 + d] = cosf(p * freq(d))
+//               sin_table[p * 128 + d] = sinf(p * freq(d))
+// where freq(d) = expf(-(float)d * ln(rope_theta) / (HEAD_DIM/2))
+//       rope_theta = 1,000,000  (Qwen-series)
+//       ln(1e6) / 128 = 0.107933676f = 0x3DDD0C55
+//
+// Register allocation:
+//   x19 = cos_table base (callee-saved)
+//   x20 = sin_table base (callee-saved)
+//   x21 = p (outer loop 0..32767, callee-saved)
+//   x22 = d (inner loop 0..127, callee-saved)
+//   x23 = byte offset (p*128+d)*4 (callee-saved, recomputed after bl calls)
+//
+// Callee-saved FP (AAPCS64: d8-d15 preserved across calls):
+//   s8 = angle = p * freq(d)  [saved across bl cosf / sinf]
+//   s9 = ln(1e6)/128 constant (0x3DDD0C55) [loaded once, stays for all iters]
+//
+// Caller-saved FP s0-s7 are freely clobbered by expf/cosf/sinf.
+.align 4
+precompute_rope_tables:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    stp     x19, x20, [sp, #-16]!
+    stp     x21, x22, [sp, #-16]!
+    stp     x23, x24, [sp, #-16]!
+    stp     d8,  d9,  [sp, #-16]!   // callee-saved FP
+
+    // ---- Allocate cos table: 16MB ----
+    mov     x0, #0
+    movz    x1, #0x0100, lsl #16    // 0x01000000 = 16MB
+    mov     x2, #PROT_RW
+    mov     x3, #MAP_PRIV_ANON
+    mvn     x4, xzr
+    mov     x5, #0
+    mov     x8, #SYS_MMAP
+    svc     #0
+    adrp    x9, rope_cos_table
+    add     x9, x9, :lo12:rope_cos_table
+    str     x0, [x9]
+    mov     x19, x0                 // x19 = cos_table base
+
+    // ---- Allocate sin table: 16MB ----
+    mov     x0, #0
+    movz    x1, #0x0100, lsl #16
+    mov     x2, #PROT_RW
+    mov     x3, #MAP_PRIV_ANON
+    mvn     x4, xzr
+    mov     x5, #0
+    mov     x8, #SYS_MMAP
+    svc     #0
+    adrp    x9, rope_sin_table
+    add     x9, x9, :lo12:rope_sin_table
+    str     x0, [x9]
+    mov     x20, x0                 // x20 = sin_table base
+
+    // ---- Load ln(1e6)/128 constant into callee-saved s9 ----
+    // ln(1,000,000) = 13.815511...  / 128 = 0.107933676...
+    // IEEE 754 single-precision: 0x3DDD0C55
+    movz    w9, #0x0C55
+    movk    w9, #0x3DDD, lsl #16
+    fmov    s9, w9                  // s9 = 0.107933676f  [callee-saved, survives bl]
+
+    // ---- Outer loop: p = 0 .. 32767 ----
+    mov     x21, #0
+.rope_p_loop:
+    movz    x0, #32768
+    cmp     x21, x0
+    b.ge    .rope_done
+
+    // ---- Inner loop: d = 0 .. 127 ----
+    mov     x22, #0
+.rope_d_loop:
+    cmp     x22, #128
+    b.ge    .rope_d_done
+
+    // freq(d) = expf(-(float)d * s9)
+    scvtf   s0, w22                 // s0 = (float)d
+    fmul    s0, s0, s9              // s0 = d * ln(1e6)/128
+    fneg    s0, s0                  // s0 = -(d * ln(1e6)/128)
+    bl      expf                    // s0 = freq(d)  [clobbers x9-x18, s0-s7]
+
+    // angle = (float)p * freq(d);  save in callee-saved s8
+    scvtf   s1, w21                 // s1 = (float)p  [x21 callee-saved]
+    fmul    s8, s1, s0              // s8 = angle  [callee-saved, survives bl]
+
+    // cosf(angle) -> store to cos_table[p*128+d]
+    fmov    s0, s8
+    bl      cosf                    // s0 = cosf(angle)  [clobbers x9-x18, s0-s7]
+    // Recompute byte offset (x9-x18 clobbered by bl; x21/x22 callee-saved)
+    mov     x23, #128
+    mul     x23, x21, x23           // x23 = p * 128
+    add     x23, x23, x22           // x23 = p*128 + d
+    lsl     x23, x23, #2            // x23 = (p*128+d) * 4
+    str     s0, [x19, x23]          // cos_table[p*128+d] = cosf
+
+    // sinf(angle) -> store to sin_table[p*128+d]
+    fmov    s0, s8                  // s8 callee-saved: still = angle
+    bl      sinf                    // s0 = sinf(angle)
+    // Recompute offset again (bl clobbers x9-x18)
+    mov     x23, #128
+    mul     x23, x21, x23
+    add     x23, x23, x22
+    lsl     x23, x23, #2
+    str     s0, [x20, x23]          // sin_table[p*128+d] = sinf
+
+    add     x22, x22, #1
+    b       .rope_d_loop
+
+.rope_d_done:
+    add     x21, x21, #1
+    b       .rope_p_loop
+
+.rope_done:
+    ldp     d8,  d9,  [sp], #16
+    ldp     x23, x24, [sp], #16
+    ldp     x21, x22, [sp], #16
+    ldp     x19, x20, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 

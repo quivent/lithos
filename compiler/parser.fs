@@ -28,11 +28,8 @@ variable li-kernels  0 li-kernels !
 variable li-hosts    0 li-hosts !
 
 \ ---- Current function name ---------------------------------------------------
-
-create li-name-buf 64 allot
-variable li-name-len  0 li-name-len !
-: li-set-name  ( addr u -- )  dup li-name-len ! li-name-buf swap move ;
-: li-name$  ( -- addr u )  li-name-buf li-name-len @ ;
+\ li-name-buf, li-name-len, li-set-name, li-name$ are defined in
+\ sass/emit-sass.fs (canonical, loaded before this file).
 
 \ ---- Symbol table: up to 64 variables ----
 \ kind: 0=input-ptr 1=output-ptr 2=local-f32 3=each-var 4=local-u32

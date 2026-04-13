@@ -123,9 +123,10 @@ variable ls-src-pos  0 ls-src-pos !
 
 \ ---- String utilities --------------------------------------------------------
 
-\ Compare two strings (reuse li-tok= pattern from lexer.fs)
+\ Compare two strings.  bootstrap compare ( a1 u1 a2 u2 -- n ) is standard;
+\ no dummy cell needed.
 : ls-str=  ( a1 u1 a2 u2 -- flag )
-  >r >r >r >r 0 r> r> r> r> compare 0= ;
+  compare 0= ;
 
 \ Check if character is a digit or minus-then-digit (for literal detection)
 : is-digit?  ( c -- flag )  dup [char] 0 >= swap [char] 9 <= and ;
@@ -212,7 +213,7 @@ variable mdo-s  variable mdo-v  variable mdo-m  variable mdo-t
   mdo-t !  mdo-m !  mdo-v !  mdo-s !   \ save tok types; stack: addr u ch
   >r 2dup r> count-leading              \ ( addr u n )
   over = 0= if 2drop 0 exit then       \ not all same char -> no match
-  drop                                  \ drop addr; stack: ( n )
+  nip                                   \ remove addr, keep u (=n); stack: ( n )
   dup 1 = if drop mdo-s @ -1 exit then
   dup 2 = if drop mdo-v @ -1 exit then
   dup 3 = if drop mdo-m @ -1 exit then
@@ -231,10 +232,12 @@ variable mdo-s  variable mdo-v  variable mdo-m  variable mdo-t
   2dup p-sum     2 ls-str= if 2drop PRIM_SUM     -1 exit then
   2dup p-times   2 ls-str= if 2drop PRIM_MUL     -1 exit then
   \ Dimensional symbol operators: repeated *, +, -, /
-  2dup [char] * PRIM_MUL PRIM_MUL_VEC PRIM_MUL_MAT PRIM_MUL_TEN match-dim-op if exit then
-  2dup [char] + PRIM_ADD PRIM_ADD_VEC PRIM_ADD_MAT PRIM_ADD_TEN match-dim-op if exit then
-  2dup [char] - PRIM_SUB PRIM_SUB_VEC PRIM_SUB_MAT 0           match-dim-op if exit then
-  2dup [char] / PRIM_DIV PRIM_DIV_VEC PRIM_DIV_MAT 0           match-dim-op if exit then
+  \ match-dim-op returns ( type true ) or ( false ).  On match, 2dup left addr u
+  \ underneath that must be cleaned before returning from match-prim.
+  2dup [char] * PRIM_MUL PRIM_MUL_VEC PRIM_MUL_MAT PRIM_MUL_TEN match-dim-op if >r 2drop r> -1 exit then
+  2dup [char] + PRIM_ADD PRIM_ADD_VEC PRIM_ADD_MAT PRIM_ADD_TEN match-dim-op if >r 2drop r> -1 exit then
+  2dup [char] - PRIM_SUB PRIM_SUB_VEC PRIM_SUB_MAT 0           match-dim-op if >r 2drop r> -1 exit then
+  2dup [char] / PRIM_DIV PRIM_DIV_VEC PRIM_DIV_MAT 0           match-dim-op if >r 2drop r> -1 exit then
   2drop 0 ;
 
 \ ---- Line parsing ------------------------------------------------------------
@@ -269,6 +272,7 @@ variable pbl-w2u   \ second word: byte length
 variable pbl-w3a   \ third word: address
 variable pbl-w3u   \ third word: byte length
 variable pbl-nw    \ number of words found (1, 2, or 3+)
+variable pbl-pt    \ scratch: prim-type saved during two-word emit
 
 \ pbl-extract-word ( off -- off' )
 \ Starting at byte offset 'off' in line-buf, skip any leading whitespace,
@@ -340,13 +344,12 @@ variable pbl-ws   variable pbl-we
   pbl-nw @ 1- 2 = if
     pbl-w1a @  pbl-w1u @  match-prim if   \ ( -- prim-type )
       \ Emit primitive token — tok-emit-raw ( type val name-addr name-len op-off -- )
-      pbl-w2a @  pbl-w2u @  op-store      \ ( prim-type op-off )
-      swap                                 \ ( op-off prim-type )
-      0                                    \ ( op-off prim-type 0=val )
-      pbl-w2a @  pbl-w2u @                 \ ( op-off prim-type 0 name-addr name-u )
-      \ tok-emit-raw wants ( type val name-addr name-len op-off )
-      \ rearrange: ( op-off prim-type 0 w2a w2u ) -> ( prim-type 0 w2a w2u op-off )
-      4 roll                               \ ( prim-type 0 w2a w2u op-off )
+      \ Build stack in exact order; use pbl-pt to avoid roll (roll not in bootstrap).
+      pbl-pt !                             \ save prim-type; stack empty
+      pbl-pt @                             \ ( prim-type )
+      0                                    \ ( prim-type 0=val )
+      pbl-w2a @  pbl-w2u @                 \ ( prim-type 0 name-addr name-u )
+      pbl-w2a @  pbl-w2u @  op-store      \ ( prim-type 0 name-addr name-u op-off )
       tok-emit-raw
       exit
     then

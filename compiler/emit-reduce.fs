@@ -8,10 +8,15 @@
 \ Public interface (reusable by emit-gemv.fs and emit-linalg.fs):
 \   emit-declare-smem      ( n-words -- smem-base )
 \   emit-warp-reduce       ( partial-reg tmp-reg -- )
-\   emit-cross-warp-reduce ( partial-reg smem-base tid-reg -- result-reg )
+\   emit-xwarp-reduce      ( partial-reg smem-base tid-reg -- result-reg )
 \   emit-full-reduce       ( array-base-reg array-len idx-reg -- result-reg )
 \   emit-isetp-ge-imm      ( pp rs1 imm -- )
 \   emit-isetp-lt-imm      ( pp rs1 imm -- )
+\
+\ NOTE: this file does NOT export a word named emit-cross-warp-reduce.
+\ emit-gemv.fs defines its own emit-cross-warp-reduce with a different
+\ signature ( partial-reg tid-reg -- ); to avoid the name collision the
+\ 3-arg version here is named emit-xwarp-reduce (private to emit-reduce.fs).
 \
 \ Load order: parser.fs must be loaded before this file (provides
 \ freg+, rreg+, preg+, shmem-size).  This file includes the SASS
@@ -95,11 +100,13 @@ variable xw-lane      variable xw-warp   variable xw-addr
 variable xw-total     variable xw-tmp    variable xw-addr2
 variable xw-result    variable xw-smreg
 
-\ emit-cross-warp-reduce ( partial-reg smem-base tid-reg -- result-reg )
+\ emit-xwarp-reduce ( partial-reg smem-base tid-reg -- result-reg )
 \ smem-base is a byte offset (immediate, not register).  tid-reg holds
 \ the thread index register.  Returns a freshly allocated register that
 \ holds the broadcast sum in every thread after the two barriers.
-: emit-cross-warp-reduce  ( partial-reg smem-base tid-reg -- result-reg )
+\ Named emit-xwarp-reduce (not emit-cross-warp-reduce) to avoid the name
+\ collision with emit-gemv.fs which defines a 2-arg void version.
+: emit-xwarp-reduce  ( partial-reg smem-base tid-reg -- result-reg )
   xw-tid !  xw-smem !  xw-partial !
 
   \ Allocate scratch registers
@@ -290,5 +297,34 @@ variable sl-pred
   rreg+ dup SR-TID-X s2r,     \ -- partial tid
   r>                           \ -- partial tid smem-offset
   swap                         \ -- partial smem-offset tid
-  emit-cross-warp-reduce       \ -- result-reg
+  emit-xwarp-reduce            \ -- result-reg
   ;
+
+\ ============================================================
+\ CROSS-THREAD REDUCTION  (the Σ primitive)
+\ ============================================================
+\ emit-Σ  ( partial-reg -- result-reg )
+\ The per-thread value in partial-reg is reduced across all threads
+\ in the block.  Each thread holds one partial sum (e.g. from a
+\ per-thread multiply in a dot product).  After this word the
+\ result register holds the total sum broadcast to every thread.
+\
+\ Steps:
+\   1. Intra-warp butterfly: partial -> warp sum in lane 0 (and all lanes)
+\   2. Cross-warp via smem: 32 warp sums -> block sum, broadcast
+
+variable emΣ-partial
+variable emΣ-tmp
+
+: emit-Σ  ( partial-reg -- result-reg )
+  emΣ-partial !                   \ save partial-reg
+  rreg+ emΣ-tmp !                 \ allocate scratch for warp shuffle (rreg, not freg: SHFL is integer-encoded)
+
+  \ Step 1: intra-warp reduce (10 instructions)
+  emΣ-partial @  emΣ-tmp @  emit-warp-reduce
+
+  \ Step 2: cross-warp reduce + broadcast
+  32 emit-declare-smem             \ ( smem-base )
+  emΣ-partial @  swap              \ ( partial smem-base )
+  rreg+ dup SR-TID-X s2r,          \ ( partial smem-base tid )
+  emit-xwarp-reduce ;              \ ( result-reg )

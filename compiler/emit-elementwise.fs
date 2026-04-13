@@ -402,6 +402,8 @@ variable patch-addr   variable patch-off
 variable evb-a    variable evb-b    variable evb-out
 variable evb-n    variable evb-step variable evb-op
 variable evb-idx  variable evb-va   variable evb-vb   variable evb-rd
+\ evb-op holds the execution token for the scalar op; stored via variable
+\ to avoid return-stack lifetime issues across nested calls.
 
 : emit-vec-binary  ( a-ptr b-ptr out-ptr n step op-xt -- )
   evb-op !  evb-step !  evb-n !
@@ -419,19 +421,19 @@ variable evb-idx  variable evb-va   variable evb-vb   variable evb-rd
 
 \ emit-mul-vec ( a-ptr b-ptr out-ptr n step -- )
 : emit-mul-vec  ( a-ptr b-ptr out-ptr n step -- )
-  ['] emit-mul  emit-vec-binary ;
+  ' emit-mul  emit-vec-binary ;
 
 \ emit-add-vec ( a-ptr b-ptr out-ptr n step -- )
 : emit-add-vec  ( a-ptr b-ptr out-ptr n step -- )
-  ['] emit-add  emit-vec-binary ;
+  ' emit-add  emit-vec-binary ;
 
 \ emit-sub-vec ( a-ptr b-ptr out-ptr n step -- )
 : emit-sub-vec  ( a-ptr b-ptr out-ptr n step -- )
-  ['] emit-sub  emit-vec-binary ;
+  ' emit-sub  emit-vec-binary ;
 
 \ emit-div-vec ( a-ptr b-ptr out-ptr n step -- )
 : emit-div-vec  ( a-ptr b-ptr out-ptr n step -- )
-  ['] emit-div  emit-vec-binary ;
+  ' emit-div  emit-vec-binary ;
 
 \ ============================================================
 \ DIMENSIONAL MATRIX EMITTERS  (*** / +++ / --- / ///)
@@ -467,13 +469,14 @@ variable slx-idx    variable slx-bound  variable slx-bra
 
 variable ema-a    variable ema-b    variable ema-out
 variable ema-M    variable ema-N    variable ema-step
+variable ema-op   \ execution token of scalar op — stored here, not on R-stack
 variable ema-i    variable ema-j
 variable ema-va   variable ema-vb   variable ema-rd
 variable ema-row-off variable ema-addr
 
 \ emit-mat-binary ( a-ptr b-ptr out-ptr M N step op-xt -- )
 : emit-mat-binary  ( a-ptr b-ptr out-ptr M N step op-xt -- )
-  ema-step swap  >r   \ save op-xt on R-stack
+  ema-op !                \ save op-xt in variable (safe across nested calls)
   ema-step !  ema-N !  ema-M !
   ema-out !  ema-b !  ema-a !
 
@@ -496,7 +499,7 @@ variable ema-row-off variable ema-addr
       ema-b @  ema-j @  emit-array-load  ema-vb !
 
       \ Apply scalar op
-      ema-va @  ema-vb @  r@ execute  ema-rd !
+      ema-va @  ema-vb @  ema-op @ execute  ema-rd !
 
       \ Compute flat index: i*N + j into a temp register
       rreg+ ema-row-off !
@@ -511,25 +514,23 @@ variable ema-row-off variable ema-addr
 
     restore-stride-state            \ restore outer loop vars
 
-  emit-stride-end                   \ end outer loop
-
-  r> drop ;                         \ discard saved op-xt
+  emit-stride-end ;                  \ end outer loop (op-xt in ema-op — no R-stack cleanup)
 
 \ emit-mul-mat ( a-ptr b-ptr out-ptr M N step -- )  — outer product
 : emit-mul-mat  ( a-ptr b-ptr out-ptr M N step -- )
-  ['] emit-mul  emit-mat-binary ;
+  ' emit-mul  emit-mat-binary ;
 
 \ emit-add-mat ( a-ptr b-ptr out-ptr M N step -- )
 : emit-add-mat  ( a-ptr b-ptr out-ptr M N step -- )
-  ['] emit-add  emit-mat-binary ;
+  ' emit-add  emit-mat-binary ;
 
 \ emit-sub-mat ( a-ptr b-ptr out-ptr M N step -- )
 : emit-sub-mat  ( a-ptr b-ptr out-ptr M N step -- )
-  ['] emit-sub  emit-mat-binary ;
+  ' emit-sub  emit-mat-binary ;
 
 \ emit-div-mat ( a-ptr b-ptr out-ptr M N step -- )
 : emit-div-mat  ( a-ptr b-ptr out-ptr M N step -- )
-  ['] emit-div  emit-mat-binary ;
+  ' emit-div  emit-mat-binary ;
 
 \ ============================================================
 \ TENSOR EMITTERS  (**** / ++++)
@@ -543,10 +544,10 @@ variable ema-row-off variable ema-addr
 \ sequence. Full three-loop specialisation is left for a later pass.
 
 : emit-mul-ten  ( a-ptr b-ptr out-ptr M N step -- )
-  ['] emit-mul  emit-mat-binary ;
+  ' emit-mul  emit-mat-binary ;
 
 : emit-add-ten  ( a-ptr b-ptr out-ptr M N step -- )
-  ['] emit-add  emit-mat-binary ;
+  ' emit-add  emit-mat-binary ;
 
 \ ============================================================
 \ END
