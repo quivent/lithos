@@ -107,9 +107,9 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   </div>
   <div class="ov-card">
     <h3>Compiler</h3>
-    <div class="bar"><div class="fill partial" style="width:70%"></div></div>
-    <div class="pct partial">65%</div>
-    <div class="note">Being rewritten to pure Lithos syntax (no =, no fn, no ->).</div>
+    <div class="bar"><div class="fill green" style="width:100%"></div></div>
+    <div class="pct done">Done</div>
+    <div class="note">Pure Lithos syntax. Zero =, fn, ->, load_u*, syscall.</div>
   </div>
   <div class="ov-card">
     <h3>Bootstrap</h3>
@@ -141,8 +141,8 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
 <div class="blocker-banner">
   <h2>Critical Blockers &mdash; in order</h2>
   <ol>
-    <li><strong>Bootstrap parser</strong> &mdash; compositions (<code>name args :</code>) + bindings (<code>name expr</code>) &mdash; NO <code>=</code> <span class="dim">(worker dispatched)</span></li>
-    <li><strong>compiler.ls rewrite</strong> &mdash; pure Lithos syntax: remove =, fn, -&gt;, load_u*, syscall <span class="dim">(worker dispatched)</span></li>
+    <li><strong>Bootstrap parser</strong> &mdash; compositions + bindings &mdash; 4 parallel workers on separate .s files <span class="dim">(running)</span></li>
+    <li><del>compiler.ls rewrite</del> <span style="color:var(--green)">DONE</span> &mdash; pure Lithos, zero old syntax</li>
     <li><del>FSP boot wiring</del> <span style="color:var(--green)">DONE</span></li>
     <li><del>register_count probe</del> <span style="color:var(--green)">DONE</span> &mdash; in 384-byte Shader Program Descriptor at offset 0x094</li>
     <li><strong>First compile</strong> &mdash; bootstrap parses compiler.ls &rarr; lithos-stage1</li>
@@ -164,8 +164,8 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Smoke test: <code>var x 42</code> &rarr; valid ARM64 ELF</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">24 new ARM64 emission helpers, verified against objdump</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Expression parsing works: <code>var y x + 1</code> &rarr; valid ELF</div></div>
-  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">Composition parsing: <code>name args :</code> &rarr; crashes at line 1196 <span class="blocking">WORKER DISPATCHED</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Binding syntax: <code>name expr</code> (no = sign) <span class="blocking">BLOCKING</span></div></div>
+  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">4 parallel workers: expr-eval.s, compose.s, control.s, parser rewrite <span class="blocking">RUNNING</span></div></div>
+  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Compositions (<code>name args :</code>) + bindings (<code>name expr</code>) <span class="blocking">BLOCKING</span></div></div>
   <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>compiler.ls</code> parses cleanly end-to-end <span class="blocking">BLOCKING</span></div></div>
 </div>
 </section>
@@ -182,7 +182,7 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">ELF writer (9-section cubin ELF64, cooperative attributes)</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Parser: recursive descent, dual backend</div></div>
   <div class="item"><div class="icon done">&#10003;</div><div class="desc">Megakernel linker: 833 lines, forward + recurrence, grid-sync</div></div>
-  <div class="item"><div class="icon wip">&#9679;</div><div class="desc">Rewrite to pure Lithos: remove <code>=</code>, <code>fn</code>, <code>-&gt;</code>, <code>load_u*</code>, <code>syscall</code> <span class="blocking">WORKER DISPATCHED</span></div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Rewritten to pure Lithos: 1174 bindings, 75 memory ops, 38 trap. Zero old syntax.</div></div>
 </div>
 </section>
 

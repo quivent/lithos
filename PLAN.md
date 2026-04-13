@@ -11,8 +11,8 @@ All sources use `.ls` extension. Zero Forth. Zero Python. Zero CUDA runtime.
 
 ```
 FOUNDATIONS   [████████] complete   language, kernels, grammar, dicts, docs
-COMPILER      [█████░░░] being rewritten to pure Lithos syntax (no =, no fn, no ->)
-BOOTSTRAP     [█████░░░] expressions work, needs compositions + bindings (no = in language)
+COMPILER      [████████] DONE — rewritten to pure Lithos syntax (zero =, fn, ->, load_u, syscall)
+BOOTSTRAP     [█████░░░] expressions work, 4 parallel parser workers running (expr, compose, control, rewrite)
 RUNTIME       [████████] all .ls written, register_count found (SPD 0x094), pushbuffer needs SPD
 HARDWARE      [██████░░] GSP+FSP wired, cbuf0 probe DONE, QMD builder untested
 INTEGRATION   [██░░░░░░] launcher.ls written (162 lines), not compiled, nothing executes end-to-end
@@ -298,7 +298,7 @@ Items previously listed as gaps that are actually resolved:
 ## CRITICAL BLOCKERS (in order)
 
 1. **Bootstrap parser** — compositions (`name args :`) + bindings (`name expr`) — NO `=`
-2. **compiler.ls rewrite** — pure Lithos syntax (worker dispatched, removes =, fn, ->, load_u*, syscall)
+2. ~~**compiler.ls rewrite**~~ — DONE. Pure Lithos syntax. Zero =, fn, ->, load_u*, syscall.
 3. ~~**FSP boot wiring**~~ — DONE (wired at step 6, BCR/FSP order fixed)
 4. ~~**register_count probe**~~ — DONE. Not in cbuf0 or QMD. In 384-byte Shader Program Descriptor at SPD offset 0x094
 5. **First compile**: bootstrap parses compiler.ls → lithos-stage1
