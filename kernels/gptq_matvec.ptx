@@ -109,7 +109,7 @@ K_LOOP:
     // nibble 0
     and.b32         %r15, %r11, 0xF;
     cvt.rn.f32.u32  %f2, %r15;
-    sub.f32         %f2, %f2, 0f40E00000;
+    sub.f32         %f2, %f2, 0f41000000;
     mul.f32         %f2, %f2, %f1;
     ld.global.f32   %f3, [%rd15];
     fma.rn.f32      %f0, %f2, %f3, %f0;
@@ -118,7 +118,7 @@ K_LOOP:
     shr.b32         %r16, %r11, 4;
     and.b32         %r16, %r16, 0xF;
     cvt.rn.f32.u32  %f2, %r16;
-    sub.f32         %f2, %f2, 0f40E00000;
+    sub.f32         %f2, %f2, 0f41000000;
     mul.f32         %f2, %f2, %f1;
     ld.global.f32   %f3, [%rd15+4];
     fma.rn.f32      %f0, %f2, %f3, %f0;
@@ -127,7 +127,7 @@ K_LOOP:
     shr.b32         %r17, %r11, 8;
     and.b32         %r17, %r17, 0xF;
     cvt.rn.f32.u32  %f2, %r17;
-    sub.f32         %f2, %f2, 0f40E00000;
+    sub.f32         %f2, %f2, 0f41000000;
     mul.f32         %f2, %f2, %f1;
     ld.global.f32   %f3, [%rd15+8];
     fma.rn.f32      %f0, %f2, %f3, %f0;
@@ -136,7 +136,7 @@ K_LOOP:
     shr.b32         %r18, %r11, 12;
     and.b32         %r18, %r18, 0xF;
     cvt.rn.f32.u32  %f2, %r18;
-    sub.f32         %f2, %f2, 0f40E00000;
+    sub.f32         %f2, %f2, 0f41000000;
     mul.f32         %f2, %f2, %f1;
     ld.global.f32   %f3, [%rd15+12];
     fma.rn.f32      %f0, %f2, %f3, %f0;
@@ -145,7 +145,7 @@ K_LOOP:
     shr.b32         %r19, %r11, 16;
     and.b32         %r19, %r19, 0xF;
     cvt.rn.f32.u32  %f2, %r19;
-    sub.f32         %f2, %f2, 0f40E00000;
+    sub.f32         %f2, %f2, 0f41000000;
     mul.f32         %f2, %f2, %f1;
     ld.global.f32   %f3, [%rd15+16];
     fma.rn.f32      %f0, %f2, %f3, %f0;
@@ -154,7 +154,7 @@ K_LOOP:
     shr.b32         %r20, %r11, 20;
     and.b32         %r20, %r20, 0xF;
     cvt.rn.f32.u32  %f2, %r20;
-    sub.f32         %f2, %f2, 0f40E00000;
+    sub.f32         %f2, %f2, 0f41000000;
     mul.f32         %f2, %f2, %f1;
     ld.global.f32   %f3, [%rd15+20];
     fma.rn.f32      %f0, %f2, %f3, %f0;
@@ -163,7 +163,7 @@ K_LOOP:
     shr.b32         %r21, %r11, 24;
     and.b32         %r21, %r21, 0xF;
     cvt.rn.f32.u32  %f2, %r21;
-    sub.f32         %f2, %f2, 0f40E00000;
+    sub.f32         %f2, %f2, 0f41000000;
     mul.f32         %f2, %f2, %f1;
     ld.global.f32   %f3, [%rd15+24];
     fma.rn.f32      %f0, %f2, %f3, %f0;
@@ -172,7 +172,7 @@ K_LOOP:
     shr.b32         %r22, %r11, 28;
     and.b32         %r22, %r22, 0xF;
     cvt.rn.f32.u32  %f2, %r22;
-    sub.f32         %f2, %f2, 0f40E00000;
+    sub.f32         %f2, %f2, 0f41000000;
     mul.f32         %f2, %f2, %f1;
     ld.global.f32   %f3, [%rd15+28];
     fma.rn.f32      %f0, %f2, %f3, %f0;

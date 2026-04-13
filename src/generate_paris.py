@@ -35,7 +35,7 @@ CACHE_DIR = "/tmp/lithos-cache/3644e4d3fa48efc4"
 HIDDEN_DIM = 5120
 INTERMEDIATE_SIZE = 17408
 GROUP_SIZE = 128
-ZERO_POINT = 7
+ZERO_POINT = 8
 NUM_LAYERS = 64
 
 # DeltaNet dimensions
@@ -401,9 +401,10 @@ class PrefillEngine:
         # Apply output gate: attn_output = attn_output * sigmoid(gate)
         gate_sigmoid = 1.0 / (1.0 + np.exp(-gate_flat.clip(-80, 80)))
         if position == 4:  # last token debug
-            print(f"    L{layer_idx} attn: attended_norm={np.linalg.norm(attended):.4f} "
-                  f"gate_mean={gate_sigmoid.mean():.4f} gate_min={gate_sigmoid.min():.4f} "
-                  f"gate_max={gate_sigmoid.max():.4f}")
+            gated = attended * gate_sigmoid
+            print(f"    L{layer_idx} attn_norm={np.linalg.norm(attended):.2f} "
+                  f"gated_norm={np.linalg.norm(gated):.2f} "
+                  f"gate_mean={gate_sigmoid.mean():.4f}")
         attended = attended * gate_sigmoid  # [6144] element-wise
 
         # O projection: 6144 -> 5120
