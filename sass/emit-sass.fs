@@ -642,6 +642,275 @@ $27 constant SR-CTAID-Z
   16 lshift $7b1d or
   ctrl-bar sinst, ;
 
+\ ============================================================
+\ MEMBAR ENCODERS  (used by grid-sync acquire/release protocol)
+\ ============================================================
+
+\ MEMBAR.SC.GPU  — GPU-scope store fence; all prior stores become visible
+\   across all SMs before any subsequent load/store on this thread.
+\ Opcode 0x7992; ctrl[13:12]=0x2 selects .GPU scope.
+\ Verified: inst=0x0000000000007992 ctrl=0x000fec0000002000
+\ (from probe_7.sass MEMBAR.SC.GPU line)
+: membar-gpu,  ( -- )
+  $0000000000007992 $000fec0000002000 sinst, ;
+
+\ MEMBAR.SC.SYS  — system-scope fence (NVLink-coherent; for CPU-GPU sync)
+\ Opcode 0x7992; ctrl[13:12]=0x3 selects .SYS scope.
+\ Verified: inst=0x0000000000007992 ctrl=0x000fec0000003000
+: membar-sys,  ( -- )
+  $0000000000007992 $000fec0000003000 sinst, ;
+
+\ ============================================================
+\ ATOM.E.ADD — global atomic add u32
+\ ============================================================
+\
+\ ATOMG.E.ADD u32 — atomically adds Rs to the 32-bit word at [Ra],
+\ returns the old value in Rd.  Use Rd=RZ (0xFF) to discard the return.
+\
+\ Opcode: 0x98b (bits[11:0]) — UNVERIFIED stub.
+\ This value is derived from:
+\   1. ENCODING.md opcode table: 0x981=LDG, 0x986=STG, 0x988=STS, 0x984=LDS,
+\      0x992=MEMBAR, 0x98f=CCTL — the 0x98x block is the global/shared memory
+\      and sync cluster. ATOM global operations fit here.
+\   2. cublas-catalog/README.md: ATOMG.E.MAX.S32.STRONG.GPU is the known
+\      Hopper global atomic instruction family (ATOMG = atomic global).
+\   3. ATOMG.E.ADD and ATOMG.E.MAX differ in a sub-opcode modifier bit,
+\      not the base opcode (analogous to how MUFU sub-function lives in ctrl).
+\ STATUS: MUST verify against nvdisasm output of:
+\   .version 8.0 / .target sm_90 / atom.global.add.u32 rd, [ra], 1;
+\ before running on real hardware.  Correct binary will arrive from
+\ probe_atom.sass once that probe is built.
+\
+\ ctrl: stall=15 yield=1 wbar=7 rbar=7 extra41=0x00100000
+\   (long-latency global atomic; STRONG.GPU semantic sets a scope bit)
+\   extra41=0x00100000: bit 20 is the STRONG.GPU scope modifier
+\   (derived from cuBLAS ATOMG.E.MAX.S32.STRONG.GPU ctrl word pattern)
+\ Computed: (15<<41)|(1<<45)|(7<<46)|(7<<49)|0x00100000
+\         = 0x001ffc0000100000
+\ NOTE: the extra41 value 0x00100000 is speculative; verify from disassembly.
+
+: ctrl-atom   15 1 7 7 0 0 $00100000   make-ctrl ;
+
+$798b constant OP-ATOM-ADD   \ ATOMG.E.ADD u32 global — UNVERIFIED (see above)
+
+\ atom-add,  ( rd ra rs -- )
+\ ATOM.E.ADD Rd, [Ra], Rs
+\ Rd = old value returned (use RZ=0xFF to discard); Ra = 64-bit address reg pair;
+\ Rs = 32-bit value to add.
+\ STUB: opcode 0x798b is unverified. Interface is correct; binary needs empirical check.
+: atom-add,  ( rd ra rs -- )
+  32 lshift >r              \ rs -> bits[39:32]
+  24 lshift >r              \ ra -> bits[31:24]
+  track-rd 16 lshift        \ rd -> bits[23:16]
+  OP-ATOM-ADD or r> or r> or
+  ctrl-atom sinst, ;
+
+\ ============================================================
+\ LD-ACQUIRE / ST-RELEASE via MEMBAR+LDG / MEMBAR+STG protocol
+\ ============================================================
+\
+\ Hopper has no single-instruction acquire-load or release-store.
+\ The canonical pattern (what ptxas emits for ld.acquire.gpu / st.release.gpu
+\ on sm_90, confirmed by probe_7.sass and CUDA cooperative groups source):
+\
+\   Release store:  MEMBAR.SC.GPU  then  STG.E [Ra], Rs
+\   Acquire load:   LDG.E Rd, [Ra]  then  MEMBAR.SC.GPU
+\
+\ stg-release,  ( ra rs -- )
+\ Store Rs to [Ra] with GPU-scope release semantics.
+: stg-release,  ( ra rs -- )
+  membar-gpu,   \ fence: all prior stores ordered before this one
+  stg, ;        \ STG.E [Ra], Rs
+
+\ ldg-acquire,  ( rd ra -- )
+\ Load [Ra] into Rd with GPU-scope acquire semantics.
+: ldg-acquire,  ( rd ra -- )
+  ldg,          \ LDG.E Rd, [Ra]
+  membar-gpu, ; \ fence: all subsequent ops ordered after this load
+
+\ ============================================================
+\ COOPERATIVE GRID-SYNC — software barrier across all CTAs on the grid
+\ ============================================================
+\
+\ Background: the megakernel runs all N DeltaNet layers in one GPU kernel
+\ launch.  Between layers, every thread block must synchronize so that layer
+\ L+1 doesn't read state written by layer L before all CTAs have written it.
+\ BAR.SYNC covers intra-CTA threads; this covers all CTAs grid-wide.
+\
+\ Protocol (identical to CUDA cooperative groups this_grid().sync()):
+\
+\   Thread 0 of each CTA:
+\     (1) Atomically increment sync_counter.  Save old value.
+\     (2) If old == grid_size-1  (this is the last CTA to arrive):
+\           MEMBAR.SC.GPU  +  STG [done_flag], 1   (release write)
+\         Else:
+\           Spin: LDG [done_flag] + MEMBAR.SC.GPU
+\                 loop until value != 0
+\   All threads: BAR.SYNC 0  (CTA barrier to broadcast "done" to all warps)
+\
+\ Instruction sequence emitted (13 fixed instructions + 1 reg-alloc helper = 14 ops):
+\   (a) S2R    gs-tid, SR_TID.X          — read thread ID
+\   (b) MOV    gs-exp, grid_size-1       — load expected old value
+\   (c) MOV    pp2-tmp, 1                — helper for ISETP immediate
+\   (d) ISETP.GE pp2, gs-tid, 1         — pp2 = (tid >= 1), i.e. non-thread-0
+\   (e) @pp2 BRA +208                   — non-thread-0 threads skip to BAR.SYNC
+\   (f) MOV    atom-one, 1              — addend for atomic
+\   (g) ATOM.E.ADD gs-old,[gs-ctr],1    — arrive; gs-old = previous count
+\   (h) ISETP.GE gs-pp, gs-old, gs-exp — gs-pp = (old >= grid_size-1)
+\   (i) @!gs-pp BRA +64                 — if not last CTA, jump to spin loop
+\   (j) MEMBAR.SC.GPU                   — release fence (last CTA path)
+\   (k) MOV    flag-one, 1              — value to store
+\   (l) STG.E  [gs-flag], flag-one     — release write: done!
+\   (m) BRA +80                         — skip spin loop to BAR.SYNC
+\   spin_top:
+\   (n) LDG.E  gs-poll, [gs-flag]      — poll: read done flag
+\   (o) MEMBAR.SC.GPU                   — acquire fence
+\   (p) MOV    poll-cmp, 1              — comparand for ISETP immediate
+\   (q) ISETP.GE pp2, gs-poll, 1       — pp2 = (flag >= 1), i.e. done
+\   (r) @!pp2 BRA spin_top (-80)       — loop back if not done yet
+\   skip_to_barsync:
+\   (s) BAR.SYNC 0                      — CTA-wide barrier; all warps sync
+\
+\ Branch offset calculation (each instruction = 16 bytes, offset = signed
+\ bytes from the instruction FOLLOWING the branch):
+\   Absolute positions (relative to start of emit-grid-sync output):
+\     (a)=0  (b)=16  (c)=32  (d)=48  (e)=64  (f)=80  (g)=96  (h)=112
+\     (i)=128  (j)=144  (k)=160  (l)=176  (m)=192
+\     (n)=208  (o)=224  (p)=240  (q)=256  (r)=272  (s)=288
+\   (e) NEXT=(f)=80,  target=(s)=288: offset = 288-80  = +208
+\   (i) NEXT=(j)=144, target=(n)=208: offset = 208-144 = +64
+\   (m) NEXT=(n)=208, target=(s)=288: offset = 288-208 = +80
+\   (r) NEXT=(s)=288, target=(n)=208: offset = 208-288 = -80
+\
+\ Stack effect: ( sync-counter-addr-reg done-flag-addr-reg grid-size -- )
+\   sync-counter-addr-reg : register (or reg pair) holding GPU VA of u32 counter
+\   done-flag-addr-reg    : register (or reg pair) holding GPU VA of u32 flag
+\   grid-size             : compile-time constant = total CTA count
+\ All three arguments consumed.  No value returned.
+
+variable gs-ctr   variable gs-flag  variable gs-grid
+variable gs-old   variable gs-exp   variable gs-poll
+variable gs-pp    variable gs-pp2   variable gs-tid
+
+: emit-grid-sync  ( sync-counter-addr-reg done-flag-addr-reg grid-size -- )
+  gs-grid !  gs-flag !  gs-ctr !
+
+  \ Allocate scratch registers and predicates
+  rreg+ gs-old !            \ ATOM return: old counter value
+  rreg+ gs-exp !            \ expected value = grid_size - 1
+  rreg+ gs-poll !           \ spin-poll register
+  preg+ gs-pp !             \ predicate: is last CTA? (old >= grid_size-1)
+  preg+ gs-pp2 !            \ predicate: non-thread-0 / spin-poll exit
+  rreg+ gs-tid !            \ thread ID in CTA
+
+  \ (a) S2R gs-tid, SR_TID.X
+  gs-tid @  SR-TID-X  s2r,
+
+  \ (b) MOV gs-exp, grid_size-1
+  gs-exp @  gs-grid @ 1-  mov-imm,
+
+  \ (c)+(d) ISETP.GE pp2, gs-tid, 1  via emit-isetp-ge-imm helper pattern:
+  \   MOV tmp, 1  then  ISETP.GE pp2, gs-tid, tmp
+  rreg+ dup >r  1  mov-imm,            \ (c) MOV tmp, 1
+  gs-pp2 @  gs-tid @  r>  isetp-ge,   \ (d) ISETP.GE pp2, gs-tid, tmp
+
+  \ (e) @pp2 BRA +208  (non-thread-0 jumps to (s)=BAR.SYNC, 13 insts past (e))
+  208  gs-pp2 @  bra-pred,
+
+  \ ---- Thread 0 only below this point ----
+
+  \ (f) MOV atom-one, 1
+  rreg+ dup >r  1  mov-imm,
+
+  \ (g) ATOM.E.ADD gs-old, [gs-ctr], atom-one
+  gs-old @  gs-ctr @  r>  atom-add,
+
+  \ (h) ISETP.GE gs-pp, gs-old, gs-exp
+  gs-pp @  gs-old @  gs-exp @  isetp-ge,
+
+  \ (i) @!gs-pp BRA +64  (not last CTA: jump 4 insts past (j) to spin_top=(n))
+  64  gs-pp @ 8 or  bra-pred,
+
+  \ ---- Last CTA path: write done flag ----
+
+  \ (j) MEMBAR.SC.GPU
+  membar-gpu,
+
+  \ (k) MOV flag-one, 1
+  rreg+ dup >r  1  mov-imm,
+
+  \ (l) STG.E [gs-flag], flag-one
+  gs-flag @  r>  stg,
+
+  \ (m) BRA +80  (skip 5 insts of spin loop to (s)=BAR.SYNC)
+  80  bra,
+
+  \ ---- Spin-poll loop ----
+  \ spin_top: (n)
+  \ (n) LDG.E gs-poll, [gs-flag]
+  gs-poll @  gs-flag @  ldg,
+
+  \ (o) MEMBAR.SC.GPU  (acquire fence after load)
+  membar-gpu,
+
+  \ (p)+(q) ISETP.GE pp2, gs-poll, 1:
+  rreg+ dup >r  1  mov-imm,            \ (p) MOV tmp, 1
+  gs-pp2 @  gs-poll @  r>  isetp-ge,  \ (q) ISETP.GE pp2, gs-poll, tmp
+
+  \ (r) @!pp2 BRA spin_top  = -5 insts back = -80 bytes from instruction (s)
+  -80  gs-pp2 @ 8 or  bra-pred,
+
+  \ ---- All-threads CTA barrier ----
+  \ skip_to_barsync: (s)
+  \ (s) BAR.SYNC 0
+  0  bar-sync, ;
+
+\ ============================================================
+\ MEGAKERNEL PARAM OFFSETS FOR COOPERATIVE GRID-SYNC
+\ ============================================================
+\
+\ Constant bank c[0x0] layout on Hopper:
+\   Bytes [0x000..0x20F] : driver-reserved (blockDim, gridDim, clock, etc.)
+\   Bytes [0x210 + k*8]  : user param k (8-byte pointer or scalar, k=0,1,...)
+\
+\ The megakernel (DeltaNet fused) passes data pointers first; the two
+\ grid-sync state pointers come last:
+\   param[K+0] = u64  sync_counter_ptr  (points to pre-zeroed u32 in HBM)
+\   param[K+1] = u64  done_flag_ptr     (points to pre-zeroed u32 in HBM)
+\
+\ K = number of data pointer params (e.g. 6 for deltanet_fused:
+\     q, k, v, z, decay, state -> K=6).
+\
+\ sync-counter-param-offset ( n-data-params -- cbank-byte-offset )
+\ Returns byte offset within c[0x0] where sync_counter_ptr lives.
+: sync-counter-param-offset  ( n-data-params -- offset )
+  8 * $210 + ;
+
+\ done-flag-param-offset ( n-data-params -- cbank-byte-offset )
+\ Returns byte offset within c[0x0] where done_flag_ptr lives.
+: done-flag-param-offset  ( n-data-params -- offset )
+  8 * $218 + ;
+
+\ emit-grid-sync-params ( n-data-params -- sync-ctr-off done-flag-off )
+\ Returns both offsets as a pair.  Intended usage:
+\   6 emit-grid-sync-params  -> ( 0x240 0x248 )  (for K=6 data params)
+: emit-grid-sync-params  ( n-data-params -- sync-ctr-off done-flag-off )
+  dup sync-counter-param-offset
+  swap done-flag-param-offset ;
+
+\ ============================================================
+\ MEGAKERNEL PARAM COUNT HELPER
+\ ============================================================
+\
+\ The megakernel's n-kparams (used by build-cubin for .nv.info KPARAM_INFO)
+\ must include the two grid-sync pointer params appended after the data params.
+\
+2 constant N-SYNC-PARAMS   \ always 2: sync_counter_ptr + done_flag_ptr
+
+\ total-kparams ( n-data-params -- total-including-sync )
+: total-kparams  ( n-data-params -- total )
+  N-SYNC-PARAMS + ;
+
 
 \ A cubin is an ELF64 file with NVIDIA-specific sections.
 \ We need:
