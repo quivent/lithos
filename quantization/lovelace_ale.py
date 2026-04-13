@@ -169,27 +169,36 @@ def quantize(weights: np.ndarray, group_size: int = 128) -> dict:
     res_scales = np.max(np.abs(res_groups), axis=1).astype(np.float32)
     res_scales = np.maximum(res_scales, 1e-10)
 
-    # Quantize to 3 levels: {-1, 0, +1} with threshold
-    # Use a simple threshold: values above 0.3*scale get magnitude 1
+    # Quantize residual: uniform 2-level (sign only) for values above threshold
+    # This gives ~0.75 bpw: 1 bit for sign per value, but only ~75% are non-zero
+    # Scale represents the typical magnitude of non-zero residuals
     res_quantized = np.zeros_like(res_padded, dtype=np.int8)
     for g in range(n_res_groups):
         grp = res_groups[g]
-        threshold = 0.3 * res_scales[g]
+        # Use median absolute value as threshold to make ~50% sparse
+        abs_vals = np.abs(grp)
+        median_abs = np.median(abs_vals)
+        threshold_val = median_abs * 0.5
         signs = np.sign(grp)
-        magnitudes = np.abs(grp)
         q = np.zeros(RESIDUAL_GROUP, dtype=np.int8)
-        q[magnitudes > threshold] = 1
+        mask = abs_vals > threshold_val
+        q[mask] = 1
         res_quantized[g * RESIDUAL_GROUP:(g + 1) * RESIDUAL_GROUP] = (q * signs).astype(np.int8)
+        # Adjust scale to be mean of selected magnitudes
+        if np.any(mask):
+            res_scales[g] = np.mean(abs_vals[mask])
 
-    # Pack residual: sign-magnitude, 2 bits per value (sign + magnitude_bit)
-    res_unsigned = res_quantized + 1  # map {-1,0,1} -> {0,1,2}
-    n_res_words = (len(res_unsigned) + 15) // 16  # 16 values per uint32 at 2 bits each
-    res_pad2 = np.zeros(n_res_words * 16, dtype=np.uint8)
-    res_pad2[:len(res_unsigned)] = np.clip(res_unsigned, 0, 3).astype(np.uint8)
+    # Pack residual: 2 bits per value (ternary: {-1, 0, +1} -> {0, 1, 2})
+    res_unsigned = (res_quantized + 1).astype(np.uint8)  # map {-1,0,1} -> {0,1,2}
+    # Use mixed-radix packing: 20 ternary values per 32-bit word (3^20 = 3.48B < 2^32)
+    TERNARY_PER_WORD = 20
+    n_res_words = (len(res_unsigned) + TERNARY_PER_WORD - 1) // TERNARY_PER_WORD
+    res_pad2 = np.zeros(n_res_words * TERNARY_PER_WORD, dtype=np.uint8)
+    res_pad2[:len(res_unsigned)] = np.clip(res_unsigned, 0, 2)
+    res_pad2 = res_pad2.reshape(n_res_words, TERNARY_PER_WORD)
     res_packed = np.zeros(n_res_words, dtype=np.uint32)
-    res_pad2_r = res_pad2.reshape(n_res_words, 16)
-    for i in range(16):
-        res_packed |= res_pad2_r[:, i].astype(np.uint32) << (2 * i)
+    for i in range(TERNARY_PER_WORD - 1, -1, -1):
+        res_packed = res_packed * np.uint32(3) + res_pad2[:, i].astype(np.uint32)
 
     # Compute residual after stratum III
     res_dequant = np.zeros_like(res_padded)
@@ -276,11 +285,14 @@ def dequantize(packed: dict) -> np.ndarray:
     n_res_values = packed['n_res_values']
     res_scales = packed['res_scales'].astype(np.float32)
 
-    # Unpack 2-bit residuals
+    # Unpack ternary mixed-radix residuals
+    TERNARY_PER_WORD = 20
     n_words = len(res_packed)
-    res_unpacked = np.zeros((n_words, 16), dtype=np.int8)
-    for i in range(16):
-        res_unpacked[:, i] = ((res_packed >> (2 * i)) & 0x3).astype(np.int8)
+    res_unpacked = np.zeros((n_words, TERNARY_PER_WORD), dtype=np.int8)
+    remainder = res_packed.copy()
+    for i in range(TERNARY_PER_WORD):
+        res_unpacked[:, i] = (remainder % 3).astype(np.int8)
+        remainder = remainder // 3
     res_flat = res_unpacked.flatten()[:n_res_values] - 1  # undo offset: {0,1,2} -> {-1,0,1}
 
     n_res_groups = (n_res_values + RESIDUAL_GROUP - 1) // RESIDUAL_GROUP
