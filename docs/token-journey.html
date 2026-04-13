@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>What Happens to a Token &mdash; One Token Through 64 Layers</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+}
+
+.speedup {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 1.05em;
+  letter-spacing: 0.02em;
+}
+
+.engine { font-weight: 500; }
+.engine-lithos    { color: var(--engine-lithos); }
+.engine-tensorrt  { color: var(--engine-tensorrt); }
+.engine-vllm      { color: var(--engine-vllm); }
+.engine-pytorch   { color: var(--engine-pytorch); }
+
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+.pitfall { color: var(--red); }
+.numbers { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.92em; }
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav a.active { color: var(--accent); }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 3.2rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+  line-height: 1.1;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Callout block */
+.callout {
+  background: var(--bg-raised);
+  border-left: 3px solid var(--accent);
+  padding: 1rem 1.2rem;
+  margin: 1.2rem 0;
+}
+.callout.warn { border-left-color: var(--red); }
+.callout.note { border-left-color: var(--blue); }
+
+/* Step label */
+.step-label {
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 600;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.84rem;
+  margin-right: 0.4rem;
+  min-width: 1.6rem;
+}
+
+/* Visual diagrams (styled divs) */
+.flow-diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  margin: 1.2rem 0 1.5rem 0;
+  overflow-x: auto;
+}
+.flow-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 0.5rem 0;
+}
+.flow-box {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  text-align: center;
+  white-space: nowrap;
+}
+.flow-box.active {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.flow-box.highlight {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.flow-box.dim {
+  border-color: var(--border);
+  color: var(--text-faint);
+}
+.flow-arrow {
+  color: var(--text-faint);
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+.flow-label {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  text-align: center;
+  margin-top: 0.2rem;
+}
+
+/* State matrix visual */
+.state-grid {
+  display: inline-grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  margin: 0.8rem 0;
+}
+.state-cell {
+  width: 20px; height: 20px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+.state-cell.filled { background: var(--accent-dim); border-color: var(--accent-dim); }
+.state-cell.new { background: var(--cyan); border-color: var(--cyan); opacity: 0.7; }
+
+/* Vector bar visual */
+.vec-bar {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 0.8rem 1.2rem;
+  margin: 0.8rem 0 1rem 0;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.78rem;
+}
+.vec-label {
+  color: var(--text-dim);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+.vec-track {
+  flex: 1;
+  height: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+}
+.vec-fill {
+  height: 100%;
+  position: absolute;
+  left: 0; top: 0;
+}
+.vec-fill.q { background: var(--accent); }
+.vec-fill.k { background: var(--cyan); }
+.vec-fill.v { background: var(--green); }
+.vec-fill.hidden { background: var(--text-faint); }
+.vec-fill.mlp { background: var(--blue); }
+.vec-size {
+  color: var(--cyan);
+  min-width: 80px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Comparison grid */
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin: 1rem 0; }
+@media (max-width: 700px) { .comparison { grid-template-columns: 1fr; } }
+.comparison > div h4 { margin-top: 0; }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="#before-layers">Embedding</a>
+  <a href="#attention-layer">Attention</a>
+  <a href="#mlp">MLP</a>
+  <a href="#deltanet-layer">DeltaNet</a>
+  <a href="#after-layers">Output</a>
+  <a href="#numbers">Numbers</a>
+  <a href="index.html">Home</a>
+  <a href="bandwidth.html">Bandwidth</a>
+  <a href="memory.html">Memory</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>What Happens to a Token</h1>
+  <p>One token through 64 layers of Qwen 3.5-27B. Every transformation, explained.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Section 1: Before the Layers -->
+<section id="before-layers">
+<h2>Before the Layers</h2>
+
+<p>The word "Paris" arrives as text. The <span class="term" data-term="Tokenizer">tokenizer</span> converts it to a number &mdash; say token ID <span class="numbers">12037</span>. That number is an index into a table of <span class="numbers">248,320</span> rows (one per word or word-piece the model knows). Row 12037 is a list of <span class="numbers">5,120</span> numbers. These numbers are the model's learned representation of "Paris" &mdash; a <span class="term" data-term="Vector">vector</span>.</p>
+
+<p>This vector is ALL the model knows about "Paris" at this point. <span class="numbers">5,120</span> numbers. It will be transformed <span class="numbers">64</span> times (once per layer) before the model decides what comes next.</p>
+
+<div class="flow-diagram">
+  <div class="flow-row">
+    <div class="flow-box">"Paris"</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box active">Tokenizer</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box highlight">ID 12037</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box active">Embedding Table<br><span style="font-size:0.7rem;color:var(--text-faint)">248,320 rows &times; 5,120 cols</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box highlight">Vector<br><span style="font-size:0.7rem;color:var(--cyan)">[5,120 numbers]</span></div>
+  </div>
+</div>
+
+<div class="vec-bar">
+  <span class="vec-label">hidden state</span>
+  <div class="vec-track"><div class="vec-fill hidden" style="width:100%"></div></div>
+  <span class="vec-size">5,120</span>
+</div>
+
+</section>
+
+<!-- Section 2: One Full Attention Layer -->
+<section id="attention-layer">
+<h2>One Full Attention Layer</h2>
+
+<p>Qwen 3.5-27B has <span class="numbers">64</span> layers. Of those, <span class="numbers">16</span> are full <span class="term" data-term="Attention">attention</span> layers (layers 3, 7, 11, 15, ... &mdash; every 4th layer). Here is what happens to the <span class="numbers">5,120</span>-number vector in one of those layers, step by step.</p>
+
+<h3>a) Normalize</h3>
+
+<p>The numbers get rescaled so their average magnitude is 1. This prevents the values from drifting too large or too small as they pass through layers. The formula: divide each number by the root-mean-square of all <span class="numbers">5,120</span> numbers, then multiply by a learned weight (<span class="numbers">5,120</span> learned weights, one per position). This operation is called <span class="term" data-term="RMSNorm">RMSNorm</span> (Root Mean Square Normalization). Output: still <span class="numbers">5,120</span> numbers, but balanced.</p>
+
+<h3>b) Project to Q, K, V</h3>
+
+<p>The normalized vector gets multiplied by three separate weight matrices to produce three new vectors:</p>
+
+<ul style="margin: 0.5rem 0 1rem 1.4rem; color: var(--text-dim); line-height: 2;">
+  <li><strong style="color:var(--accent)">Q</strong> (query): "what am I looking for?" &mdash; <span class="numbers">24</span> heads &times; <span class="numbers">256</span> numbers = <span class="numbers">6,144</span> numbers</li>
+  <li><strong style="color:var(--cyan)">K</strong> (key): "what do I contain?" &mdash; <span class="numbers">4</span> heads &times; <span class="numbers">256</span> numbers = <span class="numbers">1,024</span> numbers</li>
+  <li><strong style="color:var(--green)">V</strong> (value): "what information do I carry?" &mdash; <span class="numbers">4</span> heads &times; <span class="numbers">256</span> numbers = <span class="numbers">1,024</span> numbers</li>
+</ul>
+
+<p>Each multiplication is: take the <span class="numbers">5,120</span>-number input, multiply by a matrix of learned weights, get a different-sized output. The weights are the model's knowledge &mdash; billions of numbers learned during training. This is a <span class="term" data-term="GEMM">matrix multiplication</span> (often called a "projection" because it projects the vector into a new space).</p>
+
+<p>Qwen 3.5 uses <span class="term" data-term="GQA">Grouped Query Attention</span>: <span class="numbers">24</span> query heads share <span class="numbers">4</span> key-value heads (each key-value head serves 6 query heads). This saves memory without losing much quality.</p>
+
+<div class="vec-bar">
+  <span class="vec-label">Q (query)</span>
+  <div class="vec-track"><div class="vec-fill q" style="width:100%"></div></div>
+  <span class="vec-size">6,144</span>
+</div>
+<div class="vec-bar">
+  <span class="vec-label">K (key)</span>
+  <div class="vec-track"><div class="vec-fill k" style="width:16.7%"></div></div>
+  <span class="vec-size">1,024</span>
+</div>
+<div class="vec-bar">
+  <span class="vec-label">V (value)</span>
+  <div class="vec-track"><div class="vec-fill v" style="width:16.7%"></div></div>
+  <span class="vec-size">1,024</span>
+</div>
+
+<h3>c) Rotate (RoPE)</h3>
+
+<p>The Q and K vectors get rotated by angles that depend on the token's position in the sequence. This technique is called <span class="term" data-term="RoPE">Rotary Position Embedding</span> (RoPE). Token 1 gets small rotations. Token 100 gets larger rotations. This is how the model knows word ORDER &mdash; "the cat sat" versus "sat the cat" produce different rotations, so the model can distinguish them even though the same words appear.</p>
+
+<h3>d) Store K and V in the cache</h3>
+
+<p>The K and V vectors for this token get appended to the <span class="term" data-term="KV Cache">KV cache</span> &mdash; a growing table of every previous token's K and V. This is the model's memory of the conversation so far. Every time a new token arrives, its K and V get added to the table. The table only grows; it is never recomputed.</p>
+
+<h3>e) Attention</h3>
+
+<p>This is the core operation. The Q vector (what am I looking for?) gets compared against every previous token's K vector (what does each past token contain?). Each comparison produces a <span class="term" data-term="Attention">score</span> &mdash; how relevant is that past token to the current one.</p>
+
+<p>The scores get normalized using <span class="term" data-term="Online Softmax">softmax</span> (a function that converts a list of arbitrary numbers into probabilities that sum to 1). Then each past token's V vector gets weighted by its score and summed. The result: a <span class="numbers">6,144</span>-number vector that represents "the relevant information from all past tokens, as seen by this token."</p>
+
+<div class="flow-diagram">
+  <div style="text-align:center; margin-bottom: 0.8rem;">
+    <span style="color:var(--text-faint); font-size:0.75rem; font-family:'JetBrains Mono',monospace;">ATTENTION: compare current token against all past tokens</span>
+  </div>
+  <div class="flow-row">
+    <div class="flow-box active" style="min-width:90px">Q<br><span style="font-size:0.7rem;color:var(--text-faint)">current token</span></div>
+    <span class="flow-arrow">&times;</span>
+    <div class="flow-box highlight" style="min-width:140px">K (all past tokens)<br><span style="font-size:0.7rem;color:var(--text-faint)">from KV cache</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box dim">scores</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box dim">softmax</div>
+    <span class="flow-arrow">&times;</span>
+    <div class="flow-box highlight" style="min-width:140px">V (all past tokens)<br><span style="font-size:0.7rem;color:var(--text-faint)">from KV cache</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box active">output<br><span style="font-size:0.7rem;color:var(--cyan)">6,144</span></div>
+  </div>
+</div>
+
+<h3>f) Project output</h3>
+
+<p>The <span class="numbers">6,144</span>-number attention result gets multiplied by another weight matrix to produce a <span class="numbers">5,120</span>-number vector. This projects the multi-head result back into the model's standard vector size.</p>
+
+<h3>g) Add residual</h3>
+
+<p>The output gets ADDED to the original input (before normalization). This "skip connection" (also called a <span class="term" data-term="Residual">residual connection</span>) means the layer's transformation is added to the existing representation, not replacing it. The original information is preserved; the layer contributes refinements on top of it.</p>
+
+<div class="flow-diagram">
+  <div class="flow-row">
+    <div class="flow-box highlight">input<br><span style="font-size:0.7rem;color:var(--cyan)">5,120</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box dim">RMSNorm</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box active">Attention<br><span style="font-size:0.7rem;color:var(--text-faint)">steps b-f</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box" style="border-color:var(--green);color:var(--green)">+ residual</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box highlight">output<br><span style="font-size:0.7rem;color:var(--cyan)">5,120</span></div>
+  </div>
+  <div style="text-align:center; margin-top:0.3rem;">
+    <span style="color:var(--text-faint); font-size:0.7rem; font-family:'JetBrains Mono',monospace;">input ──────────────────────────────────────────── + (skip connection)</span>
+  </div>
+</div>
+
+<p>After these steps: the token's vector is still <span class="numbers">5,120</span> numbers, but it now contains information from previous tokens (via attention).</p>
+
+</section>
+
+<!-- Section 3: The MLP -->
+<section id="mlp">
+<h2>The MLP (Every Layer, After Attention or DeltaNet)</h2>
+
+<p>Every one of the <span class="numbers">64</span> layers has a <span class="term" data-term="MLP">Multi-Layer Perceptron</span> (MLP) that runs after the attention (or <span class="term" data-term="DeltaNet">DeltaNet</span>) step. The MLP transforms each token's vector independently &mdash; no interaction between tokens here, only within one token's own representation.</p>
+
+<h3>h) Normalize again</h3>
+
+<p>Same <span class="term" data-term="RMSNorm">RMSNorm</span> as step (a). The vector is rescaled to balanced magnitude before entering the MLP.</p>
+
+<h3>i) Gate and Up projections</h3>
+
+<p>The vector gets multiplied by TWO separate weight matrices simultaneously:</p>
+
+<ul style="margin: 0.5rem 0 1rem 1.4rem; color: var(--text-dim); line-height: 2;">
+  <li><strong style="color:var(--accent)">Gate</strong>: <span class="numbers">5,120</span> &rarr; <span class="numbers">17,408</span> numbers</li>
+  <li><strong style="color:var(--blue)">Up</strong>: <span class="numbers">5,120</span> &rarr; <span class="numbers">17,408</span> numbers</li>
+</ul>
+
+<p>The vector expands from <span class="numbers">5,120</span> to <span class="numbers">17,408</span> numbers. This expansion gives the MLP a wider space to work in &mdash; more room to represent complex patterns before compressing back down.</p>
+
+<div class="vec-bar">
+  <span class="vec-label">input</span>
+  <div class="vec-track"><div class="vec-fill hidden" style="width:29.4%"></div></div>
+  <span class="vec-size">5,120</span>
+</div>
+<div class="vec-bar">
+  <span class="vec-label">gate</span>
+  <div class="vec-track"><div class="vec-fill q" style="width:100%"></div></div>
+  <span class="vec-size">17,408</span>
+</div>
+<div class="vec-bar">
+  <span class="vec-label">up</span>
+  <div class="vec-track"><div class="vec-fill mlp" style="width:100%"></div></div>
+  <span class="vec-size">17,408</span>
+</div>
+
+<h3>j) Activate</h3>
+
+<p>The gate output goes through <span class="term" data-term="SiLU">SiLU</span> (Sigmoid Linear Unit) &mdash; a smooth curve that lets positive values pass through nearly unchanged while smoothly zeroing out negative values. Then the SiLU output gets multiplied element-by-element with the up output.</p>
+
+<p>This is the <span class="term" data-term="Nonlinearity">nonlinearity</span> &mdash; the step that makes deep networks powerful. Without it, 64 layers of <span class="term" data-term="GEMM">matrix multiplication</span> would mathematically collapse into a single multiplication. The nonlinearity is what allows each layer to learn something the previous layers could not express.</p>
+
+<h3>k) Down projection</h3>
+
+<p>The <span class="numbers">17,408</span>-number result gets multiplied by a weight matrix back to <span class="numbers">5,120</span> numbers. The wide representation is compressed back to the model's standard vector size.</p>
+
+<h3>l) Add residual again</h3>
+
+<p>Add the MLP output to the input (before this MLP's normalization). Same skip connection as step (g).</p>
+
+<div class="flow-diagram">
+  <div class="flow-row">
+    <div class="flow-box highlight">input<br><span style="font-size:0.7rem;color:var(--cyan)">5,120</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box dim">RMSNorm</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box active">Gate + Up<br><span style="font-size:0.7rem;color:var(--text-faint)">5,120 &rarr; 17,408</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box active">SiLU &times; Up<br><span style="font-size:0.7rem;color:var(--text-faint)">17,408</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box active">Down<br><span style="font-size:0.7rem;color:var(--text-faint)">17,408 &rarr; 5,120</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box" style="border-color:var(--green);color:var(--green)">+ residual</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box highlight">output<br><span style="font-size:0.7rem;color:var(--cyan)">5,120</span></div>
+  </div>
+</div>
+
+<p>After the MLP: the token's vector is still <span class="numbers">5,120</span> numbers. It has been transformed by the attention mechanism AND the MLP. One layer is complete.</p>
+
+</section>
+
+<!-- Section 4: One DeltaNet Layer -->
+<section id="deltanet-layer">
+<h2>One DeltaNet Layer</h2>
+
+<p><span class="term" data-term="DeltaNet">DeltaNet</span> layers replace attention (steps b-f) with a different mechanism. The <span class="term" data-term="MLP">MLP</span> (steps h-l) is the same.</p>
+
+<p>Instead of comparing against every past token (which takes longer as the conversation grows), DeltaNet maintains a compressed state matrix &mdash; <span class="numbers">16</span> heads &times; <span class="numbers">128</span> &times; <span class="numbers">128</span> = <span class="numbers">262,144</span> numbers per layer. This state is a compressed summary of all past tokens.</p>
+
+<p><span class="numbers">48</span> of the <span class="numbers">64</span> layers use DeltaNet (layers 0, 1, 2, 4, 5, 6, 8, 9, 10, ... &mdash; every layer that is NOT every 4th).</p>
+
+<h3>DeltaNet steps (replacing attention)</h3>
+
+<h4><span class="step-label">a)</span> Normalize</h4>
+<p>Same <span class="term" data-term="RMSNorm">RMSNorm</span> as the attention layer.</p>
+
+<h4><span class="step-label">b)</span> Project to Q, K, V, gate, beta</h4>
+<p>The normalized vector gets multiplied by weight matrices to produce Q, K, V vectors plus two additional outputs: a gate (controls how much new information to write) and beta (a per-head scaling factor). Same kind of <span class="term" data-term="GEMM">matrix multiplication</span> as attention, different output sizes.</p>
+
+<h4><span class="step-label">c)</span> Convolution</h4>
+<p>A small 4-tap filter (<span class="term" data-term="Conv1D">Conv1D</span>) runs over the K vector and the last 3 K vectors (stored in a tiny buffer). This gives the model a short-term memory of very recent tokens &mdash; a simple pattern detector that catches local context before the recurrence processes it.</p>
+
+<h4><span class="step-label">d)</span> State update</h4>
+<p>This is the core DeltaNet operation:</p>
+
+<ul style="margin: 0.5rem 0 1rem 1.4rem; color: var(--text-dim); line-height: 2;">
+  <li><strong style="color:var(--cyan)">Read from state:</strong> multiply K against the state matrix to retrieve what the state "remembers" about this key pattern</li>
+  <li><strong style="color:var(--text)">Compute the difference</strong> between V and what was retrieved</li>
+  <li><strong style="color:var(--accent)">Write to state:</strong> add the new information (scaled by gate and beta) to the state matrix</li>
+</ul>
+
+<p>The state matrix gets slightly modified by every token. It is a running summary that gets updated, not a growing list like the <span class="term" data-term="KV Cache">KV cache</span>.</p>
+
+<div class="flow-diagram">
+  <div style="text-align:center; margin-bottom: 0.8rem;">
+    <span style="color:var(--text-faint); font-size:0.75rem; font-family:'JetBrains Mono',monospace;">DELTANET STATE UPDATE: read, compare, write</span>
+  </div>
+  <div class="flow-row">
+    <div class="flow-box highlight" style="min-width:100px">State Matrix<br><span style="font-size:0.7rem;color:var(--cyan)">128 &times; 128<br>per head</span></div>
+    <span class="flow-arrow">&larr; read</span>
+    <div class="flow-box" style="border-color:var(--cyan);color:var(--cyan)">K</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box dim">retrieved</div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box active">V &minus; retrieved<br><span style="font-size:0.7rem;color:var(--text-faint)">(the delta)</span></div>
+    <span class="flow-arrow">&times; gate &times; beta</span>
+    <span class="flow-arrow">&rarr; write</span>
+    <div class="flow-box highlight" style="min-width:100px">State Matrix<br><span style="font-size:0.7rem;color:var(--green)">(updated)</span></div>
+  </div>
+</div>
+
+<h4><span class="step-label">e)</span> Query the state</h4>
+<p>Multiply Q against the (just-updated) state matrix to get the output. This replaces the attention scores + weighted sum &mdash; instead of scanning all past tokens, it reads from the compressed state.</p>
+
+<h4><span class="step-label">f)</span> Project output and add residual</h4>
+<p>Same as attention: multiply by a weight matrix to get back to <span class="numbers">5,120</span> numbers, then add the residual connection.</p>
+
+<div class="callout note">
+<p>After the DeltaNet steps, the same <span class="term" data-term="MLP">MLP</span> (steps h-l) runs. Every layer &mdash; whether attention or DeltaNet &mdash; has a sequence mechanism followed by an MLP.</p>
+</div>
+
+<h3>Why hybrid?</h3>
+
+<p>DeltaNet is fast: same cost per token regardless of how long the conversation is. The state matrix is a fixed size (<span class="numbers">262,144</span> numbers per layer), so processing the 10,000th token costs the same as processing the 10th. But DeltaNet is imprecise &mdash; the state compression loses detail. Information from thousands of tokens gets squeezed into a fixed-size matrix.</p>
+
+<p>Full attention is expensive: cost grows with conversation length (every new token must compare against every past token). But full attention is exact &mdash; every past token is considered individually, nothing is compressed away.</p>
+
+<div class="comparison">
+  <div>
+    <h4 style="color:var(--cyan)">DeltaNet (48 layers)</h4>
+    <p class="small">Fixed cost per token. State: <span class="numbers">128 &times; 128</span> matrix per head. Fast but lossy &mdash; compresses all history into fixed-size state.</p>
+  </div>
+  <div>
+    <h4 style="color:var(--accent)">Full Attention (16 layers)</h4>
+    <p class="small">Cost grows with sequence length. <span class="term" data-term="KV Cache">KV cache</span> stores every past token. Exact but expensive &mdash; scans all history every time.</p>
+  </div>
+</div>
+
+<p>Qwen 3.5 uses DeltaNet for 3 out of every 4 layers, then full attention every 4th layer to correct any drift. Cheap processing for most of the work, with occasional precise correction. The <span class="numbers">16</span> attention layers act as checkpoints that re-anchor the representation against exact history.</p>
+
+</section>
+
+<!-- Section 5: After All 64 Layers -->
+<section id="after-layers">
+<h2>After All 64 Layers</h2>
+
+<p>The token's <span class="numbers">5,120</span>-number vector has been transformed <span class="numbers">64</span> times. It no longer represents "Paris" &mdash; it represents "what should come after 'The capital of France is Paris' given everything the model knows."</p>
+
+<p>One final step: a <span class="term" data-term="GEMM">matrix multiplication</span> of the <span class="numbers">5,120</span>-number vector against the embedding table (transposed): <span class="numbers">5,120</span> &times; <span class="numbers">248,320</span> &rarr; one score per vocabulary word. The highest score wins. Maybe it is "." or "," or " and" &mdash; whatever the model predicts comes next.</p>
+
+<div class="flow-diagram">
+  <div class="flow-row">
+    <div class="flow-box highlight">final vector<br><span style="font-size:0.7rem;color:var(--cyan)">5,120</span></div>
+    <span class="flow-arrow">&times;</span>
+    <div class="flow-box active">vocabulary matrix<br><span style="font-size:0.7rem;color:var(--text-faint)">5,120 &times; 248,320</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box dim">248,320 scores<br><span style="font-size:0.7rem;color:var(--text-faint)">one per word</span></div>
+    <span class="flow-arrow">&rarr;</span>
+    <div class="flow-box" style="border-color:var(--green);color:var(--green)">highest score<br><span style="font-size:0.7rem;color:var(--green)">next token</span></div>
+  </div>
+</div>
+
+<p>This process repeats for every token the model generates. Each new token goes through all <span class="numbers">64</span> layers, reads from and writes to the caches and states, and produces one more prediction. One token at a time, thousands of times per second.</p>
+
+</section>
+
+<!-- Section 6: The Numbers -->
+<section id="numbers">
+<h2>The Numbers</h2>
+
+<p>For Qwen 3.5-27B at <span class="term" data-term="W4A16">W4A16</span> quantization (4-bit weights, 16-bit activations):</p>
+
+<table>
+<tr><th>Metric</th><th class="num">Value</th></tr>
+<tr><td>Parameters read per token</td><td class="num">~8 GB of weights</td></tr>
+<tr><td>Vector size throughout</td><td class="num">5,120 numbers</td></tr>
+<tr><td>Total layers</td><td class="num">64</td></tr>
+<tr><td style="padding-left:2rem;color:var(--text-dim)">DeltaNet layers</td><td class="num">48</td></tr>
+<tr><td style="padding-left:2rem;color:var(--text-dim)">Full attention layers</td><td class="num">16</td></tr>
+<tr><td><span class="term" data-term="GEMM">Matrix multiplications</span> per token</td><td class="num">448 (7 per layer &times; 64 layers)</td></tr>
+<tr><td><span class="term" data-term="KV Cache">KV cache</span> growth per token</td><td class="num">~64 KB (only the 16 attention layers)</td></tr>
+<tr><td><span class="term" data-term="DeltaNet">DeltaNet</span> state per layer</td><td class="num">~262 KB (fixed, does not grow)</td></tr>
+<tr><td>DeltaNet state total (all 48 layers)</td><td class="num">~12.6 MB fixed</td></tr>
+</table>
+
+<div class="callout">
+<p>The <span class="term" data-term="KV Cache">KV cache</span> grows with every token &mdash; a 10,000-token conversation adds <span class="numbers">~640 MB</span> to the cache. The <span class="term" data-term="DeltaNet">DeltaNet</span> state stays at <span class="numbers">12.6 MB</span> regardless of conversation length. This is the fundamental trade-off: attention is precise but expensive; DeltaNet is compact but approximate.</p>
+</div>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+<span class="term" data-term="Lithos">Lithos</span> &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. <span class="term" data-term="Lithos">Lithos</span> writes on the GPU.
+</div>
+</footer>
+
+<script src="glossary-data.js"></script>
+</body>
+</html>
