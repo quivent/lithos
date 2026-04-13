@@ -383,48 +383,62 @@ class PrefillEngine:
         # Update conv buffer: shift left by 1, append current
         self.dn_conv_buf[layer_idx] = conv_window[:, 1:]  # [10240, 3] -- drop oldest
 
-        # Split QKV after conv
+        # Apply SiLU activation after conv1d (critical -- matches reference implementation)
+        qkv_conv = qkv_conv * (1.0 / (1.0 + np.exp(-qkv_conv.clip(-80, 80))))
+
+        # Split QKV after conv + SiLU
         q = qkv_conv[:2048].reshape(NUM_KEY_HEADS, KEY_HEAD_DIM)
         k = qkv_conv[2048:4096].reshape(NUM_KEY_HEADS, KEY_HEAD_DIM)
         v = qkv_conv[4096:].reshape(NUM_VALUE_HEADS, VALUE_HEAD_DIM)
 
-        # --- Beta ---
+        # --- Q and K RMS normalization + scaling ---
+        # From fused_gdn kernel: q_scale = rms_norm(q) * (1/dk), k_scale = rms_norm(k) * (1/sqrt(dk))
+        inv_scale = KEY_HEAD_DIM ** -0.5  # 1/sqrt(128)
+        for hi in range(NUM_KEY_HEADS):
+            q_rms = np.sqrt(np.mean(q[hi] ** 2) + 1e-6)
+            q[hi] = (q[hi] / q_rms) * (inv_scale ** 2)  # = q_normed / dk
+            k_rms = np.sqrt(np.mean(k[hi] ** 2) + 1e-6)
+            k[hi] = (k[hi] / k_rms) * inv_scale  # = k_normed / sqrt(dk)
+
+        # --- Beta (from in_proj_a) ---
         beta = 1.0 / (1.0 + np.exp(-(self.dn_a_weight[layer_idx] @ normed_cpu).clip(-80, 80)))
 
-        # --- dt and decay ---
+        # --- dt/decay (from in_proj_b) ---
         dt = self.dn_b_weight[layer_idx] @ normed_cpu + self.dn_dt_bias[layer_idx]
         dt = np.log1p(np.exp(dt.clip(-20, 20)))  # softplus
 
-        A = -np.exp(self.dn_A_log[layer_idx])
-        decay = np.exp(A * dt)  # [48]
+        # Gate = exp(-A_exp * dt) where A_exp = exp(A_log) (positive)
+        A_exp = np.exp(self.dn_A_log[layer_idx])  # [48], positive
+        decay = np.exp(-A_exp * dt)  # [48], in (0, 1)
 
         # --- DeltaNet recurrence with state ---
-        S = self.dn_S[layer_idx]  # [48, 128, 128]
+        # State layout: S[h] is [Dv, Dk] = [128, 128]
+        S = self.dn_S[layer_idx]  # [48, 128, 128] = [Hv, Dv, Dk]
         output_heads = np.zeros((NUM_VALUE_HEADS, VALUE_HEAD_DIM), dtype=np.float32)
 
         for h in range(NUM_VALUE_HEADS):
             key_idx = h // HEADS_PER_KEY
-            q_h = q[key_idx]   # [128]
-            k_h = k[key_idx]   # [128]
-            v_h = v[h]         # [128]
+            q_h = q[key_idx]   # [Dk]
+            k_h = k[key_idx]   # [Dk]
+            v_h = v[h]         # [Dv]
 
-            # Retrieval from existing state
-            retrieval = S[h] @ q_h  # [128] (value_dim)
-            # Wait -- S is [key_dim, value_dim] = [128, 128]
-            # retrieval = q_h @ S[h] gives [value_dim]  (1x128 @ 128x128 = 1x128)
-            retrieval = q_h @ S[h]  # [128]
+            # State S[h] has shape [Dv, Dk]
+            # Step 1: Apply decay
+            S[h] *= decay[h]
 
-            # State update: S = decay * S + beta * outer(k, v - retrieval)
-            # But the DeltaNet delta rule is:
-            #   S_new = decay * S + beta * k^T (v - k @ S)^T
-            # In matrix form: S_new = decay * S + beta * outer(k, v - S^T @ k)
-            # retrieval for state update uses k, not q:
-            k_retrieval = k_h @ S[h]  # [value_dim]
-            delta = v_h - k_retrieval
-            S[h] = decay[h] * S[h] + beta[h] * np.outer(k_h, delta)
+            # Step 2: Compute k^T @ S for each Dv index
+            # S[h] @ k_h: [Dv, Dk] @ [Dk] = [Dv] -- this is the retrieval with k
+            kv_mem = S[h] @ k_h  # [Dv]
 
-            # Output: q @ S_new
-            output_heads[h] = q_h @ S[h]
+            # Step 3: Delta
+            delta = (v_h - kv_mem) * beta[h]  # [Dv]
+
+            # Step 4: State update: S += outer(delta, k) = delta[:, None] * k[None, :]
+            # S[h] shape is [Dv, Dk], so update is [Dv, Dk]
+            S[h] += np.outer(delta, k_h)  # [Dv, Dk]
+
+            # Step 5: Output: S @ q = [Dv, Dk] @ [Dk] = [Dv]
+            output_heads[h] = S[h] @ q_h
 
         self.dn_S[layer_idx] = S
 

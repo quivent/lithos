@@ -17,10 +17,7 @@ Run:
 
 import argparse
 import asyncio
-import ctypes
 import json
-import math
-import os
 import sys
 import time
 import uuid
@@ -609,9 +606,12 @@ async def _stream_completion(
     created: int,
     prompt_tokens: list[int],
     max_tokens: int,
+    temperature: float = 0.0,
 ) -> AsyncIterator[str]:
     """SSE stream for raw completions."""
-    async for _tid, token_text in _generate_tokens(prompt_tokens, max_tokens):
+    async for _tid, token_text, _tok_time in _generate_tokens(
+        prompt_tokens, max_tokens, temperature
+    ):
         chunk = {
             "id": request_id,
             "object": "text_completion",
@@ -652,11 +652,9 @@ async def server_metrics(request: Request) -> JSONResponse:
         "tokens_generated": metrics.tokens_generated,
         "tokens_per_second": round(metrics.tokens_per_second, 2),
         "uptime_seconds": round(metrics.uptime_s, 2),
-        "cubins_loaded": len(engine.cubins) if engine else 0,
-        "kv_cache_allocated_gb": round(
-            engine.kv_cache.allocated_bytes / (1 << 30), 1
-        ) if engine else 0,
-        "model": engine.config.name if engine else None,
+        "startup_seconds": round(_startup_duration, 2),
+        "model": engine.model_name if engine else None,
+        "inference": "real",
     })
 
 
@@ -683,23 +681,19 @@ def main():
     global engine, metrics
 
     parser = argparse.ArgumentParser(description="Lithos inference server")
-    parser.add_argument("--model", type=str, default=None,
-                        help="Path to model directory")
     parser.add_argument("--host", type=str, default="0.0.0.0",
                         help="Bind address (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8080,
                         help="Listen port (default: 8080)")
-    parser.add_argument("--max-batch", type=int, default=256,
-                        help="Maximum concurrent batch size")
-    parser.add_argument("--max-seq-len", type=int, default=32768,
-                        help="Maximum sequence length")
     args = parser.parse_args()
 
-    # --- startup ---
-    engine = startup_engine(args.model)
+    # --- startup: load real model, kernels, allocate GPU buffers ---
+    engine = startup_engine()
     metrics = Metrics()
 
     print(f"[{_ts()}] Ready to serve on port {args.port}")
+    print(f"  Model: {engine.model_name}")
+    print(f"  Startup: {_startup_duration:.2f}s")
     print(f"{'='*60}")
     print()
     print(f"  Endpoints:")
@@ -708,6 +702,9 @@ def main():
     print(f"    POST http://{args.host}:{args.port}/v1/chat/completions")
     print(f"    POST http://{args.host}:{args.port}/v1/completions")
     print(f"    GET  http://{args.host}:{args.port}/metrics")
+    print()
+    print(f"  NOTE: Each token requires a full forward pass (~seconds).")
+    print(f"  No KV cache reuse yet -- every token is independent.")
     print()
 
     # --- serve ---

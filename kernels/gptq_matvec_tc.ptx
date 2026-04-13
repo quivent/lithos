@@ -222,9 +222,12 @@ LOAD_X_DONE:
     shl.b32         %r56, %r3, 1;          // tid * 2 bytes in S_smem
     add.u32         %r57, %r41, %r56;
 
-    @%p4 cp.async.ca.shared.global [%r57], [%rd34], 2;
+    mov.b16         %htmp2, 0;
+    @%p4 ld.global.b16 %htmp2, [%rd34];
+    st.shared.b16   [%r57], %htmp2;
 
 SKIP_SCALE0:
+    // Commit the weight cp.async group
     cp.async.commit_group;
 
     // ================================================================

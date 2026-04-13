@@ -294,9 +294,13 @@ class WeightStager:
             idx = self._extract_layer_idx(name)
             if idx is not None:
                 self._post_attn_norm_names[idx] = name
-        # model.language_model.norm.weight  (final norm)
+        # model.language_model.norm.weight  (final norm before lm_head)
+        # Be specific: match the language model's final norm, not visual/MTP norms
         elif name.endswith("norm.weight") and "layers." not in name:
-            self._final_norm_name = name
+            # Prefer the language_model norm; only set if not already set or
+            # this is the language_model one.
+            if "language_model" in name or self._final_norm_name is None:
+                self._final_norm_name = name
 
     @staticmethod
     def _extract_layer_idx(name: str) -> Optional[int]:
