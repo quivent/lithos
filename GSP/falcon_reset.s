@@ -60,8 +60,8 @@ msg_reset_done:     .asciz "gsp: falcon reset -- deasserted, reset complete\n"
 msg_reset_done_len = . - msg_reset_done - 1
 msg_reset_timeout:  .asciz "gsp: ERROR: falcon reset timeout\n"
 msg_reset_timeout_len = . - msg_reset_timeout - 1
-msg_bar0_null:      .asciz "gsp: ERROR: BAR0 not mapped for falcon reset\n"
-msg_bar0_null_len = . - msg_bar0_null - 1
+falcon_msg_bar0_null:      .asciz "gsp: ERROR: BAR0 not mapped for falcon reset\n"
+falcon_msg_bar0_null_len = . - falcon_msg_bar0_null - 1
 
 // ============================================================
 // Text section
@@ -156,9 +156,9 @@ falcon_reset:
     b       .falcon_return
 
 .falcon_bar0_null:
-    adrp    x1, msg_bar0_null
-    add     x1, x1, :lo12:msg_bar0_null
-    mov     x2, #msg_bar0_null_len
+    adrp    x1, falcon_msg_bar0_null
+    add     x1, x1, :lo12:falcon_msg_bar0_null
+    mov     x2, #falcon_msg_bar0_null_len
     bl      falcon_print_msg
     mov     x0, #-1
 

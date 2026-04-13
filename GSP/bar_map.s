@@ -12,6 +12,14 @@
 // PCI BDF is set by pci_bdf_slot below.  Default 0000:09:00.0.
 // To change, patch the ASCII string before calling bar_map_init.
 //
+// !!! WARNING: THE BDF STRING "09:00" IS DUPLICATED IN THREE PLACES !!!
+//     pci_bdf_slot   (bar0_path)
+//     pci_bdf_slot4  (bar4_path)
+//     pci_bdf_slot_r (resource_path)
+// ALL THREE MUST BE PATCHED TOGETHER.  Patching only one will cause
+// BAR0/BAR4/phys-parse to reference different devices.  See the
+// comments next to each copy below.
+//
 // Calling convention: ARM64 AAPCS.  Clobbers x0-x8, x16-x17.
 // Returns: x0 = 0 on success, -1 on failure.
 // On success, bar0_base and bar4_base are populated.
@@ -31,7 +39,6 @@
 .equ AT_FDCWD,      -100
 .equ O_RDWR,        2
 .equ O_SYNC,        0x101000          // O_SYNC on aarch64 = 0x101000
-.equ O_RDWR_SYNC,   0x101002          // O_RDWR | O_SYNC
 .equ PROT_READ,     1
 .equ PROT_WRITE,    2
 .equ PROT_RW,       3
@@ -44,7 +51,6 @@
 // For initial bring-up, map a 256 MB window (sufficient for GSP boot
 // structures).  Full 128 GB can be mapped later if needed.
 .equ BAR4_SIZE_LO,  0x10000000        // 256 MB
-.equ BAR4_SIZE_HI,  0                 // high word
 
 // ============================================================
 // Data section
@@ -65,14 +71,14 @@ bar4_phys:      .quad 0               // BAR4 physical base (parsed from sysfs)
 // Patch pci_bdf_slot (5 bytes "09:00") to match your system.
 bar0_path:
     .ascii "/sys/bus/pci/devices/0000:"
-pci_bdf_slot:
+pci_bdf_slot:                                // !!! BDF COPY 1/3 -- MUST MATCH pci_bdf_slot4 AND pci_bdf_slot_r !!!
     .ascii "09:00"
     .ascii ".0/resource0"
     .byte 0
 
 bar4_path:
     .ascii "/sys/bus/pci/devices/0000:"
-pci_bdf_slot4:
+pci_bdf_slot4:                               // !!! BDF COPY 2/3 -- MUST MATCH pci_bdf_slot AND pci_bdf_slot_r !!!
     .ascii "09:00"
     .ascii ".0/resource4"
     .byte 0
@@ -80,7 +86,7 @@ pci_bdf_slot4:
 // Physical address resource file (for parsing BAR4 phys addr)
 resource_path:
     .ascii "/sys/bus/pci/devices/0000:"
-pci_bdf_slot_r:
+pci_bdf_slot_r:                              // !!! BDF COPY 3/3 -- MUST MATCH pci_bdf_slot AND pci_bdf_slot4 !!!
     .ascii "09:00"
     .ascii ".0/resource"
     .byte 0
@@ -214,8 +220,12 @@ bar_map_init:
     mov     x0, #0
     b       .bar_map_return
 
-.bar0_open_fail:
 .bar0_mmap_fail:
+    // mmap failed but fd in x19 is still open -- close it before erroring
+    mov     x0, x19
+    mov     x8, #SYS_CLOSE
+    svc     #0
+.bar0_open_fail:
     adrp    x1, msg_bar0_fail
     add     x1, x1, :lo12:msg_bar0_fail
     mov     x2, #msg_bar0_fail_len
@@ -223,8 +233,12 @@ bar_map_init:
     mov     x0, #-1
     b       .bar_map_return
 
-.bar4_open_fail:
 .bar4_mmap_fail:
+    // mmap failed but fd in x19 is still open -- close it before erroring
+    mov     x0, x19
+    mov     x8, #SYS_CLOSE
+    svc     #0
+.bar4_open_fail:
     adrp    x1, msg_bar4_fail
     add     x1, x1, :lo12:msg_bar4_fail
     mov     x2, #msg_bar4_fail_len
@@ -299,6 +313,8 @@ parse_bar4_phys:
     cmp     x1, x3
     b.ge    .parse_phys_fail_noclose
 .skip_char:
+    cmp     x1, x3
+    b.ge    .parse_phys_fail_noclose
     ldrb    w4, [x1], #1
     cmp     w4, #'\n'
     b.ne    .skip_char

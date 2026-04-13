@@ -37,8 +37,8 @@ msg_hopper_ok:    .asciz "gsp: PMC_BOOT_0 verified -- Hopper architecture\n"
 msg_hopper_ok_len = . - msg_hopper_ok - 1
 msg_not_hopper:   .asciz "gsp: ERROR: not Hopper (bits[23:20] != 0xA)\n"
 msg_not_hopper_len = . - msg_not_hopper - 1
-msg_bar0_null:    .asciz "gsp: ERROR: BAR0 not mapped (bar0_base == 0)\n"
-msg_bar0_null_len = . - msg_bar0_null - 1
+pmc_msg_bar0_null:    .asciz "gsp: ERROR: BAR0 not mapped (bar0_base == 0)\n"
+pmc_msg_bar0_null_len = . - pmc_msg_bar0_null - 1
 msg_boot0_is:     .asciz "gsp: PMC_BOOT_0 = 0x"
 msg_boot0_is_len = . - msg_boot0_is - 1
 
@@ -125,9 +125,9 @@ pmc_check:
     b       .pmc_return
 
 .pmc_bar0_null:
-    adrp    x1, msg_bar0_null
-    add     x1, x1, :lo12:msg_bar0_null
-    mov     x2, #msg_bar0_null_len
+    adrp    x1, pmc_msg_bar0_null
+    add     x1, x1, :lo12:pmc_msg_bar0_null
+    mov     x2, #pmc_msg_bar0_null_len
     bl      pmc_print_msg
     mov     x0, #-1
     mov     x1, #0

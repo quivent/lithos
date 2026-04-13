@@ -72,6 +72,10 @@ msg_fw_elf_err:   .asciz "gsp: bad ELF magic\n"
 msg_fw_elf_err_len = . - msg_fw_elf_err - 1
 msg_fw_sec_err:   .asciz "gsp: .fwimage section not found\n"
 msg_fw_sec_err_len = . - msg_fw_sec_err - 1
+msg_fw_lseek_err: .asciz "gsp: lseek(SEEK_END) failed or firmware file is empty\n"
+msg_fw_lseek_err_len = . - msg_fw_lseek_err - 1
+msg_fw_mmap_err:  .asciz "gsp: mmap of firmware file failed (MAP_FAILED)\n"
+msg_fw_mmap_err_len = . - msg_fw_mmap_err - 1
 msg_fw_ok:        .asciz "gsp: firmware loaded to BAR4\n"
 msg_fw_ok_len = . - msg_fw_ok - 1
 
@@ -131,6 +135,10 @@ gsp_fw_load:
     mov     x1, #0
     mov     x2, SEEK_END
     svc     #0
+    // Check lseek result: negative = error, zero = empty file.
+    // Treat x0 <= 0 as fatal.
+    cmp     x0, #0
+    b.le    .fw_lseek_fail
     mov     x20, x0                 // x20 = file size
 
     // ---- 3. mmap the firmware file ----
@@ -142,6 +150,11 @@ gsp_fw_load:
     mov     x4, x19                 // fd
     mov     x5, #0                  // offset = 0
     svc     #0
+    // Check for MAP_FAILED: mmap returns a negative errno in [-4095, -1]
+    // on failure.  Idiom from launcher.s: cmn x0, #4096 ; b.hi .fail
+    // catches x0 in the error range (unsigned-above comparison).
+    cmn     x0, #4096
+    b.hi    .fw_mmap_fail
     mov     x21, x0                 // x21 = mmap'd file base
 
     // ---- 4. Verify ELF64 magic: 0x7f 'E' 'L' 'F' ----
@@ -323,6 +336,36 @@ gsp_fw_load:
     mov     x2, msg_fw_sec_err_len
     svc     #0
     mov     x0, #3
+    mov     x8, SYS_EXIT
+    svc     #0
+
+.fw_lseek_fail:
+    // Print error, close fd, exit.  fd is in x19.
+    mov     x8, #64                     // SYS_WRITE
+    mov     x0, #2                      // stderr
+    adrp    x1, msg_fw_lseek_err
+    add     x1, x1, :lo12:msg_fw_lseek_err
+    mov     x2, msg_fw_lseek_err_len
+    svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #4
+    mov     x8, SYS_EXIT
+    svc     #0
+
+.fw_mmap_fail:
+    // Print error, close fd, exit.  fd is in x19.
+    mov     x8, #64                     // SYS_WRITE
+    mov     x0, #2                      // stderr
+    adrp    x1, msg_fw_mmap_err
+    add     x1, x1, :lo12:msg_fw_mmap_err
+    mov     x2, msg_fw_mmap_err_len
+    svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #5
     mov     x8, SYS_EXIT
     svc     #0
 

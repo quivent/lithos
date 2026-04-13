@@ -58,15 +58,21 @@
 .equ NV_VGPU_MSG_FUNCTION_ALLOC_ROOT,        2
 .equ NV_VGPU_MSG_FUNCTION_ALLOC_DEVICE,      3
 .equ NV_VGPU_MSG_FUNCTION_ALLOC_CHANNEL_DMA, 6
+.equ NV_VGPU_MSG_FUNCTION_ALLOC_SUBDEVICE,   19
 
 // ---- RPC object classes ----
 .equ NV01_DEVICE_0,         0x0080      // device class
+.equ NV20_SUBDEVICE_0,      0x20E0      // subdevice class
 .equ HOPPER_CHANNEL_GPFIFO, 0xC86F      // Hopper GPFIFO channel class
 
 // ---- RPC object handles (arbitrary, must be unique per client) ----
 .equ HANDLE_CLIENT,         0x01000000
 .equ HANDLE_DEVICE,         0x01000001
+.equ HANDLE_SUBDEVICE,      0x01000002
 .equ HANDLE_CHANNEL,        0x01000003
+
+// Subdevice alloc payload: { u32 hClient, u32 hParent, u32 hSubdevice, u32 hClass }
+.equ RPC_ALLOC_SUBDEVICE_PAYLOAD, 16
 
 // ---- RPC message header layout (from rpc_headers.h / message_queue_cpu.c) ----
 // Each RPC message in the command queue has:
@@ -95,6 +101,12 @@
 
 // ---- Timeout ----
 .equ RPC_POLL_LIMIT,       10000000    // ~10M iterations with MMIO = ~10s
+
+// ---- Queue buffer size ----
+// Each RPC queue (cmd and status) is a 256 KB ring in BAR4. head/tail are
+// byte offsets that must wrap modulo this size. For the 3-4 init RPCs used
+// here this will not actually wrap, but wrap-around is handled defensively.
+.equ QUEUE_BUF_SIZE,       0x40000     // 256 KB
 
 .data
 .balign 8
@@ -206,6 +218,9 @@ mq_write:
     load_qhead_off x8, 0
     ldr w0, [x19, x8]                   // re-read current head
     add w0, w0, w2                      // new head
+    // Wrap modulo QUEUE_BUF_SIZE (power of two)
+    mov w3, #(QUEUE_BUF_SIZE - 1)
+    and w0, w0, w3
     str w0, [x19, x8]                   // BAR0+0x110C00 <- new head
 
     // Memory barrier: head write must be visible to GSP
@@ -258,10 +273,6 @@ mq_poll_response:
     ldr w23, [x19, x8]                  // w23 = current tail (our read offset)
 
     // Timeout counter: ~10M iterations with MMIO reads = ~10s
-    movz x24, #0x0098
-    movk x24, #0x9680, lsl #0           // x24 = 0x989680 = 10000000
-    // (movz sets upper, movk patches lower -- but actually:
-    //  10000000 = 0x989680, so movz w24, #0x9680; movk w24, #0x98, lsl #16)
     movz w24, #0x9680
     movk w24, #0x0098, lsl #16          // w24 = 0x00989680 = 10000000
 
@@ -303,6 +314,9 @@ mq_poll_response:
     add w5, w5, #7
     and w5, w5, #0xFFFFFFF8             // align to 8
     add w23, w23, w5                    // new tail
+    // Wrap modulo QUEUE_BUF_SIZE (power of two)
+    mov w6, #(QUEUE_BUF_SIZE - 1)
+    and w23, w23, w6
     load_qtail_off x8, 1
     str w23, [x19, x8]                  // update tail register
 
@@ -498,12 +512,58 @@ gsp_rpc_alloc_channel:
     cbnz x0, .rpc_fail
 
     // ================================================================
+    // RPC 3: NV_RM_RPC_ALLOC_SUBDEVICE (function=19)
+    // Payload: { u32 hClient, u32 hParent (=hDevice), u32 hSubdevice, u32 hClass }
+    // Source: rpc_global_enums.h -- NV_VGPU_MSG_FUNCTION_ALLOC_SUBDEVICE
+    // ================================================================
+    add x0, sp, #96
+    mov w1, #NV_VGPU_MSG_FUNCTION_ALLOC_SUBDEVICE   // 19
+    mov w2, #RPC_ALLOC_SUBDEVICE_PAYLOAD            // 16 bytes
+    bl format_rpc_header
+
+    add x0, sp, #96
+    // hClient = 0x01000000
+    mov w1, #0x0000
+    movk w1, #0x0100, lsl #16
+    str w1, [x0, #RPC_HDR_SIZE]
+    // hParent = hDevice = 0x01000001
+    mov w1, #0x0001
+    movk w1, #0x0100, lsl #16
+    str w1, [x0, #(RPC_HDR_SIZE + 4)]
+    // hSubdevice = 0x01000002
+    mov w1, #0x0002
+    movk w1, #0x0100, lsl #16
+    str w1, [x0, #(RPC_HDR_SIZE + 8)]
+    // hClass = NV20_SUBDEVICE_0 = 0x20E0
+    mov w1, #NV20_SUBDEVICE_0
+    str w1, [x0, #(RPC_HDR_SIZE + 12)]
+
+    mov x0, x19
+    mov x1, x21
+    add x2, sp, #96
+    mov x3, #(RPC_HDR_SIZE + RPC_ALLOC_SUBDEVICE_PAYLOAD)
+    bl mq_write
+
+    adrp x3, rpc_sequence
+    add x3, x3, :lo12:rpc_sequence
+    ldr x2, [x3]
+    sub w2, w2, #1
+    mov x0, x19
+    mov x1, x22
+    bl mq_poll_response
+    cbnz x0, .rpc_fail
+
+    // ================================================================
     // Bump-allocate GPFIFO ring from BAR4 (8KB, page-aligned)
     // If gpfifo_gpu_va was provided (non-zero), skip allocation.
     // On GH200: BAR4 PA == GPU VA, so the bump offset + bar4_phys
     // gives the GPU VA. The caller provides gpfifo_gpu_va or we
     // use the bump-allocated BAR4 offset.
     // ================================================================
+    // x28 holds GPFIFO CPU VA (for zeroing / storing as cpu-accessible base).
+    // x23 holds GPFIFO GPU VA (== bar4_phys + offset on GH200); this is what
+    // gets sent to GSP in the RPC. CPU VA and GPU VA are two different values.
+    mov x28, x23                        // if caller provided, treat as both
     cbnz x23, .gpfifo_ready
 
     // Read current bump offset
@@ -513,13 +573,18 @@ gsp_rpc_alloc_channel:
     mov x1, #~(GPFIFO_ALIGN - 1)
     and x0, x0, x1
     // x0 = aligned offset for GPFIFO within BAR4
-    add x23, x20, x0                    // x23 = bar4 + offset = GPFIFO CPU VA
+    add x28, x20, x0                    // x28 = bar4_mmap + offset = GPFIFO CPU VA
+    // GPU VA = bar4_phys + offset
+    adrp x2, bar4_phys
+    add x2, x2, :lo12:bar4_phys
+    ldr x2, [x2]                        // x2 = bar4_phys
+    add x23, x2, x0                     // x23 = bar4_phys + offset = GPFIFO GPU VA
     // Update bump pointer past GPFIFO
     add x1, x0, #GPFIFO_SIZE
     str x1, [x25]                       // bump_ptr += alignment + GPFIFO_SIZE
 
-    // Zero the GPFIFO ring (8KB)
-    mov x1, x23                         // GPFIFO VA
+    // Zero the GPFIFO ring (8KB) using CPU VA
+    mov x1, x28                         // GPFIFO CPU VA
     mov x2, #(GPFIFO_SIZE / 8)          // iterations (8 bytes each)
 .zero_gpfifo:
     cbz x2, .gpfifo_ready
@@ -528,10 +593,10 @@ gsp_rpc_alloc_channel:
     b .zero_gpfifo
 
 .gpfifo_ready:
-    // Store GPFIFO base in .data
+    // Store GPFIFO CPU base in .data (kernel reads via CPU VA)
     adrp x0, gpfifo_base
     add x0, x0, :lo12:gpfifo_base
-    str x23, [x0]
+    str x28, [x0]
 
     // Zero gpfifo_put
     adrp x0, gpfifo_put
@@ -563,8 +628,8 @@ gsp_rpc_alloc_channel:
     mov w1, #0x0000
     movk w1, #0x0100, lsl #16
     str w1, [x0, #RPC_HDR_SIZE]         // offset 0x00: hClient
-    // hParent = hDevice = 0x01000001
-    mov w1, #0x0001
+    // hParent = hSubdevice = 0x01000002
+    mov w1, #0x0002
     movk w1, #0x0100, lsl #16
     str w1, [x0, #(RPC_HDR_SIZE + 4)]   // offset 0x04: hParent
     // hChannel = 0x01000003
@@ -574,8 +639,8 @@ gsp_rpc_alloc_channel:
     // hClass = HOPPER_CHANNEL_GPFIFO_A = 0xC86F
     mov w1, #HOPPER_CHANNEL_GPFIFO
     str w1, [x0, #(RPC_HDR_SIZE + 12)]  // offset 0x0C: hClass = 0xC86F
-    // gpFifoBase (64-bit GPU VA) -- x23 holds GPFIFO cpu VA
-    // On GH200: PA == GPU VA, so this is correct if bar4 was identity-mapped
+    // gpFifoBase (64-bit GPU VA) -- x23 holds GPFIFO GPU VA (bar4_phys + off)
+    // On GH200: BAR4 PA == GPU VA; CPU VA is separately held in x28
     str x23, [x0, #(RPC_HDR_SIZE + 16)] // offset 0x10: gpFifoBase
     // gpFifoEntries
     str w24, [x0, #(RPC_HDR_SIZE + 24)] // offset 0x18: gpFifoEntries
@@ -611,7 +676,9 @@ gsp_rpc_alloc_channel:
     // Store channel_id
     adrp x0, channel_id_out
     add x0, x0, :lo12:channel_id_out
-    str w26, [x0]
+    // w26 was loaded via `ldr w26,...` which zero-extends into x26.
+    // channel_id_out is declared .quad (64-bit); store full x26.
+    str x26, [x0]
 
     // ================================================================
     // Set up USERD base address
