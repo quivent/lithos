@@ -1,4 +1,4 @@
-// gptq_matvec_tc.ptx -- Tensor-core GPTQ W4A16 GEMV for single-token decode
+// gptq_matvec_tc.ptx -- Tensor-core optimized GPTQ W4A16 GEMV for single-token decode
 //
 // Computes: output[n] = sum_k( dequant(qweight[k/8, n], k%8) * input[k] )
 //   where dequant(packed, bit) = ((packed >> (bit*4)) & 0xF - 7) * scales[k/128, n]
@@ -12,31 +12,30 @@
 //         N (u32), K (u32)
 //
 // Launch: grid=(ceil(N/64), 1, 1), block=(128, 1, 1)
-// Each block computes 64 output elements.
-// 128 threads = 4 warps. 2 warp-columns x 2 warp-rows (but M=1 so warp-rows collapse).
-// Actually: 4 warps each handle 16 output columns. Each warp does m16n8k16 x 2 n-tiles.
+// Each block computes 64 output elements (vs 1 per block in baseline).
 //
-// Tile structure:
-//   BN = 64 (output columns per block)
-//   BK = 16 (K-dimension per MMA step, matching m16n8k16)
-//   Each warp: 16 output cols (2 x m16n8k16 n-tiles of 8 cols each)
-//   K-loop iterates in steps of BK=16.
+// Architecture:
+//   128 threads = 4 warps. Each warp handles 16 output columns.
+//   Within a warp, 32 threads cooperatively reduce along K.
+//   Uses mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 tensor cores.
 //
-// For GEMV (M=1), the A-fragment is the input vector broadcast across 16 rows.
-// The B-fragment is the dequantized weight tile [16 x 64] in f16.
-// mma produces [16 x 8] output; only row 0 is meaningful (all rows identical for GEMV).
+//   To preserve f32 precision on the input vector:
+//   - Input loaded to shared memory as f32 (once per block)
+//   - For each K-tile of 16: input f32 is split into f16 + residual_f16
+//     input_f16 = cvt.rn.f16(input_f32)
+//     residual_f32 = input_f32 - cvt.f32(input_f16)
+//     residual_f16 = cvt.rn.f16(residual_f32)
+//   - Two MMAs are issued: main + residual, results accumulated
+//   This achieves near-f32 precision for the input contribution.
 //
-// Double-buffering: cp.async loads next weight tile while tensor cores compute current.
-// Input vector loaded into shared memory once (BK=16 f16 values per K-step).
+//   Weight dequantization (INT32 -> f16) happens in registers from global loads.
+//   Dequantized f16 weights stored to shared memory for ldmatrix/MMA consumption.
 //
 // Shared memory layout:
-//   X_smem:   K f16 values (input vector, converted from f32) - loaded once at start
-//             Actually K can be large (5120), so 10KB. Load BK-sized chunks instead.
-//   Alternatively: load full input to smem once = 5120 * 2 = 10KB. Fits easily.
-//   B_smem:   2 stages * (16 rows * 64 cols * 2B f16) = 2 * 2048 = 4096 B
-//   Bq_smem:  2 stages * (16 rows * 64 cols / 2) = 2 * 512 = 1024 B (packed W4)
-//   S_smem:   64 * 2B = 128 B (f16 scales for current group)
-//   Total: ~15 KB (well within 48KB limit)
+//   X_smem:  K * 4 bytes (input vector, f32)           = 20480 B for K=5120
+//   B_smem:  16 * 64 * 2 bytes (dequant f16 weights)   = 2048 B (single buffer)
+//   S_smem:  64 * 2 bytes (f16 scales)                 = 128 B
+//   Total: ~22 KB
 
 .version 8.5
 .target sm_90
@@ -52,19 +51,15 @@
 )
 {
     .reg .u64   %rd<100>;
-    .reg .u32   %r<180>;
-    .reg .f32   %f<80>;
+    .reg .u32   %r<200>;
+    .reg .f32   %f<100>;
     .reg .f16x2 %h<32>;
     .reg .b32   %b<64>;
     .reg .pred  %p<32>;
-    .reg .b16   %htmp<4>;
+    .reg .b16   %htmp<8>;
 
-    // Shared memory layout:
-    //   X_smem[0..10239]: input vector f16, K elements (max ~10KB for K=5120)
-    //   B_smem[10240..14335]: dequantized weights, 2 stages * 16*64*2 = 4096 B
-    //   S_smem[14336..14463]: scales for 64 cols, f16 = 128 B
-    .shared .align 16 .b8 X_smem[10240];   // K * 2 bytes, up to 5120 f16
-    .shared .align 16 .b8 B_smem[4096];    // 2 stages * 2048B dequantized f16 weights
+    .shared .align 16 .b8 X_smem[20480];   // K * 4 bytes (f32), max K=5120
+    .shared .align 16 .b8 B_smem[2048];    // 16 * 64 * 2B dequantized f16 weights
     .shared .align 16 .b8 S_smem[128];     // 64 f16 scales
 
     // ---- Load parameters ----
@@ -90,39 +85,34 @@
     @%p0 bra        DONE;
 
     // ================================================================
-    // STEP 1: Load entire input vector into shared memory as f16
-    // 128 threads, K elements. Each thread loads ceil(K/128) elements.
-    // input is f32, we convert to f16 on the fly.
+    // STEP 1: Load input vector into shared memory as f32
+    // 128 threads, K f32 elements. Each thread loads K/128 elements.
     // ================================================================
-    mov.u32         %r20, %r3;             // start index = tid
+    mov.u32         %r20, X_smem;
+    mov.u32         %r21, %r3;             // start index = tid
 LOAD_X:
-    setp.ge.u32     %p1, %r20, %r1;
+    setp.ge.u32     %p1, %r21, %r1;
     @%p1 bra        LOAD_X_DONE;
 
-    // Load f32 from global
-    cvt.u64.u32     %rd10, %r20;
+    cvt.u64.u32     %rd10, %r21;
     shl.b64         %rd11, %rd10, 2;       // byte offset = idx * 4
     add.u64         %rd12, %rd2, %rd11;
-    ld.global.f32   %f0, [%rd12];
+    ld.global.f32   %f40, [%rd12];
 
-    // Convert to f16 and store to smem
-    cvt.rn.f16.f32  %htmp0, %f0;
-    shl.b32         %r21, %r20, 1;         // byte offset in smem = idx * 2
-    mov.u32         %r22, X_smem;
-    add.u32         %r23, %r22, %r21;
-    st.shared.b16   [%r23], %htmp0;
+    shl.b32         %r22, %r21, 2;         // byte offset in smem = idx * 4
+    add.u32         %r23, %r20, %r22;
+    st.shared.f32   [%r23], %f40;
 
-    add.u32         %r20, %r20, 128;       // stride by blockDim
+    add.u32         %r21, %r21, 128;
     bra             LOAD_X;
 LOAD_X_DONE:
     bar.sync        0;
 
     // ================================================================
     // STEP 2: Initialize accumulators
-    // Each warp handles 16 output columns via 2 m16n8k16 MMAs.
-    // Warp 0: cols 0..15, Warp 1: cols 16..31, Warp 2: cols 32..47, Warp 3: cols 48..63
-    // Each MMA: 4 f32 accumulators per thread.
-    // 2 MMAs per warp = 8 f32 accumulators per thread.
+    // Each warp: 2 n-tiles of 8 cols = 16 cols.
+    // Each n-tile MMA has 4 f32 accumulators per thread.
+    // We do main + residual = same accumulators (accumulated).
     // ================================================================
     mov.f32         %f0,  0f00000000;
     mov.f32         %f1,  0f00000000;
@@ -134,140 +124,96 @@ LOAD_X_DONE:
     mov.f32         %f7,  0f00000000;
 
     // ================================================================
-    // STEP 3: Precompute weight/scale addressing
-    // qweight: [K/8, N] int32 row-major. stride = N * 4 bytes per row.
-    // For W4: each int32 packs 8 nibbles along K.
-    // In the K-loop, we process BK=16 K-elements, which is 2 packed rows.
-    //
-    // For the B tile [BK=16, BN=64]:
-    //   We need 16 * 64 = 1024 weight values.
-    //   Packed: 16/8 = 2 rows of qweight, each row has 64 int32 = 256 bytes.
-    //   Total packed data per tile: 2 * 256 = 512 bytes.
-    //   128 threads: 4 bytes each (one int32 = 8 nibbles).
-    //
-    // Thread mapping for loading packed weights:
-    //   128 threads, 128 int32 values (2 rows * 64 cols)
-    //   t -> packed_row = t / 64 (0 or 1), packed_col = t % 64
+    // STEP 3: Weight/scale addressing setup
     // ================================================================
+    // Thread mapping for packed weight loading:
+    //   128 threads load 2 packed rows * 64 cols = 128 int32 values
+    //   tid -> packed_row = tid / 64 (0 or 1), packed_col = tid % 64
+    shr.b32         %r30, %r3, 6;          // packed_row (0 or 1)
+    and.b32         %r31, %r3, 63;         // packed_col (0..63)
 
-    // Packed weight load setup
-    shr.b32         %r30, %r3, 6;          // packed_row = tid / 64 (0 or 1)
-    and.b32         %r31, %r3, 63;         // packed_col = tid % 64 (0..63)
+    // Global column for this thread's weight
+    add.u32         %r32, %r10, %r31;      // tile_origin + packed_col
 
-    // Global column = tile_origin + packed_col
-    add.u32         %r32, %r10, %r31;
-
-    // Row stride in bytes for qweight: N * 4
-    shl.b32         %r33, %r0, 2;          // N * 4 bytes
+    // qweight row stride in bytes: N * 4
+    shl.b32         %r33, %r0, 2;
     cvt.u64.u32     %rd20, %r33;
 
-    // Column byte offset: packed_col * 4
+    // Column byte offset: global_col * 4
     shl.b32         %r34, %r32, 2;
-    cvt.u64.u32     %rd21, %r34;           // global col byte offset
+    cvt.u64.u32     %rd21, %r34;
 
-    // Scales setup: [K/128, N] f16. Row stride = N * 2 bytes.
-    shl.b32         %r35, %r0, 1;          // N * 2 bytes
+    // Scales row stride: N * 2 bytes
+    shl.b32         %r35, %r0, 1;
     cvt.u64.u32     %rd22, %r35;
 
-    // Scale column byte offset: global_col * 2
-    shl.b32         %r36, %r32, 1;
-    cvt.u64.u32     %rd23, %r36;
-
-    // B_smem base
+    // B_smem and S_smem bases
     mov.u32         %r40, B_smem;
-    // S_smem base
     mov.u32         %r41, S_smem;
 
-    // ================================================================
-    // STEP 4: Main K-loop with double-buffered weight loading
-    // ================================================================
-    mov.u32         %r50, 0;               // k_offset (in elements, 0..K, step 16)
-    mov.u32         %r51, 0;               // stage toggle (0 or 1)
+    // Precompute: packed_row * 8 (for nibble K offset)
+    shl.b32         %r42, %r30, 3;         // packed_row * 8
+    // packed_col * 2 bytes (B_smem column offset)
+    shl.b32         %r43, %r31, 1;
 
-    // ---- PRELOAD STAGE 0 ----
-    // Load packed weights for k=0..15
-    // packed_row_global = (k_offset/8) + packed_row = 0 + packed_row
-    // Global addr = qweight_ptr + packed_row_global * N * 4 + global_col * 4
-    cvt.u64.u32     %rd30, %r30;           // packed_row (0 or 1)
-    mul.lo.u64      %rd31, %rd30, %rd20;   // packed_row * N * 4
-    add.u64         %rd32, %rd0, %rd31;    // + qweight_ptr
-    add.u64         %rd32, %rd32, %rd21;   // + col offset
+    // MMA fragment addressing
+    and.b32         %r100, %r6, 3;         // lane % 4
+    shr.b32         %r111, %r6, 2;         // lane / 4 (0..7)
+    shl.b32         %r110, %r7, 4;         // warp_id * 16
 
-    // Bounds check on column
+    // Column bounds check (used throughout)
     setp.lt.u32     %p2, %r32, %r0;
 
-    // Load 4 bytes (one int32) via cp.async
-    // Dest: B_smem[stage * 512 + packed_row * 256 + packed_col * 4]
-    // = B_smem[0 + packed_row * 256 + packed_col * 4]
-    shl.b32         %r52, %r30, 8;         // packed_row * 256
-    shl.b32         %r53, %r31, 2;         // packed_col * 4
-    add.u32         %r54, %r40, %r52;
-    add.u32         %r54, %r54, %r53;      // smem dest addr (stage 0)
-
-    @%p2 cp.async.ca.shared.global [%r54], [%rd32], 4;
-    @!%p2 st.shared.b32 [%r54], 0;
-
-    // Load scales for this tile (only first 64 threads)
-    // scale_group = k_offset / 128 = 0
+    // ================================================================
+    // STEP 4: Load initial scales (group 0)
+    // ================================================================
     setp.lt.u32     %p3, %r3, 64;
-    @!%p3 bra       SKIP_SCALE0;
+    @!%p3 bra       SKIP_SCALE_INIT;
 
-    // Scale addr = scales_ptr + group * N * 2 + (tile_origin + tid) * 2
     add.u32         %r55, %r10, %r3;       // global N col
-    setp.lt.u32     %p4, %r55, %r0;        // col bounds check
+    setp.lt.u32     %p4, %r55, %r0;
     cvt.u64.u32     %rd33, %r55;
-    shl.b64         %rd33, %rd33, 1;       // * 2 bytes
-    add.u64         %rd34, %rd1, %rd33;    // scales_ptr + col*2 (group 0, row 0)
+    shl.b64         %rd33, %rd33, 1;
+    add.u64         %rd34, %rd1, %rd33;    // scales_ptr + col * 2 (group 0)
 
-    shl.b32         %r56, %r3, 1;          // tid * 2 bytes in S_smem
+    shl.b32         %r56, %r3, 1;
     add.u32         %r57, %r41, %r56;
 
     mov.b16         %htmp2, 0;
     @%p4 ld.global.b16 %htmp2, [%rd34];
     st.shared.b16   [%r57], %htmp2;
 
-SKIP_SCALE0:
-    // Commit the weight cp.async group
-    cp.async.commit_group;
+SKIP_SCALE_INIT:
+    bar.sync        0;
 
     // ================================================================
     // K_LOOP: process BK=16 elements per iteration
     // ================================================================
+    mov.u32         %r50, 0;               // k_offset (elements, step 16)
+
 K_LOOP:
     setp.ge.u32     %p5, %r50, %r1;
     @%p5 bra        K_DONE;
 
-    // Wait for current stage load
-    cp.async.wait_group 0;
-    bar.sync        0;
+    // ---- Load packed weights from global memory ----
+    shr.b32         %r60, %r50, 3;         // k_offset / 8 = packed row base
+    add.u32         %r61, %r60, %r30;      // + packed_row (0 or 1)
+    cvt.u64.u32     %rd40, %r61;
+    mul.lo.u64      %rd41, %rd40, %rd20;   // * row_stride (N * 4)
+    add.u64         %rd42, %rd0, %rd41;    // + qweight_ptr
+    add.u64         %rd42, %rd42, %rd21;   // + col offset
 
-    // ---- Dequantize weights: packed W4 -> f16, applying scales ----
-    // We have 2 packed rows * 64 cols = 128 int32 values in B_smem (stage area).
-    // Each thread handles its own int32 (8 nibbles = 8 weight values).
-    // packed_row gives k_sub offset 0 or 1 (within the 2-row block).
-    // Each packed row expands to 8 K-values.
-    // So packed_row 0 -> k 0..7, packed_row 1 -> k 8..15.
-    //
-    // The dequantized B tile is [16, 64] f16 stored in the same B_smem stage.
-    // But we need to read packed first, then write dequantized.
-    // Use registers as intermediary.
+    mov.u32         %r62, 0;
+    @%p2 ld.global.b32 %r62, [%rd42];
 
-    // Read packed int32 from B_smem
-    shl.b32         %r60, %r51, 9;         // stage * 512
-    add.u32         %r61, %r40, %r60;      // B_smem + stage_offset
-    add.u32         %r61, %r61, %r52;      // + packed_row * 256
-    add.u32         %r61, %r61, %r53;      // + packed_col * 4
-    ld.shared.b32   %r62, [%r61];          // packed int32
-
-    // Read scale for this column
-    shl.b32         %r63, %r31, 1;         // packed_col * 2 bytes
-    add.u32         %r64, %r41, %r63;
+    // ---- Read scale for this column ----
+    ld.shared.b16   %htmp1, [%r41 + 0];   // temp: will compute proper offset
+    // Actually, packed_col * 2 offset:
+    add.u32         %r64, %r41, %r43;     // S_smem + packed_col * 2
     ld.shared.b16   %htmp1, [%r64];
-    cvt.f32.f16     %f10, %htmp1;          // scale as f32
+    cvt.f32.f16     %f10, %htmp1;
 
-    // Extract 8 nibbles, dequantize to f16
-    // nibble i -> k = packed_row * 8 + i
-    // value = (nibble - 7) * scale
+    // ---- Dequantize 8 nibbles -> 8 f16 values ----
     and.b32         %r70, %r62, 0xF;
     shr.b32         %r71, %r62, 4;  and.b32 %r71, %r71, 0xF;
     shr.b32         %r72, %r62, 8;  and.b32 %r72, %r72, 0xF;
@@ -277,270 +223,179 @@ K_LOOP:
     shr.b32         %r76, %r62, 24; and.b32 %r76, %r76, 0xF;
     shr.b32         %r77, %r62, 28; and.b32 %r77, %r77, 0xF;
 
-    // Dequant: (nib - 7) * scale -> f32 -> f16
     cvt.rn.f32.u32  %f20, %r70; sub.f32 %f20, %f20, 0f40E00000; mul.f32 %f20, %f20, %f10;
     cvt.rn.f32.u32  %f21, %r71; sub.f32 %f21, %f21, 0f40E00000; mul.f32 %f21, %f21, %f10;
     cvt.rn.f32.u32  %f22, %r72; sub.f32 %f22, %f22, 0f40E00000; mul.f32 %f22, %f22, %f10;
     cvt.rn.f32.u32  %f23, %r73; sub.f32 %f23, %f23, 0f40E00000; mul.f32 %f23, %f23, %f10;
     cvt.rn.f32.u32  %f24, %r74; sub.f32 %f24, %f24, 0f40E00000; mul.f32 %f24, %f24, %f10;
-    cvt.rn.f32.u32  %f25, %r75; sub.f32 %f25, %f25, 0f40E00000; mul.f32 %f25, %f25, %f10;
+    cvt.rn.f32.u32  %f25, %r75; sub.f32 %f25, %f75, 0f40E00000; mul.f32 %f25, %f25, %f10;
     cvt.rn.f32.u32  %f26, %r76; sub.f32 %f26, %f26, 0f40E00000; mul.f32 %f26, %f26, %f10;
     cvt.rn.f32.u32  %f27, %r77; sub.f32 %f27, %f27, 0f40E00000; mul.f32 %f27, %f27, %f10;
 
-    // Now we need to store dequantized weights into B_smem in a layout suitable for ldmatrix.
-    // B tile layout for mma m16n8k16 (B is col-major in the MMA sense):
-    //   B is [K=16, N_tile] f16. For ldmatrix.trans.x4, the layout in smem is:
-    //   16 rows (K) x N_cols f16, row-major, stride = N_cols * 2 bytes.
-    //
-    // We store as [16][64] f16, row-major.
-    // Thread t stores 8 f16 values at row (packed_row * 8 + nibble), col packed_col.
-    // Wait -- each thread has ONE column (packed_col) and 8 K values.
-    // So we store 8 values at 8 different rows, same column.
-
-    // Dequant stage area: re-use B_smem at offset stage * 2048 (after the 512B packed area).
-    // Actually let's use the full B_smem area. We read from packed area (512B), now write to
-    // the dequant area. Total B_smem = 4096B = 2 stages * 2048B dequant.
-    // But we were using first 1024B as packed staging. Let's separate:
-    // Actually the B_smem is 4096B total. Let's use it as:
-    //   stage 0 dequant: [0, 2048)
-    //   stage 1 dequant: [2048, 4096)
-    // And the packed data was loaded into the first 512B of the stage. After reading it,
-    // we can overwrite. But we need sync. Let's just do it in registers and write dequant.
-
-    // Dequant dest base = B_smem + stage * 2048
-    shl.b32         %r80, %r51, 11;        // stage * 2048
-    add.u32         %r81, %r40, %r80;
-
-    // Row stride = 64 cols * 2 bytes = 128 bytes
-    // For each of 8 nibbles: row = packed_row * 8 + nib_idx
+    // Store dequantized weights to B_smem as f16
+    // Layout: [16][64] f16, row-major. stride = 64 * 2 = 128 bytes per row.
+    // Row = packed_row * 8 + nibble_idx, Col = packed_col
     // Offset = row * 128 + packed_col * 2
-    shl.b32         %r82, %r30, 3;         // packed_row * 8
-    shl.b32         %r83, %r31, 1;         // packed_col * 2 bytes
 
-    // Store nibble 0: row = packed_row*8 + 0
-    add.u32         %r84, %r82, 0;         // k_row
-    shl.b32         %r85, %r84, 7;         // k_row * 128
-    add.u32         %r86, %r81, %r85;
-    add.u32         %r86, %r86, %r83;
+    // nibble 0: row = packed_row*8
+    shl.b32         %r80, %r42, 7;         // (packed_row * 8) * 128
+    add.u32         %r81, %r40, %r80;
+    add.u32         %r81, %r81, %r43;      // + packed_col * 2
     cvt.rn.f16.f32  %htmp0, %f20;
-    st.shared.b16   [%r86], %htmp0;
+    st.shared.b16   [%r81], %htmp0;
 
     // nibble 1
-    add.u32         %r84, %r82, 1;
-    shl.b32         %r85, %r84, 7;
-    add.u32         %r86, %r81, %r85;
-    add.u32         %r86, %r86, %r83;
+    add.u32         %r82, %r81, 128;
     cvt.rn.f16.f32  %htmp0, %f21;
-    st.shared.b16   [%r86], %htmp0;
+    st.shared.b16   [%r82], %htmp0;
 
     // nibble 2
-    add.u32         %r84, %r82, 2;
-    shl.b32         %r85, %r84, 7;
-    add.u32         %r86, %r81, %r85;
-    add.u32         %r86, %r86, %r83;
+    add.u32         %r82, %r82, 128;
     cvt.rn.f16.f32  %htmp0, %f22;
-    st.shared.b16   [%r86], %htmp0;
+    st.shared.b16   [%r82], %htmp0;
 
     // nibble 3
-    add.u32         %r84, %r82, 3;
-    shl.b32         %r85, %r84, 7;
-    add.u32         %r86, %r81, %r85;
-    add.u32         %r86, %r86, %r83;
+    add.u32         %r82, %r82, 128;
     cvt.rn.f16.f32  %htmp0, %f23;
-    st.shared.b16   [%r86], %htmp0;
+    st.shared.b16   [%r82], %htmp0;
 
     // nibble 4
-    add.u32         %r84, %r82, 4;
-    shl.b32         %r85, %r84, 7;
-    add.u32         %r86, %r81, %r85;
-    add.u32         %r86, %r86, %r83;
+    add.u32         %r82, %r82, 128;
     cvt.rn.f16.f32  %htmp0, %f24;
-    st.shared.b16   [%r86], %htmp0;
+    st.shared.b16   [%r82], %htmp0;
 
     // nibble 5
-    add.u32         %r84, %r82, 5;
-    shl.b32         %r85, %r84, 7;
-    add.u32         %r86, %r81, %r85;
-    add.u32         %r86, %r86, %r83;
+    add.u32         %r82, %r82, 128;
     cvt.rn.f16.f32  %htmp0, %f25;
-    st.shared.b16   [%r86], %htmp0;
+    st.shared.b16   [%r82], %htmp0;
 
     // nibble 6
-    add.u32         %r84, %r82, 6;
-    shl.b32         %r85, %r84, 7;
-    add.u32         %r86, %r81, %r85;
-    add.u32         %r86, %r86, %r83;
+    add.u32         %r82, %r82, 128;
     cvt.rn.f16.f32  %htmp0, %f26;
-    st.shared.b16   [%r86], %htmp0;
+    st.shared.b16   [%r82], %htmp0;
 
     // nibble 7
-    add.u32         %r84, %r82, 7;
-    shl.b32         %r85, %r84, 7;
-    add.u32         %r86, %r81, %r85;
-    add.u32         %r86, %r86, %r83;
+    add.u32         %r82, %r82, 128;
     cvt.rn.f16.f32  %htmp0, %f27;
-    st.shared.b16   [%r86], %htmp0;
+    st.shared.b16   [%r82], %htmp0;
 
     bar.sync        0;
 
-    // ---- Issue cp.async for NEXT stage (double-buffering) ----
-    add.u32         %r90, %r50, 16;        // next k_offset
-    setp.lt.u32     %p6, %r90, %r1;       // has next tile?
-    xor.b32         %r91, %r51, 1;         // next stage
-
-    // Next weight tile: packed_row_global = (next_k/8) + packed_row
-    shr.b32         %r92, %r90, 3;         // next_k / 8
-    add.u32         %r93, %r92, %r30;      // + packed_row
-    cvt.u64.u32     %rd40, %r93;
-    mul.lo.u64      %rd41, %rd40, %rd20;   // * N * 4
-    add.u64         %rd42, %rd0, %rd41;    // + qweight_ptr
-    add.u64         %rd42, %rd42, %rd21;   // + col offset
-
-    // Next smem dest (packed area, stage * 512)
-    // We'll reuse the dequant area for packed staging in the next stage
-    // Actually we need a separate packed staging area. Let me reconsider.
-    // We can just load packed data into the dequant stage area (first 512B of stage).
-    // After dequanting, we overwrite the whole stage with dequantized data.
-    // For next stage, cp.async writes to the other stage's first 512B,
-    // which is safe because we're computing on the current stage.
-
-    // Packed dest for next stage: B_smem + next_stage * 2048 + packed_row * 256 + packed_col * 4
-    // But wait, the dequant area and packed area overlap. The packed area only uses first 512B
-    // of each 2048B stage, so we need to make sure we read packed before writing dequant.
-    // Above, we already did that: read packed, then write dequant. Good.
-
-    // Next packed dest:
-    shl.b32         %r94, %r91, 11;        // next_stage * 2048 (using dequant offset space)
-    // Actually let's just use the first 512B for packed. Same offsets as before.
-    // Actually no, the packed load goes into B_smem at offset stage * 512.
-    // But we defined B_smem as 4096B for dequant. Let me just use separate offsets.
-    // Hmm, this is getting complicated. Let me simplify:
-    // Use B_smem [0..4095] for dequantized only (2 stages * 2048).
-    // Load packed weights directly into registers via global loads (not cp.async).
-
-    // REVISED APPROACH: Load packed weights with regular ld.global, dequant in regs,
-    // store to B_smem. For double-buffering, the cp.async is used only for overlapping
-    // the NEXT iteration's global load with the CURRENT iteration's MMA.
-
-    // For simplicity and correctness, let's just prefetch next tile.
-    // We use the first 512B of each stage for packed data, then overwrite with dequant.
-    shl.b32         %r95, %r91, 9;         // next_stage * 512 (packed offset in B_smem)
-    // Wait, our B_smem is only 4096B. If packed uses [0,512) and [512,1024),
-    // and dequant uses [0,2048) and [2048,4096), they overlap. Bad.
-
-    // Let me just not use cp.async for the packed weights. Instead:
-    // After the MMA below, issue a regular prefetch or just load at top of next iteration.
-    // The main perf win is from tiling (64 outputs/block) + smem input, not double-buffering.
-
-    // Actually, let me skip the cp.async double-buffering for weights and just do it simply.
-    // The loaded dequant'd weights are already in B_smem. Let's do the MMA now.
-
-    // ---- Prepare A fragment (input vector, replicated across 16 rows) ----
-    // For m16n8k16 MMA:
-    //   A fragment per lane: 4 x b32, each containing f16x2
-    //   Layout: A[row][col] where row = lane/4 or lane/4+8 (for halves),
-    //           col = (lane%4)*2 or (lane%4)*2+1 (packed in f16x2)
-    //   For each b32 fragment reg:
-    //     reg[0]: A[lane%16 / 4, ...] -- but actually for m16n8k16:
-    //     Fragment A is {a0, a1, a2, a3} where each is f16x2.
-    //     a0 = {A[t/4, (t%4)*2], A[t/4, (t%4)*2+1]}       (rows 0..7)
-    //     a1 = {A[t/4+8, (t%4)*2], A[t/4+8, (t%4)*2+1]}   (rows 8..15)
-    //     a2 = {A[t/4, (t%4)*2+8], A[t/4, (t%4)*2+8+1]}   (K cols 8..15)
-    //     a3 = {A[t/4+8, (t%4)*2+8], A[t/4+8, (t%4)*2+8+1]}
+    // ================================================================
+    // Prepare A fragment (input vector from X_smem, convert to f16)
+    // AND compute residual for precision compensation
     //
-    // For GEMV, A is the input vector broadcast: A[any_row][k_col] = input[k_offset + k_col].
-    // So A fragment values depend only on the K column.
-
-    // Load A fragment from X_smem.
-    // k_col for a0/a1: (lane%4)*2 and (lane%4)*2+1 -> packed as f16x2
-    // k_col for a2/a3: (lane%4)*2+8 and (lane%4)*2+8+1 -> packed as f16x2
-
-    and.b32         %r100, %r6, 3;         // lane % 4
-    shl.b32         %r101, %r100, 1;       // (lane%4) * 2 = k_col_base
-
-    // X_smem offset for k_offset + k_col_base: (k_offset + k_col_base) * 2 bytes
-    add.u32         %r102, %r50, %r101;    // k_offset + k_col_base
-    shl.b32         %r103, %r102, 1;       // * 2 bytes
-    mov.u32         %r104, X_smem;
-    add.u32         %r105, %r104, %r103;
-
-    // Load f16x2 for a0 (and a1 since GEMV: same value for all rows)
-    ld.shared.b32   %b0, [%r105];          // {x[k+col], x[k+col+1]}
-
-    // For a2/a3: k_col_base + 8
-    add.u32         %r106, %r105, 16;      // +8 f16 = +16 bytes
-    ld.shared.b32   %b1, [%r106];          // {x[k+col+8], x[k+col+8+1]}
-
-    // A fragments: a0=a1=b0 (rows don't matter for GEMV), a2=a3=b1
-    // So: {b0, b0, b1, b1}
-    mov.b32         %b2, %b0;
-    mov.b32         %b3, %b1;
-
-    // ---- Prepare B fragment via ldmatrix ----
-    // B_smem has [16][64] f16, row-major, stride = 128 bytes per row.
-    // For mma m16n8k16 B fragment (col-major perspective):
-    //   Using ldmatrix.trans.x4 to load 4 x 8x8 tiles.
-    //   ldmatrix lane addressing: lane l loads from address base + (l%16) * stride
-    //   For .x4.trans: loads 4 pairs of 8x8 matrices, transposing on the fly.
+    // For m16n8k16 MMA, A fragment {a0, a1, a2, a3} each f16x2:
+    //   a0 = {A[lane/4, (lane%4)*2], A[lane/4, (lane%4)*2+1]}
+    //   a1 = {A[lane/4+8, (lane%4)*2], A[lane/4+8, (lane%4)*2+1]}
+    //   a2 = {A[lane/4, (lane%4)*2+8], A[lane/4, (lane%4)*2+8+1]}
+    //   a3 = {A[lane/4+8, (lane%4)*2+8], A[lane/4+8, (lane%4)*2+8+1]}
     //
-    // Actually, for m16n8k16 B fragment, we need {b0, b1} where each is f16x2.
-    //   b0 = {B[(t%4)*2, t/4], B[(t%4)*2+1, t/4]}  (k-rows, n-col)
-    //   b1 = {B[(t%4)*2+8, t/4], B[(t%4)*2+8+1, t/4]}
-    //
-    // We can load these directly from B_smem.
+    // For GEMV (broadcast): all rows same, so a0==a1, a2==a3.
+    // k_col for a0: (lane%4)*2 and (lane%4)*2+1
+    // k_col for a2: (lane%4)*2+8 and (lane%4)*2+8+1
+    // ================================================================
 
-    // Each warp handles 16 N-columns: warp 0 -> cols 0..15, etc.
-    // Within warp, 2 mma's: n-tile 0 (cols 0..7), n-tile 1 (cols 8..15).
-    shl.b32         %r110, %r7, 4;         // warp_id * 16 = warp N-col base
+    // k_col_base = (lane%4) * 2
+    shl.b32         %r90, %r100, 1;        // (lane%4) * 2
 
-    // For MMA n-tile 0 (cols 0..7):
-    // B frag b0: k_row = (lane%4)*2, n_col = warp_col_base + lane/4
-    // B frag b1: k_row = (lane%4)*2+8, n_col = same
-    shr.b32         %r111, %r6, 2;         // lane / 4 (0..7) = n sub-index
-    // But lane/4 goes 0..7 for lanes 0..31, which means only 8 n-cols per mma (good, n8).
+    // Load f32 from X_smem at k_offset + k_col_base
+    add.u32         %r91, %r50, %r90;      // global k index
+    shl.b32         %r92, %r91, 2;         // * 4 bytes
+    add.u32         %r93, %r20, %r92;      // X_smem addr
 
-    // n_col = warp_col_base + lane/4
-    add.u32         %r112, %r110, %r111;   // n_col in tile (0..63)
+    // Load 2 f32 values for a0
+    ld.shared.f32   %f30, [%r93];          // x[k + (lane%4)*2]
+    ld.shared.f32   %f31, [%r93 + 4];      // x[k + (lane%4)*2 + 1]
+
+    // Convert to f16
+    cvt.rn.f16.f32  %htmp0, %f30;
+    cvt.rn.f16.f32  %htmp1, %f31;
+    mov.b32         %b0, {%htmp0, %htmp1}; // a0 = a1
+
+    // Compute residual: r = x_f32 - cvt.f32(x_f16)
+    cvt.f32.f16     %f32, %htmp0;
+    cvt.f32.f16     %f33, %htmp1;
+    sub.f32         %f34, %f30, %f32;      // residual[0]
+    sub.f32         %f35, %f31, %f33;      // residual[1]
+    cvt.rn.f16.f32  %htmp2, %f34;
+    cvt.rn.f16.f32  %htmp3, %f35;
+    mov.b32         %b4, {%htmp2, %htmp3}; // a0_res = a1_res
+
+    // Same for a2 (k cols +8)
+    add.u32         %r94, %r93, 32;        // +8 f32 = +32 bytes
+    ld.shared.f32   %f36, [%r94];
+    ld.shared.f32   %f37, [%r94 + 4];
+
+    cvt.rn.f16.f32  %htmp0, %f36;
+    cvt.rn.f16.f32  %htmp1, %f37;
+    mov.b32         %b1, {%htmp0, %htmp1}; // a2 = a3
+
+    cvt.f32.f16     %f38, %htmp0;
+    cvt.f32.f16     %f39, %htmp1;
+    sub.f32         %f60, %f36, %f38;
+    sub.f32         %f61, %f37, %f39;
+    cvt.rn.f16.f32  %htmp2, %f60;
+    cvt.rn.f16.f32  %htmp3, %f61;
+    mov.b32         %b5, {%htmp2, %htmp3}; // a2_res = a3_res
+
+    // a1 = a0, a3 = a2 (GEMV: all rows same)
+    mov.b32         %b2, %b0;              // a1 = a0
+    mov.b32         %b3, %b1;              // a3 = a2
+    mov.b32         %b6, %b4;              // a1_res
+    mov.b32         %b7, %b5;              // a3_res
+
+    // ================================================================
+    // Prepare B fragment from B_smem
+    // For m16n8k16 B fragment {b0, b1} each f16x2:
+    //   b0 = {B[(lane%4)*2, lane/4], B[(lane%4)*2+1, lane/4]}
+    //   b1 = {B[(lane%4)*2+8, lane/4], B[(lane%4)*2+8+1, lane/4]}
+    // k-rows, n-col within the 8-col MMA tile
+    // ================================================================
+
+    // Warp N-col base
+    add.u32         %r112, %r110, %r111;   // warp_col_base + lane/4 = n_col in tile
 
     // k_row = (lane%4)*2
-    shl.b32         %r113, %r100, 1;       // (lane%4) * 2
+    shl.b32         %r113, %r100, 1;
 
-    // B_smem addr for (k_row, n_col): stage_base + k_row * 128 + n_col * 2
+    // B_smem addr for (k_row, n_col): k_row * 128 + n_col * 2
     shl.b32         %r114, %r113, 7;       // k_row * 128
     shl.b32         %r115, %r112, 1;       // n_col * 2
-    add.u32         %r116, %r81, %r114;    // B_smem + stage_offset + k_row * 128
-    add.u32         %r116, %r116, %r115;   // + n_col * 2
+    add.u32         %r116, %r40, %r114;
+    add.u32         %r116, %r116, %r115;
 
-    // Load B frag b0: 2 consecutive f16 at k_row and k_row+1 (same n_col)
-    // Actually the layout stores k as rows: B[k_row][n_col] is at k_row * 128 + n_col * 2.
-    // B frag needs B[k_row, n_col] and B[k_row+1, n_col] packed as f16x2.
-    // These are at different rows (128 bytes apart). Load separately.
+    // Load B frag b0: B[k_row, n_col] and B[k_row+1, n_col]
     ld.shared.b16   %htmp0, [%r116];       // B[k_row, n_col]
-    add.u32         %r117, %r116, 128;     // next k_row
+    add.u32         %r117, %r116, 128;     // next k_row (+128 bytes)
     ld.shared.b16   %htmp1, [%r117];       // B[k_row+1, n_col]
-
-    // Pack as f16x2: lo=B[k_row], hi=B[k_row+1]
     mov.b32         %b10, {%htmp0, %htmp1};
 
     // b1: k_row+8 and k_row+9
-    add.u32         %r118, %r116, 1024;    // +8 rows * 128 bytes
+    add.u32         %r118, %r116, 1024;    // +8 rows * 128
     ld.shared.b16   %htmp0, [%r118];
     add.u32         %r119, %r118, 128;
     ld.shared.b16   %htmp1, [%r119];
     mov.b32         %b11, {%htmp0, %htmp1};
 
-    // ---- MMA n-tile 0 ----
+    // ---- MMA n-tile 0 (main) ----
     mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
         {%f0, %f1, %f2, %f3},
         {%b0, %b2, %b1, %b3},
         {%b10, %b11},
         {%f0, %f1, %f2, %f3};
 
+    // ---- MMA n-tile 0 (residual) ----
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%f0, %f1, %f2, %f3},
+        {%b4, %b6, %b5, %b7},
+        {%b10, %b11},
+        {%f0, %f1, %f2, %f3};
+
     // ---- MMA n-tile 1 (cols +8) ----
-    // Same A fragment, B fragment shifts by 8 n-cols.
     add.u32         %r120, %r112, 8;       // n_col + 8
-    shl.b32         %r121, %r120, 1;       // * 2 bytes
-    add.u32         %r122, %r81, %r114;
+    shl.b32         %r121, %r120, 1;
+    add.u32         %r122, %r40, %r114;
     add.u32         %r122, %r122, %r121;
 
     ld.shared.b16   %htmp0, [%r122];
@@ -554,30 +409,41 @@ K_LOOP:
     ld.shared.b16   %htmp1, [%r125];
     mov.b32         %b13, {%htmp0, %htmp1};
 
+    // Main
     mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
         {%f4, %f5, %f6, %f7},
         {%b0, %b2, %b1, %b3},
         {%b12, %b13},
         {%f4, %f5, %f6, %f7};
 
-    // ---- Advance K-loop ----
+    // Residual
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32
+        {%f4, %f5, %f6, %f7},
+        {%b4, %b6, %b5, %b7},
+        {%b12, %b13},
+        {%f4, %f5, %f6, %f7};
+
+    bar.sync        0;
+
+    // ---- Advance K ----
     add.u32         %r50, %r50, 16;
 
     // Update scale if crossing group boundary (every 128 elements)
-    // Scale group = k_offset / 128. Check if new k crosses a group boundary.
-    and.b32         %r130, %r50, 127;      // k_offset % 128
+    and.b32         %r130, %r50, 127;
     setp.ne.u32     %p7, %r130, 0;
-    @%p7 bra        SKIP_SCALE_UPDATE;
+    @%p7 bra        K_LOOP;
 
-    // Load new scales for current k_offset's group
-    setp.lt.u32     %p8, %r3, 64;
-    @!%p8 bra       SKIP_SCALE_STORE;
+    // Load new scales
+    setp.ge.u32     %p8, %r50, %r1;
+    @%p8 bra        K_DONE;
+
+    setp.lt.u32     %p9, %r3, 64;
+    @!%p9 bra       SKIP_SCALE_UPDATE;
 
     shr.b32         %r131, %r50, 7;        // group = k_offset / 128
     add.u32         %r132, %r10, %r3;      // global N col
-    setp.lt.u32     %p9, %r132, %r0;
+    setp.lt.u32     %p10, %r132, %r0;
 
-    // Scale addr = scales_ptr + group * N * 2 + col * 2
     cvt.u64.u32     %rd50, %r131;
     mul.lo.u64      %rd51, %rd50, %rd22;   // group * N * 2
     add.u64         %rd52, %rd1, %rd51;
@@ -588,102 +454,43 @@ K_LOOP:
     shl.b32         %r133, %r3, 1;
     add.u32         %r134, %r41, %r133;
 
-    @%p9 ld.global.b16 %htmp2, [%rd54];
-    @%p9 st.shared.b16 [%r134], %htmp2;
-
-SKIP_SCALE_STORE:
-    bar.sync        0;
+    mov.b16         %htmp2, 0;
+    @%p10 ld.global.b16 %htmp2, [%rd54];
+    st.shared.b16   [%r134], %htmp2;
 
 SKIP_SCALE_UPDATE:
-    // ---- Load next weight tile (simple, non-double-buffered for correctness) ----
-    // Check if more K to process
-    setp.ge.u32     %p10, %r50, %r1;
-    @%p10 bra       K_DONE;
-
-    // Load packed weights for next k tile
-    shr.b32         %r140, %r50, 3;        // k_offset / 8
-    add.u32         %r141, %r140, %r30;    // + packed_row (0 or 1)
-    cvt.u64.u32     %rd60, %r141;
-    mul.lo.u64      %rd61, %rd60, %rd20;   // * N * 4
-    add.u64         %rd62, %rd0, %rd61;
-    add.u64         %rd62, %rd62, %rd21;   // + col byte offset
-
-    // Load to register, then store to B_smem packed area (stage 0 always, we toggle between loops)
-    setp.lt.u32     %p11, %r32, %r0;       // col bounds check
-    mov.u32         %r142, 0;
-    @%p11 ld.global.b32 %r142, [%rd62];
-
-    // Store to B_smem (stage 0, since we always use stage 0 now)
-    // packed offset: packed_row * 256 + packed_col * 4
-    add.u32         %r143, %r40, %r52;     // B_smem + packed_row * 256
-    add.u32         %r143, %r143, %r53;    // + packed_col * 4
-    st.shared.b32   [%r143], %r142;
-
     bar.sync        0;
     bra             K_LOOP;
 
 K_DONE:
     // ================================================================
-    // EPILOGUE: Extract results and store to global output
+    // EPILOGUE: Extract row 0 results and store to global output
     // ================================================================
-    // For GEMV, all 16 rows of the MMA output are identical.
-    // We only need row 0's values.
-    // MMA accumulator layout (m16n8k16, f32):
-    //   {f0, f1, f2, f3} where:
-    //     f0 = C[lane/4,     (lane%4)*2]     (row 0..7 for lanes 0..31)
-    //     f1 = C[lane/4,     (lane%4)*2+1]
-    //     f2 = C[lane/4 + 8, (lane%4)*2]
-    //     f3 = C[lane/4 + 8, (lane%4)*2+1]
-    //
-    // For GEMV, C[row, col] is the same for all rows. So f0 == f2 and f1 == f3.
-    // We want C[0, n] for each n-col.
-    // Row 0 is held by lanes where lane/4 == 0, i.e., lanes 0..3.
-    // Lane 0: n-cols (0%4)*2=0, (0%4)*2+1=1 -> f0=C[0,0], f1=C[0,1]
-    // Lane 1: n-cols (1%4)*2=2, (1%4)*2+1=3 -> f0=C[0,2], f1=C[0,3]
-    // Lane 2: n-cols 4,5
-    // Lane 3: n-cols 6,7
-    //
-    // So lanes 0..3 have all 8 n-cols for MMA n-tile 0.
-    // Similarly for MMA n-tile 1 (using f4..f7).
-    //
-    // Strategy: only lanes 0..3 in each warp write to global memory.
-    // Each lane writes 4 values: f0, f1 (from n-tile 0) and f4, f5 (from n-tile 1).
-    // That's 16 outputs per warp. But we need only row 0.
-
-    // Actually, since all rows are identical for GEMV, ANY lane can write.
-    // But different lanes hold different columns. Let me think again.
-    //
-    // Lane l holds:
-    //   n-tile 0: cols (l%4)*2 and (l%4)*2+1 at rows l/4 and l/4+8
-    //   n-tile 1: cols (l%4)*2+8 and (l%4)*2+1+8 at rows l/4 and l/4+8
-    //
-    // Wait, no. The n-cols are within the 8-col MMA tile. But which GLOBAL cols?
-    // For n-tile 0: global col = tile_origin + warp_id*16 + (lane%4)*2
-    // For n-tile 1: global col = tile_origin + warp_id*16 + 8 + (lane%4)*2
-    //
-    // Multiple lanes (with different lane/4) hold the same column but at different rows.
-    // For GEMV all rows give same value, so we can pick lane/4 == 0 (lanes 0-3 of each warp).
+    // MMA accumulator layout (m16n8k16):
+    //   f0 = C[lane/4, (lane%4)*2], f1 = C[lane/4, (lane%4)*2+1]
+    //   f2 = C[lane/4+8, (lane%4)*2], f3 = C[lane/4+8, (lane%4)*2+1]
+    // For GEMV all rows same. Lanes 0-3 (lane/4==0) hold row 0.
 
     shr.b32         %r150, %r6, 2;         // lane / 4
     setp.ne.u32     %p12, %r150, 0;
     @%p12 bra       DONE;
 
-    // Lanes 0-3: write 4 values each
+    // Lanes 0-3 write 4 values each (2 n-tiles * 2 cols)
     // Global col for n-tile 0: tile_origin + warp_id*16 + (lane%4)*2
     add.u32         %r151, %r10, %r110;    // tile_origin + warp_col_base
     shl.b32         %r152, %r100, 1;       // (lane%4) * 2
-    add.u32         %r153, %r151, %r152;   // global col for n-tile 0, first element
+    add.u32         %r153, %r151, %r152;
 
-    // Store n-tile 0, col 0
+    // n-tile 0, col 0
     setp.lt.u32     %p13, %r153, %r0;
     @!%p13 bra      SKIP_ST0;
     cvt.u64.u32     %rd70, %r153;
-    shl.b64         %rd71, %rd70, 2;       // * 4 bytes
+    shl.b64         %rd71, %rd70, 2;
     add.u64         %rd72, %rd3, %rd71;
     st.global.f32   [%rd72], %f0;
 SKIP_ST0:
 
-    // Store n-tile 0, col 1
+    // n-tile 0, col 1
     add.u32         %r154, %r153, 1;
     setp.lt.u32     %p14, %r154, %r0;
     @!%p14 bra      SKIP_ST1;
@@ -693,7 +500,7 @@ SKIP_ST0:
     st.global.f32   [%rd75], %f1;
 SKIP_ST1:
 
-    // Store n-tile 1, col 0: global col + 8
+    // n-tile 1, col 0
     add.u32         %r155, %r153, 8;
     setp.lt.u32     %p15, %r155, %r0;
     @!%p15 bra      SKIP_ST2;
@@ -703,7 +510,7 @@ SKIP_ST1:
     st.global.f32   [%rd78], %f4;
 SKIP_ST2:
 
-    // Store n-tile 1, col 1
+    // n-tile 1, col 1
     add.u32         %r156, %r155, 1;
     setp.lt.u32     %p16, %r156, %r0;
     @!%p16 bra      DONE;

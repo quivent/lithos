@@ -459,11 +459,16 @@ BUG #5: Q and K head expansion should use repeat_interleave (not repeat)
   Note: The indexing h // 3 is equivalent to repeat_interleave, so this is
         actually correct. Not a bug.
 
-POTENTIAL BUG: RMSNorm uses (1+w) in Qwen3NextRMSNorm
-  Location: generate_first_token.py GPU norm kernel
+BUG #5 (CONFIRMED): RMSNorm uses (1+w) in Qwen3NextRMSNorm
+  Location: generate_first_token.py GPU norm kernel / rms_norm_cpu
   Reference Qwen3NextRMSNorm: output = norm(x) * (1 + weight)
-  If GPU kernel uses: output = norm(x) * weight, this is WRONG
-  Need to verify the GPU norm kernel implementation.
+  Our code:  output = norm(x) * weight
+  The stored weights have mean ~-0.027 (near zero), so using them directly
+  instead of (1 + w) suppresses the output by ~10x.
+  Verified: our norm output has norm 6.55 vs reference 76.25.
+  Fix: change all norm computations to use (1 + w) * norm(x).
+  Note: The DeltaNet gated norm (Qwen3NextRMSNormGated) uses plain w
+        (initialized to 1), NOT (1+w). So only the layer norms are affected.
 """)
 
     model.close()

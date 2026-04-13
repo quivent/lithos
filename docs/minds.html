@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Five Minds on Hardware-Matched Quantization &mdash; Lithos</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --bg-raised: #10101a;
+  --bg-code: #0e0e18;
+  --text: #e0e0e8;
+  --text-dim: #888898;
+  --text-faint: #555568;
+  --accent: #d4a053;
+  --accent-dim: #a07830;
+  --cyan: #6ec8d0;
+  --green: #7ec87e;
+  --blue: #6e8ed0;
+  --red: #d06e6e;
+  --border: #1a1a28;
+  /* Engine palette */
+  --engine-lithos: #d4a053;
+  --engine-tensorrt: #76b900;
+  --engine-vllm: #9c6dd7;
+  --engine-pytorch: #ee4c2c;
+  --engine-llamacpp: #4dd0e1;
+  --engine-mlx: #d4d4d4;
+  --engine-sglang: #26a69a;
+  --engine-exllama: #ef5350;
+  --engine-mlc: #42a5f5;
+  --engine-flashattn: #ffca28;
+  --engine-cublas: #78909c;
+  /* Mind colors -- chosen to avoid engine color conflicts */
+  --mind-shannon: #e8a0c8;
+  --mind-vonneumann: #a0c8e8;
+  --mind-ferrucci: #c8e8a0;
+  --mind-turing: #e8c8a0;
+  --mind-lovelace: #c8a0e8;
+}
+
+html { font-size: 15px; scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: 960px; margin: 0 auto; padding: 0 2rem; }
+
+/* Navigation */
+nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em;
+}
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+
+/* Hero */
+.hero {
+  padding: 6rem 0 4rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.hero h1 {
+  font-size: 2.8rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text); margin-bottom: 0.5rem;
+}
+.hero p { color: var(--text-dim); font-size: 1.1rem; letter-spacing: 0.06em; }
+
+/* Sections */
+section { padding: 3.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: none; }
+
+h2 {
+  font-size: 1.4rem; font-weight: 300; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--accent); margin-bottom: 1.5rem;
+}
+h3 {
+  font-size: 1rem; font-weight: 300; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim); margin: 2rem 0 0.8rem 0;
+}
+h4 {
+  font-size: 0.9rem; font-weight: 600; color: var(--text);
+  margin: 1.5rem 0 0.5rem 0;
+}
+
+p { margin-bottom: 1rem; }
+p:last-child { margin-bottom: 0; }
+
+code, .code {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.866rem;
+}
+code { color: var(--accent); }
+
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1rem 1.2rem;
+  overflow-x: auto;
+  margin: 0.8rem 0 1.2rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8rem 0 1.2rem 0;
+  font-size: 0.88rem;
+}
+th {
+  text-align: left;
+  padding: 0.5rem 0.8rem;
+  border-bottom: 2px solid var(--accent-dim);
+  color: var(--accent);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+td {
+  padding: 0.4rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+td code {
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--bg-code);
+  padding: 0.1rem 0.3rem;
+}
+.num { text-align: right; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.84rem; color: var(--cyan); }
+
+/* Mind cards */
+.mind-card {
+  margin-bottom: 3rem;
+  border-left: 3px solid var(--border);
+  padding-left: 1.5rem;
+}
+.mind-card.shannon { border-left-color: var(--mind-shannon); }
+.mind-card.vonneumann { border-left-color: var(--mind-vonneumann); }
+.mind-card.ferrucci { border-left-color: var(--mind-ferrucci); }
+.mind-card.turing { border-left-color: var(--mind-turing); }
+.mind-card.lovelace { border-left-color: var(--mind-lovelace); }
+
+.mind-name { font-size: 1.2rem; font-weight: 600; margin-bottom: 0.2rem; }
+.mind-name.shannon { color: var(--mind-shannon); }
+.mind-name.vonneumann { color: var(--mind-vonneumann); }
+.mind-name.ferrucci { color: var(--mind-ferrucci); }
+.mind-name.turing { color: var(--mind-turing); }
+.mind-name.lovelace { color: var(--mind-lovelace); }
+
+.mind-identity { color: var(--text-dim); font-size: 0.88rem; font-style: italic; margin-bottom: 0.6rem; }
+.mind-scheme { color: var(--text-faint); font-size: 0.82rem; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 1rem; }
+
+.key-numbers {
+  display: flex; gap: 2rem; flex-wrap: wrap;
+  margin: 1rem 0;
+  padding: 0.8rem 1rem;
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+}
+.key-number { text-align: center; }
+.key-number .value {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 1.1rem;
+  color: var(--cyan);
+}
+.key-number .label {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.formula {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 0.6rem 1rem;
+  margin: 0.6rem 0 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.82rem;
+  color: var(--cyan);
+  overflow-x: auto;
+}
+
+/* Glossary tooltips */
+.term {
+  border-bottom: 1px dotted var(--text-faint);
+  cursor: help;
+  position: relative;
+}
+.term:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.4rem 0.7rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  max-width: 320px;
+  white-space: normal;
+  z-index: 200;
+  pointer-events: none;
+  line-height: 1.4;
+}
+
+/* Comparison table header colors */
+.cmp-shannon { color: var(--mind-shannon) !important; }
+.cmp-vonneumann { color: var(--mind-vonneumann) !important; }
+.cmp-ferrucci { color: var(--mind-ferrucci) !important; }
+.cmp-turing { color: var(--mind-turing) !important; }
+.cmp-lovelace { color: var(--mind-lovelace) !important; }
+
+/* Pipeline diagram */
+.diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  padding: 1.5rem 2rem;
+  margin: 1rem 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--text-dim);
+}
+.diagram .accent { color: var(--accent); }
+
+/* Utility */
+.mt-1 { margin-top: 1rem; }
+.mt-2 { margin-top: 2rem; }
+.mb-1 { margin-bottom: 1rem; }
+.small { font-size: 0.82rem; color: var(--text-dim); }
+.measure { color: var(--cyan); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace; }
+
+/* Footer */
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 700px) {
+  .hero h1 { font-size: 1.8rem; }
+  .key-numbers { gap: 1rem; }
+  table { font-size: 0.78rem; }
+  th, td { padding: 0.3rem 0.4rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+<div class="container">
+  <a href="index.html" class="nav-brand">Lithos</a>
+  <a href="index.html#what">What</a>
+  <a href="index.html#problems">Problems</a>
+  <a href="index.html#silicon">Silicon</a>
+  <a href="index.html#architecture">Architecture</a>
+  <a href="index.html#vocabulary">Vocabulary</a>
+  <a href="pytorch.html">Lithos vs PyTorch</a>
+  <a href="performance.html">Performance</a>
+  <a href="bandwidth.html">Bandwidth</a>
+  <a href="memory.html">Memory</a>
+  <a href="architecture.html">Architecture</a>
+  <a href="kernels.html">Kernels</a>
+  <a href="warp-scheduler.html">Warp Scheduler</a>
+  <a href="token-journey.html">Token Journey</a>
+  <a href="quantization.html">Quantization</a>
+  <a href="minds.html" style="color: var(--accent);">Five Minds</a>
+</div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+<div class="container">
+  <h1>Five Minds on Hardware-Matched Quantization</h1>
+  <p>The problem: fit one <span class="term" data-tip="A single transformer layer in a 27B-parameter model contains approximately 180 million weight parameters across Q, K, V, O, gate, up, and down projections.">transformer layer</span> (180M weights) into <span class="measure">66 MB</span> of on-chip GPU memory while utilizing all four <span class="term" data-tip="FP32 ALUs (128/SM), INT32 ALUs (64/SM), FP64 ALUs (64/SM), and tensor cores (4/SM).">compute unit types</span>. Five perspectives, five solutions.</p>
+</div>
+</header>
+
+<main class="container">
+
+<!-- Intro -->
+<section id="intro">
+<h2>The Constraint</h2>
+<p>A Hopper SM has <span class="measure">256 KB</span> of register file plus <span class="measure">256 KB</span> of L1/shared memory. Across 132 SMs, this is roughly <span class="measure">66 MB</span> of on-chip storage. One layer of a 27B transformer has 180 million weights. At FP16, that is 360 MB &mdash; over 5x too large.</p>
+<p>The target rate: <span class="measure">553,648,128 bits / 180,000,000 weights = 3.076 bits/weight</span>. But metadata (scales, codebooks, maps) consumes some of that budget, so the effective index rate must be closer to <span class="measure">~2.8&ndash;2.9 bits/weight</span>.</p>
+<p>Meanwhile, standard inference uses only <span class="term" data-tip="Fourth-generation tensor cores on Hopper, capable of FP8/FP16/BF16 matrix multiply-accumulate at up to 2,048 FLOP/clock per SM.">tensor cores</span> for matrix multiplication. The FP32, INT32, and FP64 ALUs sit idle. A hardware-matched quantization format should put all four unit types to work in a pipelined dequantization scheme.</p>
+<p>Five minds were given this problem. Each approached it from the foundations of their own discipline. All five arrived at sub-3-bit formats that pipeline across compute units &mdash; but the details differ in revealing ways.</p>
+</section>
+
+<!-- ================================================================ -->
+<!-- SHANNON -->
+<!-- ================================================================ -->
+<section id="shannon">
+<div class="mind-card shannon">
+
+<div class="mind-name shannon">Claude E. Shannon</div>
+<div class="mind-identity">Father of information theory. Concerned with fundamental limits, rate-distortion tradeoffs, and entropy.</div>
+<div class="mind-scheme">Scheme: Shannon Mixed-Radix Scheme (SMRS)</div>
+
+<div class="key-numbers">
+  <div class="key-number"><div class="value">3.076</div><div class="label">bits/weight</div></div>
+  <div class="key-number"><div class="value">66.16 MB</div><div class="label">layer size</div></div>
+  <div class="key-number"><div class="value">99.9996%</div><div class="label">pipeline eff.</div></div>
+  <div class="key-number"><div class="value">16.01 dB</div><div class="label">SQNR</div></div>
+</div>
+
+<h4>Core Insight</h4>
+<p>Transformer weights are Gaussian, not uniform. A <span class="term" data-tip="Lloyd-Max quantization places reconstruction levels at the centroids of the Voronoi regions of the source distribution, minimizing mean-squared error for a given number of levels.">Lloyd-Max quantizer</span> with 6 or 8 levels on a Gaussian source has entropy strictly less than <code>log2(k)</code> bits. By using a non-power-of-two number of quantization levels (6 or 7) and packing groups of 8 indices via <span class="term" data-tip="Encoding multiple base-k digits into a single integer: value = sum(d_i * k^i). For k=6, 8 digits fit in 21 bits instead of the 24 bits needed for 8 three-bit codes.">mixed-radix arithmetic</span>, Shannon achieves implicit entropy coding without variable-length codewords &mdash; preserving random access and GPU parallelism. The scheme then allocates more levels to sensitive weights (51.5% get 8 levels) and fewer to insensitive ones (48.5% get 6 levels), following the <span class="term" data-tip="In rate-distortion theory, the optimal bit allocation gives more bits to sources with higher variance. Sources below a threshold (the 'water level') receive zero bits.">reverse water-filling</span> principle.</p>
+
+<h4>Key Formulas</h4>
+<div class="formula">R(D) = (1/2) log2(sigma^2 / D)    -- rate-distortion for Gaussian source</div>
+<div class="formula">D(R) = sigma^2 * 2^(-2R)           -- minimum MSE at rate R bits/weight</div>
+<div class="formula">6^8 = 1,679,616 &lt; 2^21 = 2,097,152  -- 8 weights x 6 levels pack into 21 bits (2.625 bits/wt)</div>
+<div class="formula">7^8 = 5,764,801 &lt; 2^23 = 8,388,608  -- 8 weights x 7 levels pack into 23 bits (2.875 bits/wt)</div>
+<div class="formula">R_total = alpha * 3.25 + (1-alpha) * 2.875 = 2.93  -->  alpha = 0.5147</div>
+<div class="formula">Weighted SQNR = 10 * log10(1 / 0.02504) = 16.01 dB    (bound: 16.99 dB, gap: 0.98 dB)</div>
+
+<h4>Pipeline Design</h4>
+<div class="diagram"><span class="accent">INT32</span>:  Mixed-radix unpack (divide-and-modulo chain for 6-level, bit-shift for 8-level)
+<span class="accent">FP32</span>:   Codebook lookup + affine dequant: w_hat = scale * codebook[idx] + zero
+<span class="accent">Tensor</span>: Matrix-multiply accumulate (weight tile x activation)
+<span class="accent">FP64</span>:   High-precision partial-sum accumulation to prevent numerical drift</div>
+
+<p class="small">Shannon's approach is the most theoretically grounded. The scheme operates within 0.98 dB of the rate-distortion bound &mdash; meaning no encoding can do meaningfully better at this bit rate.</p>
+
+</div>
+</section>
+
+<!-- ================================================================ -->
+<!-- VON NEUMANN -->
+<!-- ================================================================ -->
+<section id="vonneumann">
+<div class="mind-card vonneumann">
+
+<div class="mind-name vonneumann">John von Neumann</div>
+<div class="mind-identity">Architect of the stored-program computer. Thinks in automata, operators, and game-theoretic equilibria.</div>
+<div class="mind-scheme">Scheme: Heptary Group Quantization (HGQ-384)</div>
+
+<div class="key-numbers">
+  <div class="key-number"><div class="value">3.000</div><div class="label">bits/weight</div></div>
+  <div class="key-number"><div class="value">64.37 MB</div><div class="label">layer size</div></div>
+  <div class="key-number"><div class="value">99.9996%</div><div class="label">pipeline eff.</div></div>
+  <div class="key-number"><div class="value">100%</div><div class="label">unit utilization</div></div>
+</div>
+
+<h4>Core Insight</h4>
+<p>Von Neumann models each SM as four parallel <span class="term" data-tip="A finite-state machine where transitions are triggered by data-readiness signals. Four automata (INT32, FP32, FP64, tensor core) run concurrently with synchronized pipeline stages.">automata</span> sharing a data path. The quantization format is not chosen for compression optimality but for <span class="term" data-tip="A state where no compute unit can improve its utilization by claiming work from another unit. At equilibrium, all pipeline stages take exactly the same time.">Nash equilibrium</span> of compute unit utilization. Seven quantization levels (symmetric: {-3,...,+3}) pack 8 values into 23 bits via base-7 encoding. Each group of 128 weights occupies exactly 384 bits (48 bytes = 6 x 64-bit words) &mdash; including scale factor. No padding, no waste. The dequantization pipeline is formalized as a composition of four operators, each mapping to a specific hardware unit type.</p>
+
+<h4>Key Formulas</h4>
+<div class="formula">log2(7) = 2.807 bits/weight    -- information content per 7-level symbol</div>
+<div class="formula">7^8 = 5,764,801 &lt; 2^23          -- sub-pack: 8 heptary digits in 23 bits</div>
+<div class="formula">B_group = 16 * 23 + 16 = 384 bits = 48 bytes    -- exact, no padding</div>
+<div class="formula">D = T4 . T3 . T2 . T1           -- operator chain: extract, decode, scale, contract</div>
+<div class="formula">T2(Pj) = LUT4(Pj mod 7^4) || LUT4(floor(Pj / 7^4))    -- 9.6 KB shared-mem LUT</div>
+<div class="formula">eta_pipe = (K-3)/(K+2) = 1,406,247/1,406,252 = 0.999996</div>
+
+<h4>Pipeline Design</h4>
+<div class="diagram"><span class="accent">INT32</span>:  Bit extraction (23-bit sub-packs from 64-bit words) + LUT-based base-7 decode
+       64 ops/cycle = capacity.  LUT4[0..2400] in shared memory (9.6 KB/SM).
+<span class="accent">FP32</span>:   Affine scaling: w = (q - 3) * scale.  128 FMA ops = capacity.
+<span class="accent">Tensor</span>: Tile GEMM: 128 weights x activation sub-vector. 256 FMA = capacity.
+<span class="accent">FP64</span>:   Kahan compensated summation: t = y + p; c = (t-y) - p; y = t-c.
+       64 ops = capacity.
+
+All four units at 100% utilization at Nash equilibrium.  T* = 1 cycle/group/SM.</div>
+
+<p class="small">Von Neumann's design is the most formally rigorous. The 384-bit group achieves exact packing with zero waste, and the game-theoretic analysis proves that the pipeline balance is a unique Nash equilibrium.</p>
+
+</div>
+</section>
+
+<!-- ================================================================ -->
+<!-- FERRUCCI -->
+<!-- ================================================================ -->
+<section id="ferrucci">
+<div class="mind-card ferrucci">
+
+<div class="mind-name ferrucci">Dave Ferrucci</div>
+<div class="mind-identity">Builder of Watson. Systems integrator who combines parallel heterogeneous evidence pipelines.</div>
+<div class="mind-scheme">Scheme: Evidence-Based Adaptive Quantization (EBAQ)</div>
+
+<div class="key-numbers">
+  <div class="key-number"><div class="value">2.93</div><div class="label">bits/weight (avg)</div></div>
+  <div class="key-number"><div class="value">66 MB</div><div class="label">layer size</div></div>
+  <div class="key-number"><div class="value">&gt;80%</div><div class="label">unit utilization</div></div>
+  <div class="key-number"><div class="value">&lt;0.5 ppl</div><div class="label">quality loss</div></div>
+</div>
+
+<h4>Core Insight</h4>
+<p>Ferrucci refuses to separate the format design from the validation loop. Like Watson, the system combines four independent <span class="term" data-tip="Hessian diagonal approximation, activation magnitude statistics, layer removal experiments, and direct quantization simulation at multiple bit widths.">sensitivity signals</span> to allocate bits where they matter most &mdash; then validates empirically and iterates. The critical architectural decision: separate <em>calibration quality</em> (which rounding decisions to make) from <em>packing layout</em> (how bits sit in memory). Use AQLM or QuIP# for calibration. Use a hardware-matched format for packing. Same quantized values, different byte arrangement. The format itself uses fixed-width {2, 3, 4}-bit codes with per-group allocation, avoiding the complexity of mixed-radix or entropy coding.</p>
+
+<h4>Key Formulas</h4>
+<div class="formula">Sensitivity = f(Hessian_diag, activation_stats, layer_ablation, quant_simulation)</div>
+<div class="formula">Minimize: total_perplexity_impact</div>
+<div class="formula">Subject to: sum(bits_per_group * group_size) &lt;= 66 MB per layer</div>
+<div class="formula">Greedy allocation: start at 2 bits (45 MB), upgrade by sensitivity until budget full</div>
+<div class="formula">Error budget: quant_rounding (~0.3 ppl) + dequant_numerical (~0.01) + calibration_mismatch (~0.15) + group_size (~0.05) &lt; 0.5 ppl</div>
+
+<h4>Pipeline Design</h4>
+<div class="diagram"><span class="accent">INT32</span>:  Shift-and-mask extraction. Fixed-width {2,3,4}-bit codes.
+       No division, no LUT, no data-dependent branching.
+       ~960 ops/tile (1024 weights) at 64 cores = ~15 cycles.
+<span class="accent">FP32</span>:   Scale + zero-point: w = (float)q * scale + zero.
+       ~2048 ops/tile at 128 cores = ~16 cycles.
+<span class="accent">Tensor</span>: Standard mma.sync on dequantized FP16 tiles. 8-16 cycles.
+<span class="accent">FP64</span>:   Optional Kahan accumulation for long reductions.
+       Enabled per-layer only where rounding error is measurable.
+       ~1 cycle when active. Never the bottleneck.</div>
+
+<p class="small">Ferrucci's design is the most pragmatic. It treats format parameters as a search space (60 configurations) that Lithos JIT compilation can explore in under 10 minutes. The architecture is right even if the first parameter choice is not &mdash; you iterate on measurements, not theory.</p>
+
+</div>
+</section>
+
+<!-- ================================================================ -->
+<!-- TURING -->
+<!-- ================================================================ -->
+<section id="turing">
+<div class="mind-card turing">
+
+<div class="mind-name turing">Alan Turing</div>
+<div class="mind-identity">Founder of computability theory. Cryptanalyst. Asks what is fundamentally computable within constraints.</div>
+<div class="mind-scheme">Scheme: Turing-2.93 (Mixed-Precision Tile Format)</div>
+
+<div class="key-numbers">
+  <div class="key-number"><div class="value">2.93</div><div class="label">bits/weight (avg)</div></div>
+  <div class="key-number"><div class="value">65.93 MB</div><div class="label">layer size</div></div>
+  <div class="key-number"><div class="value">~16 cyc</div><div class="label">balanced stage</div></div>
+  <div class="key-number"><div class="value">10/48/42</div><div class="label">T4/T3/T2 split %</div></div>
+</div>
+
+<h4>Core Insight</h4>
+<p>Turing defines a complexity class he calls <span class="term" data-tip="Functions computable by a bounded sequence of shift, bitwise-AND, and multiply-add operations. Maps exactly to the INT32+FP32 instruction set. Excludes division, large table lookups, and data-dependent branching.">SHIFT-MASK-SCALE</span>: the set of functions computable by shift, bitwise-AND, and FMA alone. Any dequantization requiring division, large LUTs, or data-dependent branching is inadmissible for the inner loop. The format uses three fixed tile types (T4 at 4-bit, T3 at 3-bit, T2 at 2-bit), mixed within a layer via <span class="term" data-tip="Bayesian sensitivity analysis inspired by Turing's Banburismus procedure from WWII cryptanalysis. Allocate bits where the 'evidence' (sensitivity) is strongest.">Bayesian allocation</span>. The format descriptor is universal; the parameters are model-specific. Lithos JIT compiles the descriptor into a specialized PTX kernel with shift amounts and masks baked in as constants.</p>
+
+<h4>Key Formulas</h4>
+<div class="formula">4.25*p4 + 3.25*p3 + 2.25*p2 = 2.93,  p4+p3+p2 = 1</div>
+<div class="formula">Solution: p4=0.10, p3=0.48, p2=0.42    (with g=128 metadata overhead)</div>
+<div class="formula">importance(bit_j) ~ |dL/d(bit_j)|                  -- first-order (gradient)</div>
+<div class="formula">importance(bit_j) ~ (dL/d(bit_j))^2 / (d^2L/d(bit_j)^2)  -- second-order (OBS)</div>
+<div class="formula">group_importance(g) = ||X_g||_F * ||W_g - Dequant(Quant(W_g))||_F</div>
+<div class="formula">Total: 180M * 2.93 / 8 = 65.925 MB  (75 KB headroom)</div>
+
+<h4>Pipeline Design</h4>
+<div class="diagram"><span class="accent">INT32</span>:  Shift-and-mask extraction. All tile types cost 2 INT32 ops/weight.
+       2048 ops/tile at 64 cores = 32 cycles.
+       (Reducible to 16 cycles by sharing INT ops on FP32 datapath.)
+<span class="accent">FP32</span>:   INT-to-float conversion + FMA scale: w = (float)q * scale + zero.
+       3072 ops/tile at 128 cores = 24 cycles.
+<span class="accent">Tensor</span>: mma.sync m16n8k16 on dequantized FP16. 16 cycles.
+<span class="accent">FP64</span>:   Accumulate partial sums: accum_f64 += (double)tile_result.
+       16 ops/tile at 64 cores = &lt;1 cycle. Vastly underutilized.
+
+Key insight: even at 2x pipeline imbalance (32 vs 16 cycles),
+on-chip decode (32 cycles) beats HBM read (400 cycles) by 12.5x.</div>
+
+<p class="small">Turing's design is the most computationally principled. The SHIFT-MASK-SCALE constraint guarantees that the dequantization function is deterministic, decomposable, and free of warp divergence. The format is universal (one kernel structure); the parameters are specialized (per model, per layer).</p>
+
+</div>
+</section>
+
+<!-- ================================================================ -->
+<!-- LOVELACE -->
+<!-- ================================================================ -->
+<section id="lovelace">
+<div class="mind-card lovelace">
+
+<div class="mind-name lovelace">Ada Lovelace</div>
+<div class="mind-identity">First programmer. Sees computation as the weaving of algebraical patterns, not mere arithmetic.</div>
+<div class="mind-scheme">Scheme: Algebraical Loom Encoding (ALE)</div>
+
+<div class="key-numbers">
+  <div class="key-number"><div class="value">2.931</div><div class="label">bits/weight</div></div>
+  <div class="key-number"><div class="value">65.9 MB</div><div class="label">layer size</div></div>
+  <div class="key-number"><div class="value">depth 3</div><div class="label">critical path</div></div>
+  <div class="key-number"><div class="value">4 strata</div><div class="label">parallel decode</div></div>
+</div>
+
+<h4>Core Insight</h4>
+<p>Lovelace alone rejects the premise that quantization is about compressing individual numbers. Weights are <em>patterns of relations</em>, like a Jacquard fabric. The encoding should be a <span class="term" data-tip="Four interlocking layers of representation, each decoded by a different compute unit type: FP64 centroids, tensor-core codebook multiply, INT32 residual unpack, FP32 harmonic corrections. They compose by simple addition.">multi-stratum decomposition</span> where each stratum is expressed in the notation native to the hardware that must reconstruct it. The result is a four-voice fugue: FP64 units compute high-precision structural centroids, tensor cores execute a <span class="term" data-tip="Representing each weight as the product of two sub-codes from learned codebooks. Reconstruction is a matrix multiply -- exactly the operation tensor cores are built for.">product-quantization</span> codebook multiply, INT32 units unpack bitplane residuals, and FP32 units apply sparse harmonic corrections. All four voices sound simultaneously with zero data dependencies between strata.</p>
+
+<h4>Key Formulas</h4>
+<div class="formula">w = skeleton + fabric + texture + harmonics    -- additive four-stratum composition</div>
+<div class="formula">Stratum I   (FP64):   0.031 bits/wt -- FP64 centroid per 4096-weight super-block</div>
+<div class="formula">Stratum II  (Tensor): 2.000 bits/wt -- product-quantized codebook indices</div>
+<div class="formula">Stratum III (INT32):  0.750 bits/wt -- bitplane-coded residual with integer scale</div>
+<div class="formula">Stratum IV  (FP32):   0.150 bits/wt -- sparse harmonic corrections (~3.8% of weights)</div>
+<div class="formula">Total:                2.931 bits/wt    -->  65.9 MB per layer</div>
+
+<h4>Pipeline Design</h4>
+<div class="diagram"><span class="accent">FP64</span>:   Compute high-precision block centroids (base + delta).
+       Zero cross-block error accumulation. Analogous to Bernoulli term precision.
+<span class="accent">Tensor</span>: Codebook matrix multiply: W_block = C_warp[P_rows,:] * S * C_weft[P_cols,:]^T
+       The reconstruction IS a matrix multiply. The notation IS the hardware op.
+<span class="accent">INT32</span>:  Bitplane residual unpack: mask decode, sign/magnitude extract, integer scale.
+       Pure bitwise + integer multiply. Native INT32 work.
+<span class="accent">FP32</span>:   Sparse harmonic corrections: mask decode, FP16 upcast, scale, accumulate.
+       Targets the ~3.8% highest-sensitivity weights.
+
+All four strata decode in parallel (zero inter-stratum dependencies).
+Critical path depth: 3 (decode | convert | sum).  Compare GPTQ: depth 5.</div>
+
+<p class="small">Lovelace's design is the most architecturally original. By decomposing weights into four strata matched to four unit types, she achieves the shallowest critical path (depth 3 vs. depth 5 for conventional dequant) and gives every compute unit purposeful, native work.</p>
+
+</div>
+</section>
+
+<!-- ================================================================ -->
+<!-- COMPARISON TABLE -->
+<!-- ================================================================ -->
+<section id="comparison">
+<h2>Side-by-Side Comparison</h2>
+
+<div style="overflow-x: auto;">
+<table>
+<thead>
+<tr>
+  <th>Property</th>
+  <th class="cmp-shannon">Shannon</th>
+  <th class="cmp-vonneumann">von Neumann</th>
+  <th class="cmp-ferrucci">Ferrucci</th>
+  <th class="cmp-turing">Turing</th>
+  <th class="cmp-lovelace">Lovelace</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Scheme name</td>
+  <td>SMRS</td>
+  <td>HGQ-384</td>
+  <td>EBAQ</td>
+  <td>Turing-2.93</td>
+  <td>ALE</td>
+</tr>
+<tr>
+  <td>Bits/weight</td>
+  <td class="num">3.076</td>
+  <td class="num">3.000</td>
+  <td class="num">2.93</td>
+  <td class="num">2.93</td>
+  <td class="num">2.931</td>
+</tr>
+<tr>
+  <td>Layer size</td>
+  <td class="num">66.2 MB</td>
+  <td class="num">64.4 MB</td>
+  <td class="num">66.0 MB</td>
+  <td class="num">65.9 MB</td>
+  <td class="num">65.9 MB</td>
+</tr>
+<tr>
+  <td>Quantization levels</td>
+  <td>6 / 8 (mixed)</td>
+  <td>7 (uniform)</td>
+  <td>4 / 8 / 16</td>
+  <td>4 / 8 / 16</td>
+  <td>Codebook (learned)</td>
+</tr>
+<tr>
+  <td>Group size</td>
+  <td>128</td>
+  <td>128</td>
+  <td>16</td>
+  <td>64&ndash;128</td>
+  <td>128&ndash;4096</td>
+</tr>
+<tr>
+  <td>Packing method</td>
+  <td>Mixed-radix (6^8, 8^8)</td>
+  <td>Base-7 (7^8 in 23 bits)</td>
+  <td>Fixed-width shift-mask</td>
+  <td>Fixed-width shift-mask</td>
+  <td>Four-stratum additive</td>
+</tr>
+<tr>
+  <td>INT32 role</td>
+  <td>Divide-mod decode</td>
+  <td>LUT-based base-7 decode</td>
+  <td>Shift-and-mask</td>
+  <td>Shift-and-mask</td>
+  <td>Bitplane residual unpack</td>
+</tr>
+<tr>
+  <td>FP32 role</td>
+  <td>Codebook + affine scale</td>
+  <td>Affine scale (q-3)*s</td>
+  <td>Scale + zero-point</td>
+  <td>Scale + zero-point</td>
+  <td>Sparse harmonic correction</td>
+</tr>
+<tr>
+  <td>FP64 role</td>
+  <td>High-precision accumulation</td>
+  <td>Kahan compensated sum</td>
+  <td>Optional per-layer</td>
+  <td>Partial sum accumulation</td>
+  <td>Structural centroid compute</td>
+</tr>
+<tr>
+  <td>Tensor core role</td>
+  <td>Tile GEMM</td>
+  <td>Tile GEMM</td>
+  <td>Tile GEMM</td>
+  <td>Tile GEMM</td>
+  <td>Codebook matrix multiply</td>
+</tr>
+<tr>
+  <td>Pipeline efficiency</td>
+  <td class="num">~100%</td>
+  <td class="num">99.9996%</td>
+  <td class="num">&gt;80%</td>
+  <td class="num">~50&ndash;100%</td>
+  <td class="num">~100% (depth 3)</td>
+</tr>
+<tr>
+  <td>Requires division?</td>
+  <td>Yes (mod 6)</td>
+  <td>Yes (mod 2401, via LUT)</td>
+  <td>No</td>
+  <td>No</td>
+  <td>No</td>
+</tr>
+<tr>
+  <td>Calibration method</td>
+  <td>Fisher/Hessian sensitivity</td>
+  <td>Per-group scale optimization</td>
+  <td>4-signal evidence combo</td>
+  <td>Bayesian (Banburismus)</td>
+  <td>k-means codebook + Hessian</td>
+</tr>
+<tr>
+  <td>Theoretical grounding</td>
+  <td>Rate-distortion bound</td>
+  <td>Game-theoretic equilibrium</td>
+  <td>Empirical iteration</td>
+  <td>Computability theory</td>
+  <td>Multi-scale decomposition</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<!-- ================================================================ -->
+<!-- SYNTHESIS -->
+<!-- ================================================================ -->
+<section id="synthesis">
+<h2>Synthesis</h2>
+
+<h3>Where They Agree</h3>
+
+<p><strong>Sub-3-bit is feasible.</strong> All five designs fit 180M weights into 66 MB at rates between 2.93 and 3.08 bits per weight. Shannon proves it information-theoretically (0.98 dB from the rate-distortion bound). Turing argues it from intrinsic dimensionality (trained weights have far fewer effective degrees of freedom than parameter count). Ferrucci validates it empirically (AQLM and QuIP# already achieve 2-bit with acceptable quality). The consensus is overwhelming: <span class="measure">~3 bits/weight</span> preserves &gt;97% of signal variance.</p>
+
+<p><strong>Pipeline across all four unit types works.</strong> Every design assigns meaningful work to INT32 (bit extraction/decode), FP32 (scale application), tensor cores (matrix multiply), and FP64 (precision accumulation or centroid computation). The insight is shared: current inference wastes &gt;50% of on-chip compute by ignoring INT32 and FP64 ALUs. A hardware-matched format converts this waste into useful dequantization work that runs concurrently with tensor core consumption.</p>
+
+<p><strong>The format should be hardware-specific, not model-specific.</strong> All five reject the idea of a single universal quantization format. Shannon's mixed-radix packing, von Neumann's 384-bit groups, and Turing's tile types are all designed for the specific unit counts and throughputs of Hopper SMs. Turing and Ferrucci both emphasize that Lithos's microsecond recompilation makes per-model format specialization free. The <span class="term" data-tip="The dequantization kernel structure is universal (one code path). The parameters (bit widths, group sizes, scale precision) are specialized per model and per layer. JIT compilation bakes parameters into constants.">universal kernel, specialized parameters</span> pattern appears in three of the five designs.</p>
+
+<h3>Where They Differ</h3>
+
+<p><strong>Encoding details: mixed-radix vs. fixed-width vs. multi-stratum.</strong> Shannon and von Neumann use non-power-of-two levels (6, 7, or 8) packed via mixed-radix arithmetic, which requires integer division in the decode path. Turing and Ferrucci insist on power-of-two levels ({2, 3, 4}-bit) with pure shift-and-mask extraction &mdash; no division, no LUT, no warp divergence. Lovelace takes a third path entirely: learned codebooks with product quantization, where the decode is a matrix multiply on tensor cores rather than integer arithmetic. The division-vs-shift debate is the sharpest technical disagreement.</p>
+
+<p><strong>LUT-based decode vs. direct decode.</strong> Von Neumann's design hinges on a 9.6 KB shared-memory <span class="term" data-tip="A precomputed table of 2401 entries mapping packed base-7^4 integers to four heptary digits. Eliminates runtime division at the cost of shared memory occupancy.">lookup table</span> that converts base-7 packed integers to heptary digits in two table lookups per sub-pack. Shannon's divide-and-modulo chain achieves the same result without a LUT but at higher INT32 cost. Turing explicitly rules out LUTs larger than the register file. Ferrucci avoids the question by using fixed-width codes. The tradeoff is shared-memory capacity vs. ALU cycles.</p>
+
+<p><strong>The role of FP64.</strong> This is the most divergent axis. Von Neumann and Shannon use FP64 for <span class="term" data-tip="A numerical technique that maintains a separate compensation variable to capture rounding errors during summation: t = y + p; c = (t - y) - p; y = t - c. Achieves O(epsilon_FP64) total error regardless of summation length.">Kahan compensated summation</span> of partial products &mdash; a precision-preservation role. Lovelace assigns FP64 a structural role: computing high-precision block centroids that anchor the coarse representation. Ferrucci makes FP64 optional, arguing that most layers do not need it and the register pressure cost is not justified everywhere. Turing acknowledges FP64 is vastly underutilized even in his scheme (&lt;1 cycle per tile vs. 32 for INT32). The question remains open: is FP64 worth the pipeline stage, or should it be an opportunistic resource?</p>
+
+</section>
+
+</main>
+
+<footer>
+<div class="container">
+Lithos &mdash; from lithography. Writing on stone. The process that puts circuits on silicon. Five minds, one constraint, one chip.
+</div>
+</footer>
+
+</body>
+</html>
