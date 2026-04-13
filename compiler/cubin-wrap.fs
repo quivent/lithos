@@ -17,6 +17,14 @@
 \   [8] .nv.constant0.<kernel>  (0x210 reserved + param_bytes)
 \ No program headers: cuModuleLoadData tolerates shdr-only cubins for a
 \ single kernel without shared-mem dependencies.
+\
+\ Cooperative kernels:
+\   Set  1 cooperative? !  (or call build-cubin-coop) before write-cubin.
+\   emit-grid-sync (written separately) calls record-gridsync-offset before
+\   emitting each grid-sync instruction so offsets are tracked automatically.
+\   The driver requires EIATTR_COOP_GROUP_INSTR_OFFSETS and
+\   EIATTR_COOP_GROUP_MASK_REGIDS in .nv.info.<kernel> to accept
+\   cuLaunchCooperativeKernel.  build-cubin emits them when cooperative?=1.
 
 variable cw-fd
 
@@ -34,3 +42,10 @@ variable cw-fd
   build-cubin 2drop              \ discard addr/u — we read them via globals
   cubin-buf cubin-pos @  cw-fd @  write-file drop
   cw-fd @ close-file drop ;
+
+\ write-cubin-coop ( outpath outlen -- )
+\ Like write-cubin but marks the kernel cooperative before building.
+\ Assumes emit-grid-sync has called record-gridsync-offset for each sync site.
+: write-cubin-coop  ( outpath outlen -- )
+  1 cooperative? !
+  write-cubin ;

@@ -128,7 +128,34 @@ variable max-reg-used  0 max-reg-used !
 \ Non-destructive: updates max-reg-used if rd > current max, then leaves rd.
 : track-rd  ( rd -- rd )  dup max-reg-used @ max max-reg-used ! ;
 
-: sass-reset  0 sass-pos !  0 max-reg-used ! ;
+\ ============================================================
+\ COOPERATIVE GRID-SYNC STATE
+\ ============================================================
+\ cooperative?  — set to 1 (true) when the kernel uses grid-wide sync.
+\ build-cubin checks this and emits COOP_GROUP attrs in .nv.info.<kernel>.
+\ Default is 0 (non-cooperative; backward compatible).
+variable cooperative?  0 cooperative? !
+
+\ gridsync-offsets — array of u32 byte offsets into .text.<kernel> for each
+\ grid-sync instruction emitted by emit-grid-sync / grid-sync,.
+create gridsync-offsets  256 cells allot   \ up to 256 grid-sync sites
+variable gridsync-count  0 gridsync-count !
+
+\ record-gridsync-offset  ( -- )
+\ Snapshot current sass-pos as the byte offset of the NEXT grid-sync instruction.
+\ Call this immediately BEFORE emitting the sync instruction bytes so that
+\ sass-pos still points to the instruction start.
+: record-gridsync-offset  ( -- )
+  gridsync-count @ 255 > if exit then       \ silently clamp at 256 sites
+  sass-pos @  gridsync-offsets gridsync-count @ cells +  !
+  1 gridsync-count +! ;
+
+\ coop-reset  ( -- )  — clear coop state; called by sass-reset.
+: coop-reset  ( -- )
+  0 gridsync-count !
+  0 cooperative? ! ;
+
+: sass-reset  0 sass-pos !  0 max-reg-used !  coop-reset ;
 
 \ Emit one 16-byte instruction from four u32 values.
 \ DEPRECATED — use sinst, instead. Fixed to delegate rather than use
@@ -752,6 +779,9 @@ $1b constant EIATTR-MAXREG-COUNT
 $50 constant EIATTR-SPARSE-MMA-MASK
 $36 constant EIATTR-SW-WAR
 $23 constant EIATTR-CRS-STACK-SIZE
+\ Cooperative grid-sync attributes (verified from probe_6b.sass — SHFL/grid-sync probe)
+$28 constant EIATTR-COOP-GROUP-INSTR-OFFSETS  \ fmt=$04; N*4 bytes; one u32 per sync site
+$29 constant EIATTR-COOP-GROUP-MASK-REGIDS    \ fmt=$04; 16 bytes; 4 x $ffffffff bitmask
 
 \ ============================================================
 \ BUILD CUBIN
@@ -838,6 +868,22 @@ $23 constant EIATTR-CRS-STACK-SIZE
   $03 cb, EIATTR-SPARSE-MMA-MASK cb, 0 cb, 0 cb,
   \ MAXREG_COUNT = 0xff (HVAL format: fmt=03 attr=0x1b val_u16)
   $03 cb, EIATTR-MAXREG-COUNT cb, $ff cb, 0 cb,
+  \ ---- cooperative grid-sync attributes (omitted when cooperative?=0) ----
+  \ Ordering matches probe_6b.sass: MASK_REGIDS before INSTR_OFFSETS,
+  \ both before EXIT_INSTR_OFFSETS.
+  cooperative? @ if
+    \ COOP_GROUP_MASK_REGIDS (fmt=$04 attr=$29 size=16; four $ffffffff words)
+    \ Bitmask marks all register slots as eligible for coop-group state.
+    \ probe_6b.sass: four consecutive 0xffffffff u32 entries (16 bytes total).
+    $04 cb, EIATTR-COOP-GROUP-MASK-REGIDS cb, $10 cw,
+    $ffffffff cd, $ffffffff cd, $ffffffff cd, $ffffffff cd,
+    \ COOP_GROUP_INSTR_OFFSETS (fmt=$04 attr=$28 size=N*4; one u32 per sync site)
+    \ Each entry is the byte offset within .text.<kernel> of a grid-sync instruction.
+    $04 cb, EIATTR-COOP-GROUP-INSTR-OFFSETS cb, gridsync-count @ 4 * cw,
+    gridsync-count @ 0 ?do
+      gridsync-offsets i cells + @ cd,
+    loop
+  then
   \ EXIT_INSTR_OFFSETS (fmt=04 attr=0x1c size=4 val=offset of EXIT in .text)
   \ For a kernel with a single EXIT at the end, pass text-size-16 (start of EXIT instr).
   \ We emit 0x100 as a safe default; actual offset would be patched by instruction-level
