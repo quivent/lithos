@@ -1,0 +1,160 @@
+// lm_head.ptx -- Dense FP16 matrix-vector multiply for lm_head projection
+//
+// Computes: output[n] = dot(weight[n, :], input[:])
+//   where weight is [vocab_size, hidden_dim] in FP16 row-major
+//   and input is [hidden_dim] in F32
+//
+// weight layout: [vocab_size, hidden_dim] float16 row-major
+// input layout:  [hidden_dim] float32
+// output layout: [vocab_size] float32
+//
+// Params: weight_ptr (u64, FP16), input_ptr (u64, F32), output_ptr (u64, F32)
+//
+// Launch: grid=(vocab_size, 1, 1), block=(256, 1, 1)
+// Each block computes one output element via dot product of a weight row
+// against the input vector. 256 threads stride over hidden_dim=5120.
+// Uses warp shuffle reduction then shared memory cross-warp reduction.
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.visible .entry lm_head(
+    .param .u64 weight_ptr,
+    .param .u64 input_ptr,
+    .param .u64 output_ptr
+)
+{
+    .reg .u64   %rd<20>;
+    .reg .u32   %r<40>;
+    .reg .f32   %f<20>;
+    .reg .pred  %p<10>;
+    .reg .b32   %shfl_tmp;
+    .reg .b16   %h_tmp;
+
+    .shared .align 4 .f32 warp_sums[8];
+
+    // Load params
+    ld.param.u64    %rd0, [weight_ptr];
+    ld.param.u64    %rd1, [input_ptr];
+    ld.param.u64    %rd2, [output_ptr];
+
+    // n = blockIdx.x (output row index)
+    mov.u32         %r0, %ctaid.x;
+
+    // tid = threadIdx.x
+    mov.u32         %r1, %tid.x;
+    // blockDim
+    mov.u32         %r2, %ntid.x;
+
+    // hidden_dim = 5120 (baked in)
+    mov.u32         %r3, 5120;
+
+    // Compute base address for weight row n:
+    // row_offset_bytes = n * 5120 * 2  (FP16 = 2 bytes per element)
+    // = n * 10240
+    mul.lo.u32      %r4, %r0, 10240;
+    cvt.u64.u32     %rd3, %r4;
+    add.u64         %rd4, %rd0, %rd3;    // weight_row_ptr (FP16)
+
+    // Accumulator
+    mov.f32         %f0, 0f00000000;
+
+    // Loop: k = tid, tid+blockDim, ... < hidden_dim
+    // Each iteration: load weight[n, k] as FP16, convert to F32, load input[k], FMA
+    mov.u32         %r5, %r1;            // k = tid
+
+K_LOOP:
+    setp.ge.u32     %p0, %r5, %r3;
+    @%p0 bra        K_DONE;
+
+    // Load weight[n, k] -- FP16
+    // addr = weight_row_ptr + k * 2
+    shl.b32         %r6, %r5, 1;         // k * 2
+    cvt.u64.u32     %rd5, %r6;
+    add.u64         %rd6, %rd4, %rd5;
+    ld.global.b16   %h_tmp, [%rd6];
+    cvt.f32.f16     %f1, %h_tmp;
+
+    // Load input[k] -- F32
+    // addr = input_ptr + k * 4
+    shl.b32         %r7, %r5, 2;         // k * 4
+    cvt.u64.u32     %rd7, %r7;
+    add.u64         %rd8, %rd1, %rd7;
+    ld.global.f32   %f2, [%rd8];
+
+    // Accumulate: f0 += f1 * f2
+    fma.rn.f32      %f0, %f1, %f2, %f0;
+
+    // k += blockDim
+    add.u32         %r5, %r5, %r2;
+    bra             K_LOOP;
+
+K_DONE:
+    // --- Warp shuffle reduction (32 -> 1) ---
+    mov.b32         %shfl_tmp, %f0;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 16, 31, 0xFFFFFFFF;
+    mov.b32         %f3, %shfl_tmp;
+    add.f32         %f0, %f0, %f3;
+
+    mov.b32         %shfl_tmp, %f0;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 8, 31, 0xFFFFFFFF;
+    mov.b32         %f3, %shfl_tmp;
+    add.f32         %f0, %f0, %f3;
+
+    mov.b32         %shfl_tmp, %f0;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 4, 31, 0xFFFFFFFF;
+    mov.b32         %f3, %shfl_tmp;
+    add.f32         %f0, %f0, %f3;
+
+    mov.b32         %shfl_tmp, %f0;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 2, 31, 0xFFFFFFFF;
+    mov.b32         %f3, %shfl_tmp;
+    add.f32         %f0, %f0, %f3;
+
+    mov.b32         %shfl_tmp, %f0;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 1, 31, 0xFFFFFFFF;
+    mov.b32         %f3, %shfl_tmp;
+    add.f32         %f0, %f0, %f3;
+
+    // --- Lane 0 of each warp stores to shared memory ---
+    shr.b32         %r10, %r1, 5;        // warp_id = tid / 32
+    and.b32         %r11, %r1, 31;       // lane = tid % 32
+
+    setp.eq.u32     %p1, %r11, 0;
+    shl.b32         %r12, %r10, 2;       // warp_id * 4 bytes
+    mov.u32         %r13, warp_sums;
+    add.u32         %r14, %r13, %r12;
+    @%p1 st.shared.f32 [%r14], %f0;
+
+    bar.sync        0;
+
+    // --- Thread 0 sums across warps and stores result ---
+    setp.ne.u32     %p2, %r1, 0;
+    @%p2 bra        DONE;
+
+    shr.b32         %r20, %r2, 5;        // num_warps = blockDim / 32
+
+    mov.f32         %f5, 0f00000000;
+    mov.u32         %r21, 0;
+    mov.u32         %r13, warp_sums;
+WARP_REDUCE:
+    setp.ge.u32     %p3, %r21, %r20;
+    @%p3 bra        WARP_REDUCE_DONE;
+    shl.b32         %r22, %r21, 2;
+    add.u32         %r23, %r13, %r22;
+    ld.shared.f32   %f6, [%r23];
+    add.f32         %f5, %f5, %f6;
+    add.u32         %r21, %r21, 1;
+    bra             WARP_REDUCE;
+
+WARP_REDUCE_DONE:
+    // Store output[n]
+    cvt.u64.u32     %rd10, %r0;
+    shl.b64         %rd10, %rd10, 2;     // n * 4 bytes
+    add.u64         %rd11, %rd2, %rd10;
+    st.global.f32   [%rd11], %f5;
+
+DONE:
+    ret;
+}
