@@ -1,26 +1,23 @@
-# LEGACY: .li dialect. Replaced by kernels.ls (.ls dialect).
-# Multi-function .li files produced broken cubins (only last function kept).
+\\ elementwise.ls — Per-element operations for LLM inference
+\\ Replaces: activate.ptx, add_store.ptx, elemwise_mul.ptx, residual_add.ptx
+\\
+\\ Four elementwise kernels, all using `each` parallelism.
 
-\ elementwise.li — Per-element operations for LLM inference
-\ Replaces: activate.ptx, add_store.ptx, elemwise_mul.ptx, residual_add.ptx
-\
-\ Four elementwise kernels, all using `each` parallelism.
-
-\ ---- 1. residual_add: output[i] = a[i] + b[i] ----------------------------
-fn residual_add a b -> output
+\\ ---- 1. residual_add: output[i] = a[i] + b[i] ----------------------------
+residual_add a b output :
     each i
         output [ i ] = a [ i ] + b [ i ]
 
-\ ---- 2. elemwise_mul: output[i] = a[i] * b[i] ----------------------------
-fn elemwise_mul a b -> output
+\\ ---- 2. elemwise_mul: output[i] = a[i] * b[i] ----------------------------
+elemwise_mul a b output :
     each i
         output [ i ] = a [ i ] * b [ i ]
 
-\ ---- 3. activate_silu: output[i] = x[i] * sigmoid(x[i]) -----------------
-\ SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
-\ sigmoid(x) = 1 / (1 + exp(-x))
-\ exp(-x) = 2^(-x * log2(e)), log2(e) = 1.4426950408
-fn activate_silu x -> output
+\\ ---- 3. activate_silu: output[i] = x[i] * sigmoid(x[i]) -----------------
+\\ SiLU(x) = x * sigmoid(x) = x / (1 + exp(-x))
+\\ sigmoid(x) = 1 / (1 + exp(-x))
+\\ exp(-x) = 2^(-x * log2(e)), log2(e) = 1.4426950408
+activate_silu x output :
     each i
         val = x [ i ]
         neg nval val
@@ -31,7 +28,7 @@ fn activate_silu x -> output
         result = val * sig
         output [ i ] = result
 
-\ ---- 4. scale: output[i] = x[i] * factor[i] ------------------------------
-fn scale x factor -> output
+\\ ---- 4. scale: output[i] = x[i] * factor[i] ------------------------------
+scale x factor output :
     each i
         output [ i ] = x [ i ] * factor [ i ]

@@ -612,6 +612,7 @@ footer {
   <a href="/pytorch">Lithos vs PyTorch</a>
   <a href="/token-journey">Token Journey</a>
   <a href="/language-design">Language Design</a>
+  <a href="/language">Language Reference</a>
   <a href="/glossary">Glossary</a>
 
   <a href="#" class="nav-search" onclick="openSearch(event)" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
@@ -847,7 +848,7 @@ footer {
   <!-- Lithos path -->
   <div class="pipeline-col">
     <h4 class="lithos">Lithos (current)</h4>
-    <div class="pipeline-step"><span class="step-box highlight">Lithos primitives (.li / .ls)</span></div>
+    <div class="pipeline-step"><span class="step-box highlight">Lithos primitives (.ls)</span></div>
     <div class="pipeline-down">&darr;</div>
     <div class="pipeline-step"><span class="step-box" style="color: var(--cyan); border-color: #2a5a5e;">sm90a GPU machine code</span></div>
     <div class="pipeline-down">&darr;</div>
@@ -1093,7 +1094,7 @@ footer {
     <div class="stack-col-title lithos">Lithos stack</div>
     <div class="stack-col">
       <div class="stack-layer highlight">
-        <span class="name">Lithos (.li / .ls + safetensors)</span>
+        <span class="name">Lithos (.ls + safetensors)</span>
         <span class="detail">primitives + weights &rarr; weight-immediate instruction streams &rarr; ELF</span>
       </div>
       <div class="stack-layer essential">

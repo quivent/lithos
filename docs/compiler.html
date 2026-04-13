@@ -281,7 +281,7 @@ footer {
 <section id="decision">
 <h2>The Decision</h2>
 
-<p>The Lithos <em>language</em> consists of <code>.li</code> kernel files and <code>.ls</code> composition files. The Lithos <em>compiler</em> is implemented in bootstrap <span class="term" data-term="Forth">Forth</span> (<code>.fs</code> files) &mdash; this is an implementation detail, not part of the language surface.</p>
+<p>The Lithos <em>language</em> consists of <code>.ls</code> source files. The Lithos <em>compiler</em> is implemented in bootstrap <span class="term" data-term="Forth">Forth</span> (<code>.fs</code> files) &mdash; this is an implementation detail, not part of the language surface.</p>
 
 <p>The compiler is a <strong>macro assembler</strong>, not a traditional optimizer. Each primitive family maps to a fixed, known-good binary pattern. There is no optimization pass, no register allocator guessing, no IR lowering. The encoding table is empirically verified against live GH200 hardware via ptxas + nvdisasm probing. The compiler runs on <code>forth-bootstrap</code> &mdash; an ARM64 Linux assembly <span class="term" data-term="Forth">Forth</span> interpreter, <span class="numbers">4,831 lines</span> of ARM64 assembly. When <strong>Eighth</strong> self-hosts, the compiler compiles itself to a native ARM64 binary.</p>
 

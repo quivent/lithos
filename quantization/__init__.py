@@ -1,1 +1,0 @@
-# Lithos quantization schemes
