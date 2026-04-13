@@ -439,7 +439,7 @@ variable ph-acc
 \ Check if token starts with 0x
 : is-hex? ( addr u -- flag )
     dup 2 < if 2drop 0 exit then
-    over c@ [char] 0 = swap 1 + c@ [char] x = and ;
+    drop dup c@ [char] 0 = swap 1 + c@ [char] x = and ;
 
 \ ---- Resolve operand: look up symbol, return kind and reg --------------------
 \ For use in direct PTX-like statements
@@ -613,7 +613,7 @@ variable for-label-num
         drop rreg+ dup for-counter-reg !
         4 swap sym-add drop
     else
-        >r 2drop r> sym-reg@ for-counter-reg !
+        nip nip sym-reg@ for-counter-reg !
     then
 
     \ Parse start
@@ -625,13 +625,13 @@ variable for-label-num
 
     \ Parse bound
     src-token 2dup sym-find dup -1 <> if
-        >r 2drop r> sym-reg@ for-bound-val ! -1 for-bound-is-reg !
+        nip nip sym-reg@ for-bound-val ! -1 for-bound-is-reg !
     else
+        drop   \ drop the -1 from sym-find
         2dup is-number? if
             parse-uint for-bound-val ! 0 for-bound-is-reg !
         else
-            sym-find dup -1 <> if sym-reg@ for-bound-val ! -1 for-bound-is-reg !
-            else drop 0 for-bound-val ! 0 for-bound-is-reg ! then
+            2drop 0 for-bound-val ! 0 for-bound-is-reg !
         then
     then
 
@@ -715,14 +715,14 @@ variable bw-op-len
     src-token 2dup sym-find dup -1 = if
         drop rreg+ dup bw-dst !
         >r 4 r> sym-add drop
-    else >r 2drop r> sym-reg@ bw-dst ! then
+    else nip nip sym-reg@ bw-dst ! then
 
     \ Parse src1
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if
             parse-uint emit-iconst bw-src1 !
         else 2drop 0 bw-src1 ! then
-    else >r 2drop r> sym-reg@ bw-src1 ! then
+    else nip nip sym-reg@ bw-src1 ! then
 
     \ Parse src2
     0 bw-src2-imm !
@@ -732,7 +732,7 @@ variable bw-op-len
         else 2dup is-hex? if
             2 - swap 2 + swap parse-hex bw-src2 ! -1 bw-src2-imm !
         else 2drop 0 bw-src2 ! then then
-    else >r 2drop r> sym-reg@ bw-src2 ! then ;
+    else nip nip sym-reg@ bw-src2 ! then ;
 
 : emit-bw-instr ( op-addr op-u -- )
     dup bw-op-len ! bw-op-buf swap move
@@ -760,26 +760,30 @@ variable bw-op-len
 \ Emits: shfl.sync.bfly.b32 DST, SRC, OFFSET, 0x1f; (mask 0xffffffff)
 \ ==============================================================================
 
+variable shfl-dst
+variable shfl-src
+variable shfl-off
+
 : emit-shfl-bfly ( -- )
     src-token 2dup sym-find dup -1 = if
-        drop rreg+ >r 4 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then   \ dst
+        drop rreg+ dup shfl-dst !
+        >r 4 r> sym-add drop
+    else nip nip sym-reg@ shfl-dst ! then
 
     src-token 2dup sym-find dup -1 = if
-        drop 2drop 0
-    else >r 2drop r> sym-reg@ then   \ src
+        drop 2drop 0 shfl-src !
+    else nip nip sym-reg@ shfl-src ! then
 
     src-token 2dup is-number? if
-        parse-uint
+        parse-uint shfl-off !
     else
-        sym-find dup -1 <> if sym-reg@ else drop 0 then
-    then                              \ offset
+        sym-find dup -1 <> if sym-reg@ shfl-off ! else drop 0 shfl-off ! then
+    then
 
-    >r >r >r
     ptx-indent s" shfl.sync.bfly.b32 " ptx+
-    r> ptx-r32 s" , " ptx+           \ dst
-    r> ptx-r32 s" , " ptx+           \ src
-    r> ptx-num ptx+ s" , 31, -1;" ptx+ ptx-nl ;
+    shfl-dst @ ptx-r32 s" , " ptx+
+    shfl-src @ ptx-r32 s" , " ptx+
+    shfl-off @ ptx-num ptx+ s" , 31, -1;" ptx+ ptx-nl ;
 
 \ ==============================================================================
 \ FEATURE 4: SHARED MEMORY
@@ -850,21 +854,28 @@ variable bw-op-len
 \ Syntax: exp DST SRC  (also rcp, rsqrt, sqrt, sin, cos, neg)
 \ ==============================================================================
 
+create mu-op-buf 32 allot
+variable mu-op-len
+variable mu-dst
+variable mu-src
+
 : emit-math-unary ( ptx-op-addr ptx-op-u -- )
+    dup mu-op-len ! mu-op-buf swap move
+
     src-token 2dup sym-find dup -1 = if
-        drop freg+ >r 2 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then   \ dst
+        drop freg+ dup mu-dst !
+        >r 2 r> sym-add drop
+    else nip nip sym-reg@ mu-dst ! then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-float? if
-            emit-fconst
-        else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ src
+            emit-fconst mu-src !
+        else 2drop 0 mu-src ! then
+    else nip nip sym-reg@ mu-src ! then
 
-    >r >r
-    ptx-indent 2swap ptx+ s"  " ptx+
-    r> ptx-freg s" , " ptx+
-    r> ptx-freg s" ;" ptx+ ptx-nl ;
+    ptx-indent mu-op-buf mu-op-len @ ptx+ s"  " ptx+
+    mu-dst @ ptx-freg s" , " ptx+
+    mu-src @ ptx-freg s" ;" ptx+ ptx-nl ;
 
 : emit-exp    s" ex2.approx.f32"   emit-math-unary ;
 : emit-rcp    s" rcp.approx.f32"   emit-math-unary ;
@@ -875,29 +886,30 @@ variable bw-op-len
 : emit-neg    s" neg.f32"          emit-math-unary ;
 
 \ FMA: fma DST A B C -> fma.rn.f32 DST, A, B, C
+variable fma-d
+variable fma-a
+variable fma-b
+variable fma-c
+
+: parse-fma-arg ( -- freg )
+    src-token 2dup sym-find dup -1 = if
+        drop 2dup is-float? if emit-fconst nip nip
+        else 2drop 0 then
+    else nip nip sym-reg@ then ;
+
 : emit-fma ( -- )
     src-token 2dup sym-find dup -1 = if
-        drop freg+ >r 2 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then   \ dst
-
-    src-token 2dup sym-find dup -1 = if
-        drop 2dup is-float? if emit-fconst else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ a
-
-    src-token 2dup sym-find dup -1 = if
-        drop 2dup is-float? if emit-fconst else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ b
-
-    src-token 2dup sym-find dup -1 = if
-        drop 2dup is-float? if emit-fconst else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ c
-
-    >r >r >r >r
+        drop freg+ dup fma-d !
+        >r 2 r> sym-add drop
+    else nip nip sym-reg@ fma-d ! then
+    parse-fma-arg fma-a !
+    parse-fma-arg fma-b !
+    parse-fma-arg fma-c !
     ptx-indent s" fma.rn.f32 " ptx+
-    r> ptx-freg s" , " ptx+
-    r> ptx-freg s" , " ptx+
-    r> ptx-freg s" , " ptx+
-    r> ptx-freg s" ;" ptx+ ptx-nl ;
+    fma-d @ ptx-freg s" , " ptx+
+    fma-a @ ptx-freg s" , " ptx+
+    fma-b @ ptx-freg s" , " ptx+
+    fma-c @ ptx-freg s" ;" ptx+ ptx-nl ;
 
 \ ==============================================================================
 \ FEATURE 8: TYPE CONVERSIONS
@@ -928,7 +940,7 @@ variable cvt-suffix-len
             >r 4 r> sym-add drop
         then
     else
-        >r 2drop r> sym-reg@ cvt-dst-reg !
+        nip nip sym-reg@ cvt-dst-reg !
     then
 
     \ Parse SRC
@@ -944,7 +956,7 @@ variable cvt-suffix-len
             then
         then
     else
-        >r 2drop r> sym-reg@ cvt-src-reg !
+        nip nip sym-reg@ cvt-src-reg !
     then
 
     \ Emit: cvt.SUFFIX dst, src
@@ -966,43 +978,37 @@ variable cvt-suffix-len
 \ Syntax: @p0 INSTRUCTION...  or  setp.ge DST A B
 \ ==============================================================================
 
+create setp-cmp-buf 8 allot
+variable setp-cmp-len
+create setp-type-buf 8 allot
+variable setp-type-len
+variable setp-pred
+variable setp-src1
+variable setp-src2
+
 : emit-setp ( -- )
-    \ setp.CMP.TYPE pred src1 src2
-    \ Parse comparison: ge, lt, eq, ne, gt, le
-    src-token                         \ cmp string (e.g., "ge")
-    2dup                              \ save
-
-    \ Parse type
-    src-token                         \ type string
-    2dup                              \ save
-
-    \ Parse pred dst
+    src-token dup setp-cmp-len ! setp-cmp-buf swap move
+    src-token dup setp-type-len ! setp-type-buf swap move
     src-token 2dup sym-find dup -1 = if
-        drop preg+ >r 7 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then
-
-    \ Parse src1
+        drop preg+ dup setp-pred !
+        >r 7 r> sym-add drop
+    else nip nip sym-reg@ setp-pred ! then
     src-token 2dup sym-find dup -1 = if
-        drop 2dup is-number? if parse-uint emit-iconst
-        else 2drop 0 then
-    else >r 2drop r> sym-reg@ then
-
-    \ Parse src2
+        drop 2dup is-number? if parse-uint emit-iconst setp-src1 !
+        else 2drop 0 setp-src1 ! then
+    else nip nip sym-reg@ setp-src1 ! then
     src-token 2dup sym-find dup -1 = if
-        drop 2dup is-number? if parse-uint emit-iconst
-        else 2drop 0 then
-    else >r 2drop r> sym-reg@ then
+        drop 2dup is-number? if parse-uint emit-iconst setp-src2 !
+        else 2drop 0 setp-src2 ! then
+    else nip nip sym-reg@ setp-src2 ! then
 
-    \ ( cmp-addr cmp-u type-addr type-u pred src1 src2 )
-    >r >r >r
     ptx-indent s" setp." ptx+
-    \ emit cmp
-    2swap ptx+
-    s" ." ptx+ ptx+       \ type
+    setp-cmp-buf setp-cmp-len @ ptx+
+    s" ." ptx+ setp-type-buf setp-type-len @ ptx+
     s"  " ptx+
-    r> ptx-preg s" , " ptx+
-    r> ptx-r32 s" , " ptx+
-    r> ptx-r32 s" ;" ptx+ ptx-nl ;
+    setp-pred @ ptx-preg s" , " ptx+
+    setp-src1 @ ptx-r32 s" , " ptx+
+    setp-src2 @ ptx-r32 s" ;" ptx+ ptx-nl ;
 
 \ ==============================================================================
 \ FEATURE 10: BOUNDS CHECK / EARLY EXIT
@@ -1019,12 +1025,12 @@ variable ifge-target-len
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst ifge-src1 !
         else 2drop 0 ifge-src1 ! then
-    else >r 2drop r> sym-reg@ ifge-src1 ! then
+    else nip nip sym-reg@ ifge-src1 ! then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst ifge-src2 !
         else 2drop 0 ifge-src2 ! then
-    else >r 2drop r> sym-reg@ ifge-src2 ! then
+    else nip nip sym-reg@ ifge-src2 ! then
 
     src-token dup ifge-target-len ! ifge-target swap move ;
 
@@ -1068,7 +1074,7 @@ variable ifge-target-len
 : emit-mov ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if
@@ -1079,7 +1085,7 @@ variable ifge-target-len
         else
             2drop 0
         then
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     swap >r >r
     ptx-indent s" mov.u32 " ptx+ r> ptx-r32 s" , " ptx+ r> ptx-r32 s" ;" ptx+ ptx-nl ;
@@ -1088,12 +1094,12 @@ variable ifge-target-len
 : emit-add-u32 ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if
@@ -1105,7 +1111,7 @@ variable ifge-target-len
         else
             2drop 0
         then
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     >r >r >r
     ptx-indent s" add.u32 " ptx+
@@ -1115,12 +1121,12 @@ variable ifge-target-len
 : emit-sub-u32 ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if
@@ -1130,7 +1136,7 @@ variable ifge-target-len
             r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+
             r> ptx-num ptx+ s" ;" ptx+ ptx-nl exit
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     >r >r >r
     ptx-indent s" sub.u32 " ptx+
@@ -1140,12 +1146,12 @@ variable ifge-target-len
 : emit-mul-u32 ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if
@@ -1155,7 +1161,7 @@ variable ifge-target-len
             r> ptx-r32 s" , " ptx+ r> ptx-r32 s" , " ptx+
             r> ptx-num ptx+ s" ;" ptx+ ptx-nl exit
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then
+    else nip nip sym-reg@ then
 
     >r >r >r
     ptx-indent s" mul.lo.u32 " ptx+
@@ -1165,22 +1171,22 @@ variable ifge-target-len
 : emit-mad ( -- )
     src-token 2dup sym-find dup -1 = if
         drop rreg+ >r 4 r@ sym-add >r r> drop r>
-    else >r 2drop r> sym-reg@ then   \ dst
+    else nip nip sym-reg@ then   \ dst
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ a
+    else nip nip sym-reg@ then   \ a
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ b
+    else nip nip sym-reg@ then   \ b
 
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if parse-uint emit-iconst
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ c
+    else nip nip sym-reg@ then   \ c
 
     >r >r >r >r
     ptx-indent s" mad.lo.u32 " ptx+
@@ -1207,19 +1213,19 @@ variable ldst-type    \ 0=f32 1=u32
         \ Check next token to determine type
         freg+ dup ldst-dst !
         >r 2 r> sym-add drop
-    else >r 2drop r> sym-reg@ ldst-dst ! then
+    else nip nip sym-reg@ ldst-dst ! then
 
     \ Parse base (pointer / rd reg)
     src-token 2dup sym-find dup -1 = if
         drop 2drop 0 ldst-base !
-    else >r 2drop r> sym-reg@ ldst-base ! then
+    else nip nip sym-reg@ ldst-base ! then
 
     \ Parse offset (r32 reg)
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if
             parse-uint emit-iconst ldst-offset !
         else 2drop 0 ldst-offset ! then
-    else >r 2drop r> sym-reg@ ldst-offset ! then
+    else nip nip sym-reg@ ldst-offset ! then
 
     \ Optional type
     src-pos @ >r
@@ -1251,14 +1257,14 @@ variable ldst-type    \ 0=f32 1=u32
     \ Parse base
     src-token 2dup sym-find dup -1 = if
         drop 2drop 0 ldst-base !
-    else >r 2drop r> sym-reg@ ldst-base ! then
+    else nip nip sym-reg@ ldst-base ! then
 
     \ Parse offset (r32 reg)
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-number? if
             parse-uint emit-iconst ldst-offset !
         else 2drop 0 ldst-offset ! then
-    else >r 2drop r> sym-reg@ ldst-offset ! then
+    else nip nip sym-reg@ ldst-offset ! then
 
     \ Parse src
     src-token 2dup sym-find dup -1 = if
@@ -1267,7 +1273,7 @@ variable ldst-type    \ 0=f32 1=u32
         else 2dup is-number? if
             parse-uint emit-iconst ldst-dst !
         else 2drop 0 ldst-dst ! then then
-    else >r 2drop r> sym-reg@ ldst-dst ! then
+    else nip nip sym-reg@ ldst-dst ! then
 
     \ Optional type
     src-pos @ >r
@@ -1303,7 +1309,7 @@ variable ldst-type    \ 0=f32 1=u32
     src-token 2dup sym-find dup -1 = if
         drop freg+ dup ldst-dst !
         >r 2 r> sym-add drop
-    else >r 2drop r> sym-reg@ ldst-dst ! then
+    else nip nip sym-reg@ ldst-dst ! then
 
     \ shared mem name
     src-token ptx-indent s" ld.shared.f32 " ptx+
@@ -1333,13 +1339,13 @@ variable ldst-type    \ 0=f32 1=u32
         drop 2dup is-number? if
             parse-uint
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ offset val
+    else nip nip sym-reg@ then   \ offset val
 
     \ src
     src-token 2dup sym-find dup -1 = if
         drop 2dup is-float? if emit-fconst
         else 2drop 0 then
-    else >r 2drop r> sym-reg@ then   \ src reg
+    else nip nip sym-reg@ then   \ src reg
 
     >r >r
     ptx-indent s" st.shared.f32 [" ptx+
@@ -1352,9 +1358,9 @@ variable ldst-type    \ 0=f32 1=u32
 
 : emit-predicated ( addr u -- )
     \ The token starts with '@' — it's like @p0, @p1 etc
-    \ Extract predicate register number
-    \ Token format: @pN or @!pN
-    ptx-indent ptx+   \ emit the @pN as-is
+    \ Emit as @%pN (insert % after @)
+    ptx-indent s" @%" ptx+
+    1- swap 1+ swap ptx+   \ skip the '@', emit the rest (e.g., "p0")
     s"  " ptx+
 
     \ Now parse the instruction after it
@@ -1369,11 +1375,11 @@ variable ldst-type    \ 0=f32 1=u32
         2drop
         s" mov.f32 " ptx+
         src-token 2dup sym-find dup -1 <> if
-            >r 2drop r> sym-reg@ ptx-freg
+            nip nip sym-reg@ ptx-freg
         else drop 2drop then
         s" , " ptx+
         src-token 2dup sym-find dup -1 <> if
-            >r 2drop r> sym-reg@ ptx-freg
+            nip nip sym-reg@ ptx-freg
         else 2dup is-float? if emit-fconst ptx-freg
         else 2drop then then
         s" ;" ptx+ ptx-nl
@@ -1452,11 +1458,11 @@ variable stmt-matched   \ -1 if a keyword matched
         src-token
         src-token 2dup sym-find dup -1 = if
             drop freg+ >r 2 r@ sym-add >r r> drop r>
-        else >r 2drop r> sym-reg@ then
+        else nip nip sym-reg@ then
         src-token 2dup sym-find dup -1 = if
             drop 2dup is-number? if parse-uint emit-iconst
             else 2drop 0 then
-        else >r 2drop r> sym-reg@ then
+        else nip nip sym-reg@ then
         >r >r
         ptx-indent s" cvt." ptx+ ptx+ s"  " ptx+
         r> ptx-freg s" , " ptx+ r> ptx-r32 s" ;" ptx+ ptx-nl

@@ -124,7 +124,7 @@ def main() -> int:
     print(f"  Max active blocks per SM: {max_blks}")
     print(f"  Max cooperative grid: {max_blks * sm_count}")
 
-    grid_size = min(NUM_BLOCKS, max_blks * sm_count)
+    grid_size = sm_count  # 1 block per SM
     total_threads = grid_size * THREADS_PER_BLOCK
     print(f"  Using grid: ({grid_size}, 1, 1)  block: ({THREADS_PER_BLOCK}, 1, 1)")
     print(f"  Total threads: {total_threads}")
@@ -219,8 +219,9 @@ def main() -> int:
     d_sync_workspace = gpu.mem_alloc(16)
     gpu.memset_d8(d_sync_workspace, 0, 16)
 
-    # Norm partials: 132 x f32 = 528 bytes
+    # Norm partials: grid_size x f32
     d_norm_partials = gpu.mem_alloc(grid_size * 4)
+    print(f"  norm_partials:  {grid_size * 4} bytes ({grid_size} blocks)")
 
     # Output logits
     d_output_logits = gpu.mem_alloc(VOCAB_SIZE * 4)
@@ -270,6 +271,7 @@ def main() -> int:
         ctypes.c_uint64(d_normed.value),
         ctypes.c_uint64(d_sync_workspace.value),
         ctypes.c_uint64(d_norm_partials.value),
+        ctypes.c_uint32(grid_size),               # grid_size_param
     ]
 
     # ------------------------------------------------------------------
