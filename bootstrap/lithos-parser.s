@@ -2422,10 +2422,21 @@ parse_expr:
     mov     w1, w6
     bl      emit_cmp_reg
 
-    // Allocate result register
+    // Reuse left if scratch, else allocate fresh
+    cmp     w4, #REG_FIRST
+    b.lt    .Lcmp_alloc
+    mov     w7, w4
+    b       .Lcmp_reclaim
+.Lcmp_alloc:
     bl      alloc_reg
     mov     w7, w0
-
+.Lcmp_reclaim:
+    // Reclaim all scratch temps above result
+    cmp     w7, #REG_FIRST
+    b.lt    .Lcmp_dispatch
+    add     w0, w7, #1
+    bl      free_reg
+.Lcmp_dispatch:
     // Determine condition code
     cmp     w5, #TOK_EQEQ
     b.eq    .Lcmp_eq
@@ -2565,15 +2576,15 @@ parse_shift:
     ldp     w4, w5, [sp], #16
     mov     w6, w0
 
-    // Reclaim sub-expression temporaries above w6
-    cmp     w6, #REG_FIRST
-    b.lt    1f
-    add     w0, w6, #1
-    bl      free_reg            // next_reg = w6 + 1
-1:
+    // Reuse left if scratch, else allocate fresh
+    cmp     w4, #REG_FIRST
+    b.lt    .Lshift_alloc
+    mov     w7, w4
+    b       .Lshift_emit
+.Lshift_alloc:
     bl      alloc_reg
     mov     w7, w0
-
+.Lshift_emit:
     cmp     w5, #TOK_SHL
     b.eq    .Lshift_left
     // right shift
@@ -2581,12 +2592,18 @@ parse_shift:
     mov     w1, w4
     mov     w2, w6
     bl      emit_lsr_reg
-    b       .Lshift_next
+    b       .Lshift_reclaim
 .Lshift_left:
     mov     w0, w7
     mov     w1, w4
     mov     w2, w6
     bl      emit_lsl_reg
+.Lshift_reclaim:
+    // Reclaim all scratch temps above result
+    cmp     w7, #REG_FIRST
+    b.lt    .Lshift_next
+    add     w0, w7, #1
+    bl      free_reg
 .Lshift_next:
     mov     w0, w7
     b       .Lshift_loop
@@ -2622,15 +2639,15 @@ parse_additive:
     ldp     w4, w5, [sp], #16
     mov     w6, w0
 
-    // Reclaim sub-expression temporaries above w6
-    cmp     w6, #REG_FIRST
-    b.lt    1f
-    add     w0, w6, #1
-    bl      free_reg
-1:
+    // Reuse left if scratch, else allocate fresh
+    cmp     w4, #REG_FIRST
+    b.lt    .Ladd_alloc
+    mov     w7, w4
+    b       .Ladd_emit
+.Ladd_alloc:
     bl      alloc_reg
     mov     w7, w0
-
+.Ladd_emit:
     cmp     w5, #TOK_PLUS
     b.eq    .Ladd_plus
     // minus
@@ -2638,12 +2655,18 @@ parse_additive:
     mov     w1, w4
     mov     w2, w6
     bl      emit_sub_reg
-    b       .Ladd_next
+    b       .Ladd_reclaim
 .Ladd_plus:
     mov     w0, w7
     mov     w1, w4
     mov     w2, w6
     bl      emit_add_reg
+.Ladd_reclaim:
+    // Reclaim all scratch temps above result
+    cmp     w7, #REG_FIRST
+    b.lt    .Ladd_next
+    add     w0, w7, #1
+    bl      free_reg
 .Ladd_next:
     mov     w0, w7
     b       .Ladd_loop
@@ -2679,15 +2702,15 @@ parse_multiplicative:
     ldp     w4, w5, [sp], #16
     mov     w6, w0
 
-    // Reclaim sub-expression temporaries above w6
-    cmp     w6, #REG_FIRST
-    b.lt    1f
-    add     w0, w6, #1
-    bl      free_reg
-1:
+    // Reuse left if scratch, else allocate fresh
+    cmp     w4, #REG_FIRST
+    b.lt    .Lmul_alloc
+    mov     w7, w4
+    b       .Lmul_emit
+.Lmul_alloc:
     bl      alloc_reg
     mov     w7, w0
-
+.Lmul_emit:
     cmp     w5, #TOK_STAR
     b.eq    .Lmul_star
     // divide
@@ -2695,12 +2718,18 @@ parse_multiplicative:
     mov     w1, w4
     mov     w2, w6
     bl      emit_sdiv_reg
-    b       .Lmul_next
+    b       .Lmul_reclaim
 .Lmul_star:
     mov     w0, w7
     mov     w1, w4
     mov     w2, w6
     bl      emit_mul_reg
+.Lmul_reclaim:
+    // Reclaim all scratch temps above result
+    cmp     w7, #REG_FIRST
+    b.lt    .Lmul_next
+    add     w0, w7, #1
+    bl      free_reg
 .Lmul_next:
     mov     w0, w7
     b       .Lmul_loop
