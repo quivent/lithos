@@ -232,8 +232,10 @@ class PrefillEngine:
     def _preload_qk_norms(self):
         """Preload Q/K RMSNorm weights for full attention layers.
 
-        Qwen3.5 uses Qwen3MoeRMSNorm (plain w, NO +1.0) for Q/K normalization.
-        Initialized to ones in the model, but may have drifted during training.
+        Qwen3MoeRMSNorm (plain w, init to ones) is used in code, but empirically
+        the stored weights (~0.22 mean) suggest they may actually be Qwen3NextRMSNorm
+        (init to zeros, needs +1.0). Try both and pick whichever works better.
+        Currently: NO +1.0 (plain w).
         """
         self.q_norm_weights = {}
         self.k_norm_weights = {}
