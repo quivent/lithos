@@ -478,7 +478,7 @@ elf_arm64_header:
 elf_arm64_phdr:
     stp     x30, x19, [sp, #-16]!
     stp     x20, x21, [sp, #-16]!
-    str     x22, [sp, #-8]!
+    stp     x22, xzr, [sp, #-16]!
     mov     x19, x0                 // text_size
     mov     x20, x1                 // data_size
     mov     x21, x2                 // bss_size
@@ -514,7 +514,7 @@ elf_arm64_phdr:
     mov     x0, #PAGE_ALIGN
     bl      eq_emit
 
-    ldr     x22, [sp], #8
+    ldp     x22, xzr, [sp], #16
     ldp     x20, x21, [sp], #16
     ldp     x30, x19, [sp], #16
     ret
@@ -848,7 +848,7 @@ cubin_sym:
     stp     x30, x19, [sp, #-16]!
     stp     x4, x5, [sp, #-16]!
     stp     x2, x3, [sp, #-16]!
-    str     x1, [sp, #-8]!
+    stp     x1, xzr, [sp, #-16]!
 
     // st_name (u32)
     bl      ed_emit
@@ -856,19 +856,19 @@ cubin_sym:
     ldr     x0, [sp]
     bl      eb_emit
     // st_other (u8)
-    ldr     x0, [sp, #8]
+    ldr     x0, [sp, #16]
     bl      eb_emit
     // st_shndx (u16)
-    ldr     x0, [sp, #16]
+    ldr     x0, [sp, #24]
     bl      ew_emit
     // st_value (u64)
-    ldr     x0, [sp, #24]
-    bl      eq_emit
-    // st_size (u64)
     ldr     x0, [sp, #32]
     bl      eq_emit
+    // st_size (u64)
+    ldr     x0, [sp, #40]
+    bl      eq_emit
 
-    ldr     x1, [sp], #8
+    ldp     x1, xzr, [sp], #16
     ldp     x2, x3, [sp], #16
     ldp     x4, x5, [sp], #16
     ldp     x30, x19, [sp], #16
@@ -1821,11 +1821,11 @@ code_ELF_BUILD_ARM64:
     stp     x26, x25, [sp, #-16]!
     stp     x24, x23, [sp, #-16]!
     stp     x22, x21, [sp, #-16]!
-    str     x20, [sp, #-8]!
+    stp     x20, xzr, [sp, #-16]!
 
     bl      elf_build_arm64
 
-    ldr     x20, [sp], #8
+    ldp     x20, xzr, [sp], #16
     ldp     x22, x21, [sp], #16
     ldp     x24, x23, [sp], #16
     ldp     x26, x25, [sp], #16
@@ -1840,11 +1840,11 @@ code_ELF_SAVE:
     stp     x26, x25, [sp, #-16]!
     stp     x24, x23, [sp, #-16]!
     stp     x22, x21, [sp, #-16]!
-    str     x20, [sp, #-8]!
+    stp     x20, xzr, [sp, #-16]!
 
     bl      elf_save
 
-    ldr     x20, [sp], #8
+    ldp     x20, xzr, [sp], #16
     ldp     x22, x21, [sp], #16
     ldp     x24, x23, [sp], #16
     ldp     x26, x25, [sp], #16
@@ -1864,11 +1864,11 @@ code_ELF_WRITE_ARM64:
     stp     x26, x25, [sp, #-16]!
     stp     x24, x23, [sp, #-16]!
     stp     x22, x21, [sp, #-16]!
-    str     x20, [sp, #-8]!
+    stp     x20, xzr, [sp, #-16]!
 
     bl      elf_write_arm64
 
-    ldr     x20, [sp], #8
+    ldp     x20, xzr, [sp], #16
     ldp     x22, x21, [sp], #16
     ldp     x24, x23, [sp], #16
     ldp     x26, x25, [sp], #16
@@ -1883,11 +1883,11 @@ code_ELF_BUILD_CUBIN:
     stp     x26, x25, [sp, #-16]!
     stp     x24, x23, [sp, #-16]!
     stp     x22, x21, [sp, #-16]!
-    str     x20, [sp, #-8]!
+    stp     x20, xzr, [sp, #-16]!
 
     bl      elf_build_cubin
 
-    ldr     x20, [sp], #8
+    ldp     x20, xzr, [sp], #16
     ldp     x22, x21, [sp], #16
     ldp     x24, x23, [sp], #16
     ldp     x26, x25, [sp], #16
@@ -1903,11 +1903,11 @@ code_ELF_WRITE_CUBIN:
     stp     x26, x25, [sp, #-16]!
     stp     x24, x23, [sp, #-16]!
     stp     x22, x21, [sp, #-16]!
-    str     x20, [sp, #-8]!
+    stp     x20, xzr, [sp, #-16]!
 
     bl      elf_write_cubin
 
-    ldr     x20, [sp], #8
+    ldp     x20, xzr, [sp], #16
     ldp     x22, x21, [sp], #16
     ldp     x24, x23, [sp], #16
     ldp     x26, x25, [sp], #16
@@ -1953,3 +1953,74 @@ code_CUBIN_PARAMS:
 .endm
 .set NEXT_DEFINED, 1
 .endif
+
+// ============================================================
+// Dictionary entries — extends the chain past entry_p_parse_tokens
+// (the tail of lithos-parser.s). Tail of this file: entry_ew_cubin_params
+// ============================================================
+.data
+.align 3
+
+entry_ew_elf_build_arm64:
+    .quad   entry_p_parse_tokens
+    .byte   0
+    .byte   15
+    .ascii  "elf-build-arm64"
+    .align  3
+    .quad   code_ELF_BUILD_ARM64
+
+entry_ew_elf_save:
+    .quad   entry_ew_elf_build_arm64
+    .byte   0
+    .byte   8
+    .ascii  "elf-save"
+    .align  3
+    .quad   code_ELF_SAVE
+
+entry_ew_elf_write_arm64:
+    .quad   entry_ew_elf_save
+    .byte   0
+    .byte   15
+    .ascii  "elf-write-arm64"
+    .align  3
+    .quad   code_ELF_WRITE_ARM64
+
+entry_ew_elf_build_cubin:
+    .quad   entry_ew_elf_write_arm64
+    .byte   0
+    .byte   15
+    .ascii  "elf-build-cubin"
+    .align  3
+    .quad   code_ELF_BUILD_CUBIN
+
+entry_ew_elf_write_cubin:
+    .quad   entry_ew_elf_build_cubin
+    .byte   0
+    .byte   15
+    .ascii  "elf-write-cubin"
+    .align  3
+    .quad   code_ELF_WRITE_CUBIN
+
+entry_ew_elf_buf:
+    .quad   entry_ew_elf_write_cubin
+    .byte   0
+    .byte   7
+    .ascii  "elf-buf"
+    .align  3
+    .quad   code_ELF_BUF
+
+entry_ew_elf_pos:
+    .quad   entry_ew_elf_buf
+    .byte   0
+    .byte   7
+    .ascii  "elf-pos"
+    .align  3
+    .quad   code_ELF_POS
+
+entry_ew_cubin_params:
+    .quad   entry_ew_elf_pos
+    .byte   0
+    .byte   12
+    .ascii  "cubin-params"
+    .align  3
+    .quad   code_CUBIN_PARAMS

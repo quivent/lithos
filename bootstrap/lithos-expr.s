@@ -37,6 +37,17 @@
 .endif
 
 // ============================================================
+// Syscall numbers (Linux ARM64)
+// ============================================================
+.ifndef SYS_READ
+.equ SYS_READ,   63
+.equ SYS_WRITE,  64
+.equ SYS_OPENAT, 56
+.equ SYS_CLOSE,  57
+.equ SYS_EXIT,   93
+.endif
+
+// ============================================================
 // Token type constants (match lithos-lexer.ls)
 // ============================================================
 .equ TOK_EOF,       0
@@ -463,34 +474,34 @@ code_EXPR_SYM_FIND:
     adrp    x4, ls_sym_table
     add     x4, x4, :lo12:ls_sym_table
     mov     x5, #0          // index
-sym_find_loop:
+expr_sym_find_loop:
     cmp     x5, x3
-    b.ge    sym_find_notfound
+    b.ge    expr_sym_find_notfound
     mov     x6, #SYM_ENTRY_SIZE
     mul     x7, x5, x6
     add     x7, x4, x7     // entry base
     // Check name_len at offset 32
     ldr     w8, [x7, #32]
     cmp     w8, w1
-    b.ne    sym_find_next
+    b.ne    expr_sym_find_next
     // Compare name bytes
     mov     x9, #0
 sym_cmp_loop:
     cmp     x9, x1
-    b.ge    sym_find_found
+    b.ge    expr_sym_find_found
     ldrb    w10, [x7, x9]
     ldrb    w11, [x0, x9]
     cmp     w10, w11
-    b.ne    sym_find_next
+    b.ne    expr_sym_find_next
     add     x9, x9, #1
     b       sym_cmp_loop
-sym_find_found:
+expr_sym_find_found:
     mov     x22, x5
     NEXT
-sym_find_next:
+expr_sym_find_next:
     add     x5, x5, #1
-    b       sym_find_loop
-sym_find_notfound:
+    b       expr_sym_find_loop
+expr_sym_find_notfound:
     mov     x22, #-1
     NEXT
 
@@ -695,7 +706,8 @@ code_EXPR_EMIT_A64_CMP_CSET:
     add     x5, x5, #4
     // Emit CSET = CSINC Xd, XZR, XZR, invert(cond)
     eor     x7, x22, #1            // invert condition
-    mov     x3, #ARM64_CSINC
+    movz    x3, #(ARM64_CSINC & 0xFFFF)
+    movk    x3, #((ARM64_CSINC >> 16) & 0xFFFF), lsl #16
     orr     x3, x3, #(31 << 16)    // Xm = XZR
     orr     x3, x3, x7, lsl #12    // inverted cond
     orr     x3, x3, #(31 << 5)     // Xn = XZR
@@ -761,7 +773,8 @@ code_EXPR_EMIT_A64_MOV_IMM:
 code_EXPR_EMIT_A64_MOV_REG:
     // TOS = rs
     POP     x0          // rd
-    mov     x1, #ARM64_MOV_REG
+    movz    x1, #(ARM64_MOV_REG & 0xFFFF)
+    movk    x1, #((ARM64_MOV_REG >> 16) & 0xFFFF), lsl #16
     orr     x1, x1, x22, lsl #16   // Rm
     orr     x1, x1, x0             // Rd
     adrp    x2, ls_code_pos
@@ -782,7 +795,8 @@ code_EXPR_EMIT_A64_LDRB_REG:
     // TOS = offset_reg
     POP     x1          // base
     POP     x0          // rd
-    mov     x2, #ARM64_LDRB_REG
+    movz    x2, #(ARM64_LDRB_REG & 0xFFFF)
+    movk    x2, #((ARM64_LDRB_REG >> 16) & 0xFFFF), lsl #16
     orr     x2, x2, x22, lsl #16   // Rm = offset
     orr     x2, x2, x1, lsl #5     // Rn = base
     orr     x2, x2, x0             // Rt = rd
@@ -804,7 +818,8 @@ code_EXPR_EMIT_A64_LDR_REG:
     // TOS = offset_reg
     POP     x1          // base
     POP     x0          // rd
-    mov     x2, #ARM64_LDR_REG
+    movz    x2, #(ARM64_LDR_REG & 0xFFFF)
+    movk    x2, #((ARM64_LDR_REG >> 16) & 0xFFFF), lsl #16
     orr     x2, x2, x22, lsl #16
     orr     x2, x2, x1, lsl #5
     orr     x2, x2, x0
@@ -826,7 +841,8 @@ code_EXPR_EMIT_A64_STR_REG:
     // TOS = offset_reg
     POP     x1          // base
     POP     x0          // val_reg
-    mov     x2, #ARM64_STR_REG
+    movz    x2, #(ARM64_STR_REG & 0xFFFF)
+    movk    x2, #((ARM64_STR_REG >> 16) & 0xFFFF), lsl #16
     orr     x2, x2, x22, lsl #16   // Rm = offset
     orr     x2, x2, x1, lsl #5     // Rn = base
     orr     x2, x2, x0             // Rt = val
@@ -886,7 +902,7 @@ code_EXPR_EMIT_SASS_ALU:
     add     x6, x6, :lo12:expr_sass_buf
     add     x6, x6, x5
     str     x3, [x6]               // inst word
-    mov     x7, #SASS_CTRL_DEFAULT
+    movz    x7, #0xca00, lsl #32
     movk    x7, #0x000f, lsl #48
     str     x7, [x6, #8]           // ctrl word
     add     x5, x5, #16
@@ -1351,7 +1367,8 @@ mul_star_arm64:
     str     x22, [x24, #-8]!       // rd
     mov     x22, x16
     str     x22, [x24, #-8]!       // opcode
-    mov     x22, #ARM64_MUL
+    movz    x22, #(ARM64_MUL & 0xFFFF)
+    movk    x22, #((ARM64_MUL >> 16) & 0xFFFF), lsl #16
     bl      code_EXPR_EMIT_A64_RRR
     mov     x14, x16
     b       mul_loop
@@ -1410,7 +1427,8 @@ mul_slash_arm64:
     str     x22, [x24, #-8]!
     mov     x22, x16            // rd
     str     x22, [x24, #-8]!
-    mov     x22, #ARM64_SDIV
+    movz    x22, #(ARM64_SDIV & 0xFFFF)
+    movk    x22, #((ARM64_SDIV >> 16) & 0xFFFF), lsl #16
     bl      code_EXPR_EMIT_A64_RRR
     mov     x14, x16
     b       mul_loop
@@ -1450,7 +1468,8 @@ mul_shr_arm64:
     str     x22, [x24, #-8]!
     mov     x22, x16
     str     x22, [x24, #-8]!
-    mov     x22, #ARM64_LSR_REG
+    movz    x22, #(ARM64_LSR_REG & 0xFFFF)
+    movk    x22, #((ARM64_LSR_REG >> 16) & 0xFFFF), lsl #16
     bl      code_EXPR_EMIT_A64_RRR
     mov     x14, x16
     b       mul_loop
@@ -1490,7 +1509,8 @@ mul_shl_arm64:
     str     x22, [x24, #-8]!
     mov     x22, x16
     str     x22, [x24, #-8]!
-    mov     x22, #ARM64_LSL_REG
+    movz    x22, #(ARM64_LSL_REG & 0xFFFF)
+    movk    x22, #((ARM64_LSL_REG >> 16) & 0xFFFF), lsl #16
     bl      code_EXPR_EMIT_A64_RRR
     mov     x14, x16
     b       mul_loop
@@ -1597,7 +1617,7 @@ add_op_minus:
     add     x4, x4, :lo12:expr_sass_buf
     add     x4, x4, x3
     str     x1, [x4]
-    mov     x5, #SASS_CTRL_DEFAULT
+    movz    x5, #0xca00, lsl #32
     movk    x5, #0x000f, lsl #48
     str     x5, [x4, #8]
     add     x3, x3, #16
@@ -1714,7 +1734,7 @@ cmp_common:
     add     x4, x4, :lo12:expr_sass_buf
     add     x4, x4, x3
     str     x1, [x4]
-    mov     x5, #SASS_CTRL_DEFAULT
+    movz    x5, #0xca00, lsl #32
     movk    x5, #0x000f, lsl #48
     str     x5, [x4, #8]
     add     x3, x3, #16
@@ -2419,5 +2439,327 @@ code_EXPR_GET_MAX_REG:
 
 expr_err_expect:
     .ascii  "expr: unexpected token\n\0"
+
+// ============================================================
+// Dictionary entries — extends the chain past entry_ew_cubin_params
+// (tail of lithos-elf-writer.s). Tail of the entire dictionary
+// chain is entry_x_get_max_reg, which `last_entry` aliases.
+// ============================================================
+.align 3
+
+entry_x_init:
+    .quad   entry_ew_cubin_params
+    .byte   0
+    .byte   9
+    .ascii  "expr-init"
+    .align  3
+    .quad   code_EXPR_INIT
+
+entry_x_peek_type:
+    .quad   entry_x_init
+    .byte   0
+    .byte   14
+    .ascii  "expr-peek-type"
+    .align  3
+    .quad   code_EXPR_PEEK_TYPE
+
+entry_x_peek_offset:
+    .quad   entry_x_peek_type
+    .byte   0
+    .byte   16
+    .ascii  "expr-peek-offset"
+    .align  3
+    .quad   code_EXPR_PEEK_OFFSET
+
+entry_x_peek_length:
+    .quad   entry_x_peek_offset
+    .byte   0
+    .byte   16
+    .ascii  "expr-peek-length"
+    .align  3
+    .quad   code_EXPR_PEEK_LENGTH
+
+entry_x_consume:
+    .quad   entry_x_peek_length
+    .byte   0
+    .byte   12
+    .ascii  "expr-consume"
+    .align  3
+    .quad   code_EXPR_CONSUME
+
+entry_x_expect:
+    .quad   entry_x_consume
+    .byte   0
+    .byte   11
+    .ascii  "expr-expect"
+    .align  3
+    .quad   code_EXPR_EXPECT
+
+entry_x_alloc_reg:
+    .quad   entry_x_expect
+    .byte   0
+    .byte   14
+    .ascii  "expr-alloc-reg"
+    .align  3
+    .quad   code_EXPR_ALLOC_REG
+
+entry_x_reset_regs:
+    .quad   entry_x_alloc_reg
+    .byte   0
+    .byte   15
+    .ascii  "expr-reset-regs"
+    .align  3
+    .quad   code_EXPR_RESET_REGS
+
+entry_x_emit_arm64:
+    .quad   entry_x_reset_regs
+    .byte   0
+    .byte   15
+    .ascii  "expr-emit-arm64"
+    .align  3
+    .quad   code_EXPR_EMIT_ARM64
+
+entry_x_emit_sass:
+    .quad   entry_x_emit_arm64
+    .byte   0
+    .byte   14
+    .ascii  "expr-emit-sass"
+    .align  3
+    .quad   code_EXPR_EMIT_SASS
+
+entry_x_sym_find:
+    .quad   entry_x_emit_sass
+    .byte   0
+    .byte   13
+    .ascii  "expr-sym-find"
+    .align  3
+    .quad   code_EXPR_SYM_FIND
+
+entry_x_sym_add:
+    .quad   entry_x_sym_find
+    .byte   0
+    .byte   12
+    .ascii  "expr-sym-add"
+    .align  3
+    .quad   code_EXPR_SYM_ADD
+
+entry_x_sym_reg:
+    .quad   entry_x_sym_add
+    .byte   0
+    .byte   12
+    .ascii  "expr-sym-reg"
+    .align  3
+    .quad   code_EXPR_SYM_REG
+
+entry_x_emit_a64_rrr:
+    .quad   entry_x_sym_reg
+    .byte   0
+    .byte   17
+    .ascii  "expr-emit-a64-rrr"
+    .align  3
+    .quad   code_EXPR_EMIT_A64_RRR
+
+entry_x_emit_a64_cmp_cset:
+    .quad   entry_x_emit_a64_rrr
+    .byte   0
+    .byte   22
+    .ascii  "expr-emit-a64-cmp-cset"
+    .align  3
+    .quad   code_EXPR_EMIT_A64_CMP_CSET
+
+entry_x_emit_a64_mov_imm:
+    .quad   entry_x_emit_a64_cmp_cset
+    .byte   0
+    .byte   21
+    .ascii  "expr-emit-a64-mov-imm"
+    .align  3
+    .quad   code_EXPR_EMIT_A64_MOV_IMM
+
+entry_x_emit_a64_mov_reg:
+    .quad   entry_x_emit_a64_mov_imm
+    .byte   0
+    .byte   21
+    .ascii  "expr-emit-a64-mov-reg"
+    .align  3
+    .quad   code_EXPR_EMIT_A64_MOV_REG
+
+entry_x_emit_a64_ldrb_reg:
+    .quad   entry_x_emit_a64_mov_reg
+    .byte   0
+    .byte   22
+    .ascii  "expr-emit-a64-ldrb-reg"
+    .align  3
+    .quad   code_EXPR_EMIT_A64_LDRB_REG
+
+entry_x_emit_a64_ldr_reg:
+    .quad   entry_x_emit_a64_ldrb_reg
+    .byte   0
+    .byte   21
+    .ascii  "expr-emit-a64-ldr-reg"
+    .align  3
+    .quad   code_EXPR_EMIT_A64_LDR_REG
+
+entry_x_emit_a64_str_reg:
+    .quad   entry_x_emit_a64_ldr_reg
+    .byte   0
+    .byte   21
+    .ascii  "expr-emit-a64-str-reg"
+    .align  3
+    .quad   code_EXPR_EMIT_A64_STR_REG
+
+entry_x_emit_a64_bl:
+    .quad   entry_x_emit_a64_str_reg
+    .byte   0
+    .byte   16
+    .ascii  "expr-emit-a64-bl"
+    .align  3
+    .quad   code_EXPR_EMIT_A64_BL
+
+entry_x_emit_sass_alu:
+    .quad   entry_x_emit_a64_bl
+    .byte   0
+    .byte   18
+    .ascii  "expr-emit-sass-alu"
+    .align  3
+    .quad   code_EXPR_EMIT_SASS_ALU
+
+entry_x_emit_sass_mov_imm:
+    .quad   entry_x_emit_sass_alu
+    .byte   0
+    .byte   22
+    .ascii  "expr-emit-sass-mov-imm"
+    .align  3
+    .quad   code_EXPR_EMIT_SASS_MOV_IMM
+
+entry_x_emit_sass_ldg:
+    .quad   entry_x_emit_sass_mov_imm
+    .byte   0
+    .byte   18
+    .ascii  "expr-emit-sass-ldg"
+    .align  3
+    .quad   code_EXPR_EMIT_SASS_LDG
+
+entry_x_emit_sass_stg:
+    .quad   entry_x_emit_sass_ldg
+    .byte   0
+    .byte   18
+    .ascii  "expr-emit-sass-stg"
+    .align  3
+    .quad   code_EXPR_EMIT_SASS_STG
+
+entry_x_compile_atom:
+    .quad   entry_x_emit_sass_stg
+    .byte   0
+    .byte   17
+    .ascii  "expr-compile-atom"
+    .align  3
+    .quad   code_EXPR_COMPILE_ATOM
+
+entry_x_compile_mul:
+    .quad   entry_x_compile_atom
+    .byte   0
+    .byte   16
+    .ascii  "expr-compile-mul"
+    .align  3
+    .quad   code_EXPR_COMPILE_MUL
+
+entry_x_compile_add:
+    .quad   entry_x_compile_mul
+    .byte   0
+    .byte   16
+    .ascii  "expr-compile-add"
+    .align  3
+    .quad   code_EXPR_COMPILE_ADD
+
+entry_x_compile_cmp:
+    .quad   entry_x_compile_add
+    .byte   0
+    .byte   16
+    .ascii  "expr-compile-cmp"
+    .align  3
+    .quad   code_EXPR_COMPILE_CMP
+
+entry_x_compile_and:
+    .quad   entry_x_compile_cmp
+    .byte   0
+    .byte   16
+    .ascii  "expr-compile-and"
+    .align  3
+    .quad   code_EXPR_COMPILE_AND
+
+entry_x_compile_or:
+    .quad   entry_x_compile_and
+    .byte   0
+    .byte   15
+    .ascii  "expr-compile-or"
+    .align  3
+    .quad   code_EXPR_COMPILE_OR
+
+entry_x_compile_expr:
+    .quad   entry_x_compile_or
+    .byte   0
+    .byte   12
+    .ascii  "expr-compile"
+    .align  3
+    .quad   code_EXPR_COMPILE_EXPR
+
+entry_x_compile_assign:
+    .quad   entry_x_compile_expr
+    .byte   0
+    .byte   19
+    .ascii  "expr-compile-assign"
+    .align  3
+    .quad   code_EXPR_COMPILE_ASSIGN
+
+entry_x_compile_call:
+    .quad   entry_x_compile_assign
+    .byte   0
+    .byte   17
+    .ascii  "expr-compile-call"
+    .align  3
+    .quad   code_EXPR_COMPILE_CALL
+
+entry_x_register_comp:
+    .quad   entry_x_compile_call
+    .byte   0
+    .byte   18
+    .ascii  "expr-register-comp"
+    .align  3
+    .quad   code_EXPR_REGISTER_COMP
+
+entry_x_compile_array_store:
+    .quad   entry_x_register_comp
+    .byte   0
+    .byte   24
+    .ascii  "expr-compile-array-store"
+    .align  3
+    .quad   code_EXPR_COMPILE_ARRAY_STORE
+
+entry_x_get_arm64_buf:
+    .quad   entry_x_compile_array_store
+    .byte   0
+    .byte   18
+    .ascii  "expr-get-arm64-buf"
+    .align  3
+    .quad   code_EXPR_GET_ARM64_BUF
+
+entry_x_get_sass_buf:
+    .quad   entry_x_get_arm64_buf
+    .byte   0
+    .byte   17
+    .ascii  "expr-get-sass-buf"
+    .align  3
+    .quad   code_EXPR_GET_SASS_BUF
+
+// Final tail of the entire dictionary chain.
+.global last_entry
+last_entry:
+entry_x_get_max_reg:
+    .quad   entry_x_get_sass_buf
+    .byte   0
+    .byte   16
+    .ascii  "expr-get-max-reg"
+    .align  3
+    .quad   code_EXPR_GET_MAX_REG
 
 .end

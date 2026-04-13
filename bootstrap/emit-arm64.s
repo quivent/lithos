@@ -2322,11 +2322,9 @@ entry_e_cbz_fwd:
     .align  3
     .quad   code_E_CBZ_FWD
 
-// last emitter entry — tail of the full dictionary chain
-// var_latest is initialized to last_entry at boot
-.globl last_entry
+// last emitter entry — chain continues into lithos-parser.s
+// (last_entry is defined at the tail of lithos-expr.s)
 emit_last_entry:
-last_entry:
 entry_e_cbnz_fwd:
     .quad   entry_e_cbz_fwd
     .byte   0

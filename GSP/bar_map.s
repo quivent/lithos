@@ -37,8 +37,6 @@
 
 // ---- Constants ----
 .equ AT_FDCWD,      -100
-.equ O_RDWR,        2
-.equ O_SYNC,        0x101000          // O_SYNC on aarch64 = 0x101000
 .equ PROT_READ,     1
 .equ PROT_WRITE,    2
 .equ PROT_RW,       3
@@ -325,6 +323,8 @@ parse_bar4_phys:
     // x1 now points to start of line 4.  Format: "0xHHHH..."
     // Skip optional leading whitespace
 .skip_ws:
+    cmp     x1, x3
+    b.ge    .parse_phys_fail_noclose
     ldrb    w4, [x1]
     cmp     w4, #' '
     b.ne    .check_0x
@@ -333,9 +333,13 @@ parse_bar4_phys:
 
 .check_0x:
     // Expect "0x" prefix
+    cmp     x1, x3
+    b.ge    .parse_phys_fail_noclose
     ldrb    w4, [x1], #1
     cmp     w4, #'0'
     b.ne    .parse_phys_fail_noclose
+    cmp     x1, x3
+    b.ge    .parse_phys_fail_noclose
     ldrb    w4, [x1], #1
     cmp     w4, #'x'
     b.ne    .parse_phys_fail_noclose
@@ -343,6 +347,8 @@ parse_bar4_phys:
     // Accumulate hex digits into x21
     mov     x21, #0
 .hex_loop:
+    cmp     x1, x3
+    b.ge    .hex_done
     ldrb    w4, [x1], #1
     // Check 0-9
     sub     w5, w4, #'0'

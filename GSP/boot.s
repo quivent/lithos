@@ -1,15 +1,19 @@
 // boot.s -- GSP cold-boot entry point
 //
-// Calls the 8 GSP boot stages in sequence:
+// Calls the 9 GSP boot stages in sequence:
 //   1. bar_map_init        -- mmap BAR0 + BAR4 from PCI sysfs
 //   2. pmc_check           -- verify Hopper architecture via PMC_BOOT_0
 //   3. falcon_reset        -- 4-step Falcon engine reset
 //   4. hbm_alloc_init      -- init BAR4 bump allocator (64MB reserved header)
 //   5. gsp_fw_load         -- parse firmware ELF, copy .fwimage to BAR4
-//   6. STEP 7 TODO         -- FSP communication (NOT IMPLEMENTED)
-//   7. gsp_bcr_start       -- program BCR, start RISC-V FMC
+//   6. gsp_bcr_start       -- program BCR, start RISC-V FMC
+//   7. FSP communication   -- TODO -- NOT IMPLEMENTED (placeholder notice)
 //   8. gsp_poll_lockdown   -- wait for PRIV_LOCKDOWN release
 //   9. gsp_rpc_alloc_channel -- first RPC round-trip, allocate GPFIFO channel
+//
+// NOTE: NVIDIA's reference flow performs FSP handshake BEFORE BCR start.
+// We currently skip it (works on GH200 where SBIOS pre-seeds the state),
+// so the [7/9] slot is just a TODO notice printed after [6/9].
 //
 // No libc. Raw Linux syscalls only (SYS_WRITE for progress, SYS_EXIT on end).
 // Matches style of src/launcher.s.
@@ -27,12 +31,13 @@
 //   ld -o gsp-boot *.o -static
 //
 // Exit codes:
-//   0 = success (all 8 stages passed)
+//   0 = success (all 9 stages passed)
 //   1 = bar_map_init failed
 //   2 = pmc_check failed (not Hopper)
 //   3 = falcon_reset failed
 //   4 = gsp_poll_lockdown failed (lockdown timeout or FMC error)
 //   5 = gsp_rpc_alloc_channel failed
+//   6 = hbm_alloc_init failed
 
 .equ SYS_WRITE,     64
 .equ SYS_EXIT,      93
@@ -83,58 +88,61 @@
 msg_banner:          .asciz "gsp: ================== Lithos GSP cold-boot ==================\n"
 msg_banner_len       = . - msg_banner - 1
 
-msg_step1_begin:     .asciz "gsp: [1/8] bar_map_init -- mapping BAR0 and BAR4...\n"
+msg_step1_begin:     .asciz "gsp: [1/9] bar_map_init -- mapping BAR0 and BAR4...\n"
 msg_step1_begin_len  = . - msg_step1_begin - 1
-msg_step1_done:      .asciz "gsp: [1/8] bar_map_init -- OK\n"
+msg_step1_done:      .asciz "gsp: [1/9] bar_map_init -- OK\n"
 msg_step1_done_len   = . - msg_step1_done - 1
-msg_step1_fail:      .asciz "gsp: [1/8] bar_map_init -- FAILED, aborting\n"
+msg_step1_fail:      .asciz "gsp: [1/9] bar_map_init -- FAILED, aborting\n"
 msg_step1_fail_len   = . - msg_step1_fail - 1
 
-msg_step2_begin:     .asciz "gsp: [2/8] pmc_check -- verifying Hopper...\n"
+msg_step2_begin:     .asciz "gsp: [2/9] pmc_check -- verifying Hopper...\n"
 msg_step2_begin_len  = . - msg_step2_begin - 1
-msg_step2_done:      .asciz "gsp: [2/8] pmc_check -- OK\n"
+msg_step2_done:      .asciz "gsp: [2/9] pmc_check -- OK\n"
 msg_step2_done_len   = . - msg_step2_done - 1
-msg_step2_fail:      .asciz "gsp: [2/8] pmc_check -- FAILED, aborting\n"
+msg_step2_fail:      .asciz "gsp: [2/9] pmc_check -- FAILED, aborting\n"
 msg_step2_fail_len   = . - msg_step2_fail - 1
 
-msg_step3_begin:     .asciz "gsp: [3/8] falcon_reset -- resetting GSP Falcon engine...\n"
+msg_step3_begin:     .asciz "gsp: [3/9] falcon_reset -- resetting GSP Falcon engine...\n"
 msg_step3_begin_len  = . - msg_step3_begin - 1
-msg_step3_done:      .asciz "gsp: [3/8] falcon_reset -- OK\n"
+msg_step3_done:      .asciz "gsp: [3/9] falcon_reset -- OK\n"
 msg_step3_done_len   = . - msg_step3_done - 1
-msg_step3_fail:      .asciz "gsp: [3/8] falcon_reset -- FAILED, aborting\n"
+msg_step3_fail:      .asciz "gsp: [3/9] falcon_reset -- FAILED, aborting\n"
 msg_step3_fail_len   = . - msg_step3_fail - 1
 
-msg_step4_begin:     .asciz "gsp: [4/8] hbm_alloc_init -- init BAR4 bump allocator (64MB reserved)...\n"
+msg_step4_begin:     .asciz "gsp: [4/9] hbm_alloc_init -- init BAR4 bump allocator (64MB reserved)...\n"
 msg_step4_begin_len  = . - msg_step4_begin - 1
-msg_step4_done:      .asciz "gsp: [4/8] hbm_alloc_init -- OK\n"
+msg_step4_done:      .asciz "gsp: [4/9] hbm_alloc_init -- OK\n"
 msg_step4_done_len   = . - msg_step4_done - 1
 
-msg_step5_begin:     .asciz "gsp: [5/8] gsp_fw_load -- loading firmware ELF into BAR4...\n"
+msg_step5_begin:     .asciz "gsp: [5/9] gsp_fw_load -- loading firmware ELF into BAR4...\n"
 msg_step5_begin_len  = . - msg_step5_begin - 1
-msg_step5_done:      .asciz "gsp: [5/8] gsp_fw_load -- OK\n"
+msg_step5_done:      .asciz "gsp: [5/9] gsp_fw_load -- OK\n"
 msg_step5_done_len   = . - msg_step5_done - 1
 
-// STEP 7 TODO placeholder -- FSP communication
-msg_step_fsp_todo:   .asciz "gsp: [STEP 7 TODO] FSP communication is NOT IMPLEMENTED (see docs/gsp-native.md sec 7)\n"
+// Step 7 placeholder -- FSP communication (TODO -- NOT IMPLEMENTED)
+msg_step_fsp_todo:   .asciz "gsp: [7/9] FSP communication -- TODO -- NOT IMPLEMENTED (see docs/gsp-native.md sec 7)\n"
 msg_step_fsp_todo_len = . - msg_step_fsp_todo - 1
 
-msg_step6_begin:     .asciz "gsp: [6/8] gsp_bcr_start -- programming BCR, starting RISC-V FMC...\n"
+msg_step4_fail:      .asciz "gsp: [4/9] hbm_alloc_init -- FAILED, aborting\n"
+msg_step4_fail_len   = . - msg_step4_fail - 1
+
+msg_step6_begin:     .asciz "gsp: [6/9] gsp_bcr_start -- programming BCR, starting RISC-V FMC...\n"
 msg_step6_begin_len  = . - msg_step6_begin - 1
-msg_step6_done:      .asciz "gsp: [6/8] gsp_bcr_start -- OK (CPU started)\n"
+msg_step6_done:      .asciz "gsp: [6/9] gsp_bcr_start -- OK (CPU started)\n"
 msg_step6_done_len   = . - msg_step6_done - 1
 
-msg_step7_begin:     .asciz "gsp: [7/8] gsp_poll_lockdown -- waiting for PRIV_LOCKDOWN release...\n"
+msg_step7_begin:     .asciz "gsp: [8/9] gsp_poll_lockdown -- waiting for PRIV_LOCKDOWN release...\n"
 msg_step7_begin_len  = . - msg_step7_begin - 1
-msg_step7_done:      .asciz "gsp: [7/8] gsp_poll_lockdown -- OK (lockdown released)\n"
+msg_step7_done:      .asciz "gsp: [8/9] gsp_poll_lockdown -- OK (lockdown released)\n"
 msg_step7_done_len   = . - msg_step7_done - 1
-msg_step7_fail:      .asciz "gsp: [7/8] gsp_poll_lockdown -- FAILED (timeout or FMC error), aborting\n"
+msg_step7_fail:      .asciz "gsp: [8/9] gsp_poll_lockdown -- FAILED (timeout or FMC error), aborting\n"
 msg_step7_fail_len   = . - msg_step7_fail - 1
 
-msg_step8_begin:     .asciz "gsp: [8/8] gsp_rpc_alloc_channel -- first RPC round-trip...\n"
+msg_step8_begin:     .asciz "gsp: [9/9] gsp_rpc_alloc_channel -- first RPC round-trip...\n"
 msg_step8_begin_len  = . - msg_step8_begin - 1
-msg_step8_done:      .asciz "gsp: [8/8] gsp_rpc_alloc_channel -- OK (channel allocated)\n"
+msg_step8_done:      .asciz "gsp: [9/9] gsp_rpc_alloc_channel -- OK (channel allocated)\n"
 msg_step8_done_len   = . - msg_step8_done - 1
-msg_step8_fail:      .asciz "gsp: [8/8] gsp_rpc_alloc_channel -- FAILED, aborting\n"
+msg_step8_fail:      .asciz "gsp: [9/9] gsp_rpc_alloc_channel -- FAILED, aborting\n"
 msg_step8_fail_len   = . - msg_step8_fail - 1
 
 msg_success:         .asciz "gsp: ================== GSP boot complete ==================\n"
@@ -229,6 +237,8 @@ _start:
     ldr     x1, [x1]                        // x1 = bar4 phys
     mov     x2, #GSP_RESERVED_BYTES         // x2 = 64 MB initial offset
     bl      hbm_alloc_init
+    cmp     x0, #0
+    b.ne    .boot_fail_step4_alloc
 
     adrp    x1, msg_step4_done
     add     x1, x1, :lo12:msg_step4_done
@@ -253,30 +263,6 @@ _start:
     adrp    x1, msg_step5_done
     add     x1, x1, :lo12:msg_step5_done
     mov     x2, #msg_step5_done_len
-    bl      boot_print
-
-    // =============================================================
-    // STEP 7 TODO: FSP communication
-    // -----------------------------------------------------------------
-    // Between firmware load (step 5) and BCR start (step 6), the real
-    // NVIDIA boot sequence exchanges messages with the FSP (Falcon
-    // Security Processor) via the EMEM mailbox to:
-    //   - Negotiate the WPR/SubWPR layout
-    //   - Authorize the GSP-FMC signature
-    //   - Release the target mask to allow RISC-V boot
-    //
-    // This is not yet implemented in our native boot path.  On the
-    // current development GH200, FSP interaction appears to be either
-    // pre-seeded by SBIOS or skipped because we run with the device
-    // detached from nvidia.ko.  If the BCR start (step 6) or lockdown
-    // poll (step 7 below) times out, THIS is likely the missing piece.
-    //
-    // Design doc: docs/gsp-native.md section 7 "FSP bootstrap"
-    // Reference:  open-gpu-kernel-modules kernel_fsp_gh100.c
-    // =============================================================
-    adrp    x1, msg_step_fsp_todo
-    add     x1, x1, :lo12:msg_step_fsp_todo
-    mov     x2, #msg_step_fsp_todo_len
     bl      boot_print
 
     // =============================================================
@@ -331,7 +317,7 @@ _start:
     bl      boot_print
 
     // =============================================================
-    // Step 7 (labeled "[7/8]" in progress): gsp_poll_lockdown
+    // Step 8: gsp_poll_lockdown
     //   x0 = bar0 base
     //   x1 = fmc_params_pa (must match what BCR step passed)
     //   Returns 0 on success, -1 on timeout, -2 on FMC error.
@@ -347,7 +333,7 @@ _start:
     mov     x1, #0                            // fmc_params_pa placeholder
     bl      gsp_poll_lockdown
     cmp     x0, #0
-    b.lt    .boot_fail_step7
+    b.lt    .boot_fail_step8
 
     adrp    x1, msg_step7_done
     add     x1, x1, :lo12:msg_step7_done
@@ -355,7 +341,7 @@ _start:
     bl      boot_print
 
     // =============================================================
-    // Step 8: gsp_rpc_alloc_channel
+    // Step 9: gsp_rpc_alloc_channel
     //   x0 = bar0 base
     //   x1 = bar4 base (CPU va)
     //   x2 = cmd_queue_offset
@@ -388,7 +374,7 @@ _start:
 
     bl      gsp_rpc_alloc_channel
     cmp     x0, #0
-    b.lt    .boot_fail_step8
+    b.lt    .boot_fail_step9
 
     adrp    x1, msg_step8_done
     add     x1, x1, :lo12:msg_step8_done
@@ -437,7 +423,7 @@ _start:
     mov     x8, #SYS_EXIT
     svc     #0
 
-.boot_fail_step7:
+.boot_fail_step8:
     adrp    x1, msg_step7_fail
     add     x1, x1, :lo12:msg_step7_fail
     mov     x2, #msg_step7_fail_len
@@ -446,12 +432,21 @@ _start:
     mov     x8, #SYS_EXIT
     svc     #0
 
-.boot_fail_step8:
+.boot_fail_step9:
     adrp    x1, msg_step8_fail
     add     x1, x1, :lo12:msg_step8_fail
     mov     x2, #msg_step8_fail_len
     bl      boot_print
     mov     x0, #5
+    mov     x8, #SYS_EXIT
+    svc     #0
+
+.boot_fail_step4_alloc:
+    adrp    x1, msg_step4_fail
+    add     x1, x1, :lo12:msg_step4_fail
+    mov     x2, #msg_step4_fail_len
+    bl      boot_print
+    mov     x0, #6
     mov     x8, #SYS_EXIT
     svc     #0
 

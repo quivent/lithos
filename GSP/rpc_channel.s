@@ -440,6 +440,16 @@ gsp_rpc_alloc_channel:
     mov x24, x5                         // x24 = gpfifo_entries
     mov x25, x6                         // x25 = bump_ptr
 
+    // ================================================================
+    // CONTRACT: gpfifo_gpu_va (x4/x23) MUST be zero on entry.
+    // Callers must use the bump-allocation path so we can derive a
+    // valid CPU VA (bar4_mmap + offset) for pushbuffer writes. On
+    // GH200 bar4_phys != bar4_mmap, so a caller-supplied GPU VA
+    // cannot be reused as a CPU VA -- doing so would fault.
+    // Reject non-zero with -EINVAL (-22) via .rpc_einval.
+    // ================================================================
+    cbnz x23, .rpc_einval
+
     // RPC scratch buffer at sp+96 (80 bytes, enough for header + largest payload)
     // sp+96 .. sp+175 = 80 bytes scratch
 
@@ -604,7 +614,7 @@ gsp_rpc_alloc_channel:
     str xzr, [x0]
 
     // ================================================================
-    // RPC 3: NV_RM_RPC_ALLOC_CHANNEL (function=6)
+    // RPC 4: NV_RM_RPC_ALLOC_CHANNEL (function=6)
     // Payload (from g_rpc-structures.h / _kchannelSendChannelAllocRpc):
     //   offset 0x00: u32 hClient
     //   offset 0x04: u32 hParent (= hDevice)
@@ -706,6 +716,14 @@ gsp_rpc_alloc_channel:
 
 .rpc_fail:
     mov x0, #-1
+    mov x1, #0
+    b .rpc_done
+
+.rpc_einval:
+    // Caller passed non-zero gpfifo_gpu_va; this entry is reserved
+    // for the bump-allocation path that derives the matching CPU VA.
+    // Distinct return code (-22 = -EINVAL) so misuse is identifiable.
+    mov x0, #-22
     mov x1, #0
 
 .rpc_done:

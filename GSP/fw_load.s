@@ -76,6 +76,8 @@ msg_fw_lseek_err: .asciz "gsp: lseek(SEEK_END) failed or firmware file is empty\
 msg_fw_lseek_err_len = . - msg_fw_lseek_err - 1
 msg_fw_mmap_err:  .asciz "gsp: mmap of firmware file failed (MAP_FAILED)\n"
 msg_fw_mmap_err_len = . - msg_fw_mmap_err - 1
+msg_fw_too_small: .asciz "gsp: firmware file smaller than ELF64 header (64 bytes)\n"
+msg_fw_too_small_len = . - msg_fw_too_small - 1
 msg_fw_ok:        .asciz "gsp: firmware loaded to BAR4\n"
 msg_fw_ok_len = . - msg_fw_ok - 1
 
@@ -140,6 +142,10 @@ gsp_fw_load:
     cmp     x0, #0
     b.le    .fw_lseek_fail
     mov     x20, x0                 // x20 = file size
+
+    // Sanity: file must be at least an ELF64 header (64 bytes).
+    cmp     x20, #64
+    b.lt    .fw_elf_too_small
 
     // ---- 3. mmap the firmware file ----
     mov     x8, SYS_MMAP
@@ -318,24 +324,49 @@ gsp_fw_load:
     svc     #0
 
 .fw_elf_bad:
+    // Print error, close fd, exit.  fd is in x19.
+    // (munmap of x21 omitted: single-shot init, kernel reaps on SYS_EXIT.)
     mov     x8, #64
     mov     x0, #2
     adrp    x1, msg_fw_elf_err
     add     x1, x1, :lo12:msg_fw_elf_err
     mov     x2, msg_fw_elf_err_len
     svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
     mov     x0, #2
     mov     x8, SYS_EXIT
     svc     #0
 
 .fw_section_not_found:
+    // Print error, close fd, exit.  fd is in x19.
+    // (munmap of x21 omitted: single-shot init, kernel reaps on SYS_EXIT.)
     mov     x8, #64
     mov     x0, #2
     adrp    x1, msg_fw_sec_err
     add     x1, x1, :lo12:msg_fw_sec_err
     mov     x2, msg_fw_sec_err_len
     svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
     mov     x0, #3
+    mov     x8, SYS_EXIT
+    svc     #0
+
+.fw_elf_too_small:
+    // Print error, close fd, exit.  fd is in x19, no mmap yet.
+    mov     x8, #64
+    mov     x0, #2
+    adrp    x1, msg_fw_too_small
+    add     x1, x1, :lo12:msg_fw_too_small
+    mov     x2, msg_fw_too_small_len
+    svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #6
     mov     x8, SYS_EXIT
     svc     #0
 

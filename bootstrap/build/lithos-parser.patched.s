@@ -30,6 +30,7 @@
 .global emit_strh_reg
 .global emit_sub_reg
 .global emit_svc
+.global entry_p_parse_tokens
 .global parse_additive
 .global parse_assignment
 .global parse_atom
@@ -2956,3 +2957,18 @@ loop_stack:     .space (16 * MAX_LOOP)  // (top_addr, exit_addr) pairs
 loop_sp:        .space 4
     .align 3
 
+
+// ============================================================
+// Dictionary entries — extends the chain past entry_e_cbnz_fwd
+// (the tail of emit-arm64.s). Tail of this file: entry_p_parse_tokens
+// ============================================================
+.data
+.align 3
+
+entry_p_parse_tokens:
+    .quad   entry_e_cbnz_fwd
+    .byte   0
+    .byte   12
+    .ascii  "parse-tokens"
+    .align  3
+    .quad   code_PARSE_TOKENS

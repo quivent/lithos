@@ -202,7 +202,6 @@
 .global entry_e_tst_reg
 .global entry_e_udiv
 .global entry_emit_word
-.global last_entry
 
 // emit-arm64.s — ARM64 machine code emitter for the Lithos self-hosting compiler
 //
@@ -2528,11 +2527,9 @@ entry_e_cbz_fwd:
     .align  3
     .quad   code_E_CBZ_FWD
 
-// last emitter entry — tail of the full dictionary chain
-// var_latest is initialized to last_entry at boot
-.globl last_entry
+// last emitter entry — chain continues into lithos-parser.s
+// (last_entry is defined at the tail of lithos-expr.s)
 emit_last_entry:
-last_entry:
 entry_e_cbnz_fwd:
     .quad   entry_e_cbz_fwd
     .byte   0
