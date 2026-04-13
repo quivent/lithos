@@ -1,7 +1,13 @@
-# kernels — composed operations
-# Each body line is a stack op: `op operand` applies acc = acc OP operand.
-# Bare op = unary (* alone = square). First line is initial value.
-# Called functions (exp, sigmoid, ...) act on the accumulator as their arg.
+# kernels — stack language
+#
+# - Each body line is one op on the stack.
+# - A bare name (arg, literal, primitive constant) pushes to the stack.
+# - `op operand` = push operand, then pop-two binary op.
+# - Bare binary op = pop-two, combine.
+# - Bare `*` with stack depth 1 = square (implicit dup).
+# - Bare unary (√, Σ, log, sin, cos) = apply to top.
+# - A named kernel consumes its args from the stack, pushes its result.
+# - `acc` = dup top.
 
 
 # ==== top-level composition ====
@@ -90,23 +96,23 @@ abs x
 
 sigmoid x
   0
-  - x                // -x
-  exp                // e^(-x)
-  + 1                // 1 + e^(-x)
-  reciprocal         // 1 / (1 + e^(-x))
+  - x
+  exp
+  + 1
+  reciprocal
 
 
 SiLU x
   x
-  sigmoid            // sigmoid(x)
-  * x                // x * sigmoid(x)
+  sigmoid
+  * x
 
 
 softplus x
   x
-  exp                // e^x
-  + 1                // 1 + e^x
-  log                // log(1 + e^x)
+  exp
+  + 1
+  log
 
 
 # ==== 2-D rotation (pair) ====
@@ -114,36 +120,40 @@ softplus x
 rotate_x x y c s
   x
   * c
-  - (y * s)          // x*c - y*s
+  y
+  * s
+  -
 
 
 rotate_y x y c s
   x
   * s
-  + (y * c)          // x*s + y*c
+  y
+  * c
+  +
 
 
 # ==== vector ops ====
 
 dot u v
   u
-  * v                // elementwise u[i]*v[i]
+  * v
   Σ
 
 
 Normalize x
   x
-  *                  // square each element
+  *
   Σ
   / N
   √
   reciprocal
-  * x                // scalar * x → vector
+  * x
 
 
 L2Norm x
   x
-  *                  // square each
+  *
   Σ
   √
   reciprocal
@@ -153,7 +163,7 @@ L2Norm x
 RMSNorm x γ
   x
   Normalize
-  * γ                // scale by γ
+  * γ
 
 
 Residual x saved
@@ -163,9 +173,13 @@ Residual x saved
 
 Softmax x
   x
-  - (max x)          // subtract max elementwise
-  exp                // exp each
-  / (Σ acc)          // divide each by sum of current acc
+  x
+  max
+  -
+  exp
+  acc
+  Σ
+  /
 
 
 Sample logits
@@ -204,17 +218,27 @@ DecayGate a_proj dt_bias A_log
   a_proj
   + dt_bias
   softplus
-  * (negate (exp A_log))     // multiply by -exp(A_log)
-  exp                         // exp of the product
+  e
+  ^ A_log
+  negate
+  *
+  exp
 
 
 DeltaUpdate S K V β decay
-  outer K K
-  matmul S (outer K K)
-  outer V K
-  subtract
+  V
+  K
+  outer
+  S
+  K
+  K
+  outer
+  matmul
+  -
   * β
-  + (decay * S)
+  S
+  * decay
+  +
 
 
 OutputGate x output
@@ -225,15 +249,18 @@ OutputGate x output
 
 ScaledDotProduct Q K_cache d_head
   each K in K_cache
-    dot Q K
-    / √d_head
+    Q
+    K
+    dot
+    √ d_head
+    /
 
 
 RoPE Q K pos
-  each pair (Q_x, Q_y) at position pos
+  each pair Q_x Q_y
     rotate_x Q_x Q_y cos[pos] sin[pos]
     rotate_y Q_x Q_y cos[pos] sin[pos]
-  each pair (K_x, K_y)
+  each pair K_x K_y
     rotate_x K_x K_y cos[pos] sin[pos]
     rotate_y K_x K_y cos[pos] sin[pos]
 

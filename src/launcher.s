@@ -38,9 +38,13 @@
 .equ SYS_CLOSE,     57
 .equ SYS_LSEEK,     62
 .equ SYS_MMAP,      222
+.equ SYS_MADVISE,   233
 .equ SYS_MPROTECT,  226
+.equ MADV_WILLNEED,   3
 .equ SYS_EXIT,      93
 .equ SYS_BRK,       214
+.equ SYS_PREAD64,    67
+.equ SYS_FSTAT,      80
 
 .equ AT_FDCWD,      -100
 .equ O_RDONLY,       0
@@ -53,6 +57,7 @@
 .equ MAP_PRIVATE,    2
 .equ MAP_ANONYMOUS,  0x20
 .equ MAP_PRIV_ANON,  0x22
+.equ CU_MEMHOSTREGISTER_DEVICEMAP, 0x2  // cuMemHostRegister flag: create device mapping
 
 // ---- Model constants (Qwen 3.5-27B -- from config.json) ----
 .equ NUM_LAYERS,       64
@@ -81,7 +86,8 @@
 .equ KF_GATE_SIG,     64
 .equ KF_CONV1D,       72
 .equ KF_L2NORM,       80
-.equ KF_TABLE_SIZE,   88
+.equ KF_LM_HEAD,      88
+.equ KF_TABLE_SIZE,   96
 
 // ---- Per-layer weight pointer slot indices ----
 // Access via: ldr x_reg, [x23, #(WS_xxx * 8)]
@@ -135,9 +141,10 @@
 .equ WS_POST_NORM,        25    // post_attention_layernorm.weight (bf16)
 
 // ---- Activation buffer size ----
-// HIDDEN_DIM * sizeof(f32) = 5120 * 4 = 20480 bytes per token
-// Round up to 4 pages = 16384 (page aligned, generous)
-.equ ACT_BUF_SIZE,    20480
+// Must hold the largest intermediate tensor that lands in an act buffer.
+// DeltaNet QKV combined output = 10240 * sizeof(f32) = 40960 bytes.
+// (HIDDEN_DIM * 4 = 20480 is too small; QKV output is 2x hidden.)
+.equ ACT_BUF_SIZE,    40960
 // Residual buffer = same
 .equ RES_BUF_SIZE,    20480
 
@@ -180,6 +187,12 @@ msg_tok:      .asciz "lithos: generating tokens...\n"
 msg_tok_len = . - msg_tok - 1
 msg_err:      .asciz "lithos: CUDA error, code="
 msg_err_len = . - msg_err - 1
+msg_dbg:      .asciz "lithos: dbg layer="
+msg_dbg_len = . - msg_dbg - 1
+msg_dbg2:     .asciz " tag="
+msg_dbg2_len = . - msg_dbg2 - 1
+msg_dbg3:     .asciz " err="
+msg_dbg3_len = . - msg_dbg3 - 1
 msg_nl:       .asciz "\n"
 msg_done:     .asciz "\nlithos: done\n"
 msg_done_len = . - msg_done - 1
@@ -204,6 +217,12 @@ msg_wdone:    .asciz "lithos: weight table built (1648 tensors from 4 shards)\n"
 msg_wdone_len = . - msg_wdone - 1
 msg_werr:     .asciz "lithos: ERROR: failed to mmap shard\n"
 msg_werr_len = . - msg_werr - 1
+msg_hostreg:  .asciz "lithos: cuMemHostRegister shard "
+msg_hostreg_len = . - msg_hostreg - 1
+msg_hostreg_ok: .asciz " -> OK (GPU-pinned)\n"
+msg_hostreg_ok_len = . - msg_hostreg_ok - 1
+msg_hostreg_fail: .asciz " -> FAILED rc="
+msg_hostreg_fail_len = . - msg_hostreg_fail - 1
 msg_idxerr:   .asciz "lithos: ERROR: weight_index.bin not found\n"
 msg_idxerr_len = . - msg_idxerr - 1
 
@@ -233,6 +252,8 @@ kname_rope:        .asciz "rotate"
 kname_gate_sig:    .asciz "gate_sigmoid"
 kname_conv1d:      .asciz "conv1d_infer"
 kname_l2norm:      .asciz "l2norm"
+cubin_lm_head:     .asciz "lm_head.cubin"
+kname_lm_head:     .asciz "lm_head"
 
 // Path buffer
 .align 3
@@ -243,6 +264,12 @@ path_buf:     .space 512
 cuda_device:  .quad 0
 cuda_context: .quad 0
 cuda_stream:  .quad 0
+cuda_stream_q: .quad 0          // Q projection stream (multi-stream FA QKV)
+cuda_stream_k: .quad 0          // K projection stream
+cuda_stream_v: .quad 0          // V projection stream
+cuda_event_q:  .quad 0          // completion event for Q projection
+cuda_event_k:  .quad 0          // completion event for K projection
+cuda_event_v:  .quad 0          // completion event for V projection
 seq_position: .quad 0
 last_token:   .quad 0
 num_tokens_generated: .quad 0
@@ -259,6 +286,14 @@ modules:      .space 64      // 8 CUmodule handles
 .align 3
 launch_params: .space 256    // 32 param slots * 8 bytes
 param_ptrs:    .space 256    // 32 void* pointers into launch_params
+// Per-stream launch param scratch for parallel Q/K/V projection
+.align 3
+launch_params_q: .space 256
+param_ptrs_q:    .space 256
+launch_params_k: .space 256
+param_ptrs_k:    .space 256
+launch_params_v: .space 256
+param_ptrs_v:    .space 256
 
 // Per-layer weight POINTER table (resolved virtual addresses)
 // 64 layers * 26 slots per layer * 8 bytes = 13312 bytes
@@ -297,17 +332,15 @@ act_selector:  .quad 0       // 0 = A is input, 1 = B is input
 z_buf:         .quad 0       // output gate projection buffer (value_dim=6144 * 4 = 24576 bytes)
 conv1d_state:  .quad 0       // conv1d shift register state (all layers)
 
-// ---- Projection/norm state counters (reset per layer) ----
-proj_state:    .quad 0       // which projection within the layer (0..6)
-norm_state:    .quad 0       // which norm within the layer (0..1)
-
-// ---- DeltaNet/FA layer counters (reset per token, increment per matching layer) ----
+// ---- Per-token layer counters (contiguous; reset once per token with stp xzr,xzr) ----
 dn_layer_counter:  .quad 0   // counts DeltaNet layers (layer_idx % 4 != 3)
 fa_layer_counter:  .quad 0   // counts full-attention layers (layer_idx % 4 == 3)
 
-// ---- Per-layer call counters (reset per layer) ----
-conv1d_call_counter: .quad 0  // which conv1d call within the layer (0=Q, 1=K, 2=V)
-l2norm_call_counter: .quad 0  // which l2norm call within the layer (0=K, 1=Q)
+// ---- Per-layer state counters (contiguous; reset per layer with 2x stp xzr,xzr) ----
+proj_state:         .quad 0  // which projection within the layer (0..6)
+norm_state:         .quad 0  // which norm within the layer (0..1)
+conv1d_call_counter:.quad 0  // which conv1d call within the layer (0=Q, 1=K, 2=V)
+l2norm_call_counter:.quad 0  // which l2norm call within the layer (0=K, 1=Q)
 
 // ---- RoPE cos/sin precomputed tables ----
 rope_cos_table: .quad 0      // pointer to precomputed cos table
@@ -321,6 +354,14 @@ mlp_up_buf:    .quad 0       // up projection output (INTERMEDIATE_DIM * 4 bytes
 // VOCAB_SIZE * sizeof(f32) = 248320 * 4 = 993280 bytes (~970KB)
 .equ LOGITS_BUF_SIZE, 993280
 logits_buf:    .quad 0
+
+// ---- GPU logits device buffer (CUdeviceptr) ----
+// Allocated via cuMemAlloc; lm_head kernel writes here, then DtoH copy to logits_buf
+cuda_logits_dev: .quad 0
+
+// Shard allocation temp pointer (for cuMemAllocHost output)
+.align 3
+shard_alloc_ptr: .quad 0
 
 // Timing
 .align 3
@@ -409,6 +450,45 @@ _start:
     add     x0, x0, :lo12:cuda_stream
     mov     x1, #0
     bl      cuStreamCreate
+    cbnz    x0, cuda_error
+
+    // ---- Create Q/K/V projection streams ----
+    adrp    x0, cuda_stream_q
+    add     x0, x0, :lo12:cuda_stream_q
+    mov     x1, #0
+    bl      cuStreamCreate
+    cbnz    x0, cuda_error
+
+    adrp    x0, cuda_stream_k
+    add     x0, x0, :lo12:cuda_stream_k
+    mov     x1, #0
+    bl      cuStreamCreate
+    cbnz    x0, cuda_error
+
+    adrp    x0, cuda_stream_v
+    add     x0, x0, :lo12:cuda_stream_v
+    mov     x1, #0
+    bl      cuStreamCreate
+    cbnz    x0, cuda_error
+
+    // ---- Create completion events for Q/K/V (CU_EVENT_DISABLE_TIMING=0x2) ----
+    // Using flag 0 (default) for simplicity; disable timing for lower overhead
+    adrp    x0, cuda_event_q
+    add     x0, x0, :lo12:cuda_event_q
+    mov     x1, #2                  // CU_EVENT_DISABLE_TIMING
+    bl      cuEventCreate
+    cbnz    x0, cuda_error
+
+    adrp    x0, cuda_event_k
+    add     x0, x0, :lo12:cuda_event_k
+    mov     x1, #2
+    bl      cuEventCreate
+    cbnz    x0, cuda_error
+
+    adrp    x0, cuda_event_v
+    add     x0, x0, :lo12:cuda_event_v
+    mov     x1, #2
+    bl      cuEventCreate
     cbnz    x0, cuda_error
 
     // ---- Allocate activation buffers via mmap ----
@@ -605,13 +685,10 @@ decode_one_token:
     stp     x19, x20, [sp, #-16]!
     stp     x21, x22, [sp, #-16]!  // x22 = layer type flag (survives bl calls)
 
-    // Reset per-token layer counters
+    // Reset per-token layer counters (dn_layer_counter + fa_layer_counter contiguous)
     adrp    x0, dn_layer_counter
     add     x0, x0, :lo12:dn_layer_counter
-    str     xzr, [x0]
-    adrp    x0, fa_layer_counter
-    add     x0, x0, :lo12:fa_layer_counter
-    str     xzr, [x0]
+    stp     xzr, xzr, [x0]             // zero dn_layer_counter and fa_layer_counter
 
     // Load buffer pointers
     adrp    x20, act_buf_a
@@ -621,6 +698,14 @@ decode_one_token:
     adrp    x21, act_buf_b
     add     x21, x21, :lo12:act_buf_b
     ldr     x21, [x21]              // x21 = act_buf_b
+
+    // Hoist launch_params and param_ptrs addresses into x11/x12.
+    // All launch_* helpers treat these as implicit arguments (do not clobber
+    // x11/x12 before consuming them as x1/x2 respectively).
+    adrp    x11, launch_params
+    add     x11, x11, :lo12:launch_params
+    adrp    x12, param_ptrs
+    add     x12, x12, :lo12:param_ptrs
 
     // ---- Embed lookup ----
     // cuLaunchKernel(embed_func, grid, block, 0, stream, params, NULL)
@@ -633,8 +718,7 @@ decode_one_token:
     //   param[0] = &token_id  (u32)
     //   param[1] = &embed_ptr (u64)
     //   param[2] = &output_ptr (u64)
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted above)
     adrp    x2, last_token
     add     x2, x2, :lo12:last_token
     ldr     w3, [x2]
@@ -647,8 +731,7 @@ decode_one_token:
     str     x20, [x1, #16]         // param[2] = output_ptr
 
     // Build param_ptrs
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted above)
     str     x1, [x2]               // param_ptrs[0] = &param[0]
     add     x3, x1, #8
     str     x3, [x2, #8]           // param_ptrs[1] = &param[1]
@@ -658,7 +741,7 @@ decode_one_token:
     // cuLaunchKernel(func, gridX, gridY, gridZ, blockX, blockY, blockZ,
     //                sharedMem, stream, paramPtrs, extra)
     // x0 = func (already set)
-    mov     x1, #4                  // gridDimX = ceil(3584 / (256*4)) = 4
+    mov     x1, #5                  // gridDimX = ceil(5120 / 1024) = 5 (5*1024=5120 covers full HIDDEN_DIM)
     mov     x2, #1                  // gridDimY
     mov     x3, #1                  // gridDimZ
     mov     x4, #256                // blockDimX
@@ -669,15 +752,20 @@ decode_one_token:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12                // param_ptrs (hoisted above)
     stp     x9, x10, [sp, #-32]!   // push stream, paramPtrs
     str     xzr, [sp, #16]         // push extra = NULL
     bl      cuLaunchKernel
     add     sp, sp, #32
-    // Don't check error on hot path (check after sync)
 
 .skip_embed:
+
+    // Re-hoist launch_params/param_ptrs: cuLaunchKernel (called above for embed)
+    // is a C function and clobbers x11/x12 (caller-saved per ABI).
+    adrp    x11, launch_params
+    add     x11, x11, :lo12:launch_params
+    adrp    x12, param_ptrs
+    add     x12, x12, :lo12:param_ptrs
 
     // ---- Layer loop: 64 layers ----
     mov     x19, #0                 // layer counter
@@ -686,19 +774,11 @@ decode_one_token:
     cmp     x19, #NUM_LAYERS
     b.ge    .layers_done
 
-    // ---- Reset per-layer state counters ----
+    // ---- Reset per-layer state counters (all 4 contiguous; 2x stp xzr,xzr) ----
     adrp    x0, proj_state
     add     x0, x0, :lo12:proj_state
-    str     xzr, [x0]
-    adrp    x0, norm_state
-    add     x0, x0, :lo12:norm_state
-    str     xzr, [x0]
-    adrp    x0, conv1d_call_counter
-    add     x0, x0, :lo12:conv1d_call_counter
-    str     xzr, [x0]
-    adrp    x0, l2norm_call_counter
-    add     x0, x0, :lo12:l2norm_call_counter
-    str     xzr, [x0]
+    stp     xzr, xzr, [x0]             // zero proj_state + norm_state
+    stp     xzr, xzr, [x0, #16]        // zero conv1d_call_counter + l2norm_call_counter
 
     // ---- Set up weight pointer base for this layer ----
     // x23 = &weight_ptrs[layer_idx * WEIGHT_SLOTS_PER_LAYER]
@@ -717,13 +797,27 @@ decode_one_token:
 
     // ---- Pre-attention RMSNorm ----
     bl      launch_norm
+    mov     x0, #1; bl debug_sync_tag
 
-    // (debug sync removed)
-
-    // ---- QKV projection (3 launches) ----
-    bl      launch_proj              // Q
-    bl      launch_proj              // K
-    bl      launch_proj              // V
+    // ---- QKV projection ----
+    // FA layers: Q, K, V are independent — launch on separate streams, sync before attention.
+    // DeltaNet layers: combined QKV single kernel, use serial path.
+    cbz     x22, .qkv_parallel
+    // DeltaNet: single fused QKV projection, serial
+    bl      launch_proj              // QKV combined
+    mov     x0, #2; bl debug_sync_tag
+    b       .qkv_done
+.qkv_parallel:
+    // FA: Q, K, V on dedicated streams, then barrier on cuda_stream before attention
+    bl      launch_proj_fa_qkv_parallel  // launches Q/K/V on stream_q/k/v, records events,
+                                         // waits on cuda_stream
+    mov     x0, #3; bl debug_sync_tag
+    // Re-hoist launch_params/param_ptrs: launch_proj_fa_qkv_parallel clobbers x11/x12.
+    adrp    x11, launch_params
+    add     x11, x11, :lo12:launch_params
+    adrp    x12, param_ptrs
+    add     x12, x12, :lo12:param_ptrs
+.qkv_done:
 
     // ---- Attention or DeltaNet ----
     // x22 survives all bl calls above; no flag recomputation needed.
@@ -733,19 +827,30 @@ decode_one_token:
     // Conv1d on Q, K, V (causal, 4-tap shift register per channel)
     // x19 = layer index, used by launch_conv1d for state offset
     bl      launch_conv1d            // conv1d on Q
+    mov     x0, #4; bl debug_sync_tag
     bl      launch_conv1d            // conv1d on K
+    mov     x0, #5; bl debug_sync_tag
     bl      launch_l2norm            // steps 10-13: L2-norm on K (dim=2048)
+    mov     x0, #6; bl debug_sync_tag
     bl      launch_conv1d            // conv1d on V
+    mov     x0, #7; bl debug_sync_tag
     bl      launch_activate          // steps 14-18: SiLU on Q
+    mov     x0, #8; bl debug_sync_tag
     bl      launch_l2norm            // steps 19-22: L2-norm on Q (dim=2048)
+    mov     x0, #9; bl debug_sync_tag
     bl      launch_recurrence
+    mov     x0, #10; bl debug_sync_tag
     // Output gate (steps 29-34): z = W_z @ x, output *= sigmoid(z)
     // z projection uses ORIGINAL input x (still in act buffer, not overwritten by QKV/recur)
     bl      launch_z_proj            // step 29: z = W_z @ x -> z_buf
+    mov     x0, #11; bl debug_sync_tag
     bl      launch_gate_sigmoid      // steps 30-34: output *= sigmoid(z)
+    mov     x0, #12; bl debug_sync_tag
     // Post-attention RMSNorm on gated output, THEN output projection
     bl      launch_norm              // steps 35-40: RMSNorm on gated output
+    mov     x0, #13; bl debug_sync_tag
     bl      launch_proj              // step 41: output projection
+    mov     x0, #14; bl debug_sync_tag
     // Increment DN layer counter
     adrp    x0, dn_layer_counter
     add     x0, x0, :lo12:dn_layer_counter
@@ -757,10 +862,14 @@ decode_one_token:
 .do_full_attention:
     // ---- Full attention path (RoPE required) ----
     bl      launch_rope
+    mov     x0, #15; bl debug_sync_tag
     bl      launch_attention
+    mov     x0, #16; bl debug_sync_tag
     // Full attention: output projection, then residual norm
     bl      launch_proj              // output projection
+    mov     x0, #17; bl debug_sync_tag
     bl      launch_norm              // residual add + norm
+    mov     x0, #18; bl debug_sync_tag
     // Increment FA layer counter
     adrp    x0, fa_layer_counter
     add     x0, x0, :lo12:fa_layer_counter
@@ -775,21 +884,27 @@ decode_one_token:
 
     // ---- Pre-MLP RMSNorm ----
     bl      launch_norm
+    mov     x0, #19; bl debug_sync_tag
 
     // ---- Gate projection ----
     bl      launch_proj
+    mov     x0, #20; bl debug_sync_tag
 
     // ---- Up projection ----
     bl      launch_proj
+    mov     x0, #21; bl debug_sync_tag
 
     // ---- SwiGLU: silu(gate) * up ----
     bl      launch_activate
+    mov     x0, #22; bl debug_sync_tag
 
     // ---- Down projection ----
     bl      launch_proj
+    mov     x0, #23; bl debug_sync_tag
 
     // ---- Residual add ----
     bl      launch_norm
+    mov     x0, #24; bl debug_sync_tag
 
     // ---- Swap activation buffers ----
     eor     x27, x27, #1
@@ -803,13 +918,13 @@ decode_one_token:
     bl      launch_final_norm
 
     // ---- LM head projection (uses global_weight_ptrs[GLOBAL_LMHEAD]) ----
-    // Output: logits_buf (VOCAB_SIZE=248320 floats)
+    // Output: cuda_logits_dev (GPU device buffer; DtoH copy follows)
     bl      launch_lm_head
 
-    // ---- Synchronize to read logits on CPU ----
+    // ---- Synchronize GPU before DtoH copy ----
     bl      cuCtxSynchronize
 
-    // ---- DEBUG: check cuCtxSync return and first logit value ----
+    // ---- DEBUG: check cuCtxSync return ----
     cbnz    x0, .sync_err
     b       .sync_ok
 .sync_err:
@@ -826,6 +941,18 @@ decode_one_token:
     ldp     x19, x20, [sp], #16
 .sync_ok:
 
+    // ---- DtoH copy: cuda_logits_dev -> logits_buf (CPU) ----
+    // cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount)
+    adrp    x0, logits_buf
+    add     x0, x0, :lo12:logits_buf
+    ldr     x0, [x0]               // x0 = CPU logits_buf base addr
+    adrp    x1, cuda_logits_dev
+    add     x1, x1, :lo12:cuda_logits_dev
+    ldr     x1, [x1]               // x1 = GPU device ptr
+    movz    x2, #0x000F, lsl #16   // 0x000F2800 = 993280
+    movk    x2, #0x2800
+    bl      cuMemcpyDtoH
+
     // ---- CPU argmax over logits ----
     adrp    x0, logits_buf
     add     x0, x0, :lo12:logits_buf
@@ -833,25 +960,104 @@ decode_one_token:
     movz    x1, #0x0003, lsl #16   // 0x3C980 = 248320
     movk    x1, #0xC980            // x1 = VOCAB_SIZE
 
-    // Simple argmax: scan all floats, track max
-    ldr     w2, [x0]               // w2 = max_val (as f32 bits)
-    mov     x3, #0                 // x3 = max_idx
-    mov     x4, #1                 // x4 = current idx
+    // NEON argmax: 4 floats/cycle, 4 parallel max+idx streams
+    // V0.4S = best vals (lanes 0-3), V1.4S = best idxs (as f32)
+    // V2.4S = current idx vector, V3.4S = increment {4,4,4,4}
+    // V4.4S = candidate vals, V5.4S = mask from fcmeq, V6.4S = candidate idxs
 
-.argmax_loop:
+    // Seed: first 4 elements
+    ld1     {v0.4s}, [x0], #16         // v0 = logits[0..3], advance ptr
+    // idx vector: {0.0, 1.0, 2.0, 3.0}
+    // build {0.0, 1.0, 2.0, 3.0} index seed in v1
+    movi    v1.4s, #0                  // v1 = {0,0,0,0}
+    fmov    s16, #1.0                  // s16 = 1.0
+    fmov    s17, #2.0
+    fmov    s18, #3.0
+    ins     v1.s[1], v16.s[0]         // v1.s[1] = 1.0
+    ins     v1.s[2], v17.s[0]         // v1.s[2] = 2.0
+    ins     v1.s[3], v18.s[0]         // v1.s[3] = 3.0
+    // stride vector: {4.0, 4.0, 4.0, 4.0}
+    fmov    v3.4s, #4.0
+    // current leading index for the 4-wide window
+    fadd    v2.4s, v1.4s, v3.4s        // v2 = {4,5,6,7} — next window idxs
+
+    mov     x4, #4                     // x4 = current scalar idx
+    sub     x5, x1, #3                 // loop until x4 >= VOCAB_SIZE-3
+
+.argmax_neon:
+    cmp     x4, x5
+    b.ge    .argmax_neon_done
+    ld1     {v4.4s}, [x0], #16         // load next 4 logits
+    fcmgt   v5.4s, v4.4s, v0.4s        // v5[i]=0xFFFFFFFF where v4 > v0
+    bsl     v5.16b, v4.16b, v0.16b     // v0[i] = max(v4[i], v0[i])
+    // same mask selects new idx
+    fcmgt   v5.4s, v4.4s, v0.4s        // recompute (v0 already updated — redo)
+    // fix: compute mask before updating v0
+    // unroll the update:
+    // a) mask = v4 > old_v0 => update v0 to max, v1 to v2 where mask
+    // redo cleanly:
+    fcmgt   v5.4s, v4.4s, v0.4s        // v5 = mask (v4 > v0)
+    fmax    v0.4s, v0.4s, v4.4s        // v0 = elementwise max
+    bsl     v5.16b, v2.16b, v1.16b     // v1 = idx where v4 won, else old idx
+    mov     v1.16b, v5.16b             // commit new best idx vector
+    fadd    v2.4s, v2.4s, v3.4s        // advance candidate idx window by 4
+    add     x4, x4, #4
+    b       .argmax_neon
+
+.argmax_neon_done:
+    // Horizontal reduce v0/v1: find max across 4 lanes
+    // lane-by-lane comparison to find the winning lane
+    dup     v6.4s, v0.s[0]
+    dup     v7.4s, v0.s[1]
+    dup     v8.4s, v0.s[2]
+    dup     v9.4s, v0.s[3]
+    // find max of all 4
+    fmaxp   v10.4s, v0.4s, v0.4s       // pairwise max: [max(0,1), max(2,3), ...]
+    fmaxp   v10.4s, v10.4s, v10.4s     // [max_all, max_all, ...]
+    // which lane matches?
+    fcmeq   v11.4s, v0.4s, v10.4s      // lane mask: 1 where v0 == global max
+    // pick lowest set lane index from v1
+    // extract each candidate, compare mask
+    umov    w5, v11.s[0]
+    cbnz    w5, .argmax_lane0
+    umov    w5, v11.s[1]
+    cbnz    w5, .argmax_lane1
+    umov    w5, v11.s[2]
+    cbnz    w5, .argmax_lane2
+.argmax_lane3:
+    mov     v12.16b, v1.16b
+    ins     v13.s[0], v1.s[3]
+    fcvtzs  x3, s13                    // idx from lane 3
+    b       .argmax_scalar_tail
+.argmax_lane2:
+    ins     v13.s[0], v1.s[2]
+    fcvtzs  x3, s13                    // idx from lane 2
+    b       .argmax_scalar_tail
+.argmax_lane1:
+    ins     v13.s[0], v1.s[1]
+    fcvtzs  x3, s13                    // idx from lane 1
+    b       .argmax_scalar_tail
+.argmax_lane0:
+    fcvtzs  x3, s1                     // idx from lane 0 (s1 = v1.s[0])
+    // fall through
+
+    // Scalar tail for remaining < 4 elements
+.argmax_scalar_tail:
+    umov    w2, v10.s[0]               // current max bits
+
+.argmax_tail_loop:
     cmp     x4, x1
     b.ge    .argmax_done
-    ldr     w5, [x0, x4, lsl #2]  // w5 = logits[idx]
-    // Float compare: use fmov to FP regs
-    fmov    s0, w2                 // s0 = current max
-    fmov    s1, w5                 // s1 = candidate
+    ldr     w5, [x0], #4
+    fmov    s0, w2
+    fmov    s1, w5
     fcmp    s1, s0
-    b.le    .argmax_next
-    mov     w2, w5                 // new max
-    mov     x3, x4                 // new max_idx
-.argmax_next:
+    b.le    .argmax_tail_next
+    mov     w2, w5
+    mov     x3, x4
+.argmax_tail_next:
     add     x4, x4, #1
-    b       .argmax_loop
+    b       .argmax_tail_loop
 
 .argmax_done:
     // x3 = argmax token ID
@@ -897,11 +1103,15 @@ decode_one_token:
 launch_norm:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
     ldr     x0, [x0, #KF_NORM]
     cbz     x0, .norm_skip
+
+    // Capture hoisted launch_params into x1 before x11 is clobbered below.
+    mov     x1, x11                 // x1 = launch_params (hoisted from decode_one_token)
 
     // ---- Read and increment norm_state ----
     adrp    x9, norm_state
@@ -929,11 +1139,9 @@ launch_norm:
     // Full attention: use WS_POST_NORM (slot 25)
     ldr     x11, [x23, #(WS_POST_NORM * 8)]
 .norm_weight_ready:
-    // x11 = norm weight pointer
+    // x11 = norm weight pointer; x1 = launch_params (set above)
 
-    // ---- Build launch_params ----
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    // ---- Build launch_params (x1 already set) ----
 
     // param[0] = input_ptr (current activation buffer)
     // x27=0 -> act_buf_a is input; x27=1 -> act_buf_b is input
@@ -972,8 +1180,7 @@ launch_norm:
     str     w9, [x1, #36]
 
     // ---- Build param_ptrs array ----
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token prologue)
     str     x1, [x2, #0]            // &param[0]
     add     x3, x1, #8
     str     x3, [x2, #8]            // &param[1]
@@ -987,9 +1194,7 @@ launch_norm:
     str     x3, [x2, #40]           // &param[5]
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_NORM]
+    // x0 still holds KF_NORM CUfunction from the null-check load above
     mov     x1, #1                  // gridX
     mov     x2, #1                  // gridY
     mov     x3, #1                  // gridZ
@@ -1001,14 +1206,14 @@ launch_norm:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted from decode_one_token prologue)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .norm_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1046,6 +1251,7 @@ launch_norm:
 launch_proj:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
     stp     x19, x20, [sp, #-16]!  // save outer x19/x20 on our own frame
 
     adrp    x0, kern_table
@@ -1297,21 +1503,20 @@ launch_proj:
     add     x3, x1, #44
     str     x3, [x2, #56]           // &param[7] = k_packed_per_split
 
-    // ---- Compute gridX = ceil(N / 128) ----
-    add     w9, w13, #127
-    lsr     w9, w9, #7              // gridX = (N + 127) / 128
+    // ---- Compute gridX = ceil(N / 256) ----
+    // gptq_gemv_safe: 64 threads/block, each handles 4 cols -> 256 cols/block
+    add     w9, w13, #255
+    lsr     w9, w9, #8              // gridX = (N + 255) / 256
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_PROJ]
-    mov     x1, x9                  // gridX = ceil(N/128)
+    // x0 still holds KF_PROJ CUfunction from null-check load above
+    mov     x1, x9                  // gridX = ceil(N/256)
     mov     x2, #1
     mov     x3, #1
-    mov     x4, #128                // blockX
+    mov     x4, #64                 // blockX = 64 (kernel requires exactly 64 threads/block)
     mov     x5, #1
     mov     x6, #1
-    mov     x7, #0                  // no shared mem
+    lsl     x7, x14, #2             // sharedMem = K * 4 (input vector in smem)
 
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
@@ -1324,6 +1529,305 @@ launch_proj:
     add     sp, sp, #32
 
 .proj_skip:
+    ldp     x19, x20, [sp], #16
+    ldp     x11, x12, [sp], #16
+    ldp     x29, x30, [sp], #16
+    ret
+
+// ============================================================
+// launch_proj_fa_qkv_parallel
+// ============================================================
+// FA-only: launches Q, K, V projections on cuda_stream_q/k/v in parallel.
+// All three read the same (read-only) input buffer; outputs are non-overlapping.
+// After launching all three, records events and makes cuda_stream wait on all
+// three events so the attention kernel sees a consistent QKV state.
+//
+// proj_state is read and advanced 3 times (0→Q, 1→K, 2→V).
+// Uses launch_params_q/k/v and param_ptrs_q/k/v for independent param buffers.
+//
+// Register allocation (callee-saved by our own push/pop):
+//   x19, x20 used internally; outer x19 (layer idx) preserved via stp/ldp.
+// ============================================================
+.align 4
+launch_proj_fa_qkv_parallel:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    stp     x19, x20, [sp, #-16]!   // preserve outer layer-loop registers (act_buf_a in x20)
+    stp     x11, x12, [sp, #-16]!   // preserve hoisted launch_params/param_ptrs
+    // Snapshot act_buf_a to stack before x20 is reused; act_buf_b (x21), buf_sel (x27),
+    // weight_ptrs (x23) are callee-saved through bl calls and not clobbered by us.
+    sub     sp, sp, #16             // [sp+0]=act_buf_a_snap
+    str     x20, [sp, #0]
+
+    // ---- Check function handle is loaded ----
+    adrp    x19, kern_table
+    add     x19, x19, :lo12:kern_table
+    ldr     x19, [x19, #KF_PROJ]
+    cbz     x19, .pqkv_skip         // no kernel loaded, skip
+
+    // ---- Macro-like helper: fill one param buffer and launch on a given stream ----
+    // We inline Q, K, V cases. x19=KF_PROJ, x20=scratch, x9=scratch.
+    // Input/output pointers derived from: snap=[sp+0]=act_buf_a, x21=act_buf_b, x27=selector.
+
+    // ------ Q projection (proj_state=0: N=6144, K=5120) ------
+    adrp    x9, proj_state
+    add     x9, x9, :lo12:proj_state
+    ldr     x0, [x9]               // should be 0
+    add     x0, x0, #1
+    str     x0, [x9]
+
+    ldr     x11, [x23, #(WS_FA_Q_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_FA_Q_SCALES * 8)]
+    ldr     x15, [x23, #(WS_FA_Q_QZEROS * 8)]
+
+    adrp    x1, launch_params_q
+    add     x1, x1, :lo12:launch_params_q
+    str     x11, [x1, #0]           // param[0] = qweight
+    str     x12, [x1, #8]           // param[1] = scales
+    ldr     x20, [sp, #0]           // reload act_buf_a
+    cbz     x27, .pqkv_q_in_a
+    str     x21, [x1, #16]          // x27!=0: input = act_buf_b
+    b       .pqkv_q_in_done
+.pqkv_q_in_a:
+    str     x20, [x1, #16]          // x27==0: input = act_buf_a
+.pqkv_q_in_done:
+    cbz     x27, .pqkv_q_out_b
+    str     x20, [x1, #24]          // x27!=0 → output to act_buf_a
+    b       .pqkv_q_out_done
+.pqkv_q_out_b:
+    str     x21, [x1, #24]          // x27==0 → output to act_buf_b
+.pqkv_q_out_done:
+    movz    w9, #6144
+    str     w9, [x1, #32]           // param[4] = N=6144
+    movz    w9, #5120
+    str     w9, [x1, #36]           // param[5] = K=5120
+    mov     w9, #1
+    str     w9, [x1, #40]           // param[6] = K_SPLITS=1
+    movz    w9, #640                // 5120/8=640
+    str     w9, [x1, #44]           // param[7] = k_packed_per_split
+
+    adrp    x2, param_ptrs_q
+    add     x2, x2, :lo12:param_ptrs_q
+    str     x1,  [x2, #0]
+    add     x3, x1, #8;  str x3, [x2, #8]
+    add     x3, x1, #16; str x3, [x2, #16]
+    add     x3, x1, #24; str x3, [x2, #24]
+    add     x3, x1, #32; str x3, [x2, #32]
+    add     x3, x1, #36; str x3, [x2, #40]
+    add     x3, x1, #40; str x3, [x2, #48]
+    add     x3, x1, #44; str x3, [x2, #56]
+
+    // gridX = ceil(6144/256) = 24 (gptq_gemv_safe: 64 threads, 4 cols each -> 256 cols/block)
+    mov     x0, x19                 // KF_PROJ CUfunction
+    mov     x1, #24                 // gridX
+    mov     x2, #1; mov x3, #1
+    mov     x4, #64; mov x5, #1; mov x6, #1; mov x7, #20480  // sharedMem = K*4 = 5120*4
+    adrp    x9, cuda_stream_q
+    add     x9, x9, :lo12:cuda_stream_q
+    ldr     x9, [x9]
+    adrp    x10, param_ptrs_q
+    add     x10, x10, :lo12:param_ptrs_q
+    stp     x9, x10, [sp, #-32]!
+    str     xzr, [sp, #16]
+    bl      cuLaunchKernel
+    add     sp, sp, #32
+
+    // cuEventRecord(cuda_event_q, cuda_stream_q)
+    adrp    x0, cuda_event_q
+    add     x0, x0, :lo12:cuda_event_q
+    ldr     x0, [x0]
+    adrp    x1, cuda_stream_q
+    add     x1, x1, :lo12:cuda_stream_q
+    ldr     x1, [x1]
+    bl      cuEventRecord
+
+    // ------ K projection (proj_state=1: N=1024, K=5120) ------
+    adrp    x20, proj_state
+    add     x20, x20, :lo12:proj_state
+    ldr     x0, [x20]               // should be 1
+    add     x1, x0, #1
+    str     x1, [x20]
+
+    ldr     x11, [x23, #(WS_FA_K_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_FA_K_SCALES * 8)]
+    ldr     x15, [x23, #(WS_FA_K_QZEROS * 8)]
+
+    adrp    x1, launch_params_k
+    add     x1, x1, :lo12:launch_params_k
+    str     x11, [x1, #0]
+    str     x12, [x1, #8]
+    cbz     x27, .pqkv_k_in_a
+    str     x21, [x1, #16]
+    b       .pqkv_k_in_done
+.pqkv_k_in_a:
+    ldr     x9, [sp, #0]            // reload act_buf_a from stack snap (x20 = proj_state ptr)
+    str     x9, [x1, #16]
+.pqkv_k_in_done:
+    // K output: other act buffer (serial path writes K after Q to same "other" buf region)
+    // K output offset into other buf = Q_N * DTYPE_BYTES = 6144 * 2 = 12288 bytes past Q output
+    cbz     x27, .pqkv_k_out_b
+    ldr     x3, [sp, #0]            // reload act_buf_a
+    add     x3, x3, #12288          // act_buf_a + Q_output_size
+    b       .pqkv_k_out_done
+.pqkv_k_out_b:
+    add     x3, x21, #12288         // act_buf_b + Q_output_size
+.pqkv_k_out_done:
+    str     x3, [x1, #24]
+    movz    w9, #1024
+    str     w9, [x1, #32]           // N=1024
+    movz    w9, #5120
+    str     w9, [x1, #36]           // K=5120
+    mov     w9, #1; str w9, [x1, #40]
+    movz    w9, #640; str w9, [x1, #44]
+
+    adrp    x2, param_ptrs_k
+    add     x2, x2, :lo12:param_ptrs_k
+    str     x1,  [x2, #0]
+    add     x3, x1, #8;  str x3, [x2, #8]
+    add     x3, x1, #16; str x3, [x2, #16]
+    add     x3, x1, #24; str x3, [x2, #24]
+    add     x3, x1, #32; str x3, [x2, #32]
+    add     x3, x1, #36; str x3, [x2, #40]
+    add     x3, x1, #40; str x3, [x2, #48]
+    add     x3, x1, #44; str x3, [x2, #56]
+
+    // gridX = ceil(1024/256) = 4 (gptq_gemv_safe: 64 threads, 4 cols each -> 256 cols/block)
+    mov     x0, x19
+    mov     x1, #4
+    mov     x2, #1; mov x3, #1
+    mov     x4, #64; mov x5, #1; mov x6, #1; mov x7, #20480  // sharedMem = K*4 = 5120*4
+    adrp    x9, cuda_stream_k
+    add     x9, x9, :lo12:cuda_stream_k
+    ldr     x9, [x9]
+    adrp    x10, param_ptrs_k
+    add     x10, x10, :lo12:param_ptrs_k
+    stp     x9, x10, [sp, #-32]!
+    str     xzr, [sp, #16]
+    bl      cuLaunchKernel
+    add     sp, sp, #32
+
+    // cuEventRecord(cuda_event_k, cuda_stream_k)
+    adrp    x0, cuda_event_k
+    add     x0, x0, :lo12:cuda_event_k
+    ldr     x0, [x0]
+    adrp    x1, cuda_stream_k
+    add     x1, x1, :lo12:cuda_stream_k
+    ldr     x1, [x1]
+    bl      cuEventRecord
+
+    // ------ V projection (proj_state=2: N=1024, K=5120) ------
+    adrp    x20, proj_state
+    add     x20, x20, :lo12:proj_state
+    ldr     x0, [x20]               // should be 2
+    add     x1, x0, #1
+    str     x1, [x20]
+
+    ldr     x11, [x23, #(WS_FA_V_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_FA_V_SCALES * 8)]
+    ldr     x15, [x23, #(WS_FA_V_QZEROS * 8)]
+
+    adrp    x1, launch_params_v
+    add     x1, x1, :lo12:launch_params_v
+    str     x11, [x1, #0]
+    str     x12, [x1, #8]
+    cbz     x27, .pqkv_v_in_a
+    str     x21, [x1, #16]
+    b       .pqkv_v_in_done
+.pqkv_v_in_a:
+    ldr     x9, [sp, #0]            // reload act_buf_a from stack snap (x20 = proj_state ptr)
+    str     x9, [x1, #16]
+.pqkv_v_in_done:
+    // V output: other buf + Q_N*2 + K_N*2 = 12288 + 2048 = 14336 bytes
+    cbz     x27, .pqkv_v_out_b
+    ldr     x3, [sp, #0]            // reload act_buf_a
+    mov     x9, #14336
+    add     x3, x3, x9              // act_buf_a + V_output_offset
+    b       .pqkv_v_out_done
+.pqkv_v_out_b:
+    mov     x3, #14336
+    add     x3, x21, x3
+.pqkv_v_out_done:
+    str     x3, [x1, #24]
+    movz    w9, #1024
+    str     w9, [x1, #32]           // N=1024
+    movz    w9, #5120
+    str     w9, [x1, #36]           // K=5120
+    mov     w9, #1; str w9, [x1, #40]
+    movz    w9, #640; str w9, [x1, #44]
+
+    adrp    x2, param_ptrs_v
+    add     x2, x2, :lo12:param_ptrs_v
+    str     x1,  [x2, #0]
+    add     x3, x1, #8;  str x3, [x2, #8]
+    add     x3, x1, #16; str x3, [x2, #16]
+    add     x3, x1, #24; str x3, [x2, #24]
+    add     x3, x1, #32; str x3, [x2, #32]
+    add     x3, x1, #36; str x3, [x2, #40]
+    add     x3, x1, #40; str x3, [x2, #48]
+    add     x3, x1, #44; str x3, [x2, #56]
+
+    // gridX = ceil(1024/256) = 4 (gptq_gemv_safe: 64 threads, 4 cols each -> 256 cols/block)
+    mov     x0, x19
+    mov     x1, #4
+    mov     x2, #1; mov x3, #1
+    mov     x4, #64; mov x5, #1; mov x6, #1; mov x7, #20480  // sharedMem = K*4 = 5120*4
+    adrp    x9, cuda_stream_v
+    add     x9, x9, :lo12:cuda_stream_v
+    ldr     x9, [x9]
+    adrp    x10, param_ptrs_v
+    add     x10, x10, :lo12:param_ptrs_v
+    stp     x9, x10, [sp, #-32]!
+    str     xzr, [sp, #16]
+    bl      cuLaunchKernel
+    add     sp, sp, #32
+
+    // cuEventRecord(cuda_event_v, cuda_stream_v)
+    adrp    x0, cuda_event_v
+    add     x0, x0, :lo12:cuda_event_v
+    ldr     x0, [x0]
+    adrp    x1, cuda_stream_v
+    add     x1, x1, :lo12:cuda_stream_v
+    ldr     x1, [x1]
+    bl      cuEventRecord
+
+    // ---- Barrier: make cuda_stream wait for Q, K, V events ----
+    // cuStreamWaitEvent(cuda_stream, event, 0) for each of q/k/v
+    adrp    x9, cuda_stream
+    add     x9, x9, :lo12:cuda_stream
+    ldr     x9, [x9]                // x9 = main stream handle (callee-saved not needed, tmp)
+
+    adrp    x0, cuda_stream         // x0 = &cuda_stream
+    add     x0, x0, :lo12:cuda_stream
+    ldr     x0, [x0]               // x0 = main stream
+    adrp    x1, cuda_event_q
+    add     x1, x1, :lo12:cuda_event_q
+    ldr     x1, [x1]
+    mov     x2, #0
+    bl      cuStreamWaitEvent
+
+    adrp    x0, cuda_stream
+    add     x0, x0, :lo12:cuda_stream
+    ldr     x0, [x0]
+    adrp    x1, cuda_event_k
+    add     x1, x1, :lo12:cuda_event_k
+    ldr     x1, [x1]
+    mov     x2, #0
+    bl      cuStreamWaitEvent
+
+    adrp    x0, cuda_stream
+    add     x0, x0, :lo12:cuda_stream
+    ldr     x0, [x0]
+    adrp    x1, cuda_event_v
+    add     x1, x1, :lo12:cuda_event_v
+    ldr     x1, [x1]
+    mov     x2, #0
+    bl      cuStreamWaitEvent
+    // After this, any kernel launched on cuda_stream (e.g. RoPE, attention) is guaranteed
+    // to execute only after Q/K/V projections complete on their respective streams.
+
+.pqkv_skip:
+    add     sp, sp, #16             // drop act_buf_a snap slot
+    ldp     x11, x12, [sp], #16     // restore hoisted launch_params/param_ptrs
     ldp     x19, x20, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
@@ -1348,6 +1852,7 @@ launch_proj:
 launch_attention:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
@@ -1355,8 +1860,7 @@ launch_attention:
     cbz     x0, .attn_skip
 
     // ---- Build launch_params ----
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted from decode_one_token)
 
     // Compute QKV buffer base (the "other" act buffer)
     cbz     x27, .attn_qkv_b
@@ -1403,8 +1907,7 @@ launch_attention:
     str     w3, [x1, #40]             // param[6] = num_heads
 
     // ---- Build param_ptrs array ----
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]              // &param[0] = q_ptr
     add     x3, x1, #8
     str     x3, [x2, #8]              // &param[1] = k_cache
@@ -1420,9 +1923,7 @@ launch_attention:
     str     x3, [x2, #48]             // &param[6] = num_heads
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_ATTN]
+    // x0 still holds KF_ATTN CUfunction from null-check load above
     mov     x1, #24                 // gridX = num_heads = 24
     mov     x2, #1
     mov     x3, #1
@@ -1434,14 +1935,14 @@ launch_attention:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .attn_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1467,6 +1968,7 @@ launch_attention:
 launch_recurrence:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
@@ -1474,8 +1976,7 @@ launch_recurrence:
     cbz     x0, .recur_skip
 
     // ---- Build launch_params ----
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted from decode_one_token)
 
     // param[0] = state_ptr: dn_state_ptr + dn_layer_counter * DN_PER_LAYER
     adrp    x9, dn_state_ptr
@@ -1536,8 +2037,7 @@ launch_recurrence:
     str     w3, [x1, #64]             // param[9] = value_dim
 
     // ---- Build param_ptrs array ----
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]              // &param[0] = state
     add     x3, x1, #8
     str     x3, [x2, #8]              // &param[1] = k
@@ -1559,9 +2059,7 @@ launch_recurrence:
     str     x3, [x2, #72]             // &param[9] = value_dim
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_RECUR]
+    // x0 still holds KF_RECUR CUfunction from null-check load above
     mov     x1, #16                 // gridX = 16 (linear_num_key_heads)
     mov     x2, #1
     mov     x3, #1
@@ -1573,14 +2071,14 @@ launch_recurrence:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .recur_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1596,6 +2094,7 @@ launch_recurrence:
 launch_activate:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
@@ -1603,8 +2102,7 @@ launch_activate:
     cbz     x0, .act_skip
 
     // ---- Build launch_params ----
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted from decode_one_token)
 
     // param[0] = gate_ptr (mlp_gate_buf)
     adrp    x9, mlp_gate_buf
@@ -1629,8 +2127,7 @@ launch_activate:
     str     w9, [x1, #24]
 
     // ---- Build param_ptrs array ----
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]            // &param[0] = gate_ptr
     add     x3, x1, #8
     str     x3, [x2, #8]            // &param[1] = up_ptr
@@ -1640,9 +2137,7 @@ launch_activate:
     str     x3, [x2, #24]           // &param[3] = size
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_ACTIVATE]
+    // x0 still holds KF_ACTIVATE CUfunction from null-check load above
     // gridX = ceil(17408 / 256) = 68
     mov     x1, #68
     mov     x2, #1
@@ -1655,14 +2150,14 @@ launch_activate:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .act_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1691,6 +2186,7 @@ launch_activate:
 launch_rope:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
@@ -1698,8 +2194,7 @@ launch_rope:
     cbz     x0, .rope_skip
 
     // ---- Build launch_params ----
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted from decode_one_token)
 
     // Compute QKV buffer base (the "other" act buffer)
     cbz     x27, .rope_qkv_b
@@ -1740,8 +2235,7 @@ launch_rope:
     str     w3, [x1, #40]             // param[6] = num_heads
 
     // ---- Build param_ptrs array ----
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]              // &param[0] = q_ptr
     add     x3, x1, #8
     str     x3, [x2, #8]              // &param[1] = k_ptr
@@ -1757,9 +2251,7 @@ launch_rope:
     str     x3, [x2, #48]             // &param[6] = num_heads
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_ROPE]
+    // x0 still holds KF_ROPE CUfunction from null-check load above
     mov     x1, #24                 // gridX = num_heads = 24
     mov     x2, #1
     mov     x3, #1
@@ -1771,14 +2263,14 @@ launch_rope:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .rope_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1801,11 +2293,15 @@ launch_rope:
 launch_l2norm:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
     ldr     x0, [x0, #KF_L2NORM]
     cbz     x0, .l2norm_skip
+
+    // Capture hoisted launch_params into x1 before x11 is clobbered below.
+    mov     x1, x11                 // x1 = launch_params (hoisted from decode_one_token)
 
     // ---- Read and increment l2norm_call_counter ----
     adrp    x9, l2norm_call_counter
@@ -1824,9 +2320,7 @@ launch_l2norm:
     mov     x11, #0                  // Q slice offset
 .l2norm_offset_ready:
 
-    // ---- Build launch_params ----
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    // ---- Build launch_params (x1 already set above) ----
 
     // param[0] = x_ptr: QKV output buffer + slice offset
     // QKV output is in the "other" act buffer
@@ -1846,8 +2340,7 @@ launch_l2norm:
     str     w9, [x1, #16]             // param[2] = hidden_dim
 
     // ---- Build param_ptrs array ----
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]              // &param[0] = x_ptr
     add     x3, x1, #8
     str     x3, [x2, #8]              // &param[1] = y_ptr
@@ -1855,9 +2348,7 @@ launch_l2norm:
     str     x3, [x2, #16]             // &param[2] = hidden_dim
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_L2NORM]
+    // x0 still holds KF_L2NORM CUfunction from null-check load above
     mov     x1, #1                  // gridX = 1 (single block reduction)
     mov     x2, #1                  // gridY
     mov     x3, #1                  // gridZ
@@ -1869,14 +2360,14 @@ launch_l2norm:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .l2norm_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1895,6 +2386,7 @@ launch_l2norm:
 launch_gate_sigmoid:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
@@ -1902,8 +2394,7 @@ launch_gate_sigmoid:
     cbz     x0, .gate_sig_skip
 
     // ---- Build launch_params ----
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted from decode_one_token)
 
     // param[0] = output_ptr: recurrence output in "other" act buffer
     cbz     x27, .gate_sig_output_b
@@ -1924,8 +2415,7 @@ launch_gate_sigmoid:
     str     w9, [x1, #16]             // param[2] = n
 
     // ---- Build param_ptrs array ----
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]              // &param[0] = output_ptr
     add     x3, x1, #8
     str     x3, [x2, #8]              // &param[1] = z_ptr
@@ -1933,9 +2423,7 @@ launch_gate_sigmoid:
     str     x3, [x2, #16]             // &param[2] = n
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_GATE_SIG]
+    // x0 still holds KF_GATE_SIG CUfunction from null-check load above
     // gridX = ceil(6144 / 256) = 24
     mov     x1, #24                 // gridX
     mov     x2, #1                  // gridY
@@ -1948,14 +2436,14 @@ launch_gate_sigmoid:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .gate_sig_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1970,6 +2458,7 @@ launch_gate_sigmoid:
 launch_z_proj:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
@@ -1980,8 +2469,7 @@ launch_z_proj:
     // Uses gptq_gemv_safe kernel with Z weight slots.
     // Projects ORIGINAL input x (current input buffer) -> z_buf
     // N = VALUE_DIM = 6144, K = HIDDEN_DIM = 5120
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted from decode_one_token)
 
     // param[0] = qweight_ptr (WS_DN_Z_QWEIGHT)
     ldr     x9, [x23, #(WS_DN_Z_QWEIGHT * 8)]
@@ -2023,8 +2511,7 @@ launch_z_proj:
     str     w9, [x1, #44]
 
     // ---- Build param_ptrs array ----
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]            // &param[0] = qweight
     add     x3, x1, #8
     str     x3, [x2, #8]            // &param[1] = scales
@@ -2042,14 +2529,12 @@ launch_z_proj:
     str     x3, [x2, #56]           // &param[7] = k_packed_per_split
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_PROJ]
-    // gridX = ceil(6144 / 128) = 48
-    mov     x1, #48                 // gridX
+    // x0 still holds KF_PROJ CUfunction from null-check load above
+    // gridX = ceil(6144 / 256) = 24 (gptq_gemv_safe: 64 threads, 4 cols -> 256/block)
+    mov     x1, #24                 // gridX
     mov     x2, #1                  // gridY
     mov     x3, #1                  // gridZ
-    mov     x4, #128                // blockX
+    mov     x4, #64                 // blockX = 64 (kernel requires exactly 64 threads/block)
     mov     x5, #1                  // blockY
     mov     x6, #1                  // blockZ
     mov     x7, #0                  // no shared mem
@@ -2057,14 +2542,14 @@ launch_z_proj:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .z_proj_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -2094,11 +2579,15 @@ launch_z_proj:
 launch_conv1d:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
     ldr     x0, [x0, #KF_CONV1D]
     cbz     x0, .conv1d_skip
+
+    // Capture hoisted launch_params into x1 before x11/x12 are clobbered below.
+    mov     x1, x11                 // x1 = launch_params (hoisted from decode_one_token)
 
     // ---- Read and increment conv1d_call_counter ----
     adrp    x9, conv1d_call_counter
@@ -2141,9 +2630,7 @@ launch_conv1d:
     // x12 = history byte offset within this layer's conv1d state
     // x13 = num_heads for this slice
 
-    // ---- Build launch_params ----
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    // ---- Build launch_params (x1 already set above) ----
 
     // param[0] = input_ptr: QKV output buffer + data_offset
     // QKV output is in the "other" act buffer (proj wrote to other)
@@ -2206,9 +2693,7 @@ launch_conv1d:
     lsr     w9, w9, #8                // ceil(total / 256)
 
     // ---- Launch kernel ----
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_CONV1D]
+    // x0 still holds KF_CONV1D CUfunction from null-check load above
     mov     x1, x9                     // gridDimX
     mov     x2, #1                     // gridDimY
     mov     x3, #1                     // gridDimZ
@@ -2228,6 +2713,7 @@ launch_conv1d:
     add     sp, sp, #32
 
 .conv1d_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -2241,14 +2727,14 @@ launch_conv1d:
 launch_final_norm:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
     ldr     x0, [x0, #KF_NORM]
     cbz     x0, .fn_skip
 
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted from decode_one_token)
 
     // param[0] = input (current act buf)
     cbz     x27, .fn_input_a
@@ -2288,8 +2774,7 @@ launch_final_norm:
     str     w9, [x1, #36]
 
     // Build param_ptrs
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]
     add     x3, x1, #8
     str     x3, [x2, #8]
@@ -2303,9 +2788,7 @@ launch_final_norm:
     str     x3, [x2, #40]
 
     // Launch: 1 block, 256 threads, 128B shared
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_NORM]
+    // x0 still holds KF_NORM CUfunction from null-check load above
     mov     x1, #1
     mov     x2, #1
     mov     x3, #1
@@ -2317,99 +2800,70 @@ launch_final_norm:
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .fn_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
 // ============================================================
 // launch_lm_head -- project hidden state to vocab logits
 // ============================================================
-// Uses global_weight_ptrs[GLOBAL_LMHEAD] as the weight matrix.
-// N = VOCAB_SIZE = 248320, K = HIDDEN_DIM = 5120
-// Output goes to logits_buf (993280 bytes).
+// Kernel: lm_head (FP16 dense GEMV, NOT GPTQ)
+// Signature: lm_head(weight_ptr u64, input_ptr u64, output_ptr u64)
+// weight: [248320, 5120] FP16 row-major
+// input:  [5120] F32 (hidden state after final_norm)
+// output: [248320] F32 (logits)
+// Launch: grid=(62080, 1, 1), block=(128, 1, 1)   // 248320/4 = 62080 rows/block=4
 .align 4
 launch_lm_head:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x11, x12, [sp, #-16]!  // preserve hoisted launch_params/param_ptrs
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_PROJ]
+    ldr     x0, [x0, #KF_LM_HEAD]
     cbz     x0, .lmh_skip
 
-    adrp    x1, launch_params
-    add     x1, x1, :lo12:launch_params
+    mov     x1, x11                 // launch_params (hoisted from decode_one_token)
 
-    // param[0] = lm_head weight (qweight) from global
-    // NOTE: lm_head may be f16 (not GPTQ) in some models. For now assume
-    // it goes through the same GEMV kernel. If it's f16, we need a different kernel.
+    // param[0] = weight_ptr (FP16 lm_head matrix)
     adrp    x9, global_weight_ptrs
     add     x9, x9, :lo12:global_weight_ptrs
     ldr     x9, [x9, #GLOBAL_LMHEAD]
-    str     x9, [x1, #0]           // param[0] = qweight (or f16 weight)
+    str     x9, [x1, #0]
 
-    // param[1] = scales (NULL for f16 models — kernel must handle)
-    str     xzr, [x1, #8]
-
-    // param[2] = input (current act buf after final norm)
+    // param[1] = input_ptr (F32 hidden state, current act buf after final norm)
     cbz     x27, .lmh_input_a
-    str     x21, [x1, #16]
+    str     x21, [x1, #8]
     b       .lmh_input_done
 .lmh_input_a:
-    str     x20, [x1, #16]
+    str     x20, [x1, #8]
 .lmh_input_done:
 
-    // param[3] = output = logits_buf
-    adrp    x9, logits_buf
-    add     x9, x9, :lo12:logits_buf
+    // param[2] = output_ptr = cuda_logits_dev (GPU device buffer for logits)
+    adrp    x9, cuda_logits_dev
+    add     x9, x9, :lo12:cuda_logits_dev
     ldr     x9, [x9]
-    str     x9, [x1, #24]
+    str     x9, [x1, #16]
 
-    // param[4] = N = VOCAB_SIZE = 248320
-    movz    w9, #0x0003, lsl #16
-    movk    w9, #0xC980             // 0x3C980 = 248320
-    str     w9, [x1, #32]
-
-    // param[5] = K = HIDDEN_DIM = 5120
-    movz    w9, #5120
-    str     w9, [x1, #36]
-
-    // param[6] = K_SPLITS = 1
-    mov     w9, #1
-    str     w9, [x1, #40]
-
-    // param[7] = k_packed_per_split = 5120 / 8 = 640
-    movz    w9, #640
-    str     w9, [x1, #44]
-
-    // Build param_ptrs
-    adrp    x2, param_ptrs
-    add     x2, x2, :lo12:param_ptrs
+    // Build param_ptrs (3 params)
+    mov     x2, x12                 // param_ptrs (hoisted from decode_one_token)
     str     x1, [x2, #0]
     add     x3, x1, #8
     str     x3, [x2, #8]
     add     x3, x1, #16
     str     x3, [x2, #16]
-    add     x3, x1, #24
-    str     x3, [x2, #24]
-    add     x3, x1, #32
-    str     x3, [x2, #32]
-    add     x3, x1, #36
-    str     x3, [x2, #40]
-    add     x3, x1, #40
-    str     x3, [x2, #48]
-    add     x3, x1, #44
-    str     x3, [x2, #56]
 
-    // gridX = ceil(248320 / 128) = 1940
-    movz    x1, #1940
+    // grid=(62080, 1, 1), block=(128, 1, 1)
+    // x0 still holds KF_LM_HEAD CUfunction from null-check load above
+    movz    x1, #62080
     mov     x2, #1
     mov     x3, #1
     mov     x4, #128
@@ -2417,21 +2871,17 @@ launch_lm_head:
     mov     x6, #1
     mov     x7, #0
 
-    adrp    x0, kern_table
-    add     x0, x0, :lo12:kern_table
-    ldr     x0, [x0, #KF_PROJ]
-
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
     ldr     x9, [x9]
-    adrp    x10, param_ptrs
-    add     x10, x10, :lo12:param_ptrs
+    mov     x10, x12               // param_ptrs (hoisted)
     stp     x9, x10, [sp, #-32]!
     str     xzr, [sp, #16]
     bl      cuLaunchKernel
     add     sp, sp, #32
 
 .lmh_skip:
+    ldp     x11, x12, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -2455,6 +2905,8 @@ alloc_buffers:
     adrp    x1, act_buf_a
     add     x1, x1, :lo12:act_buf_a
     str     x0, [x1]
+    // GH200: PAGEABLE_MEMORY_ACCESS=1, anonymous mmap GPU-accessible directly.
+    // cuMemHostRegister returns 801 (NOT_SUPPORTED) on GH200 - omitted.
 
     // ---- Activation buffer B ----
     mov     x0, #0
@@ -2580,6 +3032,16 @@ alloc_buffers:
     adrp    x1, logits_buf
     add     x1, x1, :lo12:logits_buf
     str     x0, [x1]
+
+    // ---- GPU logits device buffer via cuMemAlloc ----
+    // cuMemAlloc(CUdeviceptr *dptr, size_t bytesize)
+    // x0 = pointer to cuda_logits_dev (receives the device ptr)
+    // x1 = LOGITS_BUF_SIZE = 993280
+    adrp    x0, cuda_logits_dev
+    add     x0, x0, :lo12:cuda_logits_dev
+    movz    x1, #0x000F, lsl #16       // 0x000F2800 = 993280
+    movk    x1, #0x2800
+    bl      cuMemAlloc
 
     ldp     x29, x30, [sp], #16
     ret
@@ -2805,50 +3267,87 @@ load_weights:
     b.lt    .shard_open_fail
     mov     x21, x0                // fd
 
-    // mmap the entire shard file (PROT_READ, MAP_PRIVATE)
-    // On GH200 unified memory, this gives GPU-accessible pointers
-    mov     x0, #0                 // addr = NULL (kernel picks)
-    mov     x1, x28                // length = file_size
-    mov     x2, #PROT_READ
-    mov     x3, #MAP_PRIVATE
-    mov     x4, x21                // fd
-    mov     x5, #0                 // offset = 0
-    mov     x8, #SYS_MMAP
-    svc     #0
-    cmn     x0, #1
-    b.eq    .shard_mmap_fail
+    // ---- Allocate pinned host memory via cuMemAllocHost (iter-17 fix) ----
+    // Replaces file-mmap + cuMemHostRegister which returned NOT_PERMITTED (801).
+    // cuMemAllocHost(void **pp, size_t bytesize) -- allocates page-locked host memory.
+    // GPU kernels can read pinned host memory directly without registration.
+    stp     x23, x24, [sp, #-16]!
+    stp     x25, x26, [sp, #-16]!
+    stp     x27, x28, [sp, #-16]!
 
-    // Store shard base pointer
-    mov     x22, x0                   // save mmap addr in x22 (callee-saved, pushed at entry)
+    adrp    x0, shard_alloc_ptr
+    add     x0, x0, :lo12:shard_alloc_ptr  // pp = &shard_alloc_ptr
+    mov     x1, x28                         // bytesize = file_size
+    bl      cuMemAllocHost
+    cbnz    x0, .shard_alloc_fail_restore   // non-zero return = CUDA error
+
+    // Load the allocated host pointer
+    adrp    x22, shard_alloc_ptr
+    add     x22, x22, :lo12:shard_alloc_ptr
+    ldr     x22, [x22]                      // x22 = pinned host buffer base
+
+    ldp     x27, x28, [sp], #16
+    ldp     x25, x26, [sp], #16
+    ldp     x23, x24, [sp], #16
+
+    // ---- pread loop: fill pinned buffer from shard file ----
+    // x21 = fd, x22 = buf_base, x28 = file_size
+    // x9 = offset into file, x10 = remaining bytes, x12 = write cursor
+    mov     x12, x22                        // write cursor = buffer start
+    mov     x9, #0                          // file offset = 0
+    mov     x10, x28                        // remaining = file_size
+
+.shard_pread_loop:
+    cbz     x10, .shard_pread_done
+    // chunk = min(remaining, 256MB)
+    mov     x11, #(256 * 1024 * 1024)
+    cmp     x10, x11
+    csel    x2, x10, x11, lo               // x2 = this chunk size
+    // pread64(fd, buf, count, offset)
+    mov     x0, x21                         // fd
+    mov     x1, x12                         // destination
+    // x2 already set (chunk size)
+    mov     x3, x9                          // file offset
+    mov     x8, #SYS_PREAD64
+    svc     #0
+    cmp     x0, #0
+    b.le    .shard_pread_fail               // 0=EOF or negative=error
+    add     x12, x12, x0                    // advance write cursor
+    add     x9, x9, x0                      // advance file offset
+    sub     x10, x10, x0                    // decrement remaining
+    b       .shard_pread_loop
+
+.shard_pread_done:
+    // Store shard base pointer (pinned host memory)
     adrp    x1, shard_bases
     add     x1, x1, :lo12:shard_bases
-    str     x0, [x1, x26, lsl #3]
+    str     x22, [x1, x26, lsl #3]
 
     // Store shard size
     adrp    x1, shard_sizes
     add     x1, x1, :lo12:shard_sizes
     str     x28, [x1, x26, lsl #3]
 
-    // Close fd (mmap persists)
+    // Close fd (buffer is independent)
     mov     x0, x21
     mov     x8, #SYS_CLOSE
     svc     #0
+    b       .shard_loop_next
 
-    // Register mmap'd region with CUDA for GPU access
-    // cuMemHostRegister(ptr, size, CU_MEMHOSTREGISTER_DEVICEMAP=2)
-    stp     x23, x24, [sp, #-16]!
-    stp     x25, x26, [sp, #-16]!
-    stp     x27, x28, [sp, #-16]!
-
-    mov     x0, x22                   // ptr = mmap addr
-    mov     x1, x28                   // size = file_size
-    mov     x2, #2                    // flags = CU_MEMHOSTREGISTER_DEVICEMAP
-    bl      cuMemHostRegister
-
+.shard_alloc_fail_restore:
     ldp     x27, x28, [sp], #16
     ldp     x25, x26, [sp], #16
     ldp     x23, x24, [sp], #16
+    b       .shard_mmap_fail
 
+.shard_pread_fail:
+    // Close fd and fall through to error
+    mov     x0, x21
+    mov     x8, #SYS_CLOSE
+    svc     #0
+    b       .shard_mmap_fail
+
+.shard_loop_next:
     // Next shard
     add     x26, x26, #1
     b       .shard_loop
@@ -3163,6 +3662,17 @@ load_cubins:
     add     x3, x3, :lo12:kname_l2norm
     bl      load_one_cubin
 
+    // Load lm_head cubin (FP16 dense GEMV for vocab projection)
+    adrp    x1, cubin_lm_head
+    add     x1, x1, :lo12:cubin_lm_head
+    mov     x0, x20
+    adrp    x2, kern_table
+    add     x2, x2, :lo12:kern_table
+    add     x2, x2, #KF_LM_HEAD
+    adrp    x3, kname_lm_head
+    add     x3, x3, :lo12:kname_lm_head
+    bl      load_one_cubin
+
 .cubins_done:
     ldp     x21, x22, [sp], #16
     ldp     x19, x20, [sp], #16
@@ -3359,3 +3869,57 @@ atoi:
 .atoi_done:
     mov     x0, x1
     ret
+
+// debug_sync_tag -- call cuCtxSynchronize, print tag, exit if error
+// x0 = tag number, x19 = layer index
+// Preserves x11, x12, x19-x28.
+.align 4
+debug_sync_tag:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    stp     x11, x12, [sp, #-16]!
+    stp     x19, x20, [sp, #-16]!
+    stp     x21, x22, [sp, #-16]!
+    stp     x23, x24, [sp, #-16]!
+    stp     x25, x26, [sp, #-16]!
+    stp     x27, x28, [sp, #-16]!
+    mov     x25, x0                 // save tag
+    mov     x26, x19                // save layer
+
+    bl      cuCtxSynchronize
+    mov     x24, x0                 // save err
+
+    // Print "lithos: dbg layer=<layer> tag=<tag> err=<err>\n"
+    adrp    x1, msg_dbg
+    add     x1, x1, :lo12:msg_dbg
+    mov     x2, msg_dbg_len
+    bl      print_msg
+    mov     x0, x26
+    bl      print_int
+    adrp    x1, msg_dbg2
+    add     x1, x1, :lo12:msg_dbg2
+    mov     x2, msg_dbg2_len
+    bl      print_msg
+    mov     x0, x25
+    bl      print_int
+    adrp    x1, msg_dbg3
+    add     x1, x1, :lo12:msg_dbg3
+    mov     x2, msg_dbg3_len
+    bl      print_msg
+    mov     x0, x24
+    bl      print_int
+    bl      print_newline
+
+    cbnz    x24, .dbg_sync_exit
+    ldp     x27, x28, [sp], #16
+    ldp     x25, x26, [sp], #16
+    ldp     x23, x24, [sp], #16
+    ldp     x21, x22, [sp], #16
+    ldp     x19, x20, [sp], #16
+    ldp     x11, x12, [sp], #16
+    ldp     x29, x30, [sp], #16
+    ret
+.dbg_sync_exit:
+    mov     x0, #1
+    mov     x8, #SYS_EXIT
+    svc     #0

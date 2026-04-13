@@ -1,7 +1,7 @@
 DeltaNet layer — inference — one token
 
 Input: x (hidden state), X (residual accumulator)
-Constants: D (hidden dimension), gamma (learned weight per norm)
+Constants: D (hidden dimension), w (learned weight vector per norm — one scalar per element of the hidden state, learned during training, stored in the model weights)
 
 
 PRIMITIVES
@@ -12,7 +12,7 @@ The operand decides what it does.
 
   *           multiply by self (square)
   * -1        multiply by -1 (negate)
-  * gamma     multiply by learned weight (scale)
+  * w     multiply by learned weight (scale)
   +           sum all elements (reduction)
   + 1         add scalar 1
   /           divide by another value
@@ -20,7 +20,7 @@ The operand decides what it does.
   1 /         reciprocal (1 / x)
   exp         e to the x
   log         natural log
-  sqrt        square root
+  √           square root
   project     matrix-vector multiply (learned weights)
   delta-update  state recurrence
   matvec      matrix-vector multiply (state @ query)
@@ -34,8 +34,21 @@ These are not primitives. They are names for sequences of primitives.
   sigmoid   = * -1, exp, + 1, 1 /
   silu      = * -1, exp, + 1, 1 /, *
   softplus  = exp, + 1, log
-  normalise = *, +, / D, sqrt, /, * gamma
-  l2norm    = *, +, sqrt, /
+  normalise = *, +, / D, √, /, * w
+  l2norm    = *, +, √, /
+
+  project (W4A16 GPTQ):
+    for each output element:
+      for each group of 8 packed weights:
+        load packed u32           (8 weights in 32 bits)
+        load scale                (one per group of 128 weights)
+        8x: extract nibble        (shift, mask)
+            - integer to float
+            - subtract zero point  (- 8)
+            - * scale
+            - * input element
+            + accumulate
+      + reduce across threads     (sum partial products)
 
 
 FULL DECOMPOSITION — 66 STEPS
@@ -46,9 +59,9 @@ RMSNorm on input hidden state
  1  *                square each element
  2  +                sum all squares
  3  / D              mean of squares
- 4  sqrt             root mean square
+ 4  √             root mean square
  5  /                x / rms
- 6  * gamma          scale by learned weight
+ 6  * w          scale by learned weight
 
  7  project          Q projection
  8  project          K projection
@@ -58,7 +71,7 @@ L2-norm on K (after projection, before delta-update)
 
 10  *                square each element of K
 11  +                sum all squares
-12  sqrt             sqrt(sum)
+12  √             √(sum)
 13  /                K / sqrt(sum)    =  L2-norm(K)
 
 SiLU on Q
@@ -73,7 +86,7 @@ L2-norm on Q (after SiLU, before matvec)
 
 19  *                square each element of Q
 20  +                sum all squares
-21  sqrt             sqrt(sum)
+21  √             √(sum)
 22  /                Q / sqrt(sum)    =  L2-norm(Q)
 
 Sigmoid on beta
@@ -116,9 +129,9 @@ RMSNorm on gated output
 43  *                square each element
 44  +                sum all squares
 45  / D              mean of squares
-46  sqrt             root mean square
+46  √             root mean square
 47  /                output / rms
-48  * gamma          scale by learned weight
+48  * w          scale by learned weight
 
 49  project          output projection
 50  +                residual into X
@@ -128,9 +141,9 @@ RMSNorm on X (MLP input)
 51  *                square each element
 52  +                sum all squares
 53  / D              mean of squares
-54  sqrt             root mean square
+54  √             root mean square
 55  /                X / rms
-56  * gamma          scale by learned weight
+56  * w          scale by learned weight
 
 57  project          gate projection
 58  project          up projection

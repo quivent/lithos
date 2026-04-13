@@ -178,21 +178,72 @@ create k-f32u32   7 allot   s" f32>u32" k-f32u32 swap move
 create k-u32f32   7 allot   s" u32>f32" k-u32f32 swap move
 create k-s32f32   7 allot   s" s32>f32" k-s32f32 swap move
 
-\ ---- PTX emission stubs (no-ops) ---------------------------------------------
-\ The PTX text backend has been removed.  These stubs keep the parser
-\ loadable while ops that lack a SASS emitter still call ptx-* words.
-\ Each stub simply drops its arguments so the stack stays balanced.
+\ ---- PTX text buffer ---------------------------------------------------------
+\ When --emit ptx is selected, these words build a text buffer.
+\ In SASS mode they still work (produce text), but the text is ignored.
 
-: ptx+      ( addr u -- )   2drop ;
-: ptx-nl    ( -- ) ;
-: ptx-c     ( c -- )   drop ;
-: ptx-num   ( n -- addr u )  s" 0" ;   \ returns dummy string (callers ptx+ it)
-: ptx-header ( -- ) ;
-: ptx-indent ( -- ) ;
-: ptx-freg  ( n -- )   drop ;
-: ptx-r32   ( n -- )   drop ;
-: ptx-r64   ( n -- )   drop ;
-: ptx-preg  ( n -- )   drop ;
+65536 constant PTX-BUF-SIZE
+create ptx-buf PTX-BUF-SIZE allot
+variable ptx-pos  0 ptx-pos !
+
+: ptx+  ( addr u -- )
+    dup ptx-pos @ + PTX-BUF-SIZE < 0= if 2drop exit then
+    ptx-buf ptx-pos @ + swap dup >r move r> ptx-pos +! ;
+
+: ptx-nl  ( -- )  10 ptx-buf ptx-pos @ + c!  1 ptx-pos +! ;
+
+: ptx-c  ( c -- )  ptx-buf ptx-pos @ + c!  1 ptx-pos +! ;
+
+\ Number to decimal string for PTX
+create ptx-num-buf 16 allot
+variable pn-pos
+variable pn-neg
+: ptx-num  ( n -- addr u )
+    dup 0= if drop s" 0" exit then
+    0 pn-neg !
+    dup 0< if negate -1 pn-neg ! then
+    \ Fill digits right-to-left starting at buf+15
+    15 pn-pos !
+    begin dup 0> while
+        dup 10 mod [char] 0 + ptx-num-buf pn-pos @ + c!
+        -1 pn-pos +!
+        10 /
+    repeat
+    drop
+    pn-neg @ if
+        ptx-num-buf pn-pos @ + [char] - swap c!
+        -1 pn-pos +!
+    then
+    ptx-num-buf pn-pos @ + 1+      \ addr
+    15 pn-pos @ - ;                 \ len
+
+: ptx-header  ( -- )
+    s" .version 8.5" ptx+ ptx-nl
+    s" .target sm_90" ptx+ ptx-nl
+    s" .address_size 64" ptx+ ptx-nl ptx-nl ;
+
+: ptx-indent  ( -- )  s"     " ptx+ ;
+
+: ptx-freg  ( n -- )  s" %f" ptx+  ptx-num ptx+ ;
+: ptx-r32   ( n -- )  s" %r" ptx+  ptx-num ptx+ ;
+: ptx-r64   ( n -- )  s" %rd" ptx+ ptx-num ptx+ ;
+: ptx-preg  ( n -- )  s" %p" ptx+  ptx-num ptx+ ;
+
+\ ---- SASS emitter stubs (overridden when emit-sass.fs is loaded) -------------
+\ These let the parser compile even without the SASS backend.
+: s2r,       ( rd sr -- )     2drop ;
+: imad,      ( rd r1 r2 r3 -- ) 2drop 2drop ;
+: imad-imm,  ( rd r1 imm -- ) drop 2drop ;
+: fadd,      ( rd ra rb -- )  drop 2drop ;
+: mov-imm,   ( rd imm -- )   2drop ;
+: isetp-ge,  ( pd r1 r2 -- ) drop 2drop ;
+: isetp-lt,  ( pd r1 r2 -- ) drop 2drop ;
+: bra-pred,  ( off pred -- ) 2drop ;
+: ldg-off,   ( rd ra off -- ) drop 2drop ;
+: stg-off,   ( ra rs off -- ) drop 2drop ;
+: exit,      ( -- ) ;
+: nop,       ( -- ) ;
+variable sass-pos  0 sass-pos !
 
 \ ---- IEEE 754 float encoding -------------------------------------------------
 \ Convert a float string like "1.0" or "0.5" to IEEE 754 hex "0f3F800000"
@@ -369,6 +420,11 @@ variable global-header-emitted  0 global-header-emitted !
 \ %r0=ctaid.x  %r1=ntid.x  %r2=tid.x  %r3=global_tid
 
 : emit-each-tid  ( -- )
+    \ PTX: thread indexing
+    ptx-indent s" mov.u32 %r0, %ctaid.x;" ptx+ ptx-nl
+    ptx-indent s" mov.u32 %r1, %ntid.x;" ptx+ ptx-nl
+    ptx-indent s" mov.u32 %r2, %tid.x;" ptx+ ptx-nl
+    ptx-indent s" mad.lo.u32 %r3, %r0, %r1, %r2;" ptx+ ptx-nl
     \ SASS: S2R r0,SR_CTAID.X(0x25)  S2R r1,SR_NTID.X(0x29)  S2R r2,SR_TID.X(0x21)
     \ then IMAD r3, r0, r1, r2  (global_tid = ctaid*ntid + tid)
     0 $25 s2r,
@@ -1857,6 +1913,10 @@ variable pfb-saved-pos
         then then
     again ;
 
+\ ---- Variables for function registration after parsing -----------------------
+variable fn-body-start
+variable fn-body-end
+
 \ Redefine parse-fn with the cleaner structure
 : parse-fn  ( -- )
     sym-reset
@@ -1875,9 +1935,24 @@ variable pfb-saved-pos
     li-set-name
     parse-fn-params
     parse-fn-decls-and-outputs
+    src-pos @ fn-body-start !
     ptx-emit-header
     parse-fn-body
-    ptx-emit-footer ;
+    src-pos @ fn-body-end !
+    ptx-emit-footer
+    \ Register this function for inlining
+    li-name$ n-inputs @ n-outputs @
+    fn-body-start @ fn-body-end @
+    fndef-register
+    \ Store param and output names from the symbol table
+    n-fndefs @ 1- >r
+    n-inputs @ 0 ?do
+        i sym-name@  r@ i fndef-set-param-name
+    loop
+    n-outputs @ 0 ?do
+        n-inputs @ i + sym-name@  r@ i fndef-set-out-name
+    loop
+    r> drop ;
 
 \ ---- Top-level token handler -------------------------------------------------
 

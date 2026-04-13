@@ -6,7 +6,7 @@ implementation pattern on Hopper. Context (operand shape) selects the pattern.
 ## The 12 primitives
 
 ```
-*    +    -    /    exp    log    sqrt    1/    1/√    outer    project    matvec
+*    +    -    /    exp    log    √    1/    1/√    outer    project    matvec
 ```
 
 Everything else is a named composition of these. sigmoid = `* -1, exp, + 1, 1 /`.
@@ -22,8 +22,12 @@ Context determines shape:
 |---|---|---|
 | `* -1` | negate | `FMUL Rd, Ra, -1.0` (FP32 core) |
 | `*` (self) | square | `FMUL Rd, Ra, Ra` (FP32 core) |
-| `* gamma` | scale by weight vector | stride loop: `LDG` weight + `FMUL Rd, Ra, Rb` per element |
+| `* w` | scale by learned weight vector | stride loop: `LDG` weight + `FMUL Rd, Ra, Rb` per element |
 | `* (two vectors)` | elementwise multiply | stride loop: `LDG` both + `FMUL` per element |
+
+`w` is a learned weight vector — one scalar per element of the hidden state,
+stored in the model weights. Every RMSNorm has one. It's not a hyperparameter
+or constant; it's a per-element scale factor that the model learned during training.
 
 All cases: one `FMUL` per element, trivially parallel. Compiler emits
 parallel stride loop when operating on vectors.
@@ -78,11 +82,11 @@ Two instructions. Convert to base-2 (multiply by log2(e)), then hardware exp2.
 
 Two instructions. Hardware log2, then convert to natural log (multiply by ln(2)).
 
-### `sqrt` — square root
+### `√` — square root
 
 | Usage | SASS |
 |---|---|
-| `sqrt` | `MUFU.RSQ Rt, Ra` (SFU) then `MUFU.RCP Rd, Rt` (SFU) |
+| `√` | `MUFU.RSQ Rt, Ra` (SFU) then `MUFU.RCP Rd, Rt` (SFU) |
 
 Two SFU ops: reciprocal-square-root then reciprocal.
 
@@ -94,15 +98,15 @@ Two SFU ops: reciprocal-square-root then reciprocal.
 
 One instruction.
 
-### `1/sqrt` — reciprocal square root
+### `1/√` — reciprocal square root
 
 | Usage | SASS |
 |---|---|
-| `1/sqrt` | `MUFU.RSQ Rd, Ra` (SFU) |
+| `1/√` | `MUFU.RSQ Rd, Ra` (SFU) |
 
 One instruction. This is RMSNorm's core op.
 
-### `outer` — outer product (v tensor k)
+### `outer` — outer product (v ⊗ k)
 
 | Usage | SASS |
 |---|---|
@@ -117,22 +121,32 @@ dimensions align to 16x16x16 tiles.
 
 ### `project` — matrix-vector multiply with learned weights
 
-| Usage | SASS |
-|---|---|
-| `project` | GPTQ W4A16 GEMV pattern |
+The heaviest primitive. Decomposes into arithmetic + memory ops:
 
-The heaviest primitive. Implementation per output element:
-1. Stride loop over K_packed (weight columns / 8)
-2. Per iteration: `LDG` packed u32, `LDG` scale
-3. 8x unroll: `LOP3` extract nibble, `I2F` convert, `FADD` zero-point, `FMUL` scale, `FFMA` accumulate
-4. Warp reduction: 5x `SHFL.BFLY` + `FADD`
-5. Cross-warp: smem reduction (same pattern as `+` reduce)
+```
+for each output element:
+  for each group of 8 packed weights:
+    load packed u32           (8 weights in 32 bits)
+    load scale                (one per group of 128 weights)
+    8x: extract nibble        (shift, mask)
+        - integer to float
+        - subtract zero point  (- 8)
+        - * scale
+        - * input element
+        + accumulate
+  + reduce across threads     (sum partial products)
+```
+
+SASS per loop iteration (one packed u32 = 8 weights):
+1. `LDG` packed u32, `LDG` scale, `LDG` input element
+2. 8x unroll: `LOP3` extract nibble, `I2F` convert, `FADD` zero-point, `FMUL` scale, `FFMA` accumulate
+3. After all groups: warp reduction (5x `SHFL.BFLY` + `FADD`) then cross-warp smem reduction (same as `+` reduce)
 
 40 SASS instructions per loop iteration (8 weights x 5 ops each). Memory-bandwidth
 bound. Compiler's job is coalesced loads and maximal FMA throughput per byte.
 
 Quantization scheme (W4A16, W8A16, NF4, etc.) parameterizes the dequant sequence
-inside step 3. The outer structure is identical.
+(step 2). The outer structure is identical.
 
 ### `matvec` — matrix-vector multiply against state matrix
 
@@ -172,9 +186,9 @@ complete source for a DeltaNet layer. The compiler handles everything below.
 ```
 sigmoid     = * -1, exp, + 1, 1 /           4 SASS instructions
 SiLU        = * -1, exp, + 1, 1 /, *        5 SASS instructions
-RMSNorm     = *, +, / D, 1/sqrt, *          ~25 SASS instructions (reduction dominates)
+RMSNorm     = *, +, / D, 1/√, * w           ~25 SASS instructions (reduction dominates)
 softplus    = exp, + 1, log                  5 SASS instructions
-L2Norm      = *, +, 1/sqrt, *               ~25 SASS instructions (reduction dominates)
+L2Norm      = *, +, 1/√, *                  ~25 SASS instructions (reduction dominates)
 ```
 
 Every composite is a sequence of primitives. The compiler concatenates their SASS

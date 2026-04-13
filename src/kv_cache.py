@@ -32,8 +32,8 @@ class KVCache:
     Pre-allocated KV cache for full-attention layers.
 
     Storage layout:
-        k_cache: [num_cache_layers, max_seq_len, num_kv_heads, head_dim]  float32
-        v_cache: [num_cache_layers, max_seq_len, num_kv_heads, head_dim]  float32
+        k_cache: [num_cache_layers, max_seq_len, num_kv_heads, head_dim]  bfloat16
+        v_cache: [num_cache_layers, max_seq_len, num_kv_heads, head_dim]  bfloat16
 
     The cache is indexed by a *cache layer index* (0..15), not the global
     layer index. Use layer_to_cache_idx() to convert.
@@ -49,11 +49,11 @@ class KVCache:
         # Allocate storage
         self.k_cache = np.zeros(
             (NUM_CACHE_LAYERS, max_seq_len, NUM_KV_HEADS, HEAD_DIM),
-            dtype=np.float32,
+            dtype=np.float16,
         )
         self.v_cache = np.zeros(
             (NUM_CACHE_LAYERS, max_seq_len, NUM_KV_HEADS, HEAD_DIM),
-            dtype=np.float32,
+            dtype=np.float16,
         )
 
     def layer_to_cache_idx(self, global_layer: int) -> int:

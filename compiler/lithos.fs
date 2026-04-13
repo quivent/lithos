@@ -41,11 +41,13 @@ create pa-o-kw    2 allot   s" -o"     pa-o-kw    swap move
 create pa-sass-kw 4 allot   s" sass"   pa-sass-kw swap move
 create pa-arm-kw   5 allot   s" arm64"  pa-arm-kw  swap move
 create pa-cubin-kw 5 allot   s" cubin"  pa-cubin-kw swap move
+create pa-ptx-kw   3 allot   s" ptx"    pa-ptx-kw  swap move
 
 : pa-try-emit-val  ( addr u -- )
   2dup pa-sass-kw  4 li-tok= if 2drop 1 arg-emit ! exit then
   2dup pa-arm-kw   5 li-tok= if 2drop 2 arg-emit ! exit then
   2dup pa-cubin-kw 5 li-tok= if 2drop 3 arg-emit ! exit then
+  2dup pa-ptx-kw   3 li-tok= if 2drop 4 arg-emit ! exit then
   2drop ;
 
 \ Handle one argv[i]; i on stack coming in, consumed on exit.
@@ -108,7 +110,13 @@ create pa-cubin-kw 5 allot   s" cubin"  pa-cubin-kw swap move
     \ cubin: SASS wrapped in a complete ELF64 cubin for cuModuleLoadData
     s" /home/ubuntu/lithos/compiler/cubin-wrap.fs" included
     arg-output-buf arg-output-len @ write-cubin
-  then then then
+  else arg-emit @ 4 = if
+    \ PTX text output
+    arg-output-buf arg-output-len @
+    577 open-file drop >r
+    ptx-buf ptx-pos @ r@ write-file drop
+    r> close-file drop
+  then then then then
 
   s" lithos: wrote " type arg-output-buf arg-output-len @ type
   s"  (defs=" type li-defs @ .

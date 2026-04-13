@@ -12,7 +12,7 @@ index v i
 max a b
   a
   - b
-  *            // square
+  *
   √
   + a
   + b
@@ -20,7 +20,7 @@ max a b
 
 
 max_vec v
-  fold max over v[0..n-1]
+  fold max over v
 
 
 argmax v

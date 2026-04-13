@@ -47,7 +47,7 @@ Every composite operation broken into irreducible math:
 | 10 | multiply | silu |
 | 11 | square | l2norm |
 | 12 | sum | l2norm |
-| 13 | 1 / √ | l2norm |
+| 13 | 1 / √   | l2norm |
 | 14 | multiply | l2norm |
 | 15 | scale | q by 1/√d |
 | 16 | sigmoid | → beta |
@@ -82,7 +82,7 @@ Every composite operation broken into irreducible math:
 ```
 normalise  project  rmsnorm  sigmoid  scale
 multiply   sum      add      subtract
-e^         log      1 /      1 / √    square
+e^         log      1 /      1 / √      square
 outer      negate
 ```
 

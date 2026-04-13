@@ -10,20 +10,12 @@
 \ inside a body, it looks up the callee in the function table. If found,
 \ it replays the callee's body tokens with parameter substitution: callee
 \ params are bound to the caller's arguments (register numbers).
-\
-\ For the MVP, we store each function's source text (token range) and
-\ replay it through the parser with remapped symbols.
-\
-\ This file is included by parser.fs when function-call inlining is needed.
-\ Currently, the direct-emission parser handles the common cases (each +
-\ indexed ops + infix math) without needing explicit inlining, because
-\ all operations are defined as Forth words that emit PTX inline.
-\ This file exists as the extension point for multi-function composition.
 
 \ ---- Function source registry ------------------------------------------------
 \ We save each function's source token range so we can replay it.
 
 16 constant MAX-FN-DEFS
+8 constant MAX-FN-PARAMS
 create fndef-names     MAX-FN-DEFS 32 * allot
 create fndef-nlens     MAX-FN-DEFS cells allot
 create fndef-src-start MAX-FN-DEFS cells allot  \ src-pos at start of body
@@ -31,6 +23,14 @@ create fndef-src-end   MAX-FN-DEFS cells allot  \ src-pos at end of body
 create fndef-nparams   MAX-FN-DEFS cells allot
 create fndef-nouts     MAX-FN-DEFS cells allot
 variable n-fndefs  0 n-fndefs !
+
+\ Parameter names for each function (up to MAX-FN-PARAMS params per fn)
+create fndef-param-names  MAX-FN-DEFS MAX-FN-PARAMS * 32 * allot
+create fndef-param-nlens  MAX-FN-DEFS MAX-FN-PARAMS * cells allot
+
+\ Output names for each function (up to MAX-FN-PARAMS outputs per fn)
+create fndef-out-names  MAX-FN-DEFS MAX-FN-PARAMS * 32 * allot
+create fndef-out-nlens  MAX-FN-DEFS MAX-FN-PARAMS * cells allot
 
 : fndef-name@ ( i -- addr u )
     dup 32 * fndef-names + swap cells fndef-nlens + @ ;
@@ -40,6 +40,26 @@ variable n-fndefs  0 n-fndefs !
         2dup i fndef-name@ li-tok= if 2drop i unloop exit then
     loop
     2drop -1 ;
+
+: fndef-param-name@ ( fn-idx param-idx -- addr u )
+    swap MAX-FN-PARAMS * + dup
+    32 * fndef-param-names + swap cells fndef-param-nlens + @ ;
+
+: fndef-out-name@ ( fn-idx out-idx -- addr u )
+    swap MAX-FN-PARAMS * + dup
+    32 * fndef-out-names + swap cells fndef-out-nlens + @ ;
+
+: fndef-set-param-name ( addr u fn-idx param-idx -- )
+    swap MAX-FN-PARAMS * + >r
+    dup 32 > if drop 32 then
+    dup r@ cells fndef-param-nlens + !
+    r> 32 * fndef-param-names + swap move ;
+
+: fndef-set-out-name ( addr u fn-idx out-idx -- )
+    swap MAX-FN-PARAMS * + >r
+    dup 32 > if drop 32 then
+    dup r@ cells fndef-out-nlens + !
+    r> 32 * fndef-out-names + swap move ;
 
 : fndef-register  ( name-addr name-u nparams nouts src-start src-end -- )
     n-fndefs @ MAX-FN-DEFS < 0= if 2drop 2drop 2drop exit then
@@ -64,7 +84,7 @@ variable n-fndefs  0 n-fndefs !
 \
 \ This is the mechanism by which "fn scale x factor -> y" composed with
 \ "fn add a b -> c" produces a single kernel body.
-\
-\ NOTE: For the initial implementation, the parser handles all expression
-\ forms inline. This module will be activated when we add multi-function
-\ .li files where one function references another by name.
+
+\ Inline depth counter (to prevent infinite recursion)
+variable inline-depth  0 inline-depth !
+4 constant MAX-INLINE-DEPTH

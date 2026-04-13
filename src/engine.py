@@ -471,6 +471,8 @@ def _gpu_launch(
         f"smem={shared_bytes} params=[{', '.join(f'0x{p:x}' for p in params)}]"
     )
     _LAUNCH_LOG.append(entry)
+    if len(_LAUNCH_LOG) > 10_000:
+        del _LAUNCH_LOG[:5_000]  # drop oldest half, keep recent history
 
     # Check if this kernel is in the live set (for incremental bring-up)
     should_launch = _CUDA_DRIVER is not None and func_handle != 0
@@ -1158,8 +1160,7 @@ class LithosEngine:
                 src_array = (ctypes.c_float * vocab).from_address(
                     logits_ptr + last_row_offset
                 )
-                for i in range(vocab):
-                    logits_host[i] = src_array[i]
+                logits_host = np.frombuffer(src_array, dtype=np.float32).copy()
 
             # Greedy argmax
             token_id = int(np.argmax(logits_host))

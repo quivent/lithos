@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Test the Lithos-compiled vadd kernel on the GH200."""
+"""Test the Lithos-compiled vadd kernel on the GH200.
+
+Compile with:
+  forth-bootstrap lithos.fs examples/vadd.li --emit cubin -o /tmp/vadd.cubin
+Then run this script.
+"""
 
 import ctypes
 import ctypes.util
 import numpy as np
 import struct
+import os
 
 # Load CUDA driver API
 cuda = ctypes.CDLL("libcuda.so.1")
@@ -27,6 +33,9 @@ cuda.cuCtxCreate_v2.restype = ctypes.c_int
 
 cuda.cuModuleLoad.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_char_p]
 cuda.cuModuleLoad.restype = ctypes.c_int
+
+cuda.cuModuleLoadData.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+cuda.cuModuleLoadData.restype = ctypes.c_int
 
 cuda.cuModuleGetFunction.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_char_p]
 cuda.cuModuleGetFunction.restype = ctypes.c_int
@@ -69,9 +78,13 @@ check(cuda.cuDeviceGet(ctypes.byref(dev), 0), "cuDeviceGet")
 ctx = ctypes.c_void_p()
 check(cuda.cuCtxCreate_v2(ctypes.byref(ctx), 0, dev), "cuCtxCreate")
 
-# Load the cubin
+# Load the cubin — use cuModuleLoadData (in-memory) for lithos-emitted cubins
+CUBIN_PATH = "/tmp/vadd.cubin"
 module = ctypes.c_void_p()
-check(cuda.cuModuleLoad(ctypes.byref(module), b"/tmp/vadd.cubin"), "cuModuleLoad")
+with open(CUBIN_PATH, "rb") as f:
+    cubin_bytes = f.read()
+cubin_buf = ctypes.create_string_buffer(cubin_bytes, len(cubin_bytes))
+check(cuda.cuModuleLoadData(ctypes.byref(module), cubin_buf), "cuModuleLoadData")
 
 func = ctypes.c_void_p()
 check(cuda.cuModuleGetFunction(ctypes.byref(func), module, b"vadd"), "cuModuleGetFunction")

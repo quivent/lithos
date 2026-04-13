@@ -21,15 +21,20 @@
 \ Verified against probe*.sass nvdisasm output (sm_90).
 \
 \ make-ctrl  ( stall yield wbar rbar wait reuse extra41 -- ctrl64 )
+\ Uses scratch variables to avoid r-stack LIFO ordering bugs.
+variable mc-reuse  variable mc-wait   variable mc-rbar
+variable mc-wbar   variable mc-yield  variable mc-stall
 : make-ctrl  ( stall yield wbar rbar wait reuse extra41 -- ctrl64 )
-  >r >r >r >r >r >r >r
+  \ TOS = extra41; pop remaining into variables (top-first = reverse order)
+  >r                             \ save extra41
+  mc-reuse !  mc-wait !  mc-rbar !  mc-wbar !  mc-yield !  mc-stall !
   r>                             \ extra41 (bits 0-40)
-  r> 41 lshift or                \ stall  -> bits 41-44
-  r> 45 lshift or                \ yield  -> bit  45
-  r> 46 lshift or                \ wbar   -> bits 46-48
-  r> 49 lshift or                \ rbar   -> bits 49-51
-  r> 52 lshift or                \ wait   -> bits 52-57
-  r> 58 lshift or ;              \ reuse  -> bits 58-62
+  mc-stall @ 41 lshift or        \ stall  -> bits 41-44
+  mc-yield @ 45 lshift or        \ yield  -> bit  45
+  mc-wbar  @ 46 lshift or        \ wbar   -> bits 46-48
+  mc-rbar  @ 49 lshift or        \ rbar   -> bits 49-51
+  mc-wait  @ 52 lshift or        \ wait   -> bits 52-57
+  mc-reuse @ 58 lshift or ;      \ reuse  -> bits 58-62              \ reuse  -> bits 58-62
 
 \ ---- Per-instruction control word constructors ----
 \ All stall/barrier values derived from probe disassembly.
@@ -59,7 +64,7 @@
 
 \ FFMA: stall=5 yield=0 wbar=7 rbar=7 — probe: 0x000fca0000000009 -> stall=5
 \ Rs3 (accumulator reg index) lives in extra41 bits[7:0]
-: ctrl-ffma  ( rs3 -- ctrl64 )  5 0 7 7 0 0 rot make-ctrl ;
+: ctrl-ffma  ( rs3 -- ctrl64 )  >r 5 0 7 7 0 0 r> make-ctrl ;
 
 \ FADD: stall=5 yield=0 wbar=7 rbar=7 (no load dependency)
 : ctrl-fadd       5 0 7 7 0 0 0             make-ctrl ;
@@ -70,7 +75,7 @@
 \ IMAD: stall=1 yield=1 wbar=7 rbar=7
 \ extra41 base = 0x0f8e0200 (opaque scheduler fields from probe); rs3 ORed into bits[7:0]
 \ probe IMAD R0,R3,UR4,R0 ctrl: 0x002fe2000f8e0200 (extra41=0x0f8e0200, rs3=R0=0x00)
-: ctrl-imad  ( rs3 -- ctrl64 )  1 1 7 7 0 0  $0f8e0200 rot or  make-ctrl ;
+: ctrl-imad  ( rs3 -- ctrl64 )  $0f8e0200 or >r  1 1 7 7 0 0 r>  make-ctrl ;
 
 \ IMAD-IMM: stall=1 yield=1, extra41=0x78e00ff (MOV.U32 modifier + RZ accum=0xff)
 \ verified: 0x000fe200078e00ff
@@ -479,7 +484,7 @@ $7c0c constant OP-ISETP
 \   bits[63:32] = 32-bit immediate (the mask, e.g. 0x0000000F)
 \   LUT byte for AND = 0xC0 (A AND B); packed into ctrl extra41 bits[15:8]
 \ NOTE: opcode 0x812 = imm form of LOP3; ctrl LUT byte selects the operation.
-: ctrl-lop3  ( lut-byte -- ctrl64 )  8 lshift   1 0 7 7 0 0 rot make-ctrl ;
+: ctrl-lop3  ( lut-byte -- ctrl64 )  8 lshift >r  1 0 7 7 0 0 r> make-ctrl ;
 
 : lop3-and-imm,  ( rd rs imm32 -- )
   \ LOP3.LUT Rd, Rs, imm32, RZ, 0xC0  (Rd = Rs AND imm32)
@@ -525,7 +530,9 @@ $7c0c constant OP-ISETP
 \   MUFU.COS  R15,R8  inst=0x00000008000f7308 ctrl=0x000f620000000000
 
 : ctrl-mufu  ( subfn-extra41 wbar -- ctrl64 )
-  >r   8 1 r> 7 0 0 rot make-ctrl ;
+  swap >r                       \ R: subfn-extra41; stack: wbar
+  >r 8 1 r> 7 0 0 r>            \ stack: 8 1 wbar 7 0 0 subfn-extra41
+  make-ctrl ;
 
 : mufu,  ( rd rs subfn-extra41 wbar -- )
   ctrl-mufu >r

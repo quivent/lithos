@@ -292,6 +292,10 @@ class CUDADriver:
         self._allocs: list[CUdeviceptr] = []
         self._modules: list[CUmodule] = []
 
+        # Per-kernel param scratch: id(func) → (packed_list, param_ptrs array)
+        # Avoids reallocating ctypes storage and void* arrays on every launch.
+        self._param_scratch: dict[int, tuple[list[Any], Any]] = {}
+
     # -- Device attributes ---------------------------------------------------
     def device_attribute(self, attr: int) -> int:
         """Query a CU_DEVICE_ATTRIBUTE_* value."""
@@ -424,29 +428,35 @@ class CUDADriver:
         ``ctypes.c_uint32`` and plain ``float`` values to ``ctypes.c_float``.
         For device pointers (CUdeviceptr / c_uint64) pass them directly.
         """
-        # Materialise a C array of void* pointing at each argument.
+        # Use persistent per-kernel scratch to avoid per-launch allocation.
         n = len(args)
-        packed: list[Any] = []
-        for a in args:
-            if isinstance(a, int):
-                packed.append(ctypes.c_uint32(a))
-            elif isinstance(a, float):
-                packed.append(ctypes.c_float(a))
-            elif isinstance(a, ctypes.c_uint64):
-                packed.append(a)
-            elif isinstance(a, ctypes.c_uint32):
-                packed.append(a)
-            elif isinstance(a, ctypes.c_float):
-                packed.append(a)
-            elif isinstance(a, ctypes.c_int32):
-                packed.append(a)
-            else:
-                # Assume it's already a ctypes type with addressable storage
-                packed.append(a)
-
-        param_ptrs = (c_void_p * n)()
-        for i, p in enumerate(packed):
-            param_ptrs[i] = ctypes.cast(byref(p), c_void_p).value
+        fkey = id(func)
+        scratch = self._param_scratch.get(fkey)
+        if scratch is None or len(scratch[0]) != n:
+            # First call (or arity changed): allocate stable ctypes objects.
+            packed: list[Any] = []
+            for a in args:
+                if isinstance(a, int):
+                    packed.append(ctypes.c_uint32(a))
+                elif isinstance(a, float):
+                    packed.append(ctypes.c_float(a))
+                else:
+                    # ctypes scalar already — copy so we own the storage
+                    packed.append(type(a)(a.value if hasattr(a, 'value') else a))
+            param_ptrs = (c_void_p * n)()
+            for i, p in enumerate(packed):
+                param_ptrs[i] = ctypes.cast(byref(p), c_void_p).value
+            self._param_scratch[fkey] = (packed, param_ptrs)
+        else:
+            # Subsequent call: update values in-place; addresses stay valid.
+            packed, param_ptrs = scratch
+            for i, a in enumerate(args):
+                if isinstance(a, int):
+                    packed[i].value = a
+                elif isinstance(a, float):
+                    packed[i].value = a
+                else:
+                    packed[i].value = a.value if hasattr(a, 'value') else a
 
         _check(
             "cuLaunchKernel",
@@ -477,26 +487,30 @@ class CUDADriver:
         exceed the occupancy limit for the kernel.
         """
         n = len(args)
-        packed: list[Any] = []
-        for a in args:
-            if isinstance(a, int):
-                packed.append(ctypes.c_uint32(a))
-            elif isinstance(a, float):
-                packed.append(ctypes.c_float(a))
-            elif isinstance(a, ctypes.c_uint64):
-                packed.append(a)
-            elif isinstance(a, ctypes.c_uint32):
-                packed.append(a)
-            elif isinstance(a, ctypes.c_float):
-                packed.append(a)
-            elif isinstance(a, ctypes.c_int32):
-                packed.append(a)
-            else:
-                packed.append(a)
-
-        param_ptrs = (c_void_p * n)()
-        for i, p in enumerate(packed):
-            param_ptrs[i] = ctypes.cast(byref(p), c_void_p).value
+        fkey = id(func)
+        scratch = self._param_scratch.get(fkey)
+        if scratch is None or len(scratch[0]) != n:
+            packed: list[Any] = []
+            for a in args:
+                if isinstance(a, int):
+                    packed.append(ctypes.c_uint32(a))
+                elif isinstance(a, float):
+                    packed.append(ctypes.c_float(a))
+                else:
+                    packed.append(type(a)(a.value if hasattr(a, 'value') else a))
+            param_ptrs = (c_void_p * n)()
+            for i, p in enumerate(packed):
+                param_ptrs[i] = ctypes.cast(byref(p), c_void_p).value
+            self._param_scratch[fkey] = (packed, param_ptrs)
+        else:
+            packed, param_ptrs = scratch
+            for i, a in enumerate(args):
+                if isinstance(a, int):
+                    packed[i].value = a
+                elif isinstance(a, float):
+                    packed[i].value = a
+                else:
+                    packed[i].value = a.value if hasattr(a, 'value') else a
 
         _check(
             "cuLaunchCooperativeKernel",

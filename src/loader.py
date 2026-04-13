@@ -18,6 +18,10 @@ import json
 import mmap
 import os
 import struct
+
+# madvise constants (Linux)
+_libc = ctypes.CDLL("libc.so.6", use_errno=True)
+MADV_WILLNEED = 3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -453,6 +457,10 @@ class LithosModel:
             flags=mmap.MAP_PRIVATE,
             prot=mmap.PROT_READ,
         )
+        # Advise kernel to pre-fault pages before inference begins.
+        # MADV_WILLNEED triggers readahead so page faults don't land in the hot path.
+        addr = ctypes.addressof(ctypes.c_char.from_buffer(mm))
+        _libc.madvise(ctypes.c_void_p(addr), ctypes.c_size_t(size), ctypes.c_int(MADV_WILLNEED))
         self._fds[shard_path] = fd
         self._mmaps[shard_path] = mm
 
