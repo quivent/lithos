@@ -55,8 +55,10 @@ Internal inconsistencies (Scout 2):
 [ ] Parser handles superset: `goto`, `label`, `endfor`, `load_u8/16/32/64`,
     `syscall`, `if!=`, 3-operand stmts — compiler uses them but lexer rejects
 [ ] `param NAME TYPE` lexed but never parsed → n_kparams always 0
-[ ] No config.json reader (separate from safetensors; needed for layer_types)
+[✓] config.json reader — EXISTS: compiler/config-reader.ls (873 lines), untested
+    Parses all 17 Qwen 3.5 fields, classifies layer_types[], provides accessors
 [ ] No per-layer dispatch loop (the hybrid-layers.md design is unimplemented)
+    NOTE: design is single megakernel with compile-time unrolling, not runtime dispatch
 [ ] No megakernel linker
 [ ] cubin_buf is 512KB; 64-layer megakernel needs ~300MB (600× too small)
 [ ] `$` register prefix not a lexer token
@@ -79,6 +81,10 @@ Internal inconsistencies (Scout 2):
 [✓] gemv.ls — W4A16 GEMV, GPTQ dequant chain CORRECT (scale + zero-point fixed)
 [✓] recur.ls — conv1d, gate_sigmoid, deltanet_step, state_rollback
 [✓] reduce.ls — rmsnorm, rmsnorm_residual, l2norm, sample_argmax
+
+Stale gaps (resolved by scouts 2026-04-13):
+[✓] Conv1D 4-tap — fully implemented in recur.ls (lines 12-40), not a stub
+[✓] Computed-offset indexing — .ls files use x[var] pattern, works today
 
 Still open from minds-revisited:
 [ ] Apply v7 software pipelining to gemv.ls
@@ -182,6 +188,106 @@ FSP subsystem wired:
 
 ---
 
+## MISSING LINKS (found by 12-scout gap hunt, 2026-04-13)
+
+These are gaps NOT covered elsewhere in this plan. Each blocks full inference.
+
+### M1. Tokenizer — **BLOCKING, no implementation exists**
+
+The inference loop cannot start without text → token ID conversion.
+Qwen 3.5 uses BPE with 248K vocab + ~130K merges. Files on disk:
+- `/home/ubuntu/models/Huihui-Qwen3.5-27B-abliterated-GPTQ-W4A16/vocab.json` (6.7MB)
+- `/home/ubuntu/models/Huihui-Qwen3.5-27B-abliterated-GPTQ-W4A16/tokenizer.json` (12.8MB)
+
+Zero tokenizer code exists in Lithos. Options:
+1. Implement BPE in `.ls` (hard: needs JSON parsing of 12MB merge table + regex pre-split)
+2. Implement BPE in ARM64 assembly in the bootstrap layer
+3. Pre-tokenize externally and feed raw token IDs (simplest, creates external dependency)
+
+Decision needed. For first-token milestone, option 3 (hardcoded token IDs) is sufficient.
+
+### M2. Autoregressive generation loop — **BLOCKING**
+
+`sample_argmax` in reduce.ls is fully implemented (not a stub). But:
+- No generation loop exists — system produces exactly one token per forward pass
+- No EOS token detection (no EOS ID hardcoded or parameterized anywhere)
+- No max-length parameter
+- No streaming output (token written to device memory, no host readback/print)
+- No temperature scaling, top-p, top-k, repetition penalty
+
+For first-token milestone: hardcoded single forward pass is sufficient.
+For usable inference: needs a loop in launcher.ls that calls forward pass,
+reads argmax result, checks EOS, feeds token back as next input.
+
+### M3. KV cache + DeltaNet state lifecycle — **BLOCKING**
+
+Kernels accept `k_cache`/`v_cache`/`dn_state` pointers but nothing allocates
+or manages them. Missing layer between `mem.ls` (raw bump) and kernels:
+
+```
+[ ] inference_init.ls — allocate KV cache (16 attn layers × 4 KV heads × 256 dim × max_seq)
+[ ] inference_init.ls — allocate DeltaNet state (48 layers × 16 heads × 128 × 128 × f32 = ~48MB)
+[ ] inference_init.ls — zero-initialize DeltaNet state at start of sequence
+[ ] Per-token KV append — write new K/V at position seq_len, increment counter
+[ ] Pre-allocate max sequence length or implement grow-on-demand
+```
+
+Memory ceiling: ~131KB/token for KV across 16 attention layers. At 128GB BAR4
+minus weights (~14GB) and activations, theoretical max ~500K-800K tokens.
+
+### M4. FP16 compute opcodes — **PERFORMANCE GAP**
+
+`emit-gpu.ls` has zero FP16 opcodes. Only FP32: FADD, FMUL, FFMA, FMNMX.
+No HADD, HMUL, HFMA, HMNMX, HSETP, or packed FP16 operations.
+
+The current correct inference (cosine 1.0 at all 64 layers) used FP32 throughout.
+For matching vLLM throughput, FP16 compute is essential — 2× ALU throughput
+on Hopper, 2× memory bandwidth efficiency for activation traffic.
+
+Not blocking for correctness. Blocking for closing the performance gap.
+
+```
+[ ] Add emit_hadd, emit_hmul, emit_hfma (FP16 opcodes) to emit-gpu.ls
+[ ] Add emit_hfma2 (packed 2×FP16) for bandwidth-bound kernels
+[ ] Probe and verify FP16 instruction encodings via ptxas/nvdisasm
+[ ] Add f32>f16 / f16>f32 conversion opcodes
+```
+
+### M5. Error handling — **CRITICAL for development velocity**
+
+Zero error handling exists. Silent failures will waste debugging time.
+
+```
+Critical now:
+[ ] Check openat/fstat/mmap return values in launcher.ls load_file
+    (failed open → negative fd → silent corruption or SIGSEGV)
+[ ] Wire sync_wait_flag_timeout (exists in sync.ls line 52, unused)
+    into launcher — infinite hang on any GPU fault currently
+[ ] pmc_sanity_check in init.ls — actually branch on PMC_BOOT_0 read
+    (currently reads but never checks; comment says "zero means dead silicon")
+
+Deferrable:
+[ ] ECC / thermal / Xid error register monitoring
+[ ] Watchdog / health check loop
+[ ] Graceful GPU reset on hang
+```
+
+---
+
+## STALE ITEMS (corrected by scouts 2026-04-13)
+
+Items previously listed as gaps that are actually resolved:
+
+| Item | Status | Evidence |
+|------|--------|----------|
+| config.json reader | **EXISTS** | `compiler/config-reader.ls` (873 lines), parses 17 fields, untested |
+| Conv1D 4-tap | **IMPLEMENTED** | `recur.ls` lines 12-40, complete with computed-offset workaround |
+| Computed-offset indexing | **WORKING** | `.ls` files use `x[var]` pattern throughout |
+| Weight pointer table | **BUILT** | `launcher.s` lines 298-304 (64 layers × 26 slots × 8 bytes) |
+| RoPE partial rotary | **CORRECT** | `attend.ls` rotates dims 0-63, passes through 64-255 |
+
+---
+
 ## CRITICAL BLOCKERS (in order)
 
 1. **Bootstrap parser** — add expression parsing + composition syntax handling
@@ -191,8 +297,13 @@ FSP subsystem wired:
 5. **First compile**: bootstrap parses compiler.ls → lithos-stage1
 6. **Self-compile**: lithos-stage1 compiles compiler.ls → lithos (fixed point)
 7. **First kernel execution**: GSP+GPFIFO+QMD runs one compiled .ls kernel
-8. **One token through one layer**: all 71 steps, diff < 1e-3 vs reference
-9. **Full 64-layer inference**: Qwen 3.5 27B produces coherent text
+8. **KV cache + state allocation** (M3) — allocate and wire inference buffers
+9. **Tokenizer** (M1) — at minimum, hardcoded token IDs for test prompts
+10. **One token through one layer**: all 71 steps, diff < 1e-3 vs reference
+11. **Autoregressive loop** (M2) — generate sequences, detect EOS
+12. **Error handling** (M5) — syscall checks + poll timeout (before debugging gets painful)
+13. **FP16 opcodes** (M4) — after correctness, before performance
+14. **Full 64-layer inference**: Qwen 3.5 27B produces coherent text
 
 ---
 
