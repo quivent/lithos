@@ -57,7 +57,7 @@ A .li file no longer describes a complete, standalone kernel. It describes a
 once per layer by binding concrete weight tensors to the template's weight
 declarations.
 
-The same template produces 48 different SASS streams (one per layer in a 48-layer
+The same template produces 64 different SASS streams (one per layer in a 64-layer
 model), because each layer has different weight values. The instruction structure
 is identical; only the immediates differ.
 
@@ -705,7 +705,7 @@ produce on the order of hundreds of millions of FMUL-IMM instructions. At 16
 bytes per SASS instruction, a single layer's projections occupy several
 gigabytes of instruction memory.
 
-For a 48-layer model, the total binary size is roughly equivalent to the model
+For a 64-layer model, the total binary size is roughly equivalent to the model
 size in FP32 (since each Q4 weight expands to an FP32 immediate). This is the
 fundamental tradeoff: we trade memory bandwidth (no weight loads from HBM) for
 instruction cache pressure (the program itself is huge).

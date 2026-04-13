@@ -276,7 +276,7 @@
 #define NV_PRISCV_CPUCTL_STARTCPU   0x1u
 
 /* Address alignment: FMC addresses are >> 3 (8-byte aligned) before writing */
-#define RISCV_BR_ADDR_ALIGNMENT     8u
+#define RISCV_BR_ADDR_SHIFT         3u
 
 /* -----------------------------------------------------------------------
  * GspFwWprMeta — 256-byte WPR layout descriptor sent to ACR
@@ -664,17 +664,17 @@ static void gsp_bootstrap_fmc(struct lithos_device *ldev,
     gsp_bar0_wr(ldev, NV_GSP_FALCON_MAILBOX1, (u32)(fmc_params_pa >> 32));
 
     /* Program FMC code address (shifted right by 3 = 8-byte alignment) */
-    phys = ((u64)fmc_image_pa + fmc_code_off) >> RISCV_BR_ADDR_ALIGNMENT;
+    phys = ((u64)fmc_image_pa + fmc_code_off) >> RISCV_BR_ADDR_SHIFT;
     gsp_riscv_wr(ldev, NV_PRISCV_BCR_FMCCODE_LO_OFF, (u32)(phys & 0xffffffffULL));
     gsp_riscv_wr(ldev, NV_PRISCV_BCR_FMCCODE_HI_OFF, (u32)(phys >> 32));
 
     /* Program FMC data address */
-    phys = ((u64)fmc_image_pa + fmc_data_off) >> RISCV_BR_ADDR_ALIGNMENT;
+    phys = ((u64)fmc_image_pa + fmc_data_off) >> RISCV_BR_ADDR_SHIFT;
     gsp_riscv_wr(ldev, NV_PRISCV_BCR_FMCDATA_LO_OFF, (u32)(phys & 0xffffffffULL));
     gsp_riscv_wr(ldev, NV_PRISCV_BCR_FMCDATA_HI_OFF, (u32)(phys >> 32));
 
     /* Program manifest address */
-    phys = ((u64)fmc_image_pa + fmc_manifest_off) >> RISCV_BR_ADDR_ALIGNMENT;
+    phys = ((u64)fmc_image_pa + fmc_manifest_off) >> RISCV_BR_ADDR_SHIFT;
     gsp_riscv_wr(ldev, NV_PRISCV_BCR_PKCPARAM_LO_OFF, (u32)(phys & 0xffffffffULL));
     gsp_riscv_wr(ldev, NV_PRISCV_BCR_PKCPARAM_HI_OFF, (u32)(phys >> 32));
 

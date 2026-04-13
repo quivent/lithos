@@ -32,3 +32,6 @@ kernel/*.symvers
 kernel/.*.cmd
 kernel/modules.order
 compiler/_transform.py
+bootstrap/build/
+bootstrap/lithos-bootstrap
+bootstrap/*.o

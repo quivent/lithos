@@ -392,7 +392,7 @@ verification that the weight embedding is correct.
 
 ### Size calculation for one projection
 
-Model: Qwen 2.5 27B (DeltaNet variant, using Lithos's 71-step decomposition).
+Model: Qwen 3.5 27B (DeltaNet variant, using Lithos's 71-step decomposition).
 
 Assumed dimensions (standard for 27B-class models):
 - Hidden dimension D = 3584
@@ -448,8 +448,8 @@ Bytes per layer: 436.4M * 16 = **~6.98 GB per layer**
 36 layers * 6.98 GB = **~251 GB for the full model instruction stream.**
 
 Plus the LM head (one final projection [vocab_size, D]):
-- vocab_size = 151,936 (Qwen 2.5)
-- 151,936 * 3584 = 544.5M weights
+- vocab_size = 248,320 (Qwen 3.5)
+- 248,320 * 3584 = 544.5M weights
 - 544.5M * 2 * 16 = 17.4 GB
 - **Total: ~269 GB**
 
@@ -804,9 +804,9 @@ full tensor accounting (including bias terms, norms, embeddings), and with the M
 intermediate dimension being 3.5x hidden dim for Qwen architecture, the actual
 figure is higher. Let me recalculate more carefully.
 
-**Precise calculation for Qwen 2.5 27B (DeltaNet variant):**
+**Precise calculation for Qwen 3.5 27B (DeltaNet variant):**
 
-Layer config (assumed): D=3584, MLP_DIM=18944 (5.29x, matching Qwen 2.5 architecture
+Layer config (assumed): D=3584, MLP_DIM=18944 (5.29x, matching Qwen 3.5 architecture
 which uses 18944 intermediate with SiLU gate), 36 layers.
 
 Per-layer projection sizes:
@@ -824,9 +824,9 @@ Per-layer total: 5 * 12,845,056 + 3 * 67,895,296 = 64,225,280 + 203,685,888
 
 36 layers: 267,911,168 * 36 = 9,644,802,048 weights (~9.6 billion)
 
-Plus LM head: 151,936 * 3584 = 544,538,624 weights
+Plus LM head: 248,320 * 3584 = 544,538,624 weights
 
-Plus embeddings: 151,936 * 3584 = 544,538,624 weights (but embeddings are not
+Plus embeddings: 248,320 * 3584 = 544,538,624 weights (but embeddings are not
 projections -- they are lookups, not GEMV)
 
 Total GEMV weights: 9,644,802,048 + 544,538,624 = **~10.19 billion weights**
@@ -834,7 +834,7 @@ Total GEMV weights: 9,644,802,048 + 544,538,624 = **~10.19 billion weights**
 At Q4: 10.19e9 * 0.5 bytes = **5.09 GB** (matches expected 27B model Q4 size when
 accounting for shared Q/K projections and GQA)
 
-Wait -- 27B model should have more parameters. The discrepancy is because Qwen 2.5
+Wait -- 27B model should have more parameters. The discrepancy is because Qwen 3.5
 27B uses GQA (grouped query attention) where K and V projections are smaller. Also,
 the actual hidden dim might be larger. Let me use the standard figure: **27 billion
 parameters at Q4 = 13.5 GB of weight data.**

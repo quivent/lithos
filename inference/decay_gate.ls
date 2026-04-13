@@ -22,7 +22,8 @@
 \\   8. exp       decay[i] = exp(g)
 \\
 \\ Launch: gridDim.x = 1, blockDim.x = 48 (one thread per value head)
-\\ All inputs/outputs are [48] vectors (num_value_heads for Qwen3.5-27B).
+\\ All inputs/outputs are [48] vectors: num_value_heads=48 for Qwen 3.5 27B
+\\ DeltaNet (linear_num_value_heads = 48 in config.json).
 
 decay_gate a_proj a_log dt_bias decay :
     param N u32

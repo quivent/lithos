@@ -183,7 +183,7 @@ TOTAL:   [█████░░░] 8/18 — Wave 1 done, Wave 2 running
 
 ```
 5a. [░░] One token through one layer    BLOCKED on 4b + 4c
-5b. [░░] Full 48-layer forward pass     BLOCKED on 5a
+5b. [░░] Full 64-layer forward pass     BLOCKED on 5a
 ```
 
 ### 5a. One token, one layer
@@ -193,8 +193,8 @@ TOTAL:   [█████░░░] 8/18 — Wave 1 done, Wave 2 running
 - [ ] Audit: element-wise diff < 1e-3 vs reference
 
 ### 5b. Full model inference
-- [ ] Qwen 2.5 27B, 48 layers, forward + recurrence
-- [ ] Token embedding → 48 layers → LM head → argmax
+- [ ] Qwen 3.5 27B, 64 layers (48 DeltaNet + 16 full-attention), forward + recurrence
+- [ ] Token embedding → 64 layers → LM head → argmax
 - [ ] Produces coherent text
 - [ ] Audit: matches reference model output for fixed prompt
 

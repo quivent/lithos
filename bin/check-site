@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# check-site — verify every internal link on the deployed site returns 200
+# Run before deploy to catch broken links in nav/content.
+#
+# Usage: bin/check-site [base_url]
+#   default base_url: https://lithos-seven.vercel.app
+
+set -eu
+
+BASE="${1:-https://lithos-seven.vercel.app}"
+FAIL=0
+
+# Gather all hrefs from docs/*.html — both "/path" and "/path.html"
+cd "$(dirname "$0")/.."
+
+# Extract nav links (href="/...") from all HTML, dedupe, skip external
+links=$(grep -ohE 'href="(/[^"#?]*)"' docs/*.html \
+  | sed -E 's/href="([^"]*)"/\1/' \
+  | sort -u)
+
+echo "Checking $(echo "$links" | wc -l) unique paths against $BASE ..."
+echo
+
+while IFS= read -r path; do
+  # Skip empty
+  [ -z "$path" ] && continue
+
+  code=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}${path}")
+  if [ "$code" = "200" ] || [ "$code" = "301" ] || [ "$code" = "302" ]; then
+    printf "  %s  %s\n" "$code" "$path"
+  else
+    printf "  %s  %s  ← BROKEN\n" "$code" "$path"
+    FAIL=1
+  fi
+done <<< "$links"
+
+echo
+if [ $FAIL -eq 0 ]; then
+  echo "ALL LINKS OK"
+  exit 0
+else
+  echo "SOME LINKS BROKEN — do not deploy"
+  exit 1
+fi

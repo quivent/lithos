@@ -703,7 +703,7 @@ host fn emit_grid_sync
 ### 10.4 Parameter layout
 
 The megakernel parameter struct is built by the compiler based on model
-config. For DeltaNet (48 layers):
+config. For Qwen 3.5 27B (64 layers: 48 DeltaNet + 16 full-attention):
 
 ```
 Offset  Content

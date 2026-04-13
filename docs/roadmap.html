@@ -748,12 +748,12 @@ safetensors + .ls template
   <tbody>
     <tr>
       <td>Forward pass</td>
-      <td>All 48 layers: projections + elementwise + reductions + attention + delta rule</td>
+      <td>All 64 layers (48 DeltaNet + 16 full-attention): projections + elementwise + reductions + attention + delta rule</td>
       <td>One QMD per token</td>
     </tr>
     <tr>
       <td>Recurrence update</td>
-      <td>State matrix updates across all 48 layers</td>
+      <td>State matrix updates across all 48 DeltaNet layers</td>
       <td>One QMD per token</td>
     </tr>
   </tbody>
