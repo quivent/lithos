@@ -12,7 +12,7 @@ All sources use `.ls` extension. Zero Forth. Zero Python. Zero CUDA runtime.
 ```
 FOUNDATIONS   [████████] complete   language, kernels, grammar, dicts, docs
 COMPILER      [██████░░] wired, not compiling   compiler.ls self-parse blocked
-BOOTSTRAP     [███░░░░░] smoke test works, parser gap blocks compiler.ls
+BOOTSTRAP     [█████░░░] expressions work, compositions + assignments crash (teams hit rate limit)
 RUNTIME       [████░░░░] all .ls written, untested, cbuf0 register_count unknown
 HARDWARE      [████░░░░] GSP boot wired (FSP done), QMD builder untested, cbuf0 probe pending
 INTEGRATION   [██░░░░░░] launcher.ls written (162 lines), not compiled, nothing executes end-to-end
@@ -187,7 +187,7 @@ FSP subsystem wired:
 1. **Bootstrap parser** — add expression parsing + composition syntax handling
 2. **compiler.ls self-consistency** — fix 8 internal grammar issues from Scout 2
 3. ~~**FSP boot wiring**~~ — DONE (wired at step 6, BCR/FSP order fixed)
-4. **register_count probe** — differential probe for cbuf0 offset
+4. ~~**register_count probe**~~ — DONE. Not in cbuf0 or QMD. In 384-byte Shader Program Descriptor at SPD offset 0x094
 5. **First compile**: bootstrap parses compiler.ls → lithos-stage1
 6. **Self-compile**: lithos-stage1 compiles compiler.ls → lithos (fixed point)
 7. **First kernel execution**: GSP+GPFIFO+QMD runs one compiled .ls kernel
