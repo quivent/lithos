@@ -232,8 +232,8 @@ class PrefillEngine:
     def _preload_qk_norms(self):
         """Preload Q/K RMSNorm weights for full attention layers.
 
-        Qwen3.5 uses Qwen3NextRMSNorm (1+w) for Q/K normalization in full attention.
-        These are per-head norms applied after projection and before RoPE.
+        Qwen3.5 uses Qwen3MoeRMSNorm (plain w, NO +1.0) for Q/K normalization.
+        Initialized to ones in the model, but may have drifted during training.
         """
         self.q_norm_weights = {}
         self.k_norm_weights = {}
@@ -241,8 +241,8 @@ class PrefillEngine:
             if self.layer_types[i] != "full_attention":
                 continue
             prefix = f"model.language_model.layers.{i}.self_attn"
-            self.q_norm_weights[i] = load_norm_weight(self.model, f"{prefix}.q_norm.weight") + 1.0
-            self.k_norm_weights[i] = load_norm_weight(self.model, f"{prefix}.k_norm.weight") + 1.0
+            self.q_norm_weights[i] = load_norm_weight(self.model, f"{prefix}.q_norm.weight")
+            self.k_norm_weights[i] = load_norm_weight(self.model, f"{prefix}.k_norm.weight")
         print(f"    Q/K norm weights preloaded for {len(self.q_norm_weights)} full attention layers")
 
     # ------------------------------------------------------------------
@@ -342,12 +342,12 @@ class PrefillEngine:
         """Full attention with KV cache and RoPE."""
         prefix = f"model.language_model.layers.{layer_idx}.self_attn"
 
-        # Q projection: 5120 -> 6144 (24 heads * 256 dim)
+        # Q projection: 5120 -> 12288 (24 heads * 256 dim * 2 for Q + gate)
         self.gpu_gptq_matvec(f"{prefix}.q_proj",
                               d_normed, self.d_attn_scratch1,
-                              HIDDEN_DIM, 6144)
+                              HIDDEN_DIM, 12288)
         self.gpu.synchronize()
-        q_raw = download_f32(self.gpu, self.d_attn_scratch1, 6144)
+        q_gate_raw = download_f32(self.gpu, self.d_attn_scratch1, 12288)
 
         # K projection: 5120 -> 1024 (4 heads * 256 dim)
         self.gpu_gptq_matvec(f"{prefix}.k_proj",
@@ -363,8 +363,14 @@ class PrefillEngine:
         self.gpu.synchronize()
         v_raw = download_f32(self.gpu, self.d_attn_scratch1, 1024)
 
+        # Split q_proj output into Q and gate
+        # Reference: view as [24, 512] then chunk into Q [24, 256] and gate [24, 256]
+        q_gate_heads = q_gate_raw.reshape(24, 512)  # [num_q_heads, head_dim * 2]
+        q_heads = q_gate_heads[:, :256].copy()       # [24, 256] -- Q
+        gate_heads = q_gate_heads[:, 256:].copy()    # [24, 256] -- gate
+        gate_flat = gate_heads.flatten()              # [6144] -- will be applied after attention
+
         # Apply QK RMSNorm per head (Qwen3NextRMSNorm with 1+w, already loaded)
-        q_heads = q_raw.reshape(24, 256)  # [num_q_heads, head_dim]
         k_heads = k_raw.reshape(4, 256)   # [num_kv_heads, head_dim]
         q_norm_w = self.q_norm_weights[layer_idx]  # [256] with +1.0
         k_norm_w = self.k_norm_weights[layer_idx]  # [256] with +1.0
@@ -389,6 +395,14 @@ class PrefillEngine:
 
         # Compute attention
         attended = attention_prefill(q_rope, k_cache, v_cache, position)
+
+        # Apply output gate: attn_output = attn_output * sigmoid(gate)
+        gate_sigmoid = 1.0 / (1.0 + np.exp(-gate_flat.clip(-80, 80)))
+        if position == 4:  # last token debug
+            print(f"    L{layer_idx} attn: attended_norm={np.linalg.norm(attended):.4f} "
+                  f"gate_mean={gate_sigmoid.mean():.4f} gate_min={gate_sigmoid.min():.4f} "
+                  f"gate_max={gate_sigmoid.max():.4f}")
+        attended = attended * gate_sigmoid  # [6144] element-wise
 
         # O projection: 6144 -> 5120
         self.gpu.memcpy_htod(self.d_attn_scratch2,
