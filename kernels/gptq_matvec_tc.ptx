@@ -274,7 +274,10 @@ SKIP_SCALE:
     add.u64         %rd42, %rd42, %rd22;   // + col_base * 4
 
     // Load 16 packed weights via 4 vector loads of 4 int32 each
-    ld.global.v4.b32 {%qw0, %qw1, %qw2, %qw3}, [%rd42];
+    ld.global.b32 %qw0, [%rd42];
+    ld.global.b32 %qw1, [%rd42 + 4];
+    ld.global.b32 %qw2, [%rd42 + 8];
+    ld.global.b32 %qw3, [%rd42 + 12];
 
     // Process qw0 (col 0) -- 8 nibbles
     and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc0; fma.rn.f32 %f0, %dq, %x0, %f0;
@@ -317,7 +320,10 @@ SKIP_SCALE:
     shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc3; fma.rn.f32 %f3, %dq, %x7, %f3;
 
     // Load next 4 cols (4..7)
-    ld.global.v4.b32 {%qw0, %qw1, %qw2, %qw3}, [%rd42 + 16];
+    ld.global.b32 %qw0, [%rd42 + 16];
+    ld.global.b32 %qw1, [%rd42 + 20];
+    ld.global.b32 %qw2, [%rd42 + 24];
+    ld.global.b32 %qw3, [%rd42 + 28];
 
     // col 4
     and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc4; fma.rn.f32 %f4, %dq, %x0, %f4;
@@ -360,7 +366,10 @@ SKIP_SCALE:
     shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc7; fma.rn.f32 %f7, %dq, %x7, %f7;
 
     // Load cols 8..11
-    ld.global.v4.b32 {%qw0, %qw1, %qw2, %qw3}, [%rd42 + 32];
+    ld.global.b32 %qw0, [%rd42 + 32];
+    ld.global.b32 %qw1, [%rd42 + 36];
+    ld.global.b32 %qw2, [%rd42 + 40];
+    ld.global.b32 %qw3, [%rd42 + 44];
 
     // col 8
     and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc8; fma.rn.f32 %f8, %dq, %x0, %f8;
@@ -403,7 +412,10 @@ SKIP_SCALE:
     shr.b32 %nib, %qw3, 28; and.b32 %nib, %nib, 0xF; cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc11; fma.rn.f32 %f11, %dq, %x7, %f11;
 
     // Load cols 12..15
-    ld.global.v4.b32 {%qw0, %qw1, %qw2, %qw3}, [%rd42 + 48];
+    ld.global.b32 %qw0, [%rd42 + 48];
+    ld.global.b32 %qw1, [%rd42 + 52];
+    ld.global.b32 %qw2, [%rd42 + 56];
+    ld.global.b32 %qw3, [%rd42 + 60];
 
     // col 12
     and.b32 %nib, %qw0, 0xF;       cvt.rn.f32.u32 %dq, %nib; sub.f32 %dq, %dq, 0f41000000; mul.f32 %dq, %dq, %sc12; fma.rn.f32 %f12, %dq, %x0, %f12;
