@@ -55,60 +55,78 @@ gptq_gemv W_packed scales x y :
         \\ x base index for this packed word: k_p * 8
         shl x_base k_p 3
         \\ Unroll 8 nibbles from packed word, each multiplies a distinct x element
+        \\ GPTQ W4A16 dequant per nibble:  dq = (nib - 8.0) * sc
+        \\ sc is constant across all 8 nibbles of this packed word (group=128 elements=16 packed u32s)
         \\ nibble 0: bits [3:0]  -> x[x_base + 0]
         and nib0 packed 15
-        s32>f32 fnib0 nib0
+        u32>f32 fnib0 nib0
+        zn0 = fnib0 - 8.0
+        dq0 = zn0 * sc
         xval0 = x [ x_base ]
-        fma acc fnib0 xval0 acc
+        fma acc dq0 xval0 acc
         \\ nibble 1: bits [7:4]   -> x[x_base + 1]
         shr tmp1 packed 4
         and nib1 tmp1 15
-        s32>f32 fnib1 nib1
+        u32>f32 fnib1 nib1
+        zn1 = fnib1 - 8.0
+        dq1 = zn1 * sc
         add xi1 x_base 1
         xval1 = x [ xi1 ]
-        fma acc fnib1 xval1 acc
+        fma acc dq1 xval1 acc
         \\ nibble 2: bits [11:8]  -> x[x_base + 2]
         shr tmp2 packed 8
         and nib2 tmp2 15
-        s32>f32 fnib2 nib2
+        u32>f32 fnib2 nib2
+        zn2 = fnib2 - 8.0
+        dq2 = zn2 * sc
         add xi2 x_base 2
         xval2 = x [ xi2 ]
-        fma acc fnib2 xval2 acc
+        fma acc dq2 xval2 acc
         \\ nibble 3: bits [15:12] -> x[x_base + 3]
         shr tmp3 packed 12
         and nib3 tmp3 15
-        s32>f32 fnib3 nib3
+        u32>f32 fnib3 nib3
+        zn3 = fnib3 - 8.0
+        dq3 = zn3 * sc
         add xi3 x_base 3
         xval3 = x [ xi3 ]
-        fma acc fnib3 xval3 acc
+        fma acc dq3 xval3 acc
         \\ nibble 4: bits [19:16] -> x[x_base + 4]
         shr tmp4 packed 16
         and nib4 tmp4 15
-        s32>f32 fnib4 nib4
+        u32>f32 fnib4 nib4
+        zn4 = fnib4 - 8.0
+        dq4 = zn4 * sc
         add xi4 x_base 4
         xval4 = x [ xi4 ]
-        fma acc fnib4 xval4 acc
+        fma acc dq4 xval4 acc
         \\ nibble 5: bits [23:20] -> x[x_base + 5]
         shr tmp5 packed 20
         and nib5 tmp5 15
-        s32>f32 fnib5 nib5
+        u32>f32 fnib5 nib5
+        zn5 = fnib5 - 8.0
+        dq5 = zn5 * sc
         add xi5 x_base 5
         xval5 = x [ xi5 ]
-        fma acc fnib5 xval5 acc
+        fma acc dq5 xval5 acc
         \\ nibble 6: bits [27:24] -> x[x_base + 6]
         shr tmp6 packed 24
         and nib6 tmp6 15
-        s32>f32 fnib6 nib6
+        u32>f32 fnib6 nib6
+        zn6 = fnib6 - 8.0
+        dq6 = zn6 * sc
         add xi6 x_base 6
         xval6 = x [ xi6 ]
-        fma acc fnib6 xval6 acc
+        fma acc dq6 xval6 acc
         \\ nibble 7: bits [31:28] -> x[x_base + 7]
         shr tmp7 packed 28
         and nib7 tmp7 15
-        s32>f32 fnib7 nib7
+        u32>f32 fnib7 nib7
+        zn7 = fnib7 - 8.0
+        dq7 = zn7 * sc
         add xi7 x_base 7
         xval7 = x [ xi7 ]
-        fma acc fnib7 xval7 acc
+        fma acc dq7 xval7 acc
     endfor
     \\ Warp reduction across 32 lanes (butterfly; all lanes of each warp sum)
     shfl.bfly t0 acc 16
