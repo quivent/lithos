@@ -590,6 +590,12 @@ DPK_LP:
     add.u64         %rd57, %rd53, %rd56;
     ld.global.u32   %r33, [%rd57];
 
+    // Prefetch next weight word
+    add.u32         %r39, %r32, 4;
+    cvt.u64.u32     %rd61, %r39;
+    add.u64         %rd62, %rd53, %rd61;
+    prefetch.global.L2 [%rd62];
+
     shl.b32         %r35, %r31, 5;
     cvt.u64.u32     %rd58, %r35;
     add.u64         %rd59, %rd55, %rd58;

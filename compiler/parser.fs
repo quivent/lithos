@@ -189,10 +189,12 @@ create k-s32f32   7 allot   s" s32>f32" k-s32f32 swap move
     dup 10 < if [char] 0 + else 10 - [char] A + then ;
 
 \ Emit a 32-bit value as 8 hex digits
+: mask32 ( n -- n ) 4294967295 and ;
 : emit-hex32 ( n -- )
+    mask32
     8 0 do
-        dup 28 rshift hex-digit ptx-c
-        4 lshift
+        dup 28 rshift 15 and hex-digit ptx-c
+        4 lshift mask32
     loop drop ;
 
 \ Known float constants table: string -> IEEE754 hex
@@ -1356,12 +1358,24 @@ variable ldst-type    \ 0=f32 1=u32
 \ ---- Predicated instruction emission ----------------------------------------
 \ @pN ... -- reads @pN token, then dispatches the next instruction with predicate prefix
 
+variable pred-reg-num
 : emit-predicated ( addr u -- )
-    \ The token starts with '@' — it's like @p0, @p1 etc
-    \ Emit as @%pN (insert % after @)
-    ptx-indent s" @%" ptx+
-    1- swap 1+ swap ptx+   \ skip the '@', emit the rest (e.g., "p0")
-    s"  " ptx+
+    \ The token starts with '@' — look up the pred name after @
+    1- swap 1+ swap   \ skip '@', get pred name (e.g., "planez" or "p0")
+    2dup sym-find dup -1 <> if
+        nip nip sym-reg@ pred-reg-num !
+    else
+        \ Not a symbol — try to use as literal (e.g., "p0" -> just emit)
+        drop
+        ptx-indent s" @%" ptx+ ptx+ s"  " ptx+
+        src-token
+        2dup k-bra 3 li-tok= if
+            2drop src-token
+            s" bra $L_" ptx+ ptx+ s" ;" ptx+ ptx-nl
+        else ptx+ ptx-nl then
+        exit
+    then
+    ptx-indent s" @" ptx+ pred-reg-num @ ptx-preg s"  " ptx+
 
     \ Now parse the instruction after it
     src-token

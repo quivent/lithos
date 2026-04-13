@@ -58,6 +58,55 @@ Infix math with standard precedence:
 
 Operators: `+`  `-`  `*`  `/`
 
+### Scalar Parameters
+
+`param NAME TYPE` declares a scalar kernel parameter (not a pointer).
+TYPE is `u32` or `f32`.
+
+### For Loops
+
+`for COUNTER START BOUND STEP` ... `endfor` emits a PTX loop.
+COUNTER is a new u32 variable. START/BOUND/STEP can be literals or variables.
+
+### Integer / Bitwise Operations
+
+`shr DST SRC AMT` — shift right  
+`shl DST SRC AMT` — shift left  
+`and DST SRC1 SRC2` — bitwise AND  
+`or DST SRC1 SRC2` — bitwise OR  
+`xor DST SRC1 SRC2` — bitwise XOR  
+
+### Warp Shuffle
+
+`shfl.bfly DST SRC OFFSET` emits `shfl.sync.bfly.b32`.
+
+### Shared Memory
+
+`shared NAME COUNT TYPE` declares shared memory (e.g., `shared buf 1024 f32`).
+
+### Math Intrinsics
+
+`exp DST SRC`, `rcp DST SRC`, `rsqrt DST SRC`, `sqrt DST SRC`,
+`sin DST SRC`, `cos DST SRC`, `neg DST SRC` — unary math ops.
+`fma DST A B C` — fused multiply-add.
+
+### Float Constants
+
+Literals like `0.0`, `1.0`, `0.5` are encoded as IEEE 754 hex in PTX.
+
+### Type Conversions
+
+`u32>f32 DST SRC`, `s32>f32 DST SRC`, `f32>u32 DST SRC`, `f32>s32 DST SRC`.
+
+### Predication
+
+`@pN INSTRUCTION` emits a predicated PTX instruction.
+`setp CMP TYPE PRED SRC1 SRC2` sets a predicate register.
+
+### Bounds Check / Early Exit
+
+`if>= A B exit` emits `setp.ge.u32` + `@p bra $L_exit`.
+
 ### Comments
 
 Line comments start with `\` (Forth convention).
