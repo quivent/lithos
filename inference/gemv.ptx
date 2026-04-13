@@ -1,4 +1,4 @@
-// gemv.ptx — Generated from gemv.li
+// gemv.ptx -- Generated from gemv.li
 // GPTQ W4A16 matrix-vector multiply
 // Replaces: gptq_matvec.ptx, gptq_matvec_tc.ptx, gptq_gemv_tc.ptx,
 //           projection.ptx, projection_gemm.ptx, lm_head.ptx

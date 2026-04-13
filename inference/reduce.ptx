@@ -1,4 +1,4 @@
-// reduce.ptx — Generated from reduce.li
+// reduce.ptx -- Generated from reduce.li
 // Reduction operations: RMSNorm, Sampling (argmax)
 // Replaces: norm.ptx, sample.ptx
 // Target: sm_90, PTX 8.0

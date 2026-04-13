@@ -1,4 +1,4 @@
-// attend.ptx — Generated from attend.li
+// attend.ptx -- Generated from attend.li
 // Attention scoring with KV cache, RoPE, GQA
 // Replaces: attention_score.ptx, rotate.ptx, fused_attention.ptx
 // Target: sm_90, PTX 8.0

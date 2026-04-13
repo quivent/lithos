@@ -1,12 +1,12 @@
-// elementwise.ptx — Generated from elementwise.li
+// elementwise.ptx -- Generated from elementwise.li
 // Replaces: activate.ptx, add_store.ptx, elemwise_mul.ptx, residual_add.ptx
 // Target: sm_90, PTX 8.0
 //
 // COMPILER STATUS:
-//   residual_add — compiler generates correct PTX
-//   elemwise_mul — compiler generates correct PTX
-//   activate_silu — requires intrinsics (ex2, rcp); hand-written below
-//   scale — compiler generates correct PTX
+//   residual_add -- compiler generates correct PTX
+//   elemwise_mul -- compiler generates correct PTX
+//   activate_silu -- requires intrinsics (ex2, rcp); hand-written below
+//   scale -- compiler generates correct PTX
 
 .version 8.0
 .target sm_90
