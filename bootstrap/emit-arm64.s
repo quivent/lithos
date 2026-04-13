@@ -2322,9 +2322,7 @@ entry_e_cbz_fwd:
     .align  3
     .quad   code_E_CBZ_FWD
 
-// last emitter entry — chain continues into lithos-parser.s
-// (last_entry is defined at the tail of lithos-expr.s)
-emit_last_entry:
+// chain continues into parser-needed extensions below
 entry_e_cbnz_fwd:
     .quad   entry_e_cbz_fwd
     .byte   0
@@ -2332,6 +2330,500 @@ entry_e_cbnz_fwd:
     .ascii  "emit-cbnz-fwd"
     .align  3
     .quad   code_E_CBNZ_FWD
+
+// ============================================================
+// 13. PARSER-NEEDED CONSTRUCTS
+// ============================================================
+// These are the additional emission helpers required by the parser.
+// They either wrap existing primitives with friendlier stack effects,
+// or emit multi-instruction sequences.
+
+.text
+
+// ---- MOV_IMM: simple 16-bit immediate move ----
+// emit-mov-imm ( rd imm16 -- )  MOVZ Xd, #imm16
+// 0xD2800000 | imm16<<5 | Rd
+.align 4
+code_E_MOV_IMM:
+    mov     x3, x22                 // imm16
+    ldr     x0, [x24], #8          // rd
+    ldr     x22, [x24], #8         // restore TOS
+    LOAD_BASE32 w5, 0xD2800000
+    orr     w0, w5, w0             // | Rd
+    orr     w0, w0, w3, lsl #5    // | imm16<<5
+    EMIT_INLINE
+    NEXT
+
+// ---- PROLOGUE: function entry ----
+// emit-prologue ( -- )
+// Emits: STP X29, X30, [SP, #-16]!   = 0xA9BF7BFD
+//        MOV X29, SP                  = 0x910003FD
+.align 4
+code_E_PROLOGUE:
+    // STP x29, x30, [sp, #-16]! (pre-index)
+    // opc=10 1 01 0 0110 imm7=1111111(-1) Rt2=30 Rn=31 Rt1=29
+    // 0xA9BF7BFD
+    LOADW   w0, 0xA9BF7BFD
+    EMIT_INLINE
+    // MOV x29, sp = ADD x29, sp, #0 = 0x910003FD
+    LOADW   w0, 0x910003FD
+    EMIT_INLINE
+    NEXT
+
+// ---- EPILOGUE: function exit ----
+// emit-epilogue ( -- )
+// Emits: LDP X29, X30, [SP], #16     = 0xA8C17BFD
+//        RET                          = 0xD65F03C0
+.align 4
+code_E_EPILOGUE:
+    // LDP x29, x30, [sp], #16 (post-index)
+    // 0xA8C17BFD
+    LOADW   w0, 0xA8C17BFD
+    EMIT_INLINE
+    // RET = 0xD65F03C0
+    LOADW   w0, 0xD65F03C0
+    EMIT_INLINE
+    NEXT
+
+// ---- STP_IMM: store pair with signed offset ----
+// emit-stp-imm ( rt1 rt2 rn imm -- )
+// Alias for emit-stp (same encoding, already exists).
+// Provided under the parser-expected name.
+.align 4
+code_E_STP_IMM:
+    CODE_PAIR 0xA9000000
+
+// ---- LDP_IMM: load pair with signed offset ----
+// emit-ldp-imm ( rt1 rt2 rn imm -- )
+.align 4
+code_E_LDP_IMM:
+    CODE_PAIR 0xA9400000
+
+// ---- DMB_SY ----
+// emit-dmb-sy ( -- )  DMB SY = 0xD5033FBF
+.align 4
+code_E_DMB_SY:
+    LOADW   w0, 0xD5033FBF
+    EMIT_INLINE
+    NEXT
+
+// ---- Condition code pushers ----
+// Push a condition code constant onto the data stack.
+// Used by the parser before emit-bcond / emit-bcond-fwd.
+
+.align 4
+code_COND_EQ:
+    PUSH    x22
+    mov     x22, #0
+    NEXT
+.align 4
+code_COND_NE:
+    PUSH    x22
+    mov     x22, #1
+    NEXT
+.align 4
+code_COND_HS:
+    PUSH    x22
+    mov     x22, #2
+    NEXT
+.align 4
+code_COND_LO:
+    PUSH    x22
+    mov     x22, #3
+    NEXT
+.align 4
+code_COND_MI:
+    PUSH    x22
+    mov     x22, #4
+    NEXT
+.align 4
+code_COND_PL:
+    PUSH    x22
+    mov     x22, #5
+    NEXT
+.align 4
+code_COND_VS:
+    PUSH    x22
+    mov     x22, #6
+    NEXT
+.align 4
+code_COND_VC:
+    PUSH    x22
+    mov     x22, #7
+    NEXT
+.align 4
+code_COND_HI:
+    PUSH    x22
+    mov     x22, #8
+    NEXT
+.align 4
+code_COND_LS:
+    PUSH    x22
+    mov     x22, #9
+    NEXT
+.align 4
+code_COND_GE:
+    PUSH    x22
+    mov     x22, #10
+    NEXT
+.align 4
+code_COND_LT:
+    PUSH    x22
+    mov     x22, #11
+    NEXT
+.align 4
+code_COND_GT:
+    PUSH    x22
+    mov     x22, #12
+    NEXT
+.align 4
+code_COND_LE:
+    PUSH    x22
+    mov     x22, #13
+    NEXT
+
+// ============================================================
+// 14. ARRAY INDEX — COMPOSITE EMITTERS
+// ============================================================
+// These emit multi-instruction sequences for array element access.
+// The parser calls these when it recognizes array[index] patterns.
+//
+// We use X16 as the temporary register for address computation.
+// X16 (IP0) is the standard ARM64 scratch register.
+
+// emit-array-load ( rd rb ri log2size -- )
+// Emits 3 instructions:
+//   LSL X16, Xri, #log2size      (scale index)
+//   ADD X16, Xrb, X16            (compute address)
+//   LDR Xrd, [X16]               (load element)
+.align 4
+code_E_ARRAY_LOAD:
+    mov     x9, x22                 // log2size
+    ldr     x8, [x24], #8          // ri (index register)
+    ldr     x7, [x24], #8          // rb (base register)
+    ldr     x6, [x24], #8          // rd (destination)
+    ldr     x22, [x24], #8         // restore TOS
+
+    // Get code buffer pointers once
+    adrp    x1, ls_code_buf
+    add     x1, x1, :lo12:ls_code_buf
+    adrp    x2, ls_code_pos
+    add     x2, x2, :lo12:ls_code_pos
+    ldr     x10, [x2]
+
+    // Instruction 1: LSL X16, Xri, #log2size
+    // = UBFM X16, Xri, #(64-shift), #(63-shift)
+    // 0xD3400000 | immr<<16 | imms<<10 | Rn<<5 | Rd
+    mov     x11, #64
+    sub     x11, x11, x9           // immr = 64 - log2size
+    and     x11, x11, #63
+    mov     x12, #63
+    sub     x12, x12, x9           // imms = 63 - log2size
+    LOAD_BASE32 w0, 0xD3400000
+    orr     w0, w0, #16            // Rd = X16
+    orr     w0, w0, w8, lsl #5    // Rn = ri
+    orr     w0, w0, w12, lsl #10  // imms
+    orr     w0, w0, w11, lsl #16  // immr
+    str     w0, [x1, x10]
+    add     x10, x10, #4
+
+    // Instruction 2: ADD X16, Xrb, X16
+    // 0x8B000000 | Rm<<16 | Rn<<5 | Rd
+    LOAD_BASE32 w0, 0x8B000000
+    orr     w0, w0, #16            // Rd = X16
+    orr     w0, w0, w7, lsl #5    // Rn = rb
+    orr     w0, w0, #(16 << 16)   // Rm = X16
+    str     w0, [x1, x10]
+    add     x10, x10, #4
+
+    // Instruction 3: LDR Xrd, [X16, #0]
+    // 0xF9400000 | (0)<<10 | Rn<<5 | Rt
+    LOAD_BASE32 w0, 0xF9400000
+    orr     w0, w0, w6             // Rt = rd
+    orr     w0, w0, #(16 << 5)    // Rn = X16
+    str     w0, [x1, x10]
+    add     x10, x10, #4
+
+    str     x10, [x2]              // update code_pos
+    NEXT
+
+// emit-array-store ( rs rb ri log2size -- )
+// Emits 3 instructions:
+//   LSL X16, Xri, #log2size      (scale index)
+//   ADD X16, Xrb, X16            (compute address)
+//   STR Xrs, [X16]               (store element)
+.align 4
+code_E_ARRAY_STORE:
+    mov     x9, x22                 // log2size
+    ldr     x8, [x24], #8          // ri (index register)
+    ldr     x7, [x24], #8          // rb (base register)
+    ldr     x6, [x24], #8          // rs (source register to store)
+    ldr     x22, [x24], #8         // restore TOS
+
+    // Get code buffer pointers once
+    adrp    x1, ls_code_buf
+    add     x1, x1, :lo12:ls_code_buf
+    adrp    x2, ls_code_pos
+    add     x2, x2, :lo12:ls_code_pos
+    ldr     x10, [x2]
+
+    // Instruction 1: LSL X16, Xri, #log2size
+    mov     x11, #64
+    sub     x11, x11, x9
+    and     x11, x11, #63
+    mov     x12, #63
+    sub     x12, x12, x9
+    LOAD_BASE32 w0, 0xD3400000
+    orr     w0, w0, #16            // Rd = X16
+    orr     w0, w0, w8, lsl #5    // Rn = ri
+    orr     w0, w0, w12, lsl #10  // imms
+    orr     w0, w0, w11, lsl #16  // immr
+    str     w0, [x1, x10]
+    add     x10, x10, #4
+
+    // Instruction 2: ADD X16, Xrb, X16
+    LOAD_BASE32 w0, 0x8B000000
+    orr     w0, w0, #16
+    orr     w0, w0, w7, lsl #5
+    orr     w0, w0, #(16 << 16)
+    str     w0, [x1, x10]
+    add     x10, x10, #4
+
+    // Instruction 3: STR Xrs, [X16, #0]
+    // 0xF9000000 | (0)<<10 | Rn<<5 | Rt
+    LOAD_BASE32 w0, 0xF9000000
+    orr     w0, w0, w6             // Rt = rs
+    orr     w0, w0, #(16 << 5)    // Rn = X16
+    str     w0, [x1, x10]
+    add     x10, x10, #4
+
+    str     x10, [x2]
+    NEXT
+
+// ---- PATCH_CBNZ: patch a CBNZ at mark_pos ----
+// emit-patch-cbnz ( mark_pos -- )
+// Same encoding shape as CBZ patch (19-bit offset at [23:5]).
+.align 4
+code_E_PATCH_CBNZ:
+    mov     x3, x22
+    ldr     x22, [x24], #8
+
+    adrp    x0, ls_code_buf
+    add     x0, x0, :lo12:ls_code_buf
+    adrp    x1, ls_code_pos
+    add     x1, x1, :lo12:ls_code_pos
+    ldr     x2, [x1]
+
+    sub     x4, x2, x3
+    asr     x4, x4, #2
+    and     w4, w4, #0x7FFFF
+    lsl     w4, w4, #5
+
+    ldr     w5, [x0, x3]
+    orr     w5, w5, w4
+    str     w5, [x0, x3]
+    NEXT
+
+// ============================================================
+// DICTIONARY ENTRIES — new parser-needed words
+// ============================================================
+
+.data
+.align 3
+
+entry_e_mov_imm:
+    .quad   entry_e_cbnz_fwd
+    .byte   0
+    .byte   12
+    .ascii  "emit-mov-imm"
+    .align  3
+    .quad   code_E_MOV_IMM
+
+entry_e_prologue:
+    .quad   entry_e_mov_imm
+    .byte   0
+    .byte   13
+    .ascii  "emit-prologue"
+    .align  3
+    .quad   code_E_PROLOGUE
+
+entry_e_epilogue:
+    .quad   entry_e_prologue
+    .byte   0
+    .byte   13
+    .ascii  "emit-epilogue"
+    .align  3
+    .quad   code_E_EPILOGUE
+
+entry_e_stp_imm:
+    .quad   entry_e_epilogue
+    .byte   0
+    .byte   12
+    .ascii  "emit-stp-imm"
+    .align  3
+    .quad   code_E_STP_IMM
+
+entry_e_ldp_imm:
+    .quad   entry_e_stp_imm
+    .byte   0
+    .byte   12
+    .ascii  "emit-ldp-imm"
+    .align  3
+    .quad   code_E_LDP_IMM
+
+entry_e_dmb_sy:
+    .quad   entry_e_ldp_imm
+    .byte   0
+    .byte   11
+    .ascii  "emit-dmb-sy"
+    .align  3
+    .quad   code_E_DMB_SY
+
+// --- Condition code words ---
+
+entry_cond_eq:
+    .quad   entry_e_dmb_sy
+    .byte   0
+    .byte   7
+    .ascii  "cond-eq"
+    .align  3
+    .quad   code_COND_EQ
+
+entry_cond_ne:
+    .quad   entry_cond_eq
+    .byte   0
+    .byte   7
+    .ascii  "cond-ne"
+    .align  3
+    .quad   code_COND_NE
+
+entry_cond_hs:
+    .quad   entry_cond_ne
+    .byte   0
+    .byte   7
+    .ascii  "cond-hs"
+    .align  3
+    .quad   code_COND_HS
+
+entry_cond_lo:
+    .quad   entry_cond_hs
+    .byte   0
+    .byte   7
+    .ascii  "cond-lo"
+    .align  3
+    .quad   code_COND_LO
+
+entry_cond_mi:
+    .quad   entry_cond_lo
+    .byte   0
+    .byte   7
+    .ascii  "cond-mi"
+    .align  3
+    .quad   code_COND_MI
+
+entry_cond_pl:
+    .quad   entry_cond_mi
+    .byte   0
+    .byte   7
+    .ascii  "cond-pl"
+    .align  3
+    .quad   code_COND_PL
+
+entry_cond_vs:
+    .quad   entry_cond_pl
+    .byte   0
+    .byte   7
+    .ascii  "cond-vs"
+    .align  3
+    .quad   code_COND_VS
+
+entry_cond_vc:
+    .quad   entry_cond_vs
+    .byte   0
+    .byte   7
+    .ascii  "cond-vc"
+    .align  3
+    .quad   code_COND_VC
+
+entry_cond_hi:
+    .quad   entry_cond_vc
+    .byte   0
+    .byte   7
+    .ascii  "cond-hi"
+    .align  3
+    .quad   code_COND_HI
+
+entry_cond_ls:
+    .quad   entry_cond_hi
+    .byte   0
+    .byte   7
+    .ascii  "cond-ls"
+    .align  3
+    .quad   code_COND_LS
+
+entry_cond_ge:
+    .quad   entry_cond_ls
+    .byte   0
+    .byte   7
+    .ascii  "cond-ge"
+    .align  3
+    .quad   code_COND_GE
+
+entry_cond_lt:
+    .quad   entry_cond_ge
+    .byte   0
+    .byte   7
+    .ascii  "cond-lt"
+    .align  3
+    .quad   code_COND_LT
+
+entry_cond_gt:
+    .quad   entry_cond_lt
+    .byte   0
+    .byte   7
+    .ascii  "cond-gt"
+    .align  3
+    .quad   code_COND_GT
+
+entry_cond_le:
+    .quad   entry_cond_gt
+    .byte   0
+    .byte   7
+    .ascii  "cond-le"
+    .align  3
+    .quad   code_COND_LE
+
+// --- Array access ---
+
+entry_e_array_load:
+    .quad   entry_cond_le
+    .byte   0
+    .byte   15
+    .ascii  "emit-array-load"
+    .align  3
+    .quad   code_E_ARRAY_LOAD
+
+entry_e_array_store:
+    .quad   entry_e_array_load
+    .byte   0
+    .byte   16
+    .ascii  "emit-array-store"
+    .align  3
+    .quad   code_E_ARRAY_STORE
+
+// --- Additional patch ---
+
+entry_e_patch_cbnz:
+    .quad   entry_e_array_store
+    .byte   0
+    .byte   15
+    .ascii  "emit-patch-cbnz"
+    .align  3
+    .quad   code_E_PATCH_CBNZ
+
+// last emitter entry — chain continues into lithos-parser.s
+// (last_entry is defined at the tail of lithos-expr.s)
+emit_last_entry:
 
 // ============================================================
 // To link into lithos-bootstrap.s:
