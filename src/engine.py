@@ -27,6 +27,8 @@ import struct
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from weight_stage import WeightStager
+
 # ---------------------------------------------------------------------------
 # Model configuration — matches Qwen 3.5-27B with DeltaNet hybrid
 # ---------------------------------------------------------------------------
@@ -472,12 +474,14 @@ class LithosEngine:
     """
 
     def __init__(self, model: LoadedModel, kernels: LoadedKernels,
-                 cuda_driver: Optional[Any] = None):
+                 cuda_driver: Optional[Any] = None,
+                 weight_stager: Optional[WeightStager] = None):
         global _CUDA_DRIVER
         self.model = model
         self.kernels = kernels
         self.config = model.config
         self._gpu = cuda_driver
+        self._weight_stager = weight_stager
 
         # Register the CUDA driver globally so _gpu_launch can use it
         if cuda_driver is not None:
@@ -713,13 +717,29 @@ class LithosEngine:
         # Mock: just note the pointer relationship
         pass
 
+    def _norm_weight_ptr(self, layer_idx: int, sublayer: str) -> int:
+        """Resolve a norm weight pointer, using staged F32 weights when available.
+
+        Falls back to the raw model pointer if no stager is present.
+        """
+        if self._weight_stager is not None:
+            if sublayer == "attn_norm":
+                return self._weight_stager.input_norm_ptr(layer_idx)
+            elif sublayer == "mlp_norm":
+                return self._weight_stager.post_attn_norm_ptr(layer_idx)
+        # Fallback: use the raw weight pointer (caller must ensure dtype is F32)
+        weight_name = f"layers.{layer_idx}.{sublayer}.weight"
+        return self._weight_ptr(weight_name)
+
     def _launch_norm(self, layer_idx: int, sublayer: str, n_tokens: int) -> None:
         """RMSNorm before attention or MLP sublayer.
 
         Kernel signature: norm(input_ptr, residual_ptr, weight_ptr, output_ptr, epsilon)
         All u64 pointers + f32 epsilon.  hidden_dim=5120 baked in.
+
+        If a WeightStager is attached, the norm weight pointer comes from the
+        staged F32 buffer instead of the raw BF16 model weights.
         """
-        weight_name = f"layers.{layer_idx}.{sublayer}.weight"
         eps_bits = struct.unpack('I', struct.pack('f', self.config.norm_eps))[0]
         _gpu_launch(
             self.kernels.norm_func,
@@ -729,7 +749,7 @@ class LithosEngine:
             params=[
                 self.act_bufs.input_ptr,     # input
                 self.residual.ptr,           # residual
-                self._weight_ptr(weight_name),  # weight
+                self._norm_weight_ptr(layer_idx, sublayer),  # weight (F32)
                 self.act_bufs.output_ptr,    # output
                 eps_bits,                    # epsilon as f32 bits
             ],
@@ -977,8 +997,14 @@ class LithosEngine:
     def _launch_final_norm(self, n_tokens: int) -> None:
         """RMSNorm after all layers, before the LM head.
 
-        Same kernel signature as per-layer norm.
+        Same kernel signature as per-layer norm.  Uses the staged F32
+        final norm weight when a WeightStager is attached.
         """
+        if self._weight_stager is not None:
+            norm_ptr = self._weight_stager.final_norm_ptr()
+        else:
+            norm_ptr = self.model.final_norm_ptr
+
         eps_bits = struct.unpack('I', struct.pack('f', self.config.norm_eps))[0]
         _gpu_launch(
             self.kernels.norm_func,
@@ -988,7 +1014,7 @@ class LithosEngine:
             params=[
                 self.act_bufs.input_ptr,
                 self.residual.ptr,
-                self.model.final_norm_ptr,
+                norm_ptr,
                 self.act_bufs.output_ptr,
                 eps_bits,
             ],

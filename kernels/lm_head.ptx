@@ -1,19 +1,18 @@
 // lm_head.ptx -- Dense FP16 matrix-vector multiply for lm_head projection
 //
 // Computes: output[n] = dot(weight[n, :], input[:])
-//   where weight is [vocab_size, hidden_dim] in FP16 row-major
-//   and input is [hidden_dim] in F32
-//
-// weight layout: [vocab_size, hidden_dim] float16 row-major
-// input layout:  [hidden_dim] float32
-// output layout: [vocab_size] float32
+//   where weight is [248320, 5120] in FP16 row-major
+//   and input is [5120] in F32
 //
 // Params: weight_ptr (u64, FP16), input_ptr (u64, F32), output_ptr (u64, F32)
 //
-// Launch: grid=(vocab_size, 1, 1), block=(256, 1, 1)
-// Each block computes one output element via dot product of a weight row
-// against the input vector. 256 threads stride over hidden_dim=5120.
-// Uses warp shuffle reduction then shared memory cross-warp reduction.
+// Launch: grid=(vocab_size/4, 1, 1), block=(256, 1, 1)
+// Each block computes 4 output elements. This reduces total blocks from 248320
+// to 62080, improving occupancy and reducing input refetches.
+// 256 threads stride over hidden_dim=5120. Each thread accumulates 4 partial
+// sums (one per output row). Uses warp shuffle + shared mem reduction.
+//
+// ROWS_PER_BLOCK = 4
 
 .version 8.5
 .target sm_90
@@ -25,135 +24,316 @@
     .param .u64 output_ptr
 )
 {
-    .reg .u64   %rd<20>;
-    .reg .u32   %r<40>;
-    .reg .f32   %f<20>;
+    .reg .u64   %rd<40>;
+    .reg .u32   %r<60>;
+    .reg .f32   %f<40>;
     .reg .pred  %p<10>;
     .reg .b32   %shfl_tmp;
-    .reg .b16   %h_tmp;
+    .reg .b16   %h0, %h1, %h2, %h3;
 
-    .shared .align 4 .f32 warp_sums[8];
+    // Shared memory layout: 4 arrays of 8 warp sums = 32 floats = 128 bytes
+    // Then 5120 floats for input cache = 20480 bytes
+    // Total shared: 20608 bytes
+    .shared .align 4 .f32 smem[5152];
+    // smem[0..31]     = warp_sums for 4 rows (8 warps * 4 rows)
+    // smem[32..5151]  = input cache (5120 floats)
 
     // Load params
     ld.param.u64    %rd0, [weight_ptr];
     ld.param.u64    %rd1, [input_ptr];
     ld.param.u64    %rd2, [output_ptr];
 
-    // n = blockIdx.x (output row index)
+    // base_row = blockIdx.x * 4
     mov.u32         %r0, %ctaid.x;
+    shl.b32         %r0, %r0, 2;         // base_row = blockIdx.x * 4
 
     // tid = threadIdx.x
     mov.u32         %r1, %tid.x;
     // blockDim
     mov.u32         %r2, %ntid.x;
 
-    // hidden_dim = 5120 (baked in)
+    // hidden_dim = 5120
     mov.u32         %r3, 5120;
 
-    // Compute base address for weight row n:
-    // row_offset_bytes = n * 5120 * 2  (FP16 = 2 bytes per element)
-    // = n * 10240
-    mul.lo.u32      %r4, %r0, 10240;
-    cvt.u64.u32     %rd3, %r4;
-    add.u64         %rd4, %rd0, %rd3;    // weight_row_ptr (FP16)
+    // --- Load input vector into shared memory ---
+    // Each thread loads ceil(5120/256) = 20 elements
+    mov.u32         %r51, smem;
+    // input_smem starts at smem + 32*4 = smem + 128 bytes
+    add.u32         %r52, %r51, 128;     // input_smem base
 
-    // Accumulator
-    mov.f32         %f0, 0f00000000;
+    mov.u32         %r5, %r1;            // k = tid
+LOAD_INPUT:
+    setp.ge.u32     %p0, %r5, %r3;
+    @%p0 bra        LOAD_INPUT_DONE;
+
+    // Load input[k] from global
+    shl.b32         %r6, %r5, 2;         // k * 4
+    cvt.u64.u32     %rd3, %r6;
+    add.u64         %rd4, %rd1, %rd3;
+    ld.global.f32   %f10, [%rd4];
+
+    // Store to shared: input_smem[k]
+    add.u32         %r7, %r52, %r6;
+    st.shared.f32   [%r7], %f10;
+
+    add.u32         %r5, %r5, %r2;
+    bra             LOAD_INPUT;
+
+LOAD_INPUT_DONE:
+    bar.sync        0;
+
+    // --- Compute base addresses for 4 weight rows ---
+    // row_bytes = 5120 * 2 = 10240
+    // row0_ptr = weight_ptr + base_row * 10240
+    mul.lo.u32      %r10, %r0, 10240;
+    cvt.u64.u32     %rd5, %r10;
+    add.u64         %rd10, %rd0, %rd5;   // row 0
+
+    // row1 = row0 + 10240
+    add.u64         %rd11, %rd10, 10240; // row 1
+    add.u64         %rd12, %rd11, 10240; // row 2
+    add.u64         %rd13, %rd12, 10240; // row 3
+
+    // Accumulators for 4 rows
+    mov.f32         %f0, 0f00000000;     // acc0
+    mov.f32         %f1, 0f00000000;     // acc1
+    mov.f32         %f2, 0f00000000;     // acc2
+    mov.f32         %f3, 0f00000000;     // acc3
 
     // Loop: k = tid, tid+blockDim, ... < hidden_dim
-    // Each iteration: load weight[n, k] as FP16, convert to F32, load input[k], FMA
-    mov.u32         %r5, %r1;            // k = tid
+    mov.u32         %r5, %r1;
 
 K_LOOP:
-    setp.ge.u32     %p0, %r5, %r3;
-    @%p0 bra        K_DONE;
+    setp.ge.u32     %p1, %r5, %r3;
+    @%p1 bra        K_DONE;
 
-    // Load weight[n, k] -- FP16
-    // addr = weight_row_ptr + k * 2
-    shl.b32         %r6, %r5, 1;         // k * 2
-    cvt.u64.u32     %rd5, %r6;
-    add.u64         %rd6, %rd4, %rd5;
-    ld.global.b16   %h_tmp, [%rd6];
-    cvt.f32.f16     %f1, %h_tmp;
+    // Load input[k] from shared memory
+    shl.b32         %r6, %r5, 2;
+    add.u32         %r7, %r52, %r6;
+    ld.shared.f32   %f10, [%r7];
 
-    // Load input[k] -- F32
-    // addr = input_ptr + k * 4
-    shl.b32         %r7, %r5, 2;         // k * 4
-    cvt.u64.u32     %rd7, %r7;
-    add.u64         %rd8, %rd1, %rd7;
-    ld.global.f32   %f2, [%rd8];
+    // Byte offset for column k in FP16 = k * 2
+    shl.b32         %r8, %r5, 1;
+    cvt.u64.u32     %rd6, %r8;
 
-    // Accumulate: f0 += f1 * f2
-    fma.rn.f32      %f0, %f1, %f2, %f0;
+    // Load weight[row0, k]
+    add.u64         %rd7, %rd10, %rd6;
+    ld.global.b16   %h0, [%rd7];
+    cvt.f32.f16     %f11, %h0;
+    fma.rn.f32      %f0, %f11, %f10, %f0;
+
+    // Load weight[row1, k]
+    add.u64         %rd7, %rd11, %rd6;
+    ld.global.b16   %h1, [%rd7];
+    cvt.f32.f16     %f12, %h1;
+    fma.rn.f32      %f1, %f12, %f10, %f1;
+
+    // Load weight[row2, k]
+    add.u64         %rd7, %rd12, %rd6;
+    ld.global.b16   %h2, [%rd7];
+    cvt.f32.f16     %f13, %h2;
+    fma.rn.f32      %f2, %f13, %f10, %f2;
+
+    // Load weight[row3, k]
+    add.u64         %rd7, %rd13, %rd6;
+    ld.global.b16   %h3, [%rd7];
+    cvt.f32.f16     %f14, %h3;
+    fma.rn.f32      %f3, %f14, %f10, %f3;
 
     // k += blockDim
     add.u32         %r5, %r5, %r2;
     bra             K_LOOP;
 
 K_DONE:
-    // --- Warp shuffle reduction (32 -> 1) ---
+    // --- Warp shuffle reduction for all 4 accumulators ---
+    // Reduce acc0
     mov.b32         %shfl_tmp, %f0;
     shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 16, 31, 0xFFFFFFFF;
-    mov.b32         %f3, %shfl_tmp;
-    add.f32         %f0, %f0, %f3;
-
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f0, %f0, %f20;
     mov.b32         %shfl_tmp, %f0;
     shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 8, 31, 0xFFFFFFFF;
-    mov.b32         %f3, %shfl_tmp;
-    add.f32         %f0, %f0, %f3;
-
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f0, %f0, %f20;
     mov.b32         %shfl_tmp, %f0;
     shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 4, 31, 0xFFFFFFFF;
-    mov.b32         %f3, %shfl_tmp;
-    add.f32         %f0, %f0, %f3;
-
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f0, %f0, %f20;
     mov.b32         %shfl_tmp, %f0;
     shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 2, 31, 0xFFFFFFFF;
-    mov.b32         %f3, %shfl_tmp;
-    add.f32         %f0, %f0, %f3;
-
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f0, %f0, %f20;
     mov.b32         %shfl_tmp, %f0;
     shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 1, 31, 0xFFFFFFFF;
-    mov.b32         %f3, %shfl_tmp;
-    add.f32         %f0, %f0, %f3;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f0, %f0, %f20;
 
-    // --- Lane 0 of each warp stores to shared memory ---
-    shr.b32         %r10, %r1, 5;        // warp_id = tid / 32
-    and.b32         %r11, %r1, 31;       // lane = tid % 32
+    // Reduce acc1
+    mov.b32         %shfl_tmp, %f1;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 16, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f1, %f1, %f20;
+    mov.b32         %shfl_tmp, %f1;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 8, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f1, %f1, %f20;
+    mov.b32         %shfl_tmp, %f1;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 4, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f1, %f1, %f20;
+    mov.b32         %shfl_tmp, %f1;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 2, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f1, %f1, %f20;
+    mov.b32         %shfl_tmp, %f1;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 1, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f1, %f1, %f20;
 
-    setp.eq.u32     %p1, %r11, 0;
-    shl.b32         %r12, %r10, 2;       // warp_id * 4 bytes
-    mov.u32         %r13, warp_sums;
-    add.u32         %r14, %r13, %r12;
-    @%p1 st.shared.f32 [%r14], %f0;
+    // Reduce acc2
+    mov.b32         %shfl_tmp, %f2;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 16, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f2, %f2, %f20;
+    mov.b32         %shfl_tmp, %f2;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 8, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f2, %f2, %f20;
+    mov.b32         %shfl_tmp, %f2;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 4, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f2, %f2, %f20;
+    mov.b32         %shfl_tmp, %f2;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 2, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f2, %f2, %f20;
+    mov.b32         %shfl_tmp, %f2;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 1, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f2, %f2, %f20;
+
+    // Reduce acc3
+    mov.b32         %shfl_tmp, %f3;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 16, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f3, %f3, %f20;
+    mov.b32         %shfl_tmp, %f3;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 8, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f3, %f3, %f20;
+    mov.b32         %shfl_tmp, %f3;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 4, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f3, %f3, %f20;
+    mov.b32         %shfl_tmp, %f3;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 2, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f3, %f3, %f20;
+    mov.b32         %shfl_tmp, %f3;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 1, 31, 0xFFFFFFFF;
+    mov.b32         %f20, %shfl_tmp;
+    add.f32         %f3, %f3, %f20;
+
+    // --- Lane 0 of each warp stores 4 partial sums to shared memory ---
+    shr.b32         %r30, %r1, 5;        // warp_id = tid / 32
+    and.b32         %r31, %r1, 31;       // lane = tid % 32
+
+    setp.eq.u32     %p2, %r31, 0;
+
+    // warp_sums layout: [row][warp] = smem[row * 8 + warp_id]
+    // row 0: offset = warp_id * 4
+    mov.u32         %r50, smem;
+    shl.b32         %r32, %r30, 2;       // warp_id * 4 bytes
+    add.u32         %r33, %r50, %r32;
+    @%p2 st.shared.f32 [%r33], %f0;
+
+    // row 1: offset = 8*4 + warp_id * 4 = 32 + warp_id*4
+    add.u32         %r34, %r33, 32;
+    @%p2 st.shared.f32 [%r34], %f1;
+
+    // row 2: offset = 16*4 + warp_id * 4 = 64 + warp_id*4
+    add.u32         %r35, %r34, 32;
+    @%p2 st.shared.f32 [%r35], %f2;
+
+    // row 3: offset = 24*4 + warp_id * 4 = 96 + warp_id*4
+    add.u32         %r36, %r35, 32;
+    @%p2 st.shared.f32 [%r36], %f3;
 
     bar.sync        0;
 
-    // --- Thread 0 sums across warps and stores result ---
-    setp.ne.u32     %p2, %r1, 0;
-    @%p2 bra        DONE;
+    // --- Thread 0 sums across warps for all 4 rows ---
+    setp.ne.u32     %p3, %r1, 0;
+    @%p3 bra        DONE;
 
-    shr.b32         %r20, %r2, 5;        // num_warps = blockDim / 32
+    shr.b32         %r40, %r2, 5;        // num_warps = blockDim / 32
 
-    mov.f32         %f5, 0f00000000;
-    mov.u32         %r21, 0;
-    mov.u32         %r13, warp_sums;
-WARP_REDUCE:
-    setp.ge.u32     %p3, %r21, %r20;
-    @%p3 bra        WARP_REDUCE_DONE;
-    shl.b32         %r22, %r21, 2;
-    add.u32         %r23, %r13, %r22;
-    ld.shared.f32   %f6, [%r23];
-    add.f32         %f5, %f5, %f6;
-    add.u32         %r21, %r21, 1;
-    bra             WARP_REDUCE;
+    // Sum row 0
+    mov.f32         %f25, 0f00000000;
+    mov.u32         %r41, 0;
+    mov.u32         %r50, smem;
+SUM_R0:
+    setp.ge.u32     %p4, %r41, %r40;
+    @%p4 bra        SUM_R0_DONE;
+    shl.b32         %r42, %r41, 2;
+    add.u32         %r43, %r50, %r42;
+    ld.shared.f32   %f26, [%r43];
+    add.f32         %f25, %f25, %f26;
+    add.u32         %r41, %r41, 1;
+    bra             SUM_R0;
+SUM_R0_DONE:
+    // Store output[base_row + 0]
+    cvt.u64.u32     %rd20, %r0;
+    shl.b64         %rd20, %rd20, 2;
+    add.u64         %rd21, %rd2, %rd20;
+    st.global.f32   [%rd21], %f25;
 
-WARP_REDUCE_DONE:
-    // Store output[n]
-    cvt.u64.u32     %rd10, %r0;
-    shl.b64         %rd10, %rd10, 2;     // n * 4 bytes
-    add.u64         %rd11, %rd2, %rd10;
-    st.global.f32   [%rd11], %f5;
+    // Sum row 1
+    mov.f32         %f25, 0f00000000;
+    mov.u32         %r41, 0;
+SUM_R1:
+    setp.ge.u32     %p4, %r41, %r40;
+    @%p4 bra        SUM_R1_DONE;
+    shl.b32         %r42, %r41, 2;
+    add.u32         %r43, %r50, %r42;
+    add.u32         %r43, %r43, 32;      // row 1 offset
+    ld.shared.f32   %f26, [%r43];
+    add.f32         %f25, %f25, %f26;
+    add.u32         %r41, %r41, 1;
+    bra             SUM_R1;
+SUM_R1_DONE:
+    st.global.f32   [%rd21+4], %f25;
+
+    // Sum row 2
+    mov.f32         %f25, 0f00000000;
+    mov.u32         %r41, 0;
+SUM_R2:
+    setp.ge.u32     %p4, %r41, %r40;
+    @%p4 bra        SUM_R2_DONE;
+    shl.b32         %r42, %r41, 2;
+    add.u32         %r43, %r50, %r42;
+    add.u32         %r43, %r43, 64;      // row 2 offset
+    ld.shared.f32   %f26, [%r43];
+    add.f32         %f25, %f25, %f26;
+    add.u32         %r41, %r41, 1;
+    bra             SUM_R2;
+SUM_R2_DONE:
+    st.global.f32   [%rd21+8], %f25;
+
+    // Sum row 3
+    mov.f32         %f25, 0f00000000;
+    mov.u32         %r41, 0;
+SUM_R3:
+    setp.ge.u32     %p4, %r41, %r40;
+    @%p4 bra        SUM_R3_DONE;
+    shl.b32         %r42, %r41, 2;
+    add.u32         %r43, %r50, %r42;
+    add.u32         %r43, %r43, 96;      // row 3 offset
+    ld.shared.f32   %f26, [%r43];
+    add.f32         %f25, %f25, %f26;
+    add.u32         %r41, %r41, 1;
+    bra             SUM_R3;
+SUM_R3_DONE:
+    st.global.f32   [%rd21+12], %f25;
 
 DONE:
     ret;

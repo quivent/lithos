@@ -117,6 +117,11 @@ class InferenceEngine:
         # Preload all norm weights (BF16 -> F32) -- small, 64 layers * 2 norms * 5120 * 4 = 2.5 MB
         self._preload_norms()
 
+        # KV cache for the 16 full-attention layers
+        self.kv_cache = KVCache(max_seq_len=256)
+        print(f"  KV cache: {self.kv_cache.memory_bytes() / (1024**2):.1f} MiB "
+              f"(max_seq_len=256)")
+
         t1 = time.monotonic()
         print(f"  Init time: {t1-t0:.3f}s")
 
@@ -532,7 +537,8 @@ class InferenceEngine:
                               6144, HIDDEN_DIM)
         self.gpu.synchronize()
 
-    def run_layer(self, layer_idx: int, x: np.ndarray, phase: int) -> np.ndarray:
+    def run_layer(self, layer_idx: int, x: np.ndarray, phase: int,
+                  position: int = 0) -> np.ndarray:
         """Run one transformer layer.
 
         phase 1: MLP only (skip attention)
@@ -540,6 +546,7 @@ class InferenceEngine:
         phase 3: MLP + full attention + DeltaNet (complete)
 
         x: input activation [5120] on CPU
+        position: sequence position for KV cache and RoPE (0-based)
         Returns: output activation [5120] on CPU
         """
         layer_type = self.layer_types[layer_idx]
@@ -553,8 +560,8 @@ class InferenceEngine:
                           self.input_norms[layer_idx], self.d_norm_out)
             gpu.synchronize()
 
-            # --- Full attention ---
-            self.run_full_attention_first_token(layer_idx, self.d_norm_out)
+            # --- Full attention with KV cache ---
+            self.run_full_attention(layer_idx, self.d_norm_out, position)
 
             # Download attention output and add residual
             attn_out = download_f32(gpu, self.d_attn_out, HIDDEN_DIM)
@@ -593,44 +600,69 @@ class InferenceEngine:
         return x
 
     def generate_token(self, prompt: str, phase: int) -> tuple:
-        """Run the full pipeline and return (token_id, token_text, logits)."""
+        """Run the full pipeline and return (token_id, token_text, logits).
+
+        For phase >= 2, processes ALL tokens in the prompt through the KV cache
+        so that the final token's attention can see the full context.
+        """
         token_ids = self.tok.encode(prompt)
-        tid = token_ids[0]
-        word = self.tok.decode([tid])
+        num_tokens = len(token_ids)
 
         phase_names = {1: "MLP-only", 2: "+FullAttn", 3: "+DeltaNet (complete)"}
-        banner(f"Phase {phase}: {phase_names[phase]} -- token='{word}' (id={tid})")
+        token_words = [self.tok.decode([tid]) for tid in token_ids]
+        banner(f"Phase {phase}: {phase_names[phase]} -- "
+               f"{num_tokens} tokens: {list(zip(token_ids, token_words))}")
 
-        # Step 1: Embed
+        # Reset KV cache for this generation
+        self.kv_cache.reset()
+
         t0 = time.monotonic()
-        x = self.gpu_embed(tid)
-        t_embed = time.monotonic() - t0
-        print(f"  Embed: {t_embed*1e3:.2f}ms  x_norm={np.linalg.norm(x):.4f}")
 
-        # Check for NaN/Inf
-        if np.any(np.isnan(x)) or np.any(np.isinf(x)):
-            print("  ERROR: NaN/Inf in embedding!")
-            return -1, "<error>", None
+        # For phase 1 (MLP-only), only process the first token (no attention anyway)
+        # For phase >= 2, process ALL tokens to build up the KV cache
+        tokens_to_process = token_ids if phase >= 2 else [token_ids[0]]
 
-        # Step 2: Run all 64 layers
-        t_layers = time.monotonic()
-        for layer_idx in range(NUM_LAYERS):
-            x = self.run_layer(layer_idx, x, phase)
+        for tok_pos, tid in enumerate(tokens_to_process):
+            t_tok = time.monotonic()
+            word = self.tok.decode([tid])
 
-            # Periodic status
-            if (layer_idx + 1) % 8 == 0 or layer_idx == 0:
-                x_norm = np.linalg.norm(x)
-                has_nan = np.any(np.isnan(x))
-                has_inf = np.any(np.isinf(x))
-                elapsed = time.monotonic() - t_layers
-                print(f"  Layer {layer_idx:2d}: norm={x_norm:.4f} "
-                      f"NaN={has_nan} Inf={has_inf}  [{elapsed:.2f}s elapsed]")
-                if has_nan or has_inf:
-                    print("  ERROR: NaN/Inf detected, aborting!")
-                    return -1, "<error>", None
+            if len(tokens_to_process) > 1:
+                print(f"\n  --- Token {tok_pos}: '{word}' (id={tid}) ---")
+
+            # Step 1: Embed
+            x = self.gpu_embed(tid)
+
+            # Check for NaN/Inf
+            if np.any(np.isnan(x)) or np.any(np.isinf(x)):
+                print("  ERROR: NaN/Inf in embedding!")
+                return -1, "<error>", None
+
+            # Step 2: Run all 64 layers
+            t_layers = time.monotonic()
+            for layer_idx in range(NUM_LAYERS):
+                x = self.run_layer(layer_idx, x, phase, position=tok_pos)
+
+                # Periodic status (only for last token or single-token mode)
+                if tok_pos == len(tokens_to_process) - 1:
+                    if (layer_idx + 1) % 8 == 0 or layer_idx == 0:
+                        x_norm = np.linalg.norm(x)
+                        has_nan = np.any(np.isnan(x))
+                        has_inf = np.any(np.isinf(x))
+                        elapsed = time.monotonic() - t_layers
+                        print(f"  Layer {layer_idx:2d}: norm={x_norm:.4f} "
+                              f"NaN={has_nan} Inf={has_inf}  [{elapsed:.2f}s elapsed]")
+                        if has_nan or has_inf:
+                            print("  ERROR: NaN/Inf detected, aborting!")
+                            return -1, "<error>", None
+
+            t_tok_done = time.monotonic()
+            if len(tokens_to_process) > 1:
+                print(f"  Token {tok_pos} done: {t_tok_done - t_tok:.2f}s, "
+                      f"norm={np.linalg.norm(x):.4f}")
 
         t_layers_done = time.monotonic()
-        print(f"  64 layers: {t_layers_done - t_layers:.2f}s total")
+        print(f"  {len(tokens_to_process)} token(s), 64 layers each: "
+              f"{t_layers_done - t0:.2f}s total")
 
         # Step 3: Final RMSNorm
         x_normed = rms_norm_cpu(x, self.final_norm_w, self.epsilon)

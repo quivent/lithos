@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """
-Lithos inference server — OpenAI-compatible API.
+Lithos inference server — OpenAI-compatible API with REAL inference.
 
-Zero framework dependencies beyond uvicorn. Uses only:
-  - uvicorn (ASGI server)
-  - starlette (minimal ASGI toolkit, installed with uvicorn)
-  - json, time, uuid, asyncio from stdlib
+Uses the InferenceEngine from generate_first_token.py to run Qwen 3.5-27B
+on GH200 via hand-written CUDA kernels (GPTQ W4A16 matvec, RMSNorm,
+SiLU activation, embed).  No PyTorch, no vLLM.
 
-Startup path demonstrates the Lithos advantage: sub-second cold start
-vs. vLLM's 2+ minutes. Weights are mmap'd, cubins are loaded directly
-via the CUDA driver API, and KV cache is pre-allocated in unified memory.
+Each token requires a full forward pass through 64 layers (~seconds per
+token with current unoptimized kernels).  Responses stream via SSE as
+tokens are generated.
 
 Run:
     python3 lithos/src/server.py
-    python3 lithos/src/server.py --model /path/to/model --port 8080
+    python3 lithos/src/server.py --port 8080
 """
 
 import argparse
 import asyncio
 import ctypes
 import json
-import mmap
+import math
 import os
 import sys
 import time
@@ -28,6 +27,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Optional, Union
+
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Starlette imports (ships with uvicorn)
@@ -38,9 +39,23 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 # ---------------------------------------------------------------------------
+# Project imports — real inference engine
+# ---------------------------------------------------------------------------
+SRC_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SRC_DIR))
+
+from generate_first_token import (
+    InferenceEngine,
+    rms_norm_cpu,
+    HIDDEN_DIM,
+    NUM_LAYERS,
+    download_f32,
+)
+
+# ---------------------------------------------------------------------------
 # Project paths
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = SRC_DIR.parent
 KERNEL_DIR = PROJECT_ROOT / "kernels"
 
 # ---------------------------------------------------------------------------
@@ -55,48 +70,8 @@ def _ts() -> str:
 
 
 # ===================================================================
-# Model / engine types
+# Metrics
 # ===================================================================
-
-@dataclass
-class ModelConfig:
-    name: str = "lithos-qwen-27b-w4"
-    hidden_dim: int = 3584
-    num_layers: int = 64
-    num_heads: int = 28
-    num_kv_heads: int = 4
-    head_dim: int = 128
-    intermediate_dim: int = 18944
-    vocab_size: int = 152064
-    max_seq_len: int = 32768
-    quantization: str = "w4a16"
-    weight_bytes: int = 18_300_000_000  # ~18.3 GB (W4)
-
-
-@dataclass
-class CubinHandle:
-    name: str
-    module: ctypes.c_void_p
-    function: ctypes.c_void_p
-    size_bytes: int
-
-
-@dataclass
-class KVCache:
-    """Placeholder for pre-allocated KV cache."""
-    num_layers: int = 64
-    max_batch: int = 24
-    max_seq_len: int = 32768
-    head_dim: int = 128
-    num_kv_heads: int = 4
-    dtype_bytes: int = 2  # FP16
-    allocated_bytes: int = 0
-
-    def compute_size(self) -> int:
-        # 2 (K+V) * layers * batch * seq * heads * dim * dtype
-        return (2 * self.num_layers * self.max_batch * self.max_seq_len
-                * self.num_kv_heads * self.head_dim * self.dtype_bytes)
-
 
 @dataclass
 class Metrics:
@@ -115,247 +90,154 @@ class Metrics:
 
 
 # ===================================================================
-# Engine (mock — replace internals with real Lithos dispatch)
+# Wrapper around InferenceEngine for server use
 # ===================================================================
 
-class LithosEngine:
+class LithosServerEngine:
     """
-    Inference engine.  Currently mocked — every method marks where real
-    CUDA kernel launches would happen.
+    Wraps InferenceEngine from generate_first_token.py to provide
+    tokenize / forward_token / sample methods suitable for serving.
+
+    Each forward_token call runs a single token through all 64 layers
+    (embed -> 64x {attn + MLP} -> final_norm -> lm_head -> logits).
+
+    This is first-token-only inference (no KV cache reuse across
+    positions), so every generated token is an independent forward pass.
+    Slow but real.
     """
 
-    def __init__(self, config: ModelConfig):
-        self.config = config
-        self.cubins: list[CubinHandle] = []
-        self.kv_cache = KVCache(
-            num_layers=config.num_layers,
-            max_seq_len=config.max_seq_len,
-            head_dim=config.head_dim,
-            num_kv_heads=config.num_kv_heads,
-        )
-        self._cuda = None
-        self._context = ctypes.c_void_p()
+    def __init__(self):
+        self.inf = InferenceEngine()
+        self.model_name = "lithos-qwen3.5-27b-gptq-w4a16"
+        # Cache the lm_head weight bytes once (they are large but read-only)
+        print(f"[{_ts()}] Caching lm_head weights...")
+        t0 = time.monotonic()
+        self._lm_head_raw = bytes(self.inf.model.weight_bytes("lm_head.weight"))
+        self._vocab_size = 248320
+        print(f"[{_ts()}] lm_head cached ({len(self._lm_head_raw) / (1<<20):.0f} MB) "
+              f"in {time.monotonic() - t0:.2f}s")
 
-    # ---- startup --------------------------------------------------------
-
-    def load_config(self, model_path: Optional[str] = None) -> None:
-        """Load model config.json (or use compiled-in defaults)."""
-        # TODO: if model_path provided, read config.json from it
-        print(f"[{_ts()}] Loaded config.json  "
-              f"({self.config.num_layers}L, {self.config.hidden_dim}d, "
-              f"{self.config.quantization})")
-
-    def mmap_weights(self, model_path: Optional[str] = None) -> None:
-        """
-        mmap weight files into the unified address space.
-
-        On GH200 this means: open() + mmap() and you're done.
-        The GPU reads these pointers directly via NVLink-C2C coherence.
-        No cudaMalloc, no cudaMemcpy, no staging buffers.
-        """
-        gb = self.config.weight_bytes / (1 << 30)
-        # TODO(real): glob safetensors/bin files, mmap each one
-        #   weight_files = sorted(Path(model_path).glob("*.safetensors"))
-        #   for wf in weight_files:
-        #       fd = os.open(wf, os.O_RDONLY)
-        #       mm = mmap.mmap(fd, 0, access=mmap.ACCESS_READ)
-        #       self._weight_maps.append(mm)
-        print(f"[{_ts()}] mmap'd weight files ({gb:.1f} GB)")
-
-    def load_cubins(self) -> None:
-        """
-        Load pre-compiled cubins via the CUDA driver API.
-
-        Each cubin is a single fused kernel — no framework compilation,
-        no JIT warmup.  7 cubins, ~30 KB total, loads in microseconds.
-        """
-        cubin_files = sorted(KERNEL_DIR.glob("*.cubin"))
-        if not cubin_files:
-            print(f"[{_ts()}] No cubins found in {KERNEL_DIR} "
-                  "(running in mock mode)")
-            return
-
-        # Try loading real cubins via driver API
-        try:
-            cuda = ctypes.CDLL("libcuda.so.1")
-        except OSError:
-            try:
-                cuda = ctypes.CDLL("libcuda.so")
-            except OSError:
-                print(f"[{_ts()}] libcuda.so not available — "
-                      f"mock-loading {len(cubin_files)} cubins")
-                for cf in cubin_files:
-                    self.cubins.append(CubinHandle(
-                        name=cf.stem, module=ctypes.c_void_p(),
-                        function=ctypes.c_void_p(),
-                        size_bytes=cf.stat().st_size,
-                    ))
-                return
-
-        self._cuda = cuda
-        cuda.cuInit(0)
-
-        device = ctypes.c_int()
-        cuda.cuDeviceGet(ctypes.byref(device), 0)
-        cuda.cuCtxCreate_v2(
-            ctypes.byref(self._context), 0, device)
-
-        for cf in cubin_files:
-            module = ctypes.c_void_p()
-            rc = cuda.cuModuleLoad(
-                ctypes.byref(module), str(cf).encode())
-            if rc != 0:
-                print(f"  WARN: cuModuleLoad({cf.name}) error {rc}")
-                continue
-
-            function = ctypes.c_void_p()
-            entry = cf.stem.encode()
-            rc = cuda.cuModuleGetFunction(
-                ctypes.byref(function), module, entry)
-            if rc != 0:
-                print(f"  WARN: cuModuleGetFunction({cf.stem}) error {rc}")
-                cuda.cuModuleUnload(module)
-                continue
-
-            self.cubins.append(CubinHandle(
-                name=cf.stem, module=module, function=function,
-                size_bytes=cf.stat().st_size,
-            ))
-
-        print(f"[{_ts()}] Loaded {len(self.cubins)} cubins")
-
-    def create_cuda_context(self) -> None:
-        """Ensure CUDA context exists (may already be created in load_cubins)."""
-        # Context creation happened in load_cubins if driver was available.
-        print(f"[{_ts()}] CUDA context ready")
-
-    def preallocate_kv_cache(self) -> None:
-        """
-        Pre-allocate KV cache in unified memory.
-
-        On GH200: mmap a large region.  The hardware migrates pages
-        between HBM and LPDDR5X on demand — starts in HBM, spills
-        gracefully over NVLink-C2C when full.
-        """
-        total = self.kv_cache.compute_size()
-        self.kv_cache.allocated_bytes = total
-        gb = total / (1 << 30)
-        # TODO(real): mmap(MAP_ANONYMOUS | MAP_PRIVATE, total)
-        #   or cudaMallocManaged for discrete GPUs
-        print(f"[{_ts()}] Pre-allocated KV cache ({gb:.1f} GB)")
-
-    # ---- inference (mock) -----------------------------------------------
+    @property
+    def tokenizer(self):
+        return self.inf.tok
 
     def tokenize(self, text: str) -> list[int]:
-        """
-        Tokenize input text.
-
-        TODO(real): load tokenizer.json / tokenizer.model from model dir.
-        For now returns deterministic mock token ids.
-        """
-        # Mock: ~1.3 tokens per word, plus some for special tokens
-        words = text.split()
-        return list(range(1, len(words) + 2))
+        """Tokenize text using the real Qwen tokenizer."""
+        return self.inf.tok.encode(text)
 
     def detokenize(self, token_ids: list[int]) -> str:
-        """
-        Convert token ids back to text.
+        """Decode token IDs back to text."""
+        return self.inf.tok.decode(token_ids)
 
-        TODO(real): use the loaded tokenizer.
-        """
-        # Mock vocabulary for demo responses
-        mock_vocab = [
-            "Hello", ",", " I", "'m", " Lith", "os", ",",
-            " a", " fast", " inference", " engine", ".",
-            " How", " can", " I", " help", " you", " today", "?",
-        ]
-        parts = []
-        for tid in token_ids:
-            parts.append(mock_vocab[tid % len(mock_vocab)])
-        return "".join(parts)
+    def apply_chat_template(self, messages: list[dict]) -> str:
+        """Format messages using the model's chat template."""
+        return self.inf.tok.apply_chat_template(
+            messages, add_generation_prompt=True, enable_thinking=False
+        )
 
-    async def prefill(self, token_ids: list[int]) -> list[float]:
+    def forward_token(self, token_id: int) -> np.ndarray:
         """
-        Process prompt tokens (batched matmul through all layers).
+        Run a single token through the full 64-layer pipeline.
 
-        Returns logits for the last position.
+        Returns logits array of shape [vocab_size].
 
-        TODO(real):
-          - For each layer: launch attention_kernel, mlp_kernel
-          - Or: launch single fused forward_pass kernel
-          - Write KV cache entries for all prompt positions
-          - cuLaunchKernel(self.cubins["projection"].function, ...)
+        This is a synchronous, blocking call that takes several seconds
+        due to unoptimized per-layer kernel launches.
         """
-        # Simulate ~1ms per 100 tokens of prefill
-        delay = max(0.001, len(token_ids) * 0.00001)
-        await asyncio.sleep(delay)
-        # Return mock logits
-        return [0.0] * self.config.vocab_size
+        gpu = self.inf.gpu
 
-    async def decode_step(self, prev_token: int, seq_pos: int) -> int:
-        """
-        Generate one token (autoregressive decode).
+        # Step 1: Embed
+        x = self.inf.gpu_embed(token_id)
 
-        TODO(real):
-          - Launch fused decoder layer kernels
-          - Read KV cache for attention
-          - Write new KV entry at seq_pos
-          - Sample from logits on CPU (Grace cores)
-          - cuLaunchKernel for each layer, or one mega-kernel
-        """
-        # Simulate ~2ms per token decode (targeting 400+ tok/s)
-        await asyncio.sleep(0.002)
-        # Return mock token — cycle through a short response
-        mock_response = [0, 1, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
-        return mock_response[seq_pos % len(mock_response)]
+        if np.any(np.isnan(x)) or np.any(np.isinf(x)):
+            raise RuntimeError(f"NaN/Inf in embedding for token {token_id}")
+
+        # Step 2: Run all 64 layers (phase=3 = complete pipeline)
+        for layer_idx in range(NUM_LAYERS):
+            x = self.inf.run_layer(layer_idx, x, phase=3)
+
+            if np.any(np.isnan(x)) or np.any(np.isinf(x)):
+                raise RuntimeError(
+                    f"NaN/Inf at layer {layer_idx} for token {token_id}"
+                )
+
+        # Step 3: Final RMSNorm
+        x_normed = rms_norm_cpu(x, self.inf.final_norm_w, self.inf.epsilon)
+
+        # Step 4: lm_head projection (FP16, 248320 x 5120 matmul on CPU)
+        CHUNK = 8192
+        logits = np.zeros(self._vocab_size, dtype=np.float32)
+        for start in range(0, self._vocab_size, CHUNK):
+            end = min(start + CHUNK, self._vocab_size)
+            chunk_size = end - start
+            offset = start * HIDDEN_DIM * 2  # 2 bytes per fp16
+            chunk_bytes = chunk_size * HIDDEN_DIM * 2
+            w_chunk = np.frombuffer(
+                self._lm_head_raw[offset:offset + chunk_bytes],
+                dtype=np.float16,
+            ).reshape(chunk_size, HIDDEN_DIM).astype(np.float32)
+            logits[start:end] = w_chunk @ x_normed
+
+        return logits
+
+    def sample(self, logits: np.ndarray, temperature: float = 1.0,
+               top_k: int = 50) -> int:
+        """Sample a token from logits with temperature and top-k."""
+        if temperature <= 0 or temperature < 1e-6:
+            # Greedy
+            return int(np.argmax(logits))
+
+        # Temperature scaling
+        scaled = logits / temperature
+
+        # Top-k filtering
+        if top_k > 0 and top_k < len(scaled):
+            top_k_idx = np.argpartition(scaled, -top_k)[-top_k:]
+            mask = np.full_like(scaled, -np.inf)
+            mask[top_k_idx] = scaled[top_k_idx]
+            scaled = mask
+
+        # Softmax
+        shifted = scaled - np.max(scaled)
+        exp_vals = np.exp(shifted)
+        probs = exp_vals / np.sum(exp_vals)
+
+        return int(np.random.choice(len(probs), p=probs))
+
+    def close(self):
+        self.inf.close()
 
 
 # ===================================================================
 # Global state
 # ===================================================================
 
-engine: Optional[LithosEngine] = None
+engine: Optional[LithosServerEngine] = None
 metrics = Metrics()
-_model_path: Optional[str] = None
+_startup_duration: float = 0.0
 
 
 # ===================================================================
 # Startup sequence
 # ===================================================================
 
-def startup_engine(model_path: Optional[str] = None) -> LithosEngine:
+def startup_engine() -> LithosServerEngine:
     """
-    Full startup sequence.  This is where the Lithos advantage shows:
-    sub-second from process start to ready-to-serve.
-
-    vLLM equivalent takes ~120s:
-      - PyTorch import: ~5s
-      - Model class instantiation + weight loading: ~30-60s
-      - CUDA graph capture: ~20-30s
-      - KV cache profiling: ~10-20s
-      - Worker process setup: ~5-10s
-
-    Lithos:
-      - mmap weights: <1ms (no deserialization, no copy)
-      - Load cubins: <1ms (pre-compiled, no JIT)
-      - CUDA context: ~100ms (driver initialization)
-      - KV cache alloc: <1ms (mmap, no cudaMalloc)
+    Full startup sequence: initialize InferenceEngine (loads model weights
+    via mmap, loads cubins via CUDA driver API, allocates GPU buffers,
+    preloads norm weights).
     """
-    global _T0
+    global _T0, _startup_duration
     _T0 = time.monotonic()
 
     print(f"{'='*60}")
-    print(f"  Lithos inference server — starting up")
+    print(f"  Lithos inference server — starting up (REAL inference)")
     print(f"{'='*60}")
 
-    config = ModelConfig()
-    eng = LithosEngine(config)
+    eng = LithosServerEngine()
 
-    eng.load_config(model_path)
-    eng.mmap_weights(model_path)
-    eng.load_cubins()
-    eng.create_cuda_context()
-    eng.preallocate_kv_cache()
+    _startup_duration = time.monotonic() - _T0
+    print(f"[{_ts()}] Startup complete in {_startup_duration:.2f}s")
 
     return eng
 
@@ -366,12 +248,15 @@ def startup_engine(model_path: Optional[str] = None) -> LithosEngine:
 
 async def health(request: Request) -> JSONResponse:
     """GET /health"""
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({
+        "status": "ok",
+        "startup_seconds": round(_startup_duration, 2),
+    })
 
 
 async def list_models(request: Request) -> JSONResponse:
     """GET /v1/models"""
-    model_name = engine.config.name if engine else "lithos-unknown"
+    model_name = engine.model_name if engine else "lithos-unknown"
     return JSONResponse({
         "object": "list",
         "data": [
