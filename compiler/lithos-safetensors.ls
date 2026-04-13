@@ -132,15 +132,15 @@ st_open path :
     sys_close fd
 
     \\ Store globals for later use by st_parse_header / st_find_tensor
-    \\ [HOST] store base -> st_base
-    \\ [HOST] store file_size -> st_file_size
+    \\ [HOST] ← base st_base
+    \\ [HOST] ← file_size st_file_size
 
 \\ ============================================================
 \\ BYTE-LEVEL HELPERS
 \\ ============================================================
 \\ [NOTE: .li host extension needed] Byte load/store operations.
-\\ load_u8  ptr -> byte     (LDRB on ARM64)
-\\ load_u64 ptr -> val      (LDR on ARM64)
+\\ → 8  ptr byte     (LDRB on ARM64)
+\\ → 64 ptr val      (LDR on ARM64)
 \\ These are intrinsics the ARM64 backend must provide.
 
 \\ Read a little-endian u64 from a byte pointer
@@ -456,7 +456,7 @@ st_parse_header base file_size :
     data_base = json_end    \\ raw tensor data starts here
 
     \\ Store data_base globally for st_find_tensor
-    \\ [HOST] store data_base -> st_data_base
+    \\ [HOST] ← data_base st_data_base
 
     \\ Initialize tensor count
     count = 0
