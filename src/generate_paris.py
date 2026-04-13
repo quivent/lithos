@@ -400,11 +400,6 @@ class PrefillEngine:
 
         # Apply output gate: attn_output = attn_output * sigmoid(gate)
         gate_sigmoid = 1.0 / (1.0 + np.exp(-gate_flat.clip(-80, 80)))
-        if position == 4:  # last token debug
-            gated = attended * gate_sigmoid
-            print(f"    L{layer_idx} attn_norm={np.linalg.norm(attended):.2f} "
-                  f"gated_norm={np.linalg.norm(gated):.2f} "
-                  f"gate_mean={gate_sigmoid.mean():.4f}")
         attended = attended * gate_sigmoid  # [6144] element-wise
 
         # O projection: 6144 -> 5120

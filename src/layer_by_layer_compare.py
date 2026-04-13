@@ -379,12 +379,18 @@ class ReferenceModel:
     def run_full_attention(self, layer_idx: int, normed: np.ndarray, position: int) -> np.ndarray:
         prefix = f"model.language_model.layers.{layer_idx}.self_attn"
 
-        q_raw = self.matvec(f"{prefix}.q_proj", normed)
+        # Q projection: 5120 -> 12288 (24 heads * 512: Q + gate interleaved)
+        q_gate_raw = self.matvec(f"{prefix}.q_proj", normed)
         k_raw = self.matvec(f"{prefix}.k_proj", normed)
         v_raw = self.matvec(f"{prefix}.v_proj", normed)
 
+        # Split Q and gate
+        q_gate_heads = q_gate_raw.reshape(NUM_Q_HEADS, HEAD_DIM * 2)  # [24, 512]
+        q_heads = q_gate_heads[:, :HEAD_DIM].copy()    # [24, 256]
+        gate_heads = q_gate_heads[:, HEAD_DIM:].copy()  # [24, 256]
+        gate_flat = gate_heads.flatten()  # [6144]
+
         # QK RMSNorm
-        q_heads = q_raw.reshape(NUM_Q_HEADS, HEAD_DIM)
         k_heads = k_raw.reshape(NUM_KV_HEADS, HEAD_DIM)
         q_norm_w = self.q_norm_weights[layer_idx]
         k_norm_w = self.k_norm_weights[layer_idx]
@@ -407,6 +413,10 @@ class ReferenceModel:
 
         # Attention
         attended = attention_prefill(q_rope, k_cache, v_cache, position)
+
+        # Output gate: attn_output = attn_output * sigmoid(gate)
+        gate_sigmoid = 1.0 / (1.0 + np.exp(-gate_flat.clip(-80, 80)))
+        attended = attended * gate_sigmoid
 
         # O projection
         return self.matvec(f"{prefix}.o_proj", attended)
@@ -903,17 +913,17 @@ def compare_layer_ops(lithos: LithosEngine, ref: ReferenceModel,
     elif layer_type == "full_attention":
         prefix = f"model.language_model.layers.{layer_idx}.self_attn"
 
-        # Q projection
+        # Q+gate projection (12288 output)
         ref_q = ref.matvec(f"{prefix}.q_proj", ref_normed)
         lithos.gpu_gptq_matvec(f"{prefix}.q_proj",
                                 lithos.d_norm_out, lithos.d_attn_scratch1,
-                                HIDDEN_DIM, 6144)
+                                HIDDEN_DIM, 12288)
         gpu.synchronize()
-        lithos_q = download_f32(gpu, lithos.d_attn_scratch1, 6144)
+        lithos_q = download_f32(gpu, lithos.d_attn_scratch1, 12288)
 
         cs_q = cosine_similarity(lithos_q, ref_q)
         mad_q = max_abs_diff(lithos_q, ref_q)
-        print(f"    Q projection:     cos={cs_q:.8f}  max_diff={mad_q:.6e}")
+        print(f"    Q+gate proj:      cos={cs_q:.8f}  max_diff={mad_q:.6e}")
 
         # K projection
         ref_k = ref.matvec(f"{prefix}.k_proj", ref_normed)
@@ -928,7 +938,7 @@ def compare_layer_ops(lithos: LithosEngine, ref: ReferenceModel,
         print(f"    K projection:     cos={cs_k:.8f}  max_diff={mad_k:.6e}")
 
         if cs_q < 0.999:
-            print(f"    ** GPTQ dequant mismatch in Q projection **")
+            print(f"    ** GPTQ dequant mismatch in Q+gate projection **")
             print(f"       Lithos Q[:8] = {lithos_q[:8]}")
             print(f"       Ref   Q[:8] = {ref_q[:8]}")
 
