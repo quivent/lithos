@@ -122,8 +122,9 @@ def main():
             shutil.copy2(src_path, dst_path)
             print(f"  Copied {fname}")
 
-    # Update index file to note transposition
+    # Update index file (sharded) or single-file metadata to note transposition
     idx_path = os.path.join(dst_dir, 'model.safetensors.index.json')
+    single_path = os.path.join(dst_dir, 'model.safetensors')
     if os.path.exists(idx_path):
         with open(idx_path) as f:
             idx = json.load(f)
@@ -134,6 +135,19 @@ def main():
         with open(idx_path, 'w') as f:
             json.dump(idx, f, indent=2)
         print("  Updated index metadata with layout info")
+    elif os.path.exists(single_path):
+        # For single-file models, inject metadata via safetensors metadata field.
+        # Re-save with updated __metadata__ so the loader can detect the layout.
+        from safetensors import safe_open
+        from safetensors.torch import save_file
+        tensors = {}
+        with safe_open(single_path, framework='pt') as f:
+            for k in f.keys():
+                tensors[k] = f.get_tensor(k)
+        save_file(tensors, single_path,
+                  metadata={"qweight_layout": "transposed_NK",
+                             "original_layout": "KN_row_major"})
+        print("  Updated single-file __metadata__ with layout info")
 
     print(f"\nTransposed model saved to: {dst_dir}")
 

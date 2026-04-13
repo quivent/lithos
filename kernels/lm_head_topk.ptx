@@ -1,0 +1,52 @@
+// lm_head_topk.ptx -- Top-128 index selection from 248320 approximate logits
+//
+// Stage 2 of 3-stage INT8 ranking pipeline.
+//
+// Input:  approx_logits[248320] F32
+// Output: top128_indices[128]   U32
+//         top128_values[128]    F32  (for debug/tie-break)
+//
+// Strategy: block-level segmented partial sort
+//   Launch: grid=(1, 1, 1), block=(256, 1, 1)
+//   Each thread scans 248320/256 = 970 tokens, maintaining a local heap of 128
+//   (register array min-heap, 128 slots).
+//   After K_SCAN, 256 threads each hold 128 candidates → 256*128 = 32768 candidates.
+//   Cross-thread merge in shared memory: 2-way merge tree, 7 rounds → 128 final.
+//
+//   Smem: 256 * 128 * 8 bytes = 262144 bytes  (too large for single block)
+//   Revised: block=(1024,1,1), each thread holds 8 candidates instead:
+//     1024 threads × 8 = 8192 candidates; global heap merge in 3 rounds → 128.
+//
+// Revised launch (fits 48KB smem):
+//   grid=(248320/1024, 1, 1) = 242 blocks of 1024 threads
+//   Each block: scans 1024 tokens (1 per thread), outputs block's top-8 → 242*8=1936 per-block candidates
+//   Second pass (single block, 256 threads): merge 1936 → 128
+//
+// This file documents the first-pass block kernel only.
+// Second pass is an identical structure with 1936 inputs → 128 outputs.
+//
+// Kernel signature:
+//   lm_head_topk_pass1(logits_ptr u64, block_vals_ptr u64, block_idx_ptr u64, n_vocab u32)
+//
+// NOTE: This is the design skeleton. Full PTX expansion follows the same
+// warp-reduce + shared-memory merge pattern as lm_head_int8.ptx.
+// The core register structure for a thread-local top-K heap:
+//
+//   .reg .f32 heap_v<8>;   // min-heap values (8 candidates per thread)
+//   .reg .u32 heap_i<8>;   // corresponding global indices
+//   // Heap invariant: heap_v0 is the minimum (eviction candidate)
+//
+// For each input token t in [tid, n_vocab, blockDim]:
+//   ld.global.f32 %cur_val, [logits + t*4]
+//   if cur_val > heap_v0:
+//     replace heap_v0,heap_i0 with cur_val,t
+//     sift-down to restore min-heap property
+//
+// After scan: warp-level merge of 32 heaps of 8 → 1 heap of 8 via shuffle
+// Then block-level merge of 32 warp-heaps → final 8 per block stored to GMEM.
+//
+// Pass 2 kernel (lm_head_topk_pass2) takes 242*8=1936 candidates, runs
+// single block of 256 threads scanning 1936/256 ≈ 8 candidates each, merges
+// to 128 final indices via same heap + warp-reduce pattern.
+//
+// dance vector: [heap-scan×1024] → [warp-merge] → [block-merge] → [pass2-merge] → top128

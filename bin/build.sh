@@ -19,3 +19,6 @@ chmod +x bin/lithos-launch
 echo '[lithos] Built: bin/lithos-launch'
 echo '[lithos] Size:' $(stat -c %s bin/lithos-launch) 'bytes'
 echo '[lithos] Usage: bin/lithos-launch <model_dir> <kernel_dir> [max_tokens]'
+echo ''
+echo '[lithos] Before first run, generate weight index:'
+echo '  python3 bin/gen_weight_index.py <model_dir>'

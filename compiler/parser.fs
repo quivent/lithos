@@ -125,6 +125,8 @@ create k-slash    1 allot   s" /"     k-slash  swap move
 
 create k-for      3 allot   s" for"     k-for    swap move
 create k-endfor   6 allot   s" endfor"  k-endfor swap move
+create k-stride    6 allot   s" stride"    k-stride    swap move
+create k-endstride 9 allot   s" endstride" k-endstride swap move
 create k-shr      3 allot   s" shr"     k-shr    swap move
 create k-shl      3 allot   s" shl"     k-shl    swap move
 create k-and      3 allot   s" and"     k-and    swap move
@@ -376,6 +378,78 @@ variable idx-reg   3 idx-reg !
     dup sym-kind@ 3 = if drop 3 exit then
     sym-reg@ ;
 
+\ ---- resolve-idx-expr: parse computed index expression inside [ ] -------------
+\ Handles three forms:
+\   simple:      var              -> resolve-idx -> rreg
+\   mul-add:     var * iconst + var  -> mad.lo.u32 %rN, rA, iconst, rB  -> rreg
+\   add-only:    var + var           -> add.u32 %rN, rA, rB             -> rreg
+\ Consumes tokens up to but not including the closing "]".
+\ After return the caller must consume "]".
+
+variable rie-pos0
+variable rie-rA
+variable rie-rB
+variable rie-rC
+variable rie-imm
+variable rie-result
+
+: resolve-sym-rreg ( addr u -- rreg )
+    \ resolve a single token that must be a u32/each symbol; return r-reg number
+    sym-find dup -1 = if drop 3 exit then
+    dup sym-kind@ 3 = if drop 3 exit then
+    sym-reg@ ;
+
+: resolve-idx-expr ( -- rreg )
+    \ Peek at the token stream, decide form, emit PTX, return result rreg.
+    src-pos @ rie-pos0 !
+
+    \ Token A
+    src-token                          \ ( addr u )
+    2dup resolve-sym-rreg rie-rA !     \ save A's register
+    \ save A string for possible backtrack (already consumed)
+
+    \ Peek for operator
+    src-pos @ >r  src-token  r> swap >r src-pos !  r>  \ peek next
+    \ ( peek-addr peek-u )
+
+    2dup k-star 1 li-tok= if
+        \ Form: A * imm + B  ->  mad.lo.u32 rResult, rA, imm, rB
+        2drop
+        src-token                          \ imm token
+        2dup is-number? if
+            parse-uint rie-imm !
+        else
+            \ fallback: treat as 1
+            2drop 1 rie-imm !
+        then
+        \ expect "+"
+        src-token 2drop                    \ consume "+"
+        \ token B
+        src-token resolve-sym-rreg rie-rB !
+        \ emit mad.lo.u32 rResult, rA, imm, rB
+        rreg+ rie-result !
+        ptx-indent s" mad.lo.u32 " ptx+  rie-result @ ptx-r32
+        s" , " ptx+  rie-rA @ ptx-r32
+        s" , " ptx+  rie-imm @ ptx-num ptx+
+        s" , " ptx+  rie-rB @ ptx-r32
+        s" ;" ptx+ ptx-nl
+        rie-result @
+    else 2dup k-plus 1 li-tok= if
+        \ Form: A + B  ->  add.u32 rResult, rA, rB
+        2drop
+        src-token resolve-sym-rreg rie-rB !
+        rreg+ rie-result !
+        ptx-indent s" add.u32 " ptx+  rie-result @ ptx-r32
+        s" , " ptx+  rie-rA @ ptx-r32
+        s" , " ptx+  rie-rB @ ptx-r32
+        s" ;" ptx+ ptx-nl
+        rie-result @
+    else
+        \ Simple: just A
+        2drop
+        rie-rA @
+    then then ;
+
 : emit-iload-r  ( param-rd idx-rreg -- freg )
     freg+ -rot
     ptx-indent s" mul.wide.u32 %rd22, " ptx+  ptx-r32  s" , 4;" ptx+ ptx-nl
@@ -544,7 +618,7 @@ variable pa-saved-pos
     then
     2dup k-lbrack 1 li-tok= if
         2drop
-        src-token resolve-idx    \ look up index var -> rreg
+        resolve-idx-expr         \ parse simple var or A*C+B expr -> rreg
         src-token 2drop          \ consume "]"
         swap sym-reg@ swap       \ ( param-rd idx-rreg )
         emit-iload-r             \ emit load with correct index register
@@ -625,6 +699,7 @@ variable pe-result-freg
 \ Scratch storage for for-loop args
 variable for-counter-reg
 variable for-start-val
+variable for-start-is-reg   \ -1 if start is a register, 0 if literal
 variable for-bound-val
 variable for-bound-is-reg
 variable for-step-val
@@ -642,9 +717,13 @@ variable for-label-num
 
     \ Parse start
     src-token 2dup is-number? if
-        parse-uint for-start-val !
+        parse-uint for-start-val ! 0 for-start-is-reg !
     else
-        sym-find dup -1 <> if sym-reg@ else drop 0 then for-start-val !
+        2dup sym-find dup -1 <> if
+            nip nip sym-reg@ for-start-val ! -1 for-start-is-reg !
+        else
+            drop 2drop 0 for-start-val ! 0 for-start-is-reg !
+        then
     then
 
     \ Parse bound
@@ -679,7 +758,12 @@ variable for-label-num
     \ Emit: mov counter, start
     ptx-indent s" mov.u32 " ptx+
     for-counter-reg @ ptx-r32 s" , " ptx+
-    for-start-val @ ptx-num ptx+ s" ;" ptx+ ptx-nl
+    for-start-is-reg @ if
+        for-start-val @ ptx-r32
+    else
+        for-start-val @ ptx-num ptx+
+    then
+    s" ;" ptx+ ptx-nl
 
     \ Emit loop label
     s" $L_for_" ptx+ for-label-num @ ptx-num ptx+ s" :" ptx+ ptx-nl
@@ -720,6 +804,93 @@ variable for-label-num
 
     \ Emit: $L_endfor_X:
     s" $L_endfor_" ptx+ for-depth @ cells for-labels + @ ptx-num ptx+ s" :" ptx+ ptx-nl
+    ptx-nl ;
+
+\ ==============================================================================
+\ FEATURE: STRIDE LOOP
+\ Syntax: stride I BOUND ... endstride
+\ Semantics: i = tid.x; while i < bound: body; i += blockDim.x
+\ ==============================================================================
+
+variable stride-counter-reg
+variable stride-bound-val
+variable stride-bound-is-reg
+variable stride-label-num
+
+: emit-stride ( -- )
+    \ Parse loop variable name
+    src-token
+    2dup sym-find dup -1 = if
+        drop rreg+ dup stride-counter-reg !
+        4 swap sym-add drop
+    else
+        nip nip sym-reg@ stride-counter-reg !
+    then
+
+    \ Parse bound (register or literal)
+    src-token 2dup sym-find dup -1 <> if
+        nip nip sym-reg@ stride-bound-val ! -1 stride-bound-is-reg !
+    else
+        drop
+        2dup is-number? if
+            parse-uint stride-bound-val ! 0 stride-bound-is-reg !
+        else
+            2drop 0 stride-bound-val ! 0 stride-bound-is-reg !
+        then
+    then
+
+    \ Allocate label
+    label+ stride-label-num !
+
+    \ Push to for-stack (reuse for-stack for nesting)
+    for-depth @ MAX-FOR < if
+        stride-label-num @ for-depth @ cells for-labels + !
+        stride-counter-reg @ for-depth @ cells for-counters + !
+        1 for-depth +!
+    then
+
+    \ Emit: mov.u32 %rN, %r2   (i = tid.x)
+    ptx-indent s" mov.u32 " ptx+
+    stride-counter-reg @ ptx-r32 s" , %r2;" ptx+ ptx-nl
+
+    \ Emit loop label
+    s" $L_stride_" ptx+ stride-label-num @ ptx-num ptx+ s" :" ptx+ ptx-nl
+
+    \ Emit: setp.ge.u32 %pM, %rN, <bound>
+    preg+ >r
+    ptx-indent s" setp.ge.u32 " ptx+ r@ ptx-preg s" , " ptx+
+    stride-counter-reg @ ptx-r32 s" , " ptx+
+    stride-bound-is-reg @ if
+        stride-bound-val @ ptx-r32
+    else
+        stride-bound-val @ ptx-num ptx+
+    then
+    s" ;" ptx+ ptx-nl
+
+    \ Emit: @%pM bra $L_endstride_X
+    ptx-indent s" @" ptx+ r> ptx-preg s"  bra $L_endstride_" ptx+
+    stride-label-num @ ptx-num ptx+ s" ;" ptx+ ptx-nl
+    ptx-nl ;
+
+: emit-endstride ( -- )
+    for-depth @ 0= if exit then
+    -1 for-depth +!
+
+    \ Get loop info
+    for-depth @ cells for-labels + @ >r
+    for-depth @ cells for-counters + @ >r
+
+    \ Emit: add.u32 %rN, %rN, %r1   (i += blockDim.x)
+    ptx-indent s" add.u32 " ptx+
+    r@ ptx-r32 s" , " ptx+
+    r@ ptx-r32 s" , %r1;" ptx+ ptx-nl
+
+    \ Emit: bra $L_stride_X
+    ptx-indent s" bra $L_stride_" ptx+
+    r> drop r> ptx-num ptx+ s" ;" ptx+ ptx-nl
+
+    \ Emit: $L_endstride_X:
+    s" $L_endstride_" ptx+ for-depth @ cells for-labels + @ ptx-num ptx+ s" :" ptx+ ptx-nl
     ptx-nl ;
 
 \ ==============================================================================
@@ -1487,6 +1658,8 @@ variable stmt-matched   \ -1 if a keyword matched
     then
     2dup k-endfor 6 li-tok= if 2drop emit-endfor -1 -1 stmt-matched ! exit then
     2dup k-for 3 li-tok= if 2drop emit-for-v2 -1 -1 stmt-matched ! exit then
+    2dup k-endstride 9 li-tok= if 2drop emit-endstride -1 -1 stmt-matched ! exit then
+    2dup k-stride 6 li-tok= if 2drop emit-stride -1 -1 stmt-matched ! exit then
     2dup k-shr 3 li-tok= if 2drop emit-shr -1 -1 stmt-matched ! exit then
     2dup k-shl 3 li-tok= if 2drop emit-shl -1 -1 stmt-matched ! exit then
     2dup k-and 3 li-tok= if 2drop emit-and -1 -1 stmt-matched ! exit then
@@ -1590,7 +1763,7 @@ variable ps-saved-pos
     src-token dup 0= if 2drop ps-saved-pos @ src-pos ! drop -1 exit then
     2dup k-lbrack 1 li-tok= if
         2drop                       ( sym-idx )
-        src-token resolve-idx       \ look up index var -> rreg
+        resolve-idx-expr            \ parse simple var or A*C+B expr -> rreg
         src-token 2drop             \ consume "]"
         src-token 2drop             \ consume "="
         swap                        ( idx-rreg sym-idx )
@@ -1677,6 +1850,8 @@ variable pfb-saved-pos
     2dup k-u32f32 7 li-tok= if 2drop -1 exit then
     2dup k-s32f32 7 li-tok= if 2drop -1 exit then
     2dup k-endfor 6 li-tok= if 2drop -1 exit then
+    2dup k-stride    6 li-tok= if 2drop -1 exit then
+    2dup k-endstride 9 li-tok= if 2drop -1 exit then
     2dup k-ldg    8 li-tok= if 2drop -1 exit then
     2dup k-stg    8 li-tok= if 2drop -1 exit then
     2dup k-lds    9 li-tok= if 2drop -1 exit then

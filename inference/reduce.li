@@ -47,7 +47,7 @@ fn rmsnorm x weight -> y
     warp_id = tid >> 5
     if== lane_id 0
         smem_reduce [ warp_id ] = partial_ss
-    bar.sync 0
+    barrier
 
     \ First warp reads all partial sums and reduces
     if< tid 32
@@ -72,7 +72,7 @@ fn rmsnorm x weight -> y
             mean_ss = mean_ss + eps
             rsqrt rms_inv mean_ss
             smem_reduce [ 0 ] = rms_inv
-    bar.sync 0
+    barrier
 
     \ All threads load the broadcast rms_inv
     rms_inv = smem_reduce [ 0 ]
@@ -114,7 +114,7 @@ fn rmsnorm_residual x residual weight -> y
     warp_id = tid >> 5
     if== lane_id 0
         smem_reduce [ warp_id ] = partial_ss
-    bar.sync 0
+    barrier
 
     if< tid 32
         num_warps = blockDim >> 5
@@ -137,7 +137,7 @@ fn rmsnorm_residual x residual weight -> y
             mean_ss = mean_ss + eps
             rsqrt rms_inv mean_ss
             smem_reduce [ 0 ] = rms_inv
-    bar.sync 0
+    barrier
 
     rms_inv = smem_reduce [ 0 ]
 
@@ -177,7 +177,7 @@ fn l2norm x -> y
     warp_id = tid >> 5
     if== lane_id 0
         smem_reduce [ warp_id ] = partial_ss
-    bar.sync 0
+    barrier
 
     if< tid 32
         num_warps = blockDim >> 5
@@ -198,7 +198,7 @@ fn l2norm x -> y
         if== tid 0
             rsqrt rscale total
             smem_reduce [ 0 ] = rscale
-    bar.sync 0
+    barrier
 
     rscale = smem_reduce [ 0 ]
 

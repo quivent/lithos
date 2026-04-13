@@ -152,6 +152,11 @@ class LithosModel:
 
     Supports both single-file models (model.safetensors) and sharded models
     (model.safetensors.index.json + model-NNNNN.safetensors).
+
+    The ``qweight_transposed`` property is True when qweight tensors are stored
+    in the coalesced [N, K/8] layout produced by
+    ``kernels/transpose_gptq_weights.py``.  Callers should route to
+    ``gptq_gemv_transposed`` when this flag is set.
     """
 
     def __init__(self, model_dir: str):
@@ -160,6 +165,7 @@ class LithosModel:
         self._fds: Dict[str, int] = {}                    # shard_path -> fd
         self._weights: Dict[str, TensorInfo] = {}         # tensor_name -> TensorInfo
         self.config: ModelConfig = ModelConfig()
+        self.qweight_transposed: bool = False             # True iff layout is [N, K/8]
 
         self._load_config()
         self._load_weights()
@@ -394,6 +400,11 @@ class LithosModel:
         with open(index_path) as f:
             index = json.load(f)
 
+        # Detect transposed qweight layout written by transpose_gptq_weights.py
+        metadata = index.get("metadata", {})
+        if metadata.get("qweight_layout") == "transposed_NK":
+            self.qweight_transposed = True
+
         weight_map: Dict[str, str] = index["weight_map"]
 
         # Collect unique shard files
@@ -419,6 +430,11 @@ class LithosModel:
         shard_path = str(path)
         self._mmap_shard(shard_path)
         header = self._parse_shard_header(shard_path)
+
+        # Detect transposed qweight layout stored in safetensors __metadata__
+        meta = header.get("__metadata__", {})
+        if isinstance(meta, dict) and meta.get("qweight_layout") == "transposed_NK":
+            self.qweight_transposed = True
 
         for tensor_name in header:
             if tensor_name == "__metadata__":

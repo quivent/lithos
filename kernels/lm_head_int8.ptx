@@ -1,0 +1,303 @@
+// lm_head_int8.ptx -- INT8 weight ranking GEMV for lm_head
+//
+// Stage 1 of 3-stage INT8 ranking pipeline:
+//   INT8 weight load → INT8→FP16→FP32 convert → FMA accumulate → approx logits
+//
+// Computes: approx_logit[n] = dot(weight_i8[n,:], input[:])
+//   weight_i8: [248320, 5120] INT8 row-major (248320*5120 bytes = 1.19 GB vs 2.38 GB FP16)
+//   input:     [5120] FP32
+//   scale:     [248320] FP32 per-row dequant scale  (w_fp16 = int8 * scale[n])
+//   output:    [248320] FP32 approximate logits
+//
+// Launch: grid=(248320/8, 1, 1), block=(128, 1, 1), shared_mem=20544
+// 8 output rows per block (INT8 is half the bandwidth so we can double row count).
+// Each thread: 5120/128 = 40 elements, 40 INT8 loads per row.
+// Vectorized: ld.global.v4.b8 = 4 INT8 per load → 10 iters per row.
+//
+// Smem layout: [0..31] warp_sums[8 rows * 4 warps] F32
+//              [32..5151] input[5120] F32
+
+.version 8.5
+.target sm_90
+.address_size 64
+
+.visible .entry lm_head_int8(
+    .param .u64 weight_ptr,   // INT8 [248320, 5120]
+    .param .u64 input_ptr,    // F32  [5120]
+    .param .u64 scale_ptr,    // F32  [248320] per-row dequant
+    .param .u64 output_ptr    // F32  [248320]
+)
+{
+    .reg .u64   %rd<30>;
+    .reg .u32   %r<60>;
+    .reg .f32   %f<30>;
+    .reg .pred  %p<10>;
+    .reg .b32   %shfl_tmp;
+    .reg .s8    %s8a, %s8b, %s8c, %s8d;
+
+    // smem[0..127] bytes = warp sums (8 rows * 4 warps * 4 bytes)
+    // smem[128..20607] bytes = input floats (5120 * 4 bytes)
+    .shared .align 4 .f32 smem[5140];
+
+    ld.param.u64    %rd0, [weight_ptr];
+    ld.param.u64    %rd1, [input_ptr];
+    ld.param.u64    %rd2, [scale_ptr];
+    ld.param.u64    %rd3, [output_ptr];
+
+    // base_row = blockIdx.x * 8
+    mov.u32         %r0, %ctaid.x;
+    shl.b32         %r0, %r0, 3;
+
+    mov.u32         %r1, %tid.x;
+    mov.u32         %r2, 128;
+    mov.u32         %r3, 5120;
+
+    // Load input into smem[32..5151]
+    mov.u32         %r40, smem;
+    add.u32         %r41, %r40, 128;        // input base = smem + 32*4
+
+    mov.u32         %r5, %r1;
+LOAD_INPUT:
+    setp.ge.u32     %p0, %r5, %r3;
+    @%p0 bra        LOAD_DONE;
+    shl.b32         %r6, %r5, 2;
+    cvt.u64.u32     %rd4, %r6;
+    add.u64         %rd5, %rd1, %rd4;
+    ld.global.f32   %f10, [%rd5];
+    add.u32         %r7, %r41, %r6;
+    st.shared.f32   [%r7], %f10;
+    add.u32         %r5, %r5, %r2;
+    bra             LOAD_INPUT;
+LOAD_DONE:
+    bar.sync        0;
+
+    // Compute weight row base pointers (INT8: 5120 bytes per row)
+    // rd10..rd17 = rows 0..7
+    mul.lo.u32      %r10, %r0, 5120;
+    cvt.u64.u32     %rd10, %r10;
+    add.u64         %rd10, %rd0, %rd10;
+    add.u64         %rd11, %rd10, 5120;
+    add.u64         %rd12, %rd11, 5120;
+    add.u64         %rd13, %rd12, 5120;
+    add.u64         %rd14, %rd13, 5120;
+    add.u64         %rd15, %rd14, 5120;
+    add.u64         %rd16, %rd15, 5120;
+    add.u64         %rd17, %rd16, 5120;
+
+    // 8 accumulators f0..f7
+    mov.f32         %f0,  0f00000000;
+    mov.f32         %f1,  0f00000000;
+    mov.f32         %f2,  0f00000000;
+    mov.f32         %f3,  0f00000000;
+    mov.f32         %f4,  0f00000000;
+    mov.f32         %f5,  0f00000000;
+    mov.f32         %f6,  0f00000000;
+    mov.f32         %f7,  0f00000000;
+
+    // Each thread: k = tid * 4, stride = 512; processes 40 INT8 elements
+    shl.b32         %r5, %r1, 2;
+    mov.u32         %r8, 512;
+
+K_LOOP:
+    setp.ge.u32     %p1, %r5, %r3;
+    @%p1 bra        K_DONE;
+
+    // Load 4 input floats from smem
+    shl.b32         %r6, %r5, 2;
+    add.u32         %r7, %r41, %r6;
+    ld.shared.v4.f32 {%f10, %f11, %f12, %f13}, [%r7];
+
+    // INT8 byte offset = k * 1
+    cvt.u64.u32     %rd6, %r5;
+
+    // Macro: load 4 INT8, convert to FP32, FMA into accumulator
+    // Row 0
+    add.u64         %rd7, %rd10, %rd6;
+    ld.global.v4.s8 {%s8a, %s8b, %s8c, %s8d}, [%rd7];
+    cvt.rn.f32.s8   %f20, %s8a;  fma.rn.f32 %f0, %f20, %f10, %f0;
+    cvt.rn.f32.s8   %f20, %s8b;  fma.rn.f32 %f0, %f20, %f11, %f0;
+    cvt.rn.f32.s8   %f20, %s8c;  fma.rn.f32 %f0, %f20, %f12, %f0;
+    cvt.rn.f32.s8   %f20, %s8d;  fma.rn.f32 %f0, %f20, %f13, %f0;
+
+    // Row 1
+    add.u64         %rd7, %rd11, %rd6;
+    ld.global.v4.s8 {%s8a, %s8b, %s8c, %s8d}, [%rd7];
+    cvt.rn.f32.s8   %f20, %s8a;  fma.rn.f32 %f1, %f20, %f10, %f1;
+    cvt.rn.f32.s8   %f20, %s8b;  fma.rn.f32 %f1, %f20, %f11, %f1;
+    cvt.rn.f32.s8   %f20, %s8c;  fma.rn.f32 %f1, %f20, %f12, %f1;
+    cvt.rn.f32.s8   %f20, %s8d;  fma.rn.f32 %f1, %f20, %f13, %f1;
+
+    // Row 2
+    add.u64         %rd7, %rd12, %rd6;
+    ld.global.v4.s8 {%s8a, %s8b, %s8c, %s8d}, [%rd7];
+    cvt.rn.f32.s8   %f20, %s8a;  fma.rn.f32 %f2, %f20, %f10, %f2;
+    cvt.rn.f32.s8   %f20, %s8b;  fma.rn.f32 %f2, %f20, %f11, %f2;
+    cvt.rn.f32.s8   %f20, %s8c;  fma.rn.f32 %f2, %f20, %f12, %f2;
+    cvt.rn.f32.s8   %f20, %s8d;  fma.rn.f32 %f2, %f20, %f13, %f2;
+
+    // Row 3
+    add.u64         %rd7, %rd13, %rd6;
+    ld.global.v4.s8 {%s8a, %s8b, %s8c, %s8d}, [%rd7];
+    cvt.rn.f32.s8   %f20, %s8a;  fma.rn.f32 %f3, %f20, %f10, %f3;
+    cvt.rn.f32.s8   %f20, %s8b;  fma.rn.f32 %f3, %f20, %f11, %f3;
+    cvt.rn.f32.s8   %f20, %s8c;  fma.rn.f32 %f3, %f20, %f12, %f3;
+    cvt.rn.f32.s8   %f20, %s8d;  fma.rn.f32 %f3, %f20, %f13, %f3;
+
+    // Row 4
+    add.u64         %rd7, %rd14, %rd6;
+    ld.global.v4.s8 {%s8a, %s8b, %s8c, %s8d}, [%rd7];
+    cvt.rn.f32.s8   %f20, %s8a;  fma.rn.f32 %f4, %f20, %f10, %f4;
+    cvt.rn.f32.s8   %f20, %s8b;  fma.rn.f32 %f4, %f20, %f11, %f4;
+    cvt.rn.f32.s8   %f20, %s8c;  fma.rn.f32 %f4, %f20, %f12, %f4;
+    cvt.rn.f32.s8   %f20, %s8d;  fma.rn.f32 %f4, %f20, %f13, %f4;
+
+    // Row 5
+    add.u64         %rd7, %rd15, %rd6;
+    ld.global.v4.s8 {%s8a, %s8b, %s8c, %s8d}, [%rd7];
+    cvt.rn.f32.s8   %f20, %s8a;  fma.rn.f32 %f5, %f20, %f10, %f5;
+    cvt.rn.f32.s8   %f20, %s8b;  fma.rn.f32 %f5, %f20, %f11, %f5;
+    cvt.rn.f32.s8   %f20, %s8c;  fma.rn.f32 %f5, %f20, %f12, %f5;
+    cvt.rn.f32.s8   %f20, %s8d;  fma.rn.f32 %f5, %f20, %f13, %f5;
+
+    // Row 6
+    add.u64         %rd7, %rd16, %rd6;
+    ld.global.v4.s8 {%s8a, %s8b, %s8c, %s8d}, [%rd7];
+    cvt.rn.f32.s8   %f20, %s8a;  fma.rn.f32 %f6, %f20, %f10, %f6;
+    cvt.rn.f32.s8   %f20, %s8b;  fma.rn.f32 %f6, %f20, %f11, %f6;
+    cvt.rn.f32.s8   %f20, %s8c;  fma.rn.f32 %f6, %f20, %f12, %f6;
+    cvt.rn.f32.s8   %f20, %s8d;  fma.rn.f32 %f6, %f20, %f13, %f6;
+
+    // Row 7
+    add.u64         %rd7, %rd17, %rd6;
+    ld.global.v4.s8 {%s8a, %s8b, %s8c, %s8d}, [%rd7];
+    cvt.rn.f32.s8   %f20, %s8a;  fma.rn.f32 %f7, %f20, %f10, %f7;
+    cvt.rn.f32.s8   %f20, %s8b;  fma.rn.f32 %f7, %f20, %f11, %f7;
+    cvt.rn.f32.s8   %f20, %s8c;  fma.rn.f32 %f7, %f20, %f12, %f7;
+    cvt.rn.f32.s8   %f20, %s8d;  fma.rn.f32 %f7, %f20, %f13, %f7;
+
+    add.u32         %r5, %r5, %r8;
+    bra             K_LOOP;
+
+K_DONE:
+    // Warp shuffle reduction -- macro for each of 8 accumulators
+    // (inline for rows 0..7)
+    .macro WARP_REDUCE acc
+    mov.b32 %shfl_tmp, acc;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 16, 31, 0xFFFFFFFF;
+    mov.b32 %f20, %shfl_tmp; add.f32 acc, acc, %f20;
+    mov.b32 %shfl_tmp, acc;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 8, 31, 0xFFFFFFFF;
+    mov.b32 %f20, %shfl_tmp; add.f32 acc, acc, %f20;
+    mov.b32 %shfl_tmp, acc;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 4, 31, 0xFFFFFFFF;
+    mov.b32 %f20, %shfl_tmp; add.f32 acc, acc, %f20;
+    mov.b32 %shfl_tmp, acc;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 2, 31, 0xFFFFFFFF;
+    mov.b32 %f20, %shfl_tmp; add.f32 acc, acc, %f20;
+    mov.b32 %shfl_tmp, acc;
+    shfl.sync.down.b32 %shfl_tmp, %shfl_tmp, 1, 31, 0xFFFFFFFF;
+    mov.b32 %f20, %shfl_tmp; add.f32 acc, acc, %f20;
+    .endmacro
+
+    // PTX doesn't support macros natively; expand inline:
+    // Row 0
+    mov.b32 %shfl_tmp, %f0; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp,16,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f0,%f0,%f20;
+    mov.b32 %shfl_tmp, %f0; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 8,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f0,%f0,%f20;
+    mov.b32 %shfl_tmp, %f0; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 4,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f0,%f0,%f20;
+    mov.b32 %shfl_tmp, %f0; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 2,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f0,%f0,%f20;
+    mov.b32 %shfl_tmp, %f0; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 1,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f0,%f0,%f20;
+    // Row 1
+    mov.b32 %shfl_tmp, %f1; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp,16,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f1,%f1,%f20;
+    mov.b32 %shfl_tmp, %f1; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 8,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f1,%f1,%f20;
+    mov.b32 %shfl_tmp, %f1; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 4,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f1,%f1,%f20;
+    mov.b32 %shfl_tmp, %f1; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 2,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f1,%f1,%f20;
+    mov.b32 %shfl_tmp, %f1; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 1,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f1,%f1,%f20;
+    // Row 2
+    mov.b32 %shfl_tmp, %f2; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp,16,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f2,%f2,%f20;
+    mov.b32 %shfl_tmp, %f2; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 8,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f2,%f2,%f20;
+    mov.b32 %shfl_tmp, %f2; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 4,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f2,%f2,%f20;
+    mov.b32 %shfl_tmp, %f2; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 2,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f2,%f2,%f20;
+    mov.b32 %shfl_tmp, %f2; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 1,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f2,%f2,%f20;
+    // Row 3
+    mov.b32 %shfl_tmp, %f3; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp,16,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f3,%f3,%f20;
+    mov.b32 %shfl_tmp, %f3; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 8,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f3,%f3,%f20;
+    mov.b32 %shfl_tmp, %f3; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 4,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f3,%f3,%f20;
+    mov.b32 %shfl_tmp, %f3; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 2,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f3,%f3,%f20;
+    mov.b32 %shfl_tmp, %f3; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 1,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f3,%f3,%f20;
+    // Row 4
+    mov.b32 %shfl_tmp, %f4; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp,16,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f4,%f4,%f20;
+    mov.b32 %shfl_tmp, %f4; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 8,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f4,%f4,%f20;
+    mov.b32 %shfl_tmp, %f4; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 4,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f4,%f4,%f20;
+    mov.b32 %shfl_tmp, %f4; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 2,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f4,%f4,%f20;
+    mov.b32 %shfl_tmp, %f4; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 1,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f4,%f4,%f20;
+    // Row 5
+    mov.b32 %shfl_tmp, %f5; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp,16,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f5,%f5,%f20;
+    mov.b32 %shfl_tmp, %f5; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 8,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f5,%f5,%f20;
+    mov.b32 %shfl_tmp, %f5; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 4,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f5,%f5,%f20;
+    mov.b32 %shfl_tmp, %f5; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 2,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f5,%f5,%f20;
+    mov.b32 %shfl_tmp, %f5; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 1,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f5,%f5,%f20;
+    // Row 6
+    mov.b32 %shfl_tmp, %f6; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp,16,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f6,%f6,%f20;
+    mov.b32 %shfl_tmp, %f6; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 8,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f6,%f6,%f20;
+    mov.b32 %shfl_tmp, %f6; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 4,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f6,%f6,%f20;
+    mov.b32 %shfl_tmp, %f6; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 2,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f6,%f6,%f20;
+    mov.b32 %shfl_tmp, %f6; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 1,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f6,%f6,%f20;
+    // Row 7
+    mov.b32 %shfl_tmp, %f7; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp,16,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f7,%f7,%f20;
+    mov.b32 %shfl_tmp, %f7; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 8,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f7,%f7,%f20;
+    mov.b32 %shfl_tmp, %f7; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 4,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f7,%f7,%f20;
+    mov.b32 %shfl_tmp, %f7; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 2,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f7,%f7,%f20;
+    mov.b32 %shfl_tmp, %f7; shfl.sync.down.b32 %shfl_tmp,%shfl_tmp, 1,31,0xFFFFFFFF; mov.b32 %f20,%shfl_tmp; add.f32 %f7,%f7,%f20;
+
+    // Lane 0 of each warp stores 8 sums to smem[0..127]
+    shr.b32         %r30, %r1, 5;           // warp_id
+    and.b32         %r31, %r1, 31;          // lane
+    setp.eq.u32     %p2, %r31, 0;
+
+    mov.u32         %r40, smem;
+    shl.b32         %r32, %r30, 2;          // warp_id * 4 bytes
+
+    // 8 rows × 4 warps = offsets row_r*16 + warp_id*4
+    // Row 0: base=smem[0]  Row 1: base=smem[4] ... Row 7: base=smem[28]
+    add.u32 %r33, %r40, %r32;
+    @%p2 st.shared.f32 [%r33+0],   %f0;
+    @%p2 st.shared.f32 [%r33+16],  %f1;
+    @%p2 st.shared.f32 [%r33+32],  %f2;
+    @%p2 st.shared.f32 [%r33+48],  %f3;
+    @%p2 st.shared.f32 [%r33+64],  %f4;
+    @%p2 st.shared.f32 [%r33+80],  %f5;
+    @%p2 st.shared.f32 [%r33+96],  %f6;
+    @%p2 st.shared.f32 [%r33+112], %f7;
+
+    bar.sync        0;
+
+    // Threads 0-7 each finalize one row, apply per-row scale, write output
+    setp.ge.u32     %p3, %r1, 8;
+    @%p3 bra        DONE;
+
+    // smem offset for row %r1: smem + r1 * 4 warps * 4 bytes = smem + r1 * 16
+    shl.b32         %r42, %r1, 4;
+    mov.u32         %r50, smem;
+    add.u32         %r43, %r50, %r42;
+
+    ld.shared.f32   %f25, [%r43+0];
+    ld.shared.f32   %f26, [%r43+4];  add.f32 %f25, %f25, %f26;
+    ld.shared.f32   %f26, [%r43+8];  add.f32 %f25, %f25, %f26;
+    ld.shared.f32   %f26, [%r43+12]; add.f32 %f25, %f25, %f26;
+
+    // Load per-row scale and multiply: approx_logit = sum * scale[row]
+    add.u32         %r47, %r0, %r1;         // abs_row = base_row + r1
+    cvt.u64.u32     %rd20, %r47;
+    shl.b64         %rd21, %rd20, 2;
+    add.u64         %rd22, %rd2, %rd21;
+    ld.global.f32   %f27, [%rd22];
+    mul.f32         %f25, %f25, %f27;       // dequantize
+
+    // Store approx logit
+    add.u64         %rd23, %rd3, %rd21;
+    st.global.f32   [%rd23], %f25;
+
+DONE:
+    ret;
+}
+// dance vector: [load→convert→fma→reduce→scale→store] ×8 rows ×248320/8 blocks

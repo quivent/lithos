@@ -8,9 +8,8 @@
 \ Each thread handles one channel:
 \   output = sum(weights[ch*4+j] * history[ch*4+j]) for j=0..3
 \   then shift: history[ch*4+0..2] = history[ch*4+1..3], history[ch*4+3] = input
-\ NOTE: The for-loop + offset pattern below requires the hand-written PTX
-\ (recur.ptx conv1d_infer) because the compiler cannot yet emit mad.lo.u32
-\ for computed array offsets like (i*4+j). The .li documents the algorithm.
+\ NOTE: Compiler now emits mad.lo.u32 for A*imm+B index expressions.
+\ The hand-written PTX fallback in recur.ptx is no longer required.
 fn conv1d_infer input history weights -> output
     param N u32
     each i

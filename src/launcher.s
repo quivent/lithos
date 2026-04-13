@@ -185,13 +185,14 @@ msg_done:     .asciz "\nlithos: done\n"
 msg_done_len = . - msg_done - 1
 msg_exit:     .asciz "lithos: exiting now\n"
 msg_exit_len = . - msg_exit - 1
-msg_us:       .asciz "us total\n"
-msg_us_len = . - msg_us - 1
-msg_toks:     .asciz "lithos: tokens generated: "
+msg_toks:     .asciz "lithos: "
 msg_toks_len = . - msg_toks - 1
+msg_toks2:    .asciz " tokens in "
+msg_toks2_len = . - msg_toks2 - 1
+msg_us:       .asciz "us = "
+msg_us_len = . - msg_us - 1
 msg_speed:    .asciz " tok/s\n"
-msg_perf0:    .asciz "lithos: dispatch overhead per token: "
-msg_perf0_len = . - msg_perf0 - 1
+msg_speed_len = . - msg_speed - 1
 
 msg_weights:  .asciz "lithos: loading model weights...\n"
 msg_weights_len = . - msg_weights - 1
@@ -295,6 +296,31 @@ dn_state_ptr:  .quad 0
 act_selector:  .quad 0       // 0 = A is input, 1 = B is input
 z_buf:         .quad 0       // output gate projection buffer (value_dim=6144 * 4 = 24576 bytes)
 conv1d_state:  .quad 0       // conv1d shift register state (all layers)
+
+// ---- Projection/norm state counters (reset per layer) ----
+proj_state:    .quad 0       // which projection within the layer (0..6)
+norm_state:    .quad 0       // which norm within the layer (0..1)
+
+// ---- DeltaNet/FA layer counters (reset per token, increment per matching layer) ----
+dn_layer_counter:  .quad 0   // counts DeltaNet layers (layer_idx % 4 != 3)
+fa_layer_counter:  .quad 0   // counts full-attention layers (layer_idx % 4 == 3)
+
+// ---- Per-layer call counters (reset per layer) ----
+conv1d_call_counter: .quad 0  // which conv1d call within the layer (0=Q, 1=K, 2=V)
+l2norm_call_counter: .quad 0  // which l2norm call within the layer (0=K, 1=Q)
+
+// ---- RoPE cos/sin precomputed tables ----
+rope_cos_table: .quad 0      // pointer to precomputed cos table
+rope_sin_table: .quad 0      // pointer to precomputed sin table
+
+// ---- MLP scratch buffers ----
+mlp_gate_buf:  .quad 0       // gate projection output (INTERMEDIATE_DIM * 4 bytes)
+mlp_up_buf:    .quad 0       // up projection output (INTERMEDIATE_DIM * 4 bytes)
+
+// ---- Logits buffer ----
+// VOCAB_SIZE * sizeof(f32) = 248320 * 4 = 993280 bytes (~970KB)
+.equ LOGITS_BUF_SIZE, 993280
+logits_buf:    .quad 0
 
 // Timing
 .align 3
@@ -495,45 +521,52 @@ _start:
     add     x7, x7, x0
 .no_borrow:
 
-    // Print timing: "lithos: N tokens in X.XXXs (dispatch only)\n"
-    adrp    x1, msg_done
-    add     x1, x1, :lo12:msg_done
-    mov     x2, msg_done_len
-    bl      print_msg
-
-    // Print: "lithos: dispatch time: "
-    adrp    x1, msg_perf0
-    add     x1, x1, :lo12:msg_perf0
-    mov     x2, msg_perf0_len
-    bl      print_msg
-
-    // Print elapsed microseconds
-    // usec = sec * 1000000 + nsec / 1000
+    // Compute total_usec = sec * 1000000 + nsec / 1000
     movz    x0, #0x000F, lsl #16    // 0x000F4240 = 1000000
     movk    x0, #0x4240
-    mul     x0, x6, x0             // sec * 1M
-    mov     x1, #1000
-    udiv    x7, x7, x1             // nsec / 1000
-    add     x0, x0, x7             // total usec
-    bl      print_int
+    mul     x6, x6, x0             // sec * 1M
+    mov     x0, #1000
+    udiv    x7, x7, x0             // nsec / 1000
+    add     x6, x6, x7             // x6 = total_usec
 
-    // Print "us\n"
-    adrp    x1, msg_us
-    add     x1, x1, :lo12:msg_us
-    mov     x2, msg_us_len
-    bl      print_msg
+    // Load num_tokens
+    adrp    x0, num_tokens_generated
+    add     x0, x0, :lo12:num_tokens_generated
+    ldr     x7, [x0]               // x7 = num_tokens
 
-    // ---- Print tokens generated ----
+    // Print "lithos: N tokens in Xus = Y tok/s"
     adrp    x1, msg_toks
     add     x1, x1, :lo12:msg_toks
     mov     x2, msg_toks_len
     bl      print_msg
 
-    adrp    x0, num_tokens_generated
-    add     x0, x0, :lo12:num_tokens_generated
-    ldr     x0, [x0]
+    mov     x0, x7
     bl      print_int
-    bl      print_newline
+
+    adrp    x1, msg_toks2
+    add     x1, x1, :lo12:msg_toks2
+    mov     x2, msg_toks2_len
+    bl      print_msg
+
+    mov     x0, x6
+    bl      print_int
+
+    adrp    x1, msg_us
+    add     x1, x1, :lo12:msg_us
+    mov     x2, msg_us_len
+    bl      print_msg
+
+    // Compute tok/s = num_tokens * 1000000 / total_usec
+    movz    x0, #0x000F, lsl #16    // 1000000
+    movk    x0, #0x4240
+    mul     x0, x7, x0             // tokens * 1M
+    udiv    x0, x0, x6             // / total_usec
+    bl      print_int
+
+    adrp    x1, msg_speed
+    add     x1, x1, :lo12:msg_speed
+    mov     x2, msg_speed_len
+    bl      print_msg
 
     // ---- Exit immediately ----
     mov     x0, #0
@@ -571,6 +604,14 @@ decode_one_token:
     mov     x29, sp
     stp     x19, x20, [sp, #-16]!
     stp     x21, x22, [sp, #-16]!  // x22 = layer type flag (survives bl calls)
+
+    // Reset per-token layer counters
+    adrp    x0, dn_layer_counter
+    add     x0, x0, :lo12:dn_layer_counter
+    str     xzr, [x0]
+    adrp    x0, fa_layer_counter
+    add     x0, x0, :lo12:fa_layer_counter
+    str     xzr, [x0]
 
     // Load buffer pointers
     adrp    x20, act_buf_a
@@ -645,6 +686,20 @@ decode_one_token:
     cmp     x19, #NUM_LAYERS
     b.ge    .layers_done
 
+    // ---- Reset per-layer state counters ----
+    adrp    x0, proj_state
+    add     x0, x0, :lo12:proj_state
+    str     xzr, [x0]
+    adrp    x0, norm_state
+    add     x0, x0, :lo12:norm_state
+    str     xzr, [x0]
+    adrp    x0, conv1d_call_counter
+    add     x0, x0, :lo12:conv1d_call_counter
+    str     xzr, [x0]
+    adrp    x0, l2norm_call_counter
+    add     x0, x0, :lo12:l2norm_call_counter
+    str     xzr, [x0]
+
     // ---- Set up weight pointer base for this layer ----
     // x23 = &weight_ptrs[layer_idx * WEIGHT_SLOTS_PER_LAYER]
     adrp    x23, weight_ptrs
@@ -662,6 +717,8 @@ decode_one_token:
 
     // ---- Pre-attention RMSNorm ----
     bl      launch_norm
+
+    // (debug sync removed)
 
     // ---- QKV projection (3 launches) ----
     bl      launch_proj              // Q
@@ -689,6 +746,12 @@ decode_one_token:
     // Post-attention RMSNorm on gated output, THEN output projection
     bl      launch_norm              // steps 35-40: RMSNorm on gated output
     bl      launch_proj              // step 41: output projection
+    // Increment DN layer counter
+    adrp    x0, dn_layer_counter
+    add     x0, x0, :lo12:dn_layer_counter
+    ldr     x1, [x0]
+    add     x1, x1, #1
+    str     x1, [x0]
     b       .post_proj
 
 .do_full_attention:
@@ -698,6 +761,12 @@ decode_one_token:
     // Full attention: output projection, then residual norm
     bl      launch_proj              // output projection
     bl      launch_norm              // residual add + norm
+    // Increment FA layer counter
+    adrp    x0, fa_layer_counter
+    add     x0, x0, :lo12:fa_layer_counter
+    ldr     x1, [x0]
+    add     x1, x1, #1
+    str     x1, [x0]
 
 .post_proj:
 
@@ -730,20 +799,80 @@ decode_one_token:
     b       .layer_loop
 
 .layers_done:
-    // ---- Final RMSNorm ----
-    bl      launch_norm
+    // ---- Final RMSNorm (uses global_weight_ptrs[GLOBAL_FINALNORM]) ----
+    bl      launch_final_norm
 
-    // ---- LM head projection ----
-    bl      launch_proj
+    // ---- LM head projection (uses global_weight_ptrs[GLOBAL_LMHEAD]) ----
+    // Output: logits_buf (VOCAB_SIZE=248320 floats)
+    bl      launch_lm_head
 
-    // ---- Synchronize ----
-    // cuCtxSynchronize removed from hot loop.
-    // In production: sync only when reading logits for sampling.
-    // The stream implicitly serializes kernel launches.
+    // ---- Synchronize to read logits on CPU ----
+    bl      cuCtxSynchronize
 
-    // ---- Sample (CPU argmax for now) ----
-    // In the real version, we'd launch a sample kernel or do CPU argmax
-    // For now, just advance the token counter
+    // ---- DEBUG: check cuCtxSync return and first logit value ----
+    cbnz    x0, .sync_err
+    b       .sync_ok
+.sync_err:
+    // Print sync error
+    stp     x19, x20, [sp, #-16]!
+    mov     x19, x0
+    adrp    x1, msg_err
+    add     x1, x1, :lo12:msg_err
+    mov     x2, msg_err_len
+    bl      print_msg
+    mov     x0, x19
+    bl      print_int
+    bl      print_newline
+    ldp     x19, x20, [sp], #16
+.sync_ok:
+
+    // ---- CPU argmax over logits ----
+    adrp    x0, logits_buf
+    add     x0, x0, :lo12:logits_buf
+    ldr     x0, [x0]               // x0 = logits base pointer
+    movz    x1, #0x0003, lsl #16   // 0x3C980 = 248320
+    movk    x1, #0xC980            // x1 = VOCAB_SIZE
+
+    // Simple argmax: scan all floats, track max
+    ldr     w2, [x0]               // w2 = max_val (as f32 bits)
+    mov     x3, #0                 // x3 = max_idx
+    mov     x4, #1                 // x4 = current idx
+
+.argmax_loop:
+    cmp     x4, x1
+    b.ge    .argmax_done
+    ldr     w5, [x0, x4, lsl #2]  // w5 = logits[idx]
+    // Float compare: use fmov to FP regs
+    fmov    s0, w2                 // s0 = current max
+    fmov    s1, w5                 // s1 = candidate
+    fcmp    s1, s0
+    b.le    .argmax_next
+    mov     w2, w5                 // new max
+    mov     x3, x4                 // new max_idx
+.argmax_next:
+    add     x4, x4, #1
+    b       .argmax_loop
+
+.argmax_done:
+    // x3 = argmax token ID
+    // Store as last_token for next iteration's embed
+    adrp    x0, last_token
+    add     x0, x0, :lo12:last_token
+    str     w3, [x0]
+
+    // Print token ID (so we can verify output)
+    mov     x0, x3
+    bl      print_int
+    // Print space separator
+    sub     sp, sp, #16
+    mov     w0, #' '
+    strb    w0, [sp]
+    mov     x0, #1
+    mov     x1, sp
+    mov     x2, #1
+    mov     x8, #SYS_WRITE
+    svc     #0
+    add     sp, sp, #16
 
     ldp     x21, x22, [sp], #16
     ldp     x19, x20, [sp], #16
@@ -753,6 +882,17 @@ decode_one_token:
 // ============================================================
 // launch_norm -- launch RMSNorm kernel
 // ============================================================
+// Uses norm_state counter to select which norm weight to load:
+//   norm_state=0: input_layernorm (WS_INPUT_NORM)
+//   norm_state=1: post_attention_layernorm (WS_POST_NORM, or WS_DN_NORM for DeltaNet)
+//
+// Kernel signature: norm(input, residual, weight, output, hidden_dim, epsilon)
+//   param[0]: .u64 input_ptr   -- current activation buffer
+//   param[1]: .u64 residual_ptr -- residual_buf
+//   param[2]: .u64 weight_ptr  -- norm weight from weight table
+//   param[3]: .u64 output_ptr  -- other activation buffer
+//   param[4]: .u32 hidden_dim  -- HIDDEN_DIM=5120
+//   param[5]: .f32 epsilon     -- 1e-6 = 0x358637BD
 .align 4
 launch_norm:
     stp     x29, x30, [sp, #-16]!
@@ -763,8 +903,93 @@ launch_norm:
     ldr     x0, [x0, #KF_NORM]
     cbz     x0, .norm_skip
 
-    // For the hot path, we skip full param setup and just do the call.
-    // In production, params would be wired up per-layer.
+    // ---- Read and increment norm_state ----
+    adrp    x9, norm_state
+    add     x9, x9, :lo12:norm_state
+    ldr     x10, [x9]
+    add     x11, x10, #1
+    str     x11, [x9]
+    // x10 = current norm_state (0 or 1)
+
+    // ---- Select norm weight pointer ----
+    // norm_state=0: WS_INPUT_NORM (slot 24)
+    // norm_state=1: WS_POST_NORM (slot 25) for FA, WS_DN_NORM (slot 14) for DN
+    cbnz    x10, .norm_post
+    // norm_state=0: input_layernorm
+    ldr     x11, [x23, #(WS_INPUT_NORM * 8)]
+    b       .norm_weight_ready
+.norm_post:
+    // norm_state=1: post_attention_layernorm
+    // x22 == 0 means full-attention, nonzero means DeltaNet
+    cbz     x22, .norm_post_fa
+    // DeltaNet: use WS_DN_NORM (slot 14)
+    ldr     x11, [x23, #(WS_DN_NORM * 8)]
+    b       .norm_weight_ready
+.norm_post_fa:
+    // Full attention: use WS_POST_NORM (slot 25)
+    ldr     x11, [x23, #(WS_POST_NORM * 8)]
+.norm_weight_ready:
+    // x11 = norm weight pointer
+
+    // ---- Build launch_params ----
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = input_ptr (current activation buffer)
+    // x27=0 -> act_buf_a is input; x27=1 -> act_buf_b is input
+    cbz     x27, .norm_input_a
+    str     x21, [x1, #0]           // act_buf_b
+    b       .norm_input_done
+.norm_input_a:
+    str     x20, [x1, #0]           // act_buf_a
+.norm_input_done:
+
+    // param[1] = residual_ptr
+    adrp    x9, residual_buf
+    add     x9, x9, :lo12:residual_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #8]
+
+    // param[2] = weight_ptr
+    str     x11, [x1, #16]
+
+    // param[3] = output_ptr (other activation buffer)
+    cbz     x27, .norm_output_b
+    str     x20, [x1, #24]          // output to act_buf_a
+    b       .norm_output_done
+.norm_output_b:
+    str     x21, [x1, #24]          // output to act_buf_b
+.norm_output_done:
+
+    // param[4] = hidden_dim (u32)
+    movz    w9, #(HIDDEN_DIM & 0xFFFF)
+    movk    w9, #(HIDDEN_DIM >> 16), lsl #16
+    str     w9, [x1, #32]
+
+    // param[5] = epsilon = 1e-6 as f32 = 0x358637BD
+    movz    w9, #0x37BD
+    movk    w9, #0x3586, lsl #16
+    str     w9, [x1, #36]
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]            // &param[0]
+    add     x3, x1, #8
+    str     x3, [x2, #8]            // &param[1]
+    add     x3, x1, #16
+    str     x3, [x2, #16]           // &param[2]
+    add     x3, x1, #24
+    str     x3, [x2, #24]           // &param[3]
+    add     x3, x1, #32
+    str     x3, [x2, #32]           // &param[4]
+    add     x3, x1, #36
+    str     x3, [x2, #40]           // &param[5]
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_NORM]
     mov     x1, #1                  // gridX
     mov     x2, #1                  // gridY
     mov     x3, #1                  // gridZ
@@ -790,17 +1015,297 @@ launch_norm:
 // ============================================================
 // launch_proj -- launch projection (GEMV/GEMM) kernel
 // ============================================================
+// Uses proj_state counter to determine which weight slots and dimensions.
+//
+// DeltaNet layer sequence:
+//   proj_state=0: QKV combined (DN_QKV slots, N=10240, K=5120)
+//   proj_state=1: output proj  (DN_OUT slots, N=5120, K=6144)
+//   proj_state=2: gate proj    (GATE slots, N=17408, K=5120)
+//   proj_state=3: up proj      (UP slots, N=17408, K=5120)
+//   proj_state=4: down proj    (DOWN slots, N=5120, K=17408)
+//
+// Full-attention layer sequence:
+//   proj_state=0: Q proj (FA_Q slots, N=6144, K=5120)
+//   proj_state=1: K proj (FA_K slots, N=1024, K=5120)
+//   proj_state=2: V proj (FA_V slots, N=1024, K=5120)
+//   proj_state=3: O proj (FA_O slots, N=5120, K=6144)
+//   proj_state=4: gate proj (GATE slots, N=17408, K=5120)
+//   proj_state=5: up proj (UP slots, N=17408, K=5120)
+//   proj_state=6: down proj (DOWN slots, N=5120, K=17408)
+//
+// Kernel: gptq_gemv_safe(qweight, scales, input, output, N, K, K_SPLITS, k_packed_per_split)
+//   param[0]: .u64 qweight_ptr
+//   param[1]: .u64 scales_ptr
+//   param[2]: .u64 input_ptr
+//   param[3]: .u64 output_ptr
+//   param[4]: .u32 param_N (output cols)
+//   param[5]: .u32 param_K (input rows)
+//   param[6]: .u32 param_K_SPLITS (1 for all projections)
+//   param[7]: .u32 param_k_packed_per_split (K / 8 for 4-bit packing)
 .align 4
 launch_proj:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x19, x20, [sp, #-16]!  // save outer x19/x20 on our own frame
 
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
     ldr     x0, [x0, #KF_PROJ]
     cbz     x0, .proj_skip
 
-    mov     x1, #28                 // gridX = ceil(hidden_dim / 128)
+    // ---- Read and increment proj_state ----
+    adrp    x9, proj_state
+    add     x9, x9, :lo12:proj_state
+    ldr     x10, [x9]               // x10 = current proj_state
+    add     x11, x10, #1
+    str     x11, [x9]
+
+    // ---- Determine weight slots, N, K based on layer type and proj_state ----
+    // x22 == 0 means full-attention, nonzero means DeltaNet
+    // We'll set: x11=qweight_ptr, x12=scales_ptr, x13=N, x14=K
+    // Input and output pointers are computed separately.
+
+    cbz     x22, .proj_fa_dispatch
+
+    // ---- DeltaNet dispatch ----
+    cmp     x10, #0
+    b.eq    .proj_dn_qkv
+    cmp     x10, #1
+    b.eq    .proj_dn_out
+    cmp     x10, #2
+    b.eq    .proj_gate
+    cmp     x10, #3
+    b.eq    .proj_up
+    b       .proj_down
+
+.proj_dn_qkv:
+    // QKV combined: N=10240, K=5120
+    ldr     x11, [x23, #(WS_DN_QKV_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_DN_QKV_SCALES * 8)]
+    ldr     x15, [x23, #(WS_DN_QKV_QZEROS * 8)]
+    movz    x13, #10240              // N = 10240
+    movz    x14, #5120               // K = 5120
+    b       .proj_slots_ready
+
+.proj_dn_out:
+    // Output proj: N=5120, K=6144
+    ldr     x11, [x23, #(WS_DN_OUT_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_DN_OUT_SCALES * 8)]
+    ldr     x15, [x23, #(WS_DN_OUT_QZEROS * 8)]
+    movz    x13, #5120               // N = 5120
+    movz    x14, #6144               // K = 6144
+    b       .proj_slots_ready
+
+.proj_fa_dispatch:
+    // ---- Full-attention dispatch ----
+    cmp     x10, #0
+    b.eq    .proj_fa_q
+    cmp     x10, #1
+    b.eq    .proj_fa_k
+    cmp     x10, #2
+    b.eq    .proj_fa_v
+    cmp     x10, #3
+    b.eq    .proj_fa_o
+    cmp     x10, #4
+    b.eq    .proj_gate
+    cmp     x10, #5
+    b.eq    .proj_up
+    b       .proj_down
+
+.proj_fa_q:
+    // Q proj: N=6144, K=5120
+    ldr     x11, [x23, #(WS_FA_Q_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_FA_Q_SCALES * 8)]
+    ldr     x15, [x23, #(WS_FA_Q_QZEROS * 8)]
+    movz    x13, #6144
+    movz    x14, #5120
+    b       .proj_slots_ready
+
+.proj_fa_k:
+    // K proj: N=1024, K=5120
+    ldr     x11, [x23, #(WS_FA_K_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_FA_K_SCALES * 8)]
+    ldr     x15, [x23, #(WS_FA_K_QZEROS * 8)]
+    movz    x13, #1024
+    movz    x14, #5120
+    b       .proj_slots_ready
+
+.proj_fa_v:
+    // V proj: N=1024, K=5120
+    ldr     x11, [x23, #(WS_FA_V_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_FA_V_SCALES * 8)]
+    ldr     x15, [x23, #(WS_FA_V_QZEROS * 8)]
+    movz    x13, #1024
+    movz    x14, #5120
+    b       .proj_slots_ready
+
+.proj_fa_o:
+    // O proj: N=5120, K=6144
+    ldr     x11, [x23, #(WS_FA_O_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_FA_O_SCALES * 8)]
+    ldr     x15, [x23, #(WS_FA_O_QZEROS * 8)]
+    movz    x13, #5120
+    movz    x14, #6144
+    b       .proj_slots_ready
+
+.proj_gate:
+    // Gate proj: N=17408, K=5120
+    ldr     x11, [x23, #(WS_GATE_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_GATE_SCALES * 8)]
+    ldr     x15, [x23, #(WS_GATE_QZEROS * 8)]
+    movz    x13, #17408
+    movz    x14, #5120
+    b       .proj_slots_ready
+
+.proj_up:
+    // Up proj: N=17408, K=5120
+    ldr     x11, [x23, #(WS_UP_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_UP_SCALES * 8)]
+    ldr     x15, [x23, #(WS_UP_QZEROS * 8)]
+    movz    x13, #17408
+    movz    x14, #5120
+    b       .proj_slots_ready
+
+.proj_down:
+    // Down proj: N=5120, K=17408
+    ldr     x11, [x23, #(WS_DOWN_QWEIGHT * 8)]
+    ldr     x12, [x23, #(WS_DOWN_SCALES * 8)]
+    ldr     x15, [x23, #(WS_DOWN_QZEROS * 8)]
+    movz    x13, #5120
+    movz    x14, #17408
+
+.proj_slots_ready:
+    // x11 = qweight_ptr, x12 = scales_ptr, x15 = qzeros_ptr
+    // x13 = N (output dim), x14 = K (input dim)
+
+    // ---- Build launch_params ----
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = qweight_ptr
+    str     x11, [x1, #0]
+
+    // param[1] = scales_ptr
+    str     x12, [x1, #8]
+
+    // param[2] = input_ptr (current activation buffer)
+    // For MLP down projection (last proj), input comes from mlp_gate_buf (activate output)
+    // For all others, input is current act buffer (x27 selects a/b)
+    // Determine input source based on proj_state:
+    //   DN: state 4 (down) reads from mlp_gate_buf
+    //   FA: state 6 (down) reads from mlp_gate_buf
+    //   DN: state 2 (gate), state 3 (up) read from current act buffer
+    //   FA: state 4 (gate), state 5 (up) read from current act buffer
+    // Gate output goes to mlp_gate_buf, Up output goes to mlp_up_buf.
+
+    // Check if this is the "down" projection (reads from mlp_gate_buf where activate wrote)
+    cbz     x22, .proj_input_fa_check
+    // DeltaNet: down = proj_state 4
+    cmp     x10, #4
+    b.eq    .proj_input_from_gate_buf
+    b       .proj_input_normal
+.proj_input_fa_check:
+    // FA: down = proj_state 6
+    cmp     x10, #6
+    b.eq    .proj_input_from_gate_buf
+
+.proj_input_normal:
+    cbz     x27, .proj_input_a
+    str     x21, [x1, #16]          // act_buf_b
+    b       .proj_input_done
+.proj_input_a:
+    str     x20, [x1, #16]          // act_buf_a
+    b       .proj_input_done
+.proj_input_from_gate_buf:
+    // Down projection reads from mlp_gate_buf (where activate wrote its output)
+    adrp    x9, mlp_gate_buf
+    add     x9, x9, :lo12:mlp_gate_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #16]
+.proj_input_done:
+
+    // param[3] = output_ptr
+    // Gate projection outputs to mlp_gate_buf
+    // Up projection outputs to mlp_up_buf
+    // Down projection outputs to current output buffer (other act buf)
+    // All other projections output to the other act buffer
+    cbz     x22, .proj_output_fa_check
+    // DeltaNet: gate=2, up=3
+    cmp     x10, #2
+    b.eq    .proj_output_gate_buf
+    cmp     x10, #3
+    b.eq    .proj_output_up_buf
+    b       .proj_output_other_act
+.proj_output_fa_check:
+    // FA: gate=4, up=5
+    cmp     x10, #4
+    b.eq    .proj_output_gate_buf
+    cmp     x10, #5
+    b.eq    .proj_output_up_buf
+
+.proj_output_other_act:
+    // Output to the other activation buffer
+    cbz     x27, .proj_output_b
+    str     x20, [x1, #24]          // output to act_buf_a
+    b       .proj_output_done
+.proj_output_b:
+    str     x21, [x1, #24]          // output to act_buf_b
+    b       .proj_output_done
+.proj_output_gate_buf:
+    adrp    x9, mlp_gate_buf
+    add     x9, x9, :lo12:mlp_gate_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #24]
+    b       .proj_output_done
+.proj_output_up_buf:
+    adrp    x9, mlp_up_buf
+    add     x9, x9, :lo12:mlp_up_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #24]
+.proj_output_done:
+
+    // param[4] = N (u32)
+    str     w13, [x1, #32]
+
+    // param[5] = K (u32)
+    str     w14, [x1, #36]
+
+    // param[6] = K_SPLITS (u32) = 1
+    mov     w9, #1
+    str     w9, [x1, #40]
+
+    // param[7] = k_packed_per_split (u32) = K / 8 (4-bit packing: 8 values per u32)
+    lsr     w9, w14, #3
+    str     w9, [x1, #44]
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]            // &param[0] = qweight
+    add     x3, x1, #8
+    str     x3, [x2, #8]            // &param[1] = scales
+    add     x3, x1, #16
+    str     x3, [x2, #16]           // &param[2] = input
+    add     x3, x1, #24
+    str     x3, [x2, #24]           // &param[3] = output
+    add     x3, x1, #32
+    str     x3, [x2, #32]           // &param[4] = N
+    add     x3, x1, #36
+    str     x3, [x2, #40]           // &param[5] = K
+    add     x3, x1, #40
+    str     x3, [x2, #48]           // &param[6] = K_SPLITS
+    add     x3, x1, #44
+    str     x3, [x2, #56]           // &param[7] = k_packed_per_split
+
+    // ---- Compute gridX = ceil(N / 128) ----
+    add     w9, w13, #127
+    lsr     w9, w9, #7              // gridX = (N + 127) / 128
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_PROJ]
+    mov     x1, x9                  // gridX = ceil(N/128)
     mov     x2, #1
     mov     x3, #1
     mov     x4, #128                // blockX
@@ -819,12 +1324,26 @@ launch_proj:
     add     sp, sp, #32
 
 .proj_skip:
+    ldp     x19, x20, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
 // ============================================================
-// launch_attention -- launch full attention kernel
+// launch_attention -- launch full attention decode kernel
 // ============================================================
+// Kernel signature: attention_score(q, k_cache, v_cache, output, seq_len, head_dim, num_heads)
+//   param[0]: .u64 q_ptr       -- Q vector in "other" act buffer (after RoPE)
+//   param[1]: .u64 k_cache_ptr -- kv_cache_ptr + fa_layer_idx * KV_PER_LAYER
+//   param[2]: .u64 v_cache_ptr -- k_cache_ptr + KV_PER_LAYER / 2
+//   param[3]: .u64 output_ptr  -- "other" act buffer (overwrite Q region)
+//   param[4]: .u32 seq_len     -- x26 (current sequence position)
+//   param[5]: .u32 head_dim    -- 256
+//   param[6]: .u32 num_heads   -- 24
+//
+// fa_layer_idx is read from fa_layer_counter.
+// KV_PER_LAYER = 268435456 (256MB), half = 134217728 (128MB)
+//
+// Grid: 24 blocks (one per head), Block: 256 threads, SharedMem: 2048
 .align 4
 launch_attention:
     stp     x29, x30, [sp, #-16]!
@@ -835,13 +1354,82 @@ launch_attention:
     ldr     x0, [x0, #KF_ATTN]
     cbz     x0, .attn_skip
 
-    mov     x1, #NUM_HEADS          // gridX = num_heads = 28
+    // ---- Build launch_params ----
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // Compute QKV buffer base (the "other" act buffer)
+    cbz     x27, .attn_qkv_b
+    mov     x9, x20                    // x27=1 -> other is act_buf_a
+    b       .attn_qkv_done
+.attn_qkv_b:
+    mov     x9, x21                    // x27=0 -> other is act_buf_b
+.attn_qkv_done:
+
+    // param[0] = q_ptr: "other" act buffer + 0 (Q after RoPE)
+    str     x9, [x1, #0]              // param[0] = q_ptr
+
+    // param[1] = k_cache_ptr: kv_cache_ptr + fa_layer_counter * KV_PER_LAYER
+    adrp    x2, kv_cache_ptr
+    add     x2, x2, :lo12:kv_cache_ptr
+    ldr     x2, [x2]                  // kv_cache base
+    adrp    x3, fa_layer_counter
+    add     x3, x3, :lo12:fa_layer_counter
+    ldr     x3, [x3]                  // fa_layer_idx
+    // KV_PER_LAYER = 268435456 = 0x10000000
+    movz    x4, #0x1000, lsl #16      // 0x10000000
+    mul     x4, x3, x4
+    add     x2, x2, x4                // k_cache for this FA layer
+    str     x2, [x1, #8]              // param[1] = k_cache_ptr
+
+    // param[2] = v_cache_ptr: k_cache + KV_PER_LAYER / 2
+    // KV_PER_LAYER / 2 = 134217728 = 0x08000000
+    movz    x4, #0x0800, lsl #16      // 0x08000000
+    add     x3, x2, x4
+    str     x3, [x1, #16]             // param[2] = v_cache_ptr
+
+    // param[3] = output_ptr: "other" act buffer (overwrite Q region)
+    str     x9, [x1, #24]             // param[3] = output_ptr
+
+    // param[4] = seq_len (u32) = x26 (current sequence position)
+    str     w26, [x1, #32]            // param[4] = seq_len
+
+    // param[5] = head_dim (u32) = 256
+    mov     w3, #256
+    str     w3, [x1, #36]             // param[5] = head_dim
+
+    // param[6] = num_heads (u32) = 24
+    mov     w3, #24
+    str     w3, [x1, #40]             // param[6] = num_heads
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]              // &param[0] = q_ptr
+    add     x3, x1, #8
+    str     x3, [x2, #8]              // &param[1] = k_cache
+    add     x3, x1, #16
+    str     x3, [x2, #16]             // &param[2] = v_cache
+    add     x3, x1, #24
+    str     x3, [x2, #24]             // &param[3] = output
+    add     x3, x1, #32
+    str     x3, [x2, #32]             // &param[4] = seq_len
+    add     x3, x1, #36
+    str     x3, [x2, #40]             // &param[5] = head_dim
+    add     x3, x1, #40
+    str     x3, [x2, #48]             // &param[6] = num_heads
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_ATTN]
+    mov     x1, #24                 // gridX = num_heads = 24
     mov     x2, #1
     mov     x3, #1
-    mov     x4, #128                // blockX = head_dim
+    mov     x4, #256                // blockX = head_dim = 256
     mov     x5, #1
     mov     x6, #1
-    mov     x7, #512                // sharedMem for softmax
+    mov     x7, #2048               // sharedMem for softmax scratch
 
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
@@ -860,6 +1448,21 @@ launch_attention:
 // ============================================================
 // launch_recurrence -- launch DeltaNet recurrence kernel
 // ============================================================
+// Kernel signature: recurrence(state, k, v, q, gate, beta, output,
+//                               num_heads, key_dim, value_dim)
+//   param[0]: .u64 state_ptr   -- dn_state_ptr + dn_layer_idx * DN_PER_LAYER
+//   param[1]: .u64 k_ptr       -- QKV buffer + 8192 (K slice)
+//   param[2]: .u64 v_ptr       -- QKV buffer + 16384 (V slice)
+//   param[3]: .u64 q_ptr       -- QKV buffer + 0 (Q slice)
+//   param[4]: .u64 gate_ptr    -- WS_DN_A_LOG (decay gate from model)
+//   param[5]: .u64 beta_ptr    -- WS_DN_DT_BIAS (dt bias from model)
+//   param[6]: .u64 output_ptr  -- "other" act buffer (recurrence output)
+//   param[7]: .u32 num_heads   -- 16 (linear_num_key_heads)
+//   param[8]: .u32 key_dim     -- 128 (linear_key_head_dim)
+//   param[9]: .u32 value_dim   -- 128 (linear_value_head_dim)
+//
+// dn_layer_idx is read from dn_layer_counter (NOT the same as layer_idx).
+// Grid: 16 blocks (one per head), Block: 128 threads, SharedMem: 32768
 .align 4
 launch_recurrence:
     stp     x29, x30, [sp, #-16]!
@@ -870,14 +1473,102 @@ launch_recurrence:
     ldr     x0, [x0, #KF_RECUR]
     cbz     x0, .recur_skip
 
-    mov     x1, #NUM_HEADS          // gridX = num_heads = 28
+    // ---- Build launch_params ----
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = state_ptr: dn_state_ptr + dn_layer_counter * DN_PER_LAYER
+    adrp    x9, dn_state_ptr
+    add     x9, x9, :lo12:dn_state_ptr
+    ldr     x9, [x9]                  // dn_state base
+    adrp    x2, dn_layer_counter
+    add     x2, x2, :lo12:dn_layer_counter
+    ldr     x3, [x2]                  // dn_layer_idx
+    movz    x4, #0x0030, lsl #16       // DN_PER_LAYER = 3145728 = 0x300000
+    mul     x4, x3, x4
+    add     x9, x9, x4
+    str     x9, [x1, #0]              // param[0] = state_ptr
+
+    // Compute QKV buffer base (the "other" act buffer where proj wrote)
+    cbz     x27, .recur_qkv_b
+    mov     x9, x20                    // x27=1 -> other is act_buf_a
+    b       .recur_qkv_done
+.recur_qkv_b:
+    mov     x9, x21                    // x27=0 -> other is act_buf_b
+.recur_qkv_done:
+    // x9 = QKV buffer base
+
+    // param[1] = k_ptr: QKV base + 8192
+    add     x3, x9, #8192
+    str     x3, [x1, #8]              // param[1] = k_ptr
+
+    // param[2] = v_ptr: QKV base + 16384
+    add     x3, x9, #16384
+    str     x3, [x1, #16]             // param[2] = v_ptr
+
+    // param[3] = q_ptr: QKV base + 0
+    str     x9, [x1, #24]             // param[3] = q_ptr
+
+    // param[4] = gate_ptr: WS_DN_A_LOG (decay gate)
+    ldr     x3, [x23, #(WS_DN_A_LOG * 8)]
+    str     x3, [x1, #32]             // param[4] = gate_ptr
+
+    // param[5] = beta_ptr: WS_DN_DT_BIAS
+    ldr     x3, [x23, #(WS_DN_DT_BIAS * 8)]
+    str     x3, [x1, #40]             // param[5] = beta_ptr
+
+    // param[6] = output_ptr: the "other" act buffer
+    // NOTE: recurrence output is VALUE_DIM*4=24576 bytes, which exceeds
+    // ACT_BUF_SIZE=20480. Buffer allocation needs to be enlarged to >=24576.
+    // For now, we write to the same "other" buffer (QKV data is consumed).
+    str     x9, [x1, #48]             // param[6] = output_ptr (reuse QKV buffer)
+
+    // param[7] = num_heads (u32) = 16
+    mov     w3, #16
+    str     w3, [x1, #56]             // param[7] = num_heads
+
+    // param[8] = key_dim (u32) = 128
+    mov     w3, #128
+    str     w3, [x1, #60]             // param[8] = key_dim
+
+    // param[9] = value_dim (u32) = 128
+    mov     w3, #128
+    str     w3, [x1, #64]             // param[9] = value_dim
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]              // &param[0] = state
+    add     x3, x1, #8
+    str     x3, [x2, #8]              // &param[1] = k
+    add     x3, x1, #16
+    str     x3, [x2, #16]             // &param[2] = v
+    add     x3, x1, #24
+    str     x3, [x2, #24]             // &param[3] = q
+    add     x3, x1, #32
+    str     x3, [x2, #32]             // &param[4] = gate
+    add     x3, x1, #40
+    str     x3, [x2, #40]             // &param[5] = beta
+    add     x3, x1, #48
+    str     x3, [x2, #48]             // &param[6] = output
+    add     x3, x1, #56
+    str     x3, [x2, #56]             // &param[7] = num_heads
+    add     x3, x1, #60
+    str     x3, [x2, #64]             // &param[8] = key_dim
+    add     x3, x1, #64
+    str     x3, [x2, #72]             // &param[9] = value_dim
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_RECUR]
+    mov     x1, #16                 // gridX = 16 (linear_num_key_heads)
     mov     x2, #1
     mov     x3, #1
-    mov     x4, #HEAD_DIM           // blockX = head_dim = 128
+    mov     x4, #128                // blockX = 128 (key_dim)
     mov     x5, #1
     mov     x6, #1
-    lsr     x7, x4, #0             // sharedMem = head_dim * head_dim * 2
-    mov     x7, #32768              // 128 * 128 * 2 = 32768
+    mov     x7, #32768              // sharedMem = 128 * 128 * 2 = 32768
 
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
@@ -896,6 +1587,11 @@ launch_recurrence:
 // ============================================================
 // launch_activate -- launch SwiGLU activation: silu(gate) * up
 // ============================================================
+// Kernel: activate(gate_ptr, up_ptr, output_ptr, size)
+//   param[0]: .u64 gate_ptr   -- mlp_gate_buf (gate projection output)
+//   param[1]: .u64 up_ptr     -- mlp_up_buf (up projection output)
+//   param[2]: .u64 output_ptr -- mlp_gate_buf (reuse for down proj input)
+//   param[3]: .u32 size       -- INTERMEDIATE_DIM = 17408
 .align 4
 launch_activate:
     stp     x29, x30, [sp, #-16]!
@@ -906,7 +1602,48 @@ launch_activate:
     ldr     x0, [x0, #KF_ACTIVATE]
     cbz     x0, .act_skip
 
-    // gridX = ceil(intermediate_dim / 256) = ceil(17408/256) = 68
+    // ---- Build launch_params ----
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = gate_ptr (mlp_gate_buf)
+    adrp    x9, mlp_gate_buf
+    add     x9, x9, :lo12:mlp_gate_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #0]
+
+    // param[1] = up_ptr (mlp_up_buf)
+    adrp    x9, mlp_up_buf
+    add     x9, x9, :lo12:mlp_up_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #8]
+
+    // param[2] = output_ptr (write back to mlp_gate_buf for down proj to read)
+    adrp    x9, mlp_gate_buf
+    add     x9, x9, :lo12:mlp_gate_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #16]
+
+    // param[3] = size (u32) = INTERMEDIATE_DIM = 17408
+    movz    w9, #17408
+    str     w9, [x1, #24]
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]            // &param[0] = gate_ptr
+    add     x3, x1, #8
+    str     x3, [x2, #8]            // &param[1] = up_ptr
+    add     x3, x1, #16
+    str     x3, [x2, #16]           // &param[2] = output_ptr
+    add     x3, x1, #24
+    str     x3, [x2, #24]           // &param[3] = size
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_ACTIVATE]
+    // gridX = ceil(17408 / 256) = 68
     mov     x1, #68
     mov     x2, #1
     mov     x3, #1
@@ -930,8 +1667,26 @@ launch_activate:
     ret
 
 // ============================================================
-// launch_rope -- launch RoPE kernel
+// launch_rope -- launch RoPE kernel (full-attention layers only)
 // ============================================================
+// Applies rotary position embeddings to Q and K vectors.
+// Called after QKV projection in full-attention layers.
+//
+// FA QKV layout in "other" act buffer (after separate Q/K/V projections):
+//   Q: offset 0,     size 24*256*4 = 24576 bytes
+//   K: offset 24576, size 4*256*4  = 4096 bytes
+//   V: offset 28672, size 4*256*4  = 4096 bytes
+//
+// Kernel signature: rotate(q_ptr, k_ptr, cos_ptr, sin_ptr, seq_pos, head_dim, num_heads)
+//   param[0]: .u64 q_ptr      -- Q in "other" act buffer
+//   param[1]: .u64 k_ptr      -- K in "other" act buffer + 24576
+//   param[2]: .u64 cos_ptr    -- precomputed cos table
+//   param[3]: .u64 sin_ptr    -- precomputed sin table
+//   param[4]: .u32 seq_pos    -- x26 (current sequence position)
+//   param[5]: .u32 head_dim   -- 256
+//   param[6]: .u32 num_heads  -- 24
+//
+// Grid: ceil(24 * 256 / 256) = 24 blocks of 256 threads
 .align 4
 launch_rope:
     stp     x29, x30, [sp, #-16]!
@@ -942,13 +1697,76 @@ launch_rope:
     ldr     x0, [x0, #KF_ROPE]
     cbz     x0, .rope_skip
 
-    mov     x1, #14                 // gridX = ceil(num_heads * head_dim / 256)
+    // ---- Build launch_params ----
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // Compute QKV buffer base (the "other" act buffer)
+    cbz     x27, .rope_qkv_b
+    mov     x9, x20                    // x27=1 -> other is act_buf_a
+    b       .rope_qkv_done
+.rope_qkv_b:
+    mov     x9, x21                    // x27=0 -> other is act_buf_b
+.rope_qkv_done:
+
+    // param[0] = q_ptr: QKV base + 0
+    str     x9, [x1, #0]              // param[0] = q_ptr
+
+    // param[1] = k_ptr: QKV base + 24576
+    add     x3, x9, #24576
+    str     x3, [x1, #8]              // param[1] = k_ptr
+
+    // param[2] = cos_ptr: precomputed cos table
+    adrp    x3, rope_cos_table
+    add     x3, x3, :lo12:rope_cos_table
+    ldr     x3, [x3]
+    str     x3, [x1, #16]             // param[2] = cos_ptr
+
+    // param[3] = sin_ptr: precomputed sin table
+    adrp    x3, rope_sin_table
+    add     x3, x3, :lo12:rope_sin_table
+    ldr     x3, [x3]
+    str     x3, [x1, #24]             // param[3] = sin_ptr
+
+    // param[4] = seq_pos (u32) = x26
+    str     w26, [x1, #32]            // param[4] = seq_pos
+
+    // param[5] = head_dim (u32) = 256
+    mov     w3, #256
+    str     w3, [x1, #36]             // param[5] = head_dim
+
+    // param[6] = num_heads (u32) = 24
+    mov     w3, #24
+    str     w3, [x1, #40]             // param[6] = num_heads
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]              // &param[0] = q_ptr
+    add     x3, x1, #8
+    str     x3, [x2, #8]              // &param[1] = k_ptr
+    add     x3, x1, #16
+    str     x3, [x2, #16]             // &param[2] = cos_ptr
+    add     x3, x1, #24
+    str     x3, [x2, #24]             // &param[3] = sin_ptr
+    add     x3, x1, #32
+    str     x3, [x2, #32]             // &param[4] = seq_pos
+    add     x3, x1, #36
+    str     x3, [x2, #40]             // &param[5] = head_dim
+    add     x3, x1, #40
+    str     x3, [x2, #48]             // &param[6] = num_heads
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_ROPE]
+    mov     x1, #24                 // gridX = num_heads = 24
     mov     x2, #1
     mov     x3, #1
-    mov     x4, #256
+    mov     x4, #256                // blockX = head_dim = 256
     mov     x5, #1
     mov     x6, #1
-    mov     x7, #0
+    mov     x7, #0                  // no shared mem
 
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
@@ -965,11 +1783,20 @@ launch_rope:
     ret
 
 // ============================================================
-// launch_l2norm -- launch L2-norm kernel (steps 10-13 for K, 19-22 for Q)
+// launch_l2norm -- launch L2-norm kernel (call 0=K, call 1=Q)
 // ============================================================
-// L2-norm: x / sqrt(sum(x^2))
-// Kernel signature: (x: u64, y: u64, param_hidden_dim: u32)
-// Grid: 1 block, Block: 256 threads, SharedMem: 1024 bytes
+// L2-norm: x / sqrt(sum(x^2)), in-place
+// Kernel signature: l2norm(x_ptr, y_ptr, hidden_dim)
+//   param[0]: .u64 x_ptr         -- input pointer (QKV buffer + slice offset)
+//   param[1]: .u64 y_ptr         -- output pointer (same as input, in-place)
+//   param[2]: .u32 hidden_dim    -- 2048 (16 heads * 128 dim)
+//
+// Call 0 (K): offset = 8192 bytes (after Q slice)
+// Call 1 (Q): offset = 0 bytes (Q slice)
+// Both operate on 16*128 = 2048 elements.
+//
+// Grid: ceil(2048/256) = 8 blocks of 256 threads
+// SharedMem: 1024 bytes for reduction
 .align 4
 launch_l2norm:
     stp     x29, x30, [sp, #-16]!
@@ -980,13 +1807,64 @@ launch_l2norm:
     ldr     x0, [x0, #KF_L2NORM]
     cbz     x0, .l2norm_skip
 
+    // ---- Read and increment l2norm_call_counter ----
+    adrp    x9, l2norm_call_counter
+    add     x9, x9, :lo12:l2norm_call_counter
+    ldr     x10, [x9]               // x10 = call index (0=K, 1=Q)
+    add     x11, x10, #1
+    str     x11, [x9]
+
+    // ---- Determine data offset ----
+    // Call 0 (K): offset = 8192
+    // Call 1 (Q): offset = 0
+    cbnz    x10, .l2norm_q
+    mov     x11, #8192               // K slice offset
+    b       .l2norm_offset_ready
+.l2norm_q:
+    mov     x11, #0                  // Q slice offset
+.l2norm_offset_ready:
+
+    // ---- Build launch_params ----
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = x_ptr: QKV output buffer + slice offset
+    // QKV output is in the "other" act buffer
+    cbz     x27, .l2norm_input_b
+    add     x9, x20, x11              // act_buf_a + offset (other when x27=1)
+    b       .l2norm_input_done
+.l2norm_input_b:
+    add     x9, x21, x11              // act_buf_b + offset (other when x27=0)
+.l2norm_input_done:
+    str     x9, [x1, #0]              // param[0] = x_ptr
+
+    // param[1] = y_ptr (same as x_ptr, in-place)
+    str     x9, [x1, #8]              // param[1] = y_ptr
+
+    // param[2] = hidden_dim (u32) = 2048 (16 heads * 128 dim)
+    mov     w9, #2048
+    str     w9, [x1, #16]             // param[2] = hidden_dim
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]              // &param[0] = x_ptr
+    add     x3, x1, #8
+    str     x3, [x2, #8]              // &param[1] = y_ptr
+    add     x3, x1, #16
+    str     x3, [x2, #16]             // &param[2] = hidden_dim
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_L2NORM]
     mov     x1, #1                  // gridX = 1 (single block reduction)
     mov     x2, #1                  // gridY
     mov     x3, #1                  // gridZ
     mov     x4, #256                // blockX
     mov     x5, #1                  // blockY
     mov     x6, #1                  // blockZ
-    mov     x7, #1024               // sharedMem (smem_reduce[1024])
+    mov     x7, #1024               // sharedMem
 
     adrp    x9, cuda_stream
     add     x9, x9, :lo12:cuda_stream
@@ -1006,9 +1884,13 @@ launch_l2norm:
 // launch_gate_sigmoid -- fused sigmoid gate: output *= sigmoid(z)
 // ============================================================
 // Used for DeltaNet output gating (STEPS 29-34).
-// The z projection (W_z @ x) runs as a standard GEMV launch before this.
-// This kernel applies sigmoid(z) element-wise and multiplies into output.
-// Operates on value_dim = 6144 elements.
+// The z projection (W_z @ x) has written z to z_buf.
+// The recurrence output is in the "other" act buffer.
+// This kernel applies: output[i] *= sigmoid(z[i])
+// Kernel signature: gate_sigmoid(output_ptr, z_ptr, n)
+//   param[0]: .u64 output_ptr -- recurrence output ("other" act buffer), modified in-place
+//   param[1]: .u64 z_ptr      -- z_buf (from z projection)
+//   param[2]: .u32 n          -- VALUE_DIM = 6144
 .align 4
 launch_gate_sigmoid:
     stp     x29, x30, [sp, #-16]!
@@ -1019,6 +1901,41 @@ launch_gate_sigmoid:
     ldr     x0, [x0, #KF_GATE_SIG]
     cbz     x0, .gate_sig_skip
 
+    // ---- Build launch_params ----
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = output_ptr: recurrence output in "other" act buffer
+    cbz     x27, .gate_sig_output_b
+    str     x20, [x1, #0]             // x27=1 -> other is act_buf_a
+    b       .gate_sig_output_done
+.gate_sig_output_b:
+    str     x21, [x1, #0]             // x27=0 -> other is act_buf_b
+.gate_sig_output_done:
+
+    // param[1] = z_ptr: z_buf
+    adrp    x9, z_buf
+    add     x9, x9, :lo12:z_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #8]              // param[1] = z_ptr
+
+    // param[2] = n (u32) = VALUE_DIM = 6144
+    movz    w9, #6144
+    str     w9, [x1, #16]             // param[2] = n
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]              // &param[0] = output_ptr
+    add     x3, x1, #8
+    str     x3, [x2, #8]              // &param[1] = z_ptr
+    add     x3, x1, #16
+    str     x3, [x2, #16]             // &param[2] = n
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_GATE_SIG]
     // gridX = ceil(6144 / 256) = 24
     mov     x1, #24                 // gridX
     mov     x2, #1                  // gridY
@@ -1059,7 +1976,76 @@ launch_z_proj:
     ldr     x0, [x0, #KF_PROJ]     // same GEMV kernel
     cbz     x0, .z_proj_skip
 
-    // gridX = ceil(value_dim / 128) = ceil(6144/128) = 48
+    // ---- Build launch_params ----
+    // Uses gptq_gemv_safe kernel with Z weight slots.
+    // Projects ORIGINAL input x (current input buffer) -> z_buf
+    // N = VALUE_DIM = 6144, K = HIDDEN_DIM = 5120
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = qweight_ptr (WS_DN_Z_QWEIGHT)
+    ldr     x9, [x23, #(WS_DN_Z_QWEIGHT * 8)]
+    str     x9, [x1, #0]
+
+    // param[1] = scales_ptr (WS_DN_Z_SCALES)
+    ldr     x9, [x23, #(WS_DN_Z_SCALES * 8)]
+    str     x9, [x1, #8]
+
+    // param[2] = input_ptr (current input buffer -- the original x before QKV)
+    // The original input is in the current input buffer (x27 selects)
+    cbz     x27, .z_proj_input_a
+    str     x21, [x1, #16]          // x27=1 -> input is act_buf_b
+    b       .z_proj_input_done
+.z_proj_input_a:
+    str     x20, [x1, #16]          // x27=0 -> input is act_buf_a
+.z_proj_input_done:
+
+    // param[3] = output_ptr (z_buf)
+    adrp    x9, z_buf
+    add     x9, x9, :lo12:z_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #24]
+
+    // param[4] = N (u32) = VALUE_DIM = 6144
+    movz    w9, #6144
+    str     w9, [x1, #32]
+
+    // param[5] = K (u32) = HIDDEN_DIM = 5120
+    movz    w9, #5120
+    str     w9, [x1, #36]
+
+    // param[6] = K_SPLITS (u32) = 1
+    mov     w9, #1
+    str     w9, [x1, #40]
+
+    // param[7] = k_packed_per_split (u32) = K / 8 = 640
+    mov     w9, #640
+    str     w9, [x1, #44]
+
+    // ---- Build param_ptrs array ----
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]            // &param[0] = qweight
+    add     x3, x1, #8
+    str     x3, [x2, #8]            // &param[1] = scales
+    add     x3, x1, #16
+    str     x3, [x2, #16]           // &param[2] = input
+    add     x3, x1, #24
+    str     x3, [x2, #24]           // &param[3] = output
+    add     x3, x1, #32
+    str     x3, [x2, #32]           // &param[4] = N
+    add     x3, x1, #36
+    str     x3, [x2, #40]           // &param[5] = K
+    add     x3, x1, #40
+    str     x3, [x2, #48]           // &param[6] = K_SPLITS
+    add     x3, x1, #44
+    str     x3, [x2, #56]           // &param[7] = k_packed_per_split
+
+    // ---- Launch kernel ----
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_PROJ]
+    // gridX = ceil(6144 / 128) = 48
     mov     x1, #48                 // gridX
     mov     x2, #1                  // gridY
     mov     x3, #1                  // gridZ
@@ -1083,20 +2069,27 @@ launch_z_proj:
     ret
 
 // ============================================================
-// launch_conv1d -- launch causal conv1d kernel (one Q/K/V proj)
+// launch_conv1d -- launch causal conv1d kernel (one Q/K/V slice)
 // ============================================================
-// Called 3 times per DeltaNet layer (Q, K, V).
-// conv1d_infer(input, history, weights, output, N):
-//   input   = current activation buffer (Q/K/V projection output)
-//   history = per-layer shift register state (4 taps * N channels)
-//   weights = conv1d weight pointer (from model weights)
-//   output  = same buffer (in-place, via act_buf_b scratch)
-//   N       = CONV1D_CHANNELS (10240 = concat of all head dims)
+// Called 3 times per DeltaNet layer: call 0=Q, 1=K, 2=V.
+// Kernel signature: conv1d_infer(input, weight, hist, output, num_heads, channels)
+//   param[0]: .u64 input_ptr    -- QKV output buffer + slice offset
+//   param[1]: .u64 weight_ptr   -- conv1d weight from model (WS_DN_CONV1D)
+//   param[2]: .u64 hist_ptr     -- conv1d_state + layer*CONV1D_PER_LAYER + hist_offset
+//   param[3]: .u64 output_ptr   -- same as input (in-place)
+//   param[4]: .u32 num_heads    -- Q/K: 16, V: 48
+//   param[5]: .u32 channels     -- 128 (per-head channel dim)
 //
-// x19 = layer index (callee-saved, set by layer_loop)
-// The history pointer advances by CONV1D_PER_LAYER * layer_idx.
+// DeltaNet QKV layout in output buffer (after combined QKV projection):
+//   Q: offset 0,     size 16*128*4 = 8192,  hist_off=0
+//   K: offset 8192,  size 16*128*4 = 8192,  hist_off=32768
+//   V: offset 16384, size 48*128*4 = 24576, hist_off=65536
 //
-// Grid: ceil(10240 / 256) = 40 blocks of 256 threads = 10240 threads
+// History offsets: Q = 16*128 channels * 4 taps * 4 bytes = 32768
+//                  K = 16*128 channels * 4 taps * 4 bytes = 32768
+//                  V = 48*128 channels * 4 taps * 4 bytes = 98304
+//
+// Grid: ceil(total_channels / 256), where total_channels = num_heads * channels
 .align 4
 launch_conv1d:
     stp     x29, x30, [sp, #-16]!
@@ -1107,62 +2100,116 @@ launch_conv1d:
     ldr     x0, [x0, #KF_CONV1D]
     cbz     x0, .conv1d_skip
 
-    // Build kernel params:
-    //   param[0] = input ptr  (act_buf_a -- current activation)
-    //   param[1] = history ptr (conv1d_state + layer * CONV1D_PER_LAYER)
-    //   param[2] = weights ptr (TODO: wire from model weights)
-    //   param[3] = output ptr  (act_buf_b -- scratch, copied back)
-    //   param[4] = N = CONV1D_CHANNELS (u32)
+    // ---- Read and increment conv1d_call_counter ----
+    adrp    x9, conv1d_call_counter
+    add     x9, x9, :lo12:conv1d_call_counter
+    ldr     x10, [x9]               // x10 = call index (0=Q, 1=K, 2=V)
+    add     x11, x10, #1
+    str     x11, [x9]
+
+    // ---- Determine slice offset, hist offset, num_heads based on call ----
+    // x11 = data_offset, x12 = hist_offset, x13 = num_heads
+    cmp     x10, #0
+    b.eq    .conv1d_q
+    cmp     x10, #1
+    b.eq    .conv1d_k
+    b       .conv1d_v
+
+.conv1d_q:
+    // Q: data_offset=0, hist_offset=0, num_heads=16
+    mov     x11, #0
+    mov     x12, #0
+    mov     x13, #16
+    b       .conv1d_slice_ready
+
+.conv1d_k:
+    // K: data_offset=8192, hist_offset=32768, num_heads=16
+    mov     x11, #8192
+    mov     x12, #32768
+    mov     x13, #16
+    b       .conv1d_slice_ready
+
+.conv1d_v:
+    // V: data_offset=16384, hist_offset=65536, num_heads=48
+    mov     x11, #16384
+    movz    x12, #0x0001, lsl #16
+    // 65536 = 0x10000
+    mov     x13, #48
+
+.conv1d_slice_ready:
+    // x11 = data byte offset into QKV output buffer
+    // x12 = history byte offset within this layer's conv1d state
+    // x13 = num_heads for this slice
+
+    // ---- Build launch_params ----
     adrp    x1, launch_params
     add     x1, x1, :lo12:launch_params
 
-    // param[0] = act_buf_a (input)
-    adrp    x2, act_buf_a
-    add     x2, x2, :lo12:act_buf_a
-    ldr     x3, [x2]
-    str     x3, [x1, #0]
+    // param[0] = input_ptr: QKV output buffer + data_offset
+    // QKV output is in the "other" act buffer (proj wrote to other)
+    cbz     x27, .conv1d_input_b
+    // x27=1 -> input is act_buf_b, so output (other) is act_buf_a
+    add     x9, x20, x11              // act_buf_a + offset
+    b       .conv1d_input_done
+.conv1d_input_b:
+    // x27=0 -> input is act_buf_a, so output (other) is act_buf_b
+    add     x9, x21, x11              // act_buf_b + offset
+.conv1d_input_done:
+    str     x9, [x1, #0]              // param[0] = input_ptr
 
-    // param[1] = conv1d_state + layer_idx * CONV1D_PER_LAYER
+    // param[1] = weight_ptr from model weights (WS_DN_CONV1D)
+    ldr     x9, [x23, #(WS_DN_CONV1D * 8)]
+    str     x9, [x1, #8]              // param[1] = weight_ptr
+
+    // param[2] = hist_ptr: conv1d_state + layer_idx * CONV1D_PER_LAYER + hist_offset
     adrp    x2, conv1d_state
     add     x2, x2, :lo12:conv1d_state
-    ldr     x3, [x2]                   // base
+    ldr     x3, [x2]                  // conv1d_state base
     movz    x4, #0x0002, lsl #16
-    movk    x4, #0x8000             // CONV1D_PER_LAYER = 163840 = 0x28000
-    mul     x4, x19, x4                // layer_idx * per_layer
-    add     x3, x3, x4                 // history for this layer
-    str     x3, [x1, #8]
+    movk    x4, #0x8000               // CONV1D_PER_LAYER = 163840 = 0x28000
+    mul     x4, x19, x4               // layer_idx * per_layer
+    add     x3, x3, x4                // base for this layer
+    add     x3, x3, x12               // + hist_offset for this slice
+    str     x3, [x1, #16]             // param[2] = hist_ptr
 
-    // param[2] = weights (placeholder -- needs model weight wiring)
-    str     xzr, [x1, #16]
+    // param[3] = output_ptr (same as input for in-place)
+    ldr     x9, [x1, #0]              // reload input_ptr
+    str     x9, [x1, #24]             // param[3] = output_ptr
 
-    // param[3] = output (act_buf_b as scratch)
-    adrp    x2, act_buf_b
-    add     x2, x2, :lo12:act_buf_b
-    ldr     x3, [x2]
-    str     x3, [x1, #24]
+    // param[4] = num_heads (u32)
+    str     w13, [x1, #32]            // param[4] = num_heads
 
-    // param[4] = N (u32)
-    mov     w3, #CONV1D_CHANNELS
-    str     w3, [x1, #32]
+    // param[5] = channels (u32) = 128
+    mov     w9, #128
+    str     w9, [x1, #36]             // param[5] = channels
 
-    // Build param_ptrs array
+    // ---- Build param_ptrs array ----
     adrp    x2, param_ptrs
     add     x2, x2, :lo12:param_ptrs
-    str     x1, [x2, #0]              // &param[0]
+    str     x1, [x2, #0]              // &param[0] = input
     add     x3, x1, #8
-    str     x3, [x2, #8]              // &param[1]
+    str     x3, [x2, #8]              // &param[1] = weight
     add     x3, x1, #16
-    str     x3, [x2, #16]             // &param[2]
+    str     x3, [x2, #16]             // &param[2] = hist
     add     x3, x1, #24
-    str     x3, [x2, #24]             // &param[3]
+    str     x3, [x2, #24]             // &param[3] = output
     add     x3, x1, #32
-    str     x3, [x2, #32]             // &param[4]
+    str     x3, [x2, #32]             // &param[4] = num_heads
+    add     x3, x1, #36
+    str     x3, [x2, #40]             // &param[5] = channels
 
-    // Launch: gridX=40, blockX=256, no shared mem
+    // ---- Compute gridX = ceil(num_heads * 128 / 256) ----
+    // Q/K: 16*128=2048, ceil(2048/256)=8
+    // V: 48*128=6144, ceil(6144/256)=24
+    lsl     w9, w13, #7               // num_heads * 128
+    add     w9, w9, #255
+    lsr     w9, w9, #8                // ceil(total / 256)
+
+    // ---- Launch kernel ----
     adrp    x0, kern_table
     add     x0, x0, :lo12:kern_table
     ldr     x0, [x0, #KF_CONV1D]
-    mov     x1, #40                    // gridDimX = ceil(10240/256)
+    mov     x1, x9                     // gridDimX
     mov     x2, #1                     // gridDimY
     mov     x3, #1                     // gridDimZ
     mov     x4, #256                   // blockDimX
@@ -1184,6 +2231,209 @@ launch_conv1d:
     ldp     x29, x30, [sp], #16
     ret
 
+
+// ============================================================
+// launch_final_norm -- RMSNorm using global final_norm weight
+// ============================================================
+// Same kernel as launch_norm but uses global_weight_ptrs[GLOBAL_FINALNORM]
+// instead of per-layer weight. Input is current act buffer, output to same.
+.align 4
+launch_final_norm:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_NORM]
+    cbz     x0, .fn_skip
+
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = input (current act buf)
+    cbz     x27, .fn_input_a
+    str     x21, [x1, #0]
+    b       .fn_input_done
+.fn_input_a:
+    str     x20, [x1, #0]
+.fn_input_done:
+
+    // param[1] = residual_buf
+    adrp    x9, residual_buf
+    add     x9, x9, :lo12:residual_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #8]
+
+    // param[2] = weight from global_weight_ptrs[GLOBAL_FINALNORM]
+    adrp    x9, global_weight_ptrs
+    add     x9, x9, :lo12:global_weight_ptrs
+    ldr     x9, [x9, #GLOBAL_FINALNORM]
+    str     x9, [x1, #16]
+
+    // param[3] = output (same as input — in-place for final norm)
+    cbz     x27, .fn_output_a
+    str     x21, [x1, #24]
+    b       .fn_output_done
+.fn_output_a:
+    str     x20, [x1, #24]
+.fn_output_done:
+
+    // param[4] = hidden_dim = 5120
+    movz    w9, #5120
+    str     w9, [x1, #32]
+
+    // param[5] = epsilon = 1e-6 (0x358637BD as f32 bits)
+    movz    w9, #0x3586, lsl #16
+    movk    w9, #0x37BD
+    str     w9, [x1, #36]
+
+    // Build param_ptrs
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]
+    add     x3, x1, #8
+    str     x3, [x2, #8]
+    add     x3, x1, #16
+    str     x3, [x2, #16]
+    add     x3, x1, #24
+    str     x3, [x2, #24]
+    add     x3, x1, #32
+    str     x3, [x2, #32]
+    add     x3, x1, #36
+    str     x3, [x2, #40]
+
+    // Launch: 1 block, 256 threads, 128B shared
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_NORM]
+    mov     x1, #1
+    mov     x2, #1
+    mov     x3, #1
+    mov     x4, #256
+    mov     x5, #1
+    mov     x6, #1
+    mov     x7, #128
+
+    adrp    x9, cuda_stream
+    add     x9, x9, :lo12:cuda_stream
+    ldr     x9, [x9]
+    adrp    x10, param_ptrs
+    add     x10, x10, :lo12:param_ptrs
+    stp     x9, x10, [sp, #-32]!
+    str     xzr, [sp, #16]
+    bl      cuLaunchKernel
+    add     sp, sp, #32
+
+.fn_skip:
+    ldp     x29, x30, [sp], #16
+    ret
+
+// ============================================================
+// launch_lm_head -- project hidden state to vocab logits
+// ============================================================
+// Uses global_weight_ptrs[GLOBAL_LMHEAD] as the weight matrix.
+// N = VOCAB_SIZE = 248320, K = HIDDEN_DIM = 5120
+// Output goes to logits_buf (993280 bytes).
+.align 4
+launch_lm_head:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_PROJ]
+    cbz     x0, .lmh_skip
+
+    adrp    x1, launch_params
+    add     x1, x1, :lo12:launch_params
+
+    // param[0] = lm_head weight (qweight) from global
+    // NOTE: lm_head may be f16 (not GPTQ) in some models. For now assume
+    // it goes through the same GEMV kernel. If it's f16, we need a different kernel.
+    adrp    x9, global_weight_ptrs
+    add     x9, x9, :lo12:global_weight_ptrs
+    ldr     x9, [x9, #GLOBAL_LMHEAD]
+    str     x9, [x1, #0]           // param[0] = qweight (or f16 weight)
+
+    // param[1] = scales (NULL for f16 models — kernel must handle)
+    str     xzr, [x1, #8]
+
+    // param[2] = input (current act buf after final norm)
+    cbz     x27, .lmh_input_a
+    str     x21, [x1, #16]
+    b       .lmh_input_done
+.lmh_input_a:
+    str     x20, [x1, #16]
+.lmh_input_done:
+
+    // param[3] = output = logits_buf
+    adrp    x9, logits_buf
+    add     x9, x9, :lo12:logits_buf
+    ldr     x9, [x9]
+    str     x9, [x1, #24]
+
+    // param[4] = N = VOCAB_SIZE = 248320
+    movz    w9, #0x0003, lsl #16
+    movk    w9, #0xC980             // 0x3C980 = 248320
+    str     w9, [x1, #32]
+
+    // param[5] = K = HIDDEN_DIM = 5120
+    movz    w9, #5120
+    str     w9, [x1, #36]
+
+    // param[6] = K_SPLITS = 1
+    mov     w9, #1
+    str     w9, [x1, #40]
+
+    // param[7] = k_packed_per_split = 5120 / 8 = 640
+    movz    w9, #640
+    str     w9, [x1, #44]
+
+    // Build param_ptrs
+    adrp    x2, param_ptrs
+    add     x2, x2, :lo12:param_ptrs
+    str     x1, [x2, #0]
+    add     x3, x1, #8
+    str     x3, [x2, #8]
+    add     x3, x1, #16
+    str     x3, [x2, #16]
+    add     x3, x1, #24
+    str     x3, [x2, #24]
+    add     x3, x1, #32
+    str     x3, [x2, #32]
+    add     x3, x1, #36
+    str     x3, [x2, #40]
+    add     x3, x1, #40
+    str     x3, [x2, #48]
+    add     x3, x1, #44
+    str     x3, [x2, #56]
+
+    // gridX = ceil(248320 / 128) = 1940
+    movz    x1, #1940
+    mov     x2, #1
+    mov     x3, #1
+    mov     x4, #128
+    mov     x5, #1
+    mov     x6, #1
+    mov     x7, #0
+
+    adrp    x0, kern_table
+    add     x0, x0, :lo12:kern_table
+    ldr     x0, [x0, #KF_PROJ]
+
+    adrp    x9, cuda_stream
+    add     x9, x9, :lo12:cuda_stream
+    ldr     x9, [x9]
+    adrp    x10, param_ptrs
+    add     x10, x10, :lo12:param_ptrs
+    stp     x9, x10, [sp, #-32]!
+    str     xzr, [sp, #16]
+    bl      cuLaunchKernel
+    add     sp, sp, #32
+
+.lmh_skip:
+    ldp     x29, x30, [sp], #16
+    ret
 
 // ============================================================
 // alloc_buffers -- mmap activation buffers, residual, KV cache
@@ -1260,6 +2510,79 @@ alloc_buffers:
     adrp    x1, z_buf
     add     x1, x1, :lo12:z_buf
     str     x0, [x1]
+
+    // ---- MLP gate scratch buffer ----
+    // INTERMEDIATE_DIM * sizeof(f32) = 17408 * 4 = 69632 bytes
+    mov     x0, #0
+    movz    x1, #0x0001, lsl #16       // 0x11000 = 69632
+    movk    x1, #0x1000
+    mov     x2, #PROT_RW
+    mov     x3, #MAP_PRIV_ANON
+    mvn     x4, xzr
+    mov     x5, #0
+    mov     x8, #SYS_MMAP
+    svc     #0
+    adrp    x1, mlp_gate_buf
+    add     x1, x1, :lo12:mlp_gate_buf
+    str     x0, [x1]
+
+    // ---- MLP up scratch buffer ----
+    mov     x0, #0
+    movz    x1, #0x0001, lsl #16       // 0x11000 = 69632
+    movk    x1, #0x1000
+    mov     x2, #PROT_RW
+    mov     x3, #MAP_PRIV_ANON
+    mvn     x4, xzr
+    mov     x5, #0
+    mov     x8, #SYS_MMAP
+    svc     #0
+    adrp    x1, mlp_up_buf
+    add     x1, x1, :lo12:mlp_up_buf
+    str     x0, [x1]
+
+    // ---- KV cache (16 FA layers * 256MB = 4GB) ----
+    mov     x0, #0
+    movz    x1, #0x0001, lsl #32       // 0x100000000 = 4GB
+    mov     x2, #PROT_RW
+    mov     x3, #MAP_PRIV_ANON
+    mvn     x4, xzr
+    mov     x5, #0
+    mov     x8, #SYS_MMAP
+    svc     #0
+    adrp    x1, kv_cache_ptr
+    add     x1, x1, :lo12:kv_cache_ptr
+    str     x0, [x1]
+
+    // ---- DeltaNet recurrent state (48 DN layers * 3145728 = ~150MB) ----
+    // 48 * 3145728 = 150994944 = 0x08FD0000 (round up to 0x09000000 = 150994944)
+    mov     x0, #0
+    movz    x1, #0x0900, lsl #16       // 0x09000000 = ~150MB
+    mov     x2, #PROT_RW
+    mov     x3, #MAP_PRIV_ANON
+    mvn     x4, xzr
+    mov     x5, #0
+    mov     x8, #SYS_MMAP
+    svc     #0
+    adrp    x1, dn_state_ptr
+    add     x1, x1, :lo12:dn_state_ptr
+    str     x0, [x1]
+
+    // ---- Logits buffer (VOCAB_SIZE * 4 = 993280 bytes) ----
+    mov     x0, #0
+    movz    x1, #0x000F, lsl #16       // 0x000F2800 = 993280
+    movk    x1, #0x2800
+    mov     x2, #PROT_RW
+    mov     x3, #MAP_PRIV_ANON
+    mvn     x4, xzr
+    mov     x5, #0
+    mov     x8, #SYS_MMAP
+    svc     #0
+    adrp    x1, logits_buf
+    add     x1, x1, :lo12:logits_buf
+    str     x0, [x1]
+
+    ldp     x29, x30, [sp], #16
+    ret
 
 // ============================================================
 // load_weights -- mmap safetensors shards and build weight pointer table
@@ -1496,6 +2819,7 @@ load_weights:
     b.eq    .shard_mmap_fail
 
     // Store shard base pointer
+    mov     x22, x0                   // save mmap addr in x22 (callee-saved, pushed at entry)
     adrp    x1, shard_bases
     add     x1, x1, :lo12:shard_bases
     str     x0, [x1, x26, lsl #3]
@@ -1509,6 +2833,21 @@ load_weights:
     mov     x0, x21
     mov     x8, #SYS_CLOSE
     svc     #0
+
+    // Register mmap'd region with CUDA for GPU access
+    // cuMemHostRegister(ptr, size, CU_MEMHOSTREGISTER_DEVICEMAP=2)
+    stp     x23, x24, [sp, #-16]!
+    stp     x25, x26, [sp, #-16]!
+    stp     x27, x28, [sp, #-16]!
+
+    mov     x0, x22                   // ptr = mmap addr
+    mov     x1, x28                   // size = file_size
+    mov     x2, #2                    // flags = CU_MEMHOSTREGISTER_DEVICEMAP
+    bl      cuMemHostRegister
+
+    ldp     x27, x28, [sp], #16
+    ldp     x25, x26, [sp], #16
+    ldp     x23, x24, [sp], #16
 
     // Next shard
     add     x26, x26, #1
@@ -1685,9 +3024,6 @@ get_layer_weight_ptr:
     mov     x3, #WEIGHT_SLOTS_PER_LAYER
     madd    x3, x0, x3, x1
     ldr     x0, [x2, x3, lsl #3]
-    ret
-
-    ldp     x29, x30, [sp], #16
     ret
 
 // ============================================================
@@ -2002,7 +3338,7 @@ print_int:
     ret
 .print_zero:
     mov     w5, #'0'
-    strb    w5, [x1]
+    strb    w5, [x1], #-1
     mov     x2, #1
     b       .print_digits
 

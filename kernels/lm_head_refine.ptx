@@ -1,0 +1,35 @@
+// lm_head_refine.ptx -- FP16 GEMV refinement on top-128 candidates
+//
+// Stage 3 of 3-stage INT8 ranking pipeline.
+//
+// Input:  weight_fp16[248320, 5120]  FP16 (full weight matrix, same as lm_head.ptx)
+//         input[5120]                F32
+//         top128_indices[128]        U32  from lm_head_topk
+// Output: refined_logits[128]        F32  exact FP16 dot products
+//
+// Launch: grid=(128/4, 1, 1) = 32 blocks, block=(128, 1, 1)
+//   Each block handles 4 candidate rows (indices gathered from top128_indices).
+//   Exact mirror of lm_head.ptx except weight row pointers are gathered:
+//     row_ptr[r] = weight_fp16 + top128_indices[base+r] * 5120 * 2
+//   All arithmetic identical to lm_head.ptx: cvt.f32.f16 + fma.rn.f32.
+//
+// Key difference from lm_head.ptx:
+//   1. Indirect weight row addressing via top128_indices gather.
+//   2. Only 32 blocks (not 62080), so total memory = 128 * 5120 * 2 = 1.25 MB
+//      vs full 248320 * 5120 * 2 = 2.38 GB → 1907x less bandwidth at refine stage.
+//   3. Output written to refined_logits[0..127] (dense), not scattered.
+//
+// Register additions vs lm_head.ptx:
+//   .reg .u64 %idx_ptr;           // top128_indices base
+//   .reg .u32 %row_idx<4>;        // gathered row indices
+//   // At block start:
+//   ld.param.u64  %idx_ptr, [indices_ptr];
+//   add.u32       %base4, ctaid.x*4, 0..3;
+//   ld.global.u32 %row_idx0, [%idx_ptr + base4*4 + 0];
+//   // Convert to byte offset: row_ptr = weight_fp16 + row_idx * 5120 * 2
+//   mul.lo.u32    %r_off, %row_idx0, 10240;
+//   cvt.u64.u32   %rd_row, %r_off;
+//   add.u64       %rd10, %weight_base, %rd_row;
+//   // Then K_LOOP is identical to lm_head.ptx
+//
+// dance vector: [gather-indices] → [fp16-gemv×4-rows] → [warp-reduce] → [write-128-logits]

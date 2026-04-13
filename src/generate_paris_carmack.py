@@ -203,8 +203,16 @@ class HybridEngine:
         norm_mod = gpu.load_cubin(f"{CACHE_DIR}/norm.cubin")
         self.norm_func = gpu.get_function(norm_mod, "norm")
 
-        fast_mod = gpu.load_cubin(f"{KERNEL_DIR}/gptq_gemv_fast.cubin")
-        self.proj_func_fast = gpu.get_function(fast_mod, "gptq_gemv_fast")
+        if getattr(self.model, "qweight_transposed", False):
+            # Model was pre-transposed offline: use coalesced [N, K/8] kernel
+            trans_mod = gpu.load_cubin(f"{KERNEL_DIR}/gptq_gemv_transposed.cubin")
+            self.proj_func_fast = gpu.get_function(trans_mod, "gptq_gemv_transposed")
+            self._qweight_transposed = True
+            print("    qweight layout: transposed [N, K/8] -- using gptq_gemv_transposed")
+        else:
+            fast_mod = gpu.load_cubin(f"{KERNEL_DIR}/gptq_gemv_fast.cubin")
+            self.proj_func_fast = gpu.get_function(fast_mod, "gptq_gemv_fast")
+            self._qweight_transposed = False
 
         activate_mod = gpu.load_cubin(f"{CACHE_DIR}/activate.cubin")
         self.activate_func = gpu.get_function(activate_mod, "activate")
@@ -212,7 +220,8 @@ class HybridEngine:
         lm_head_mod = gpu.load_cubin(f"{KERNEL_DIR}/lm_head.cubin")
         self.lm_head_func = gpu.get_function(lm_head_mod, "lm_head")
 
-        print("    Kernels loaded: embed_f16, norm, gptq_gemv_fast, activate, lm_head")
+        layout = "transposed [N,K/8]" if self._qweight_transposed else "original [K/8,N]"
+        print(f"    Kernels loaded: embed_f16, norm, gptq_gemv ({layout}), activate, lm_head")
 
     def _alloc_buffers(self):
         gpu = self.gpu
