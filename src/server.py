@@ -284,48 +284,85 @@ def _make_completion_id() -> str:
 async def _generate_tokens(
     prompt_tokens: list[int],
     max_tokens: int = 128,
-    stop_token: int = -1,
-) -> AsyncIterator[tuple[int, str]]:
+    temperature: float = 1.0,
+    stop_token_ids: Optional[list[int]] = None,
+) -> AsyncIterator[tuple[int, str, float]]:
     """
-    Core generation loop: prefill then decode.
+    Core generation loop using REAL inference.
 
-    Yields (token_id, token_text) pairs.
+    For prefill: runs the last prompt token through the full pipeline to
+    get the first output token.  Then for each decode step, runs the
+    previously generated token through the pipeline again.
+
+    Without KV cache reuse, each token is an independent forward pass
+    through all 64 layers.  This is slow (~seconds per token) but produces
+    real model outputs.
+
+    Yields (token_id, token_text, token_time_seconds) triples.
     """
-    # --- prefill ---
-    await engine.prefill(prompt_tokens)
+    if stop_token_ids is None:
+        eos_id = engine.tokenizer.eos_token_id
+        stop_token_ids = [eos_id] if eos_id is not None else []
 
-    # --- decode ---
-    seq_pos = len(prompt_tokens)
+    loop = asyncio.get_event_loop()
+
+    # --- prefill: process last prompt token to get first output ---
+    input_token = prompt_tokens[-1] if prompt_tokens else 0
+    print(f"  [generate] prefill token_id={input_token}, "
+          f"prompt_len={len(prompt_tokens)}")
+
     for i in range(max_tokens):
-        prev = prompt_tokens[-1] if i == 0 else token_id
-        token_id = await engine.decode_step(prev, seq_pos + i)
+        t_tok = time.monotonic()
 
-        if token_id == stop_token:
+        # Run forward pass in executor to avoid blocking the event loop
+        logits = await loop.run_in_executor(
+            None, engine.forward_token, input_token
+        )
+
+        token_id = engine.sample(logits, temperature=temperature)
+        token_time = time.monotonic() - t_tok
+
+        if token_id in stop_token_ids:
+            print(f"  [generate] stop token {token_id} after {i+1} tokens")
             break
 
         token_text = engine.detokenize([token_id])
         metrics.tokens_generated += 1
-        yield token_id, token_text
+
+        tok_s = 1.0 / token_time if token_time > 0 else 0.0
+        print(f"  [generate] token {i}: id={token_id} "
+              f"text={token_text!r} time={token_time:.2f}s "
+              f"({tok_s:.2f} tok/s)")
+
+        yield token_id, token_text, token_time
+
+        # Next iteration uses the token we just generated
+        input_token = token_id
 
 
 async def chat_completions(request: Request) -> Union[JSONResponse, StreamingResponse]:
     """POST /v1/chat/completions"""
     body = await request.json()
 
-    model = body.get("model", engine.config.name)
+    model = body.get("model", engine.model_name)
     messages = body.get("messages", [])
     stream = body.get("stream", False)
     max_tokens = body.get("max_tokens", 128)
-    temperature = body.get("temperature", 1.0)
+    temperature = body.get("temperature", 0.0)  # default greedy
 
-    # Flatten messages into a single prompt string
-    prompt_parts = []
-    for msg in messages:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        prompt_parts.append(f"<|{role}|>\n{content}")
-    prompt_parts.append("<|assistant|>\n")
-    prompt_text = "\n".join(prompt_parts)
+    # Format prompt using the model's real chat template
+    try:
+        prompt_text = engine.apply_chat_template(messages)
+    except Exception as e:
+        # Fallback: simple concatenation
+        prompt_parts = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            prompt_parts.append(f"<|{role}|>\n{content}")
+        prompt_parts.append("<|assistant|>\n")
+        prompt_text = "\n".join(prompt_parts)
+        print(f"  [chat] chat template failed ({e}), using fallback format")
 
     prompt_tokens = engine.tokenize(prompt_text)
     request_id = _make_chat_id()
@@ -333,9 +370,17 @@ async def chat_completions(request: Request) -> Union[JSONResponse, StreamingRes
 
     metrics.requests_served += 1
 
+    print(f"\n{'='*60}")
+    print(f"  [chat] request={request_id}")
+    print(f"  [chat] prompt_tokens={len(prompt_tokens)}, "
+          f"max_tokens={max_tokens}, temperature={temperature}")
+    print(f"  [chat] startup_time={_startup_duration:.2f}s")
+    t_request = time.monotonic()
+
     if stream:
         return StreamingResponse(
-            _stream_chat(request_id, model, created, prompt_tokens, max_tokens),
+            _stream_chat(request_id, model, created, prompt_tokens,
+                         max_tokens, temperature),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -347,11 +392,25 @@ async def chat_completions(request: Request) -> Union[JSONResponse, StreamingRes
     # Non-streaming: collect all tokens
     output_parts = []
     completion_tokens = 0
-    async for _tid, token_text in _generate_tokens(prompt_tokens, max_tokens):
+    total_gen_time = 0.0
+    first_token_time = None
+    async for _tid, token_text, tok_time in _generate_tokens(
+        prompt_tokens, max_tokens, temperature
+    ):
         output_parts.append(token_text)
         completion_tokens += 1
+        total_gen_time += tok_time
+        if first_token_time is None:
+            first_token_time = tok_time
 
     assistant_text = "".join(output_parts)
+    request_time = time.monotonic() - t_request
+    avg_tok_s = completion_tokens / total_gen_time if total_gen_time > 0 else 0.0
+
+    print(f"  [chat] done: {completion_tokens} tokens in {request_time:.2f}s "
+          f"({avg_tok_s:.2f} tok/s avg)")
+    if first_token_time is not None:
+        print(f"  [chat] first_token_time={first_token_time:.2f}s")
 
     return JSONResponse({
         "id": request_id,
@@ -373,6 +432,12 @@ async def chat_completions(request: Request) -> Union[JSONResponse, StreamingRes
             "completion_tokens": completion_tokens,
             "total_tokens": len(prompt_tokens) + completion_tokens,
         },
+        "lithos_timing": {
+            "first_token_seconds": round(first_token_time, 3) if first_token_time else None,
+            "total_seconds": round(request_time, 3),
+            "tokens_per_second": round(avg_tok_s, 3),
+            "startup_seconds": round(_startup_duration, 3),
+        },
     })
 
 
@@ -382,8 +447,11 @@ async def _stream_chat(
     created: int,
     prompt_tokens: list[int],
     max_tokens: int,
+    temperature: float = 0.0,
 ) -> AsyncIterator[str]:
-    """SSE stream for chat completions."""
+    """SSE stream for chat completions with real inference."""
+
+    t_stream_start = time.monotonic()
 
     # Initial chunk with role
     chunk = {
@@ -402,7 +470,16 @@ async def _stream_chat(
     yield f"data: {json.dumps(chunk)}\n\n"
 
     # Token-by-token chunks
-    async for _tid, token_text in _generate_tokens(prompt_tokens, max_tokens):
+    completion_tokens = 0
+    first_token_time = None
+    async for _tid, token_text, tok_time in _generate_tokens(
+        prompt_tokens, max_tokens, temperature
+    ):
+        completion_tokens += 1
+        if first_token_time is None:
+            first_token_time = tok_time
+            print(f"  [stream] first_token_time={first_token_time:.2f}s")
+
         chunk = {
             "id": request_id,
             "object": "chat.completion.chunk",
@@ -418,6 +495,11 @@ async def _stream_chat(
         }
         yield f"data: {json.dumps(chunk)}\n\n"
 
+    total_time = time.monotonic() - t_stream_start
+    avg_tok_s = completion_tokens / total_time if total_time > 0 else 0.0
+    print(f"  [stream] done: {completion_tokens} tokens in {total_time:.2f}s "
+          f"({avg_tok_s:.2f} tok/s avg)")
+
     # Final chunk
     chunk = {
         "id": request_id,
@@ -431,6 +513,16 @@ async def _stream_chat(
                 "finish_reason": "stop",
             }
         ],
+        "usage": {
+            "prompt_tokens": len(prompt_tokens),
+            "completion_tokens": completion_tokens,
+            "total_tokens": len(prompt_tokens) + completion_tokens,
+        },
+        "lithos_timing": {
+            "first_token_seconds": round(first_token_time, 3) if first_token_time else None,
+            "total_seconds": round(total_time, 3),
+            "tokens_per_second": round(avg_tok_s, 3),
+        },
     }
     yield f"data: {json.dumps(chunk)}\n\n"
     yield "data: [DONE]\n\n"
@@ -440,20 +532,28 @@ async def completions(request: Request) -> Union[JSONResponse, StreamingResponse
     """POST /v1/completions — raw text completion endpoint."""
     body = await request.json()
 
-    model = body.get("model", engine.config.name)
+    model = body.get("model", engine.model_name)
     prompt = body.get("prompt", "")
     stream = body.get("stream", False)
     max_tokens = body.get("max_tokens", 128)
+    temperature = body.get("temperature", 0.0)
 
     prompt_tokens = engine.tokenize(prompt)
     request_id = _make_completion_id()
     created = int(time.time())
 
     metrics.requests_served += 1
+    t_request = time.monotonic()
+
+    print(f"\n{'='*60}")
+    print(f"  [completions] request={request_id}")
+    print(f"  [completions] prompt_tokens={len(prompt_tokens)}, "
+          f"max_tokens={max_tokens}")
 
     if stream:
         return StreamingResponse(
-            _stream_completion(request_id, model, created, prompt_tokens, max_tokens),
+            _stream_completion(request_id, model, created, prompt_tokens,
+                               max_tokens, temperature),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -465,9 +565,19 @@ async def completions(request: Request) -> Union[JSONResponse, StreamingResponse
     # Non-streaming
     output_parts = []
     completion_tokens = 0
-    async for _tid, token_text in _generate_tokens(prompt_tokens, max_tokens):
+    total_gen_time = 0.0
+    async for _tid, token_text, tok_time in _generate_tokens(
+        prompt_tokens, max_tokens, temperature
+    ):
         output_parts.append(token_text)
         completion_tokens += 1
+        total_gen_time += tok_time
+
+    request_time = time.monotonic() - t_request
+    avg_tok_s = completion_tokens / total_gen_time if total_gen_time > 0 else 0.0
+
+    print(f"  [completions] done: {completion_tokens} tokens in "
+          f"{request_time:.2f}s ({avg_tok_s:.2f} tok/s)")
 
     return JSONResponse({
         "id": request_id,
@@ -485,6 +595,10 @@ async def completions(request: Request) -> Union[JSONResponse, StreamingResponse
             "prompt_tokens": len(prompt_tokens),
             "completion_tokens": completion_tokens,
             "total_tokens": len(prompt_tokens) + completion_tokens,
+        },
+        "lithos_timing": {
+            "total_seconds": round(request_time, 3),
+            "tokens_per_second": round(avg_tok_s, 3),
         },
     })
 

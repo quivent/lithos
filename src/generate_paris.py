@@ -215,13 +215,14 @@ class PrefillEngine:
         for i in range(NUM_LAYERS):
             if self.layer_types[i] != "linear_attention":
                 continue
-            # S: state matrix per value head, shape [num_value_heads, key_dim, value_dim]
-            self.dn_S[i] = np.zeros((NUM_VALUE_HEADS, KEY_HEAD_DIM, VALUE_HEAD_DIM), dtype=np.float32)
+            # S: state matrix per value head, shape [num_value_heads, value_dim, key_dim]
+            # Note: state layout is [Hv, Dv, Dk] following the fused_gdn kernel convention
+            self.dn_S[i] = np.zeros((NUM_VALUE_HEADS, VALUE_HEAD_DIM, KEY_HEAD_DIM), dtype=np.float32)
             # Conv buffer: store last (kernel_size-1) = 3 QKV values per channel
             self.dn_conv_buf[i] = np.zeros((10240, CONV_KERNEL_SIZE - 1), dtype=np.float32)
 
         print(f"    DeltaNet state initialized ({len(self.dn_S)} layers, "
-              f"S shape={NUM_VALUE_HEADS}x{KEY_HEAD_DIM}x{VALUE_HEAD_DIM})")
+              f"S shape={NUM_VALUE_HEADS}x{VALUE_HEAD_DIM}x{KEY_HEAD_DIM})")
 
     # ------------------------------------------------------------------
     # GPU kernel wrappers (same as generate_first_token.py)

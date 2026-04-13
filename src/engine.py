@@ -589,6 +589,8 @@ class LithosEngine:
         self.dn_state.close()
         self.act_bufs.close()
         self.residual.close()
+        if self._weight_stager is not None:
+            self._weight_stager.close()
 
     # ------------------------------------------------------------------
     # Per-layer orchestration
