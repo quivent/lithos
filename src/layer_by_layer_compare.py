@@ -173,13 +173,14 @@ class GPTQDequantizer:
         for bit in range(8):
             qw_unpacked[bit::8, :] = (qweight >> (bit * 4)) & 0xF
 
-        # Unpack qzeros: each int32 -> 8 x 4-bit values
-        N_z_packed = qzeros.shape[1]
-        qz_unpacked = np.zeros((num_groups, N), dtype=np.int32)
-        for bit in range(8):
-            qz_unpacked[:, bit::8] = (qzeros >> (bit * 4)) & 0xF
+        # NOTE: The qzeros in this GPTQ model store 7, but the actual zero point
+        # used for dequantization is 8. This matches the GPU gptq_matvec kernel
+        # which hardcodes 0x41000000 = 8.0f as the zero point.
+        # GPTQ symmetric 4-bit quantization centers at 8 (midpoint of 0-15).
+        # The stored qzeros = actual_zero - 1 in this GPTQ variant.
+        ZERO_POINT_F32 = 8.0
 
-        # Dequantize: w = (q - z) * scale
+        # Dequantize: w = (q - 8) * scale
         scales_f32 = scales if scales.dtype == np.float32 else scales.astype(np.float32)  # [num_groups, N]
 
         w_dequant = np.zeros((K, N), dtype=np.float32)
@@ -187,7 +188,7 @@ class GPTQDequantizer:
             row_start = g * GROUP_SIZE
             row_end = min(row_start + GROUP_SIZE, K)
             w_dequant[row_start:row_end, :] = (
-                (qw_unpacked[row_start:row_end, :] - qz_unpacked[g, :]) *
+                (qw_unpacked[row_start:row_end, :].astype(np.float32) - ZERO_POINT_F32) *
                 scales_f32[g, :]
             )
 

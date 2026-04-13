@@ -309,7 +309,7 @@ class PrefillEngine:
                     ctypes.c_uint32(N),
                     ctypes.c_uint32(K),
                 ],
-                shared_mem=0,
+                shared_mem=20480,
             )
         else:
             # Fallback to old kernel for K > 5120 (smem buffer limited to 5120)
