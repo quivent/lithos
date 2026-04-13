@@ -1,0 +1,99 @@
+\\ Hopper (SM90 / GH200) special register dictionary
+\\ Probed empirically: ptxas -arch sm_90 + nvdisasm on GH200
+\\ Source: S2R control-word bits [15:8] encode the SR register ID
+\\
+\\ name                     instruction  register_id  description
+
+\\ ── Thread / block identity ─────────────────────────────────────
+LANEID                      S2R          0x00         \\ lane within warp (0-31)
+TID                         S2R          0x20         \\ packed thread ID (x|y|z)
+TID_X                       S2R          0x21         \\ thread ID, X dimension
+TID_Y                       S2R          0x22         \\ thread ID, Y dimension
+TID_Z                       S2R          0x23         \\ thread ID, Z dimension
+CTAID_X                     S2R          0x25         \\ CTA (block) ID, X dimension
+CTAID_Y                     S2R          0x26         \\ CTA (block) ID, Y dimension
+CTAID_Z                     S2R          0x27         \\ CTA (block) ID, Z dimension
+
+\\ ── Block / grid dimensions ─────────────────────────────────────
+NTID                        S2R          0x28         \\ packed block dim (x|y|z)
+
+\\ ── Warp / SM identity ──────────────────────────────────────────
+VIRTCFG                     S2R          0x02         \\ virtual config (warpid in bits [15:8])
+VIRTID                      S2R          0x03         \\ virtual ID
+VIRTUALSMID                 S2R          0x43         \\ virtual SM ID (= %smid)
+VIRTUALENGINEID             S2R          0x44         \\ virtual engine ID
+
+\\ ── Lane masks ──────────────────────────────────────────────────
+EQMASK                      S2R          0x38         \\ lanemask_eq: bit set for own lane
+LTMASK                      S2R          0x39         \\ lanemask_lt: bits set for lanes < self
+LEMASK                      S2R          0x3A         \\ lanemask_le: bits set for lanes <= self
+GTMASK                      S2R          0x3B         \\ lanemask_gt: bits set for lanes > self
+GEMASK                      S2R          0x3C         \\ lanemask_ge: bits set for lanes >= self
+
+\\ ── Timing ──────────────────────────────────────────────────────
+CLOCK                       S2R          0x01         \\ cycle counter (low 32 bits, legacy)
+CLOCKLO                     CS2R         0x50         \\ cycle counter, low 32 bits
+CLOCKHI                     CS2R         0x51         \\ cycle counter, high 32 bits
+GLOBALTIMERLO               CS2R         0x52         \\ global timer, low 32 bits
+GLOBALTIMERHI               CS2R         0x53         \\ global timer, high 32 bits
+
+\\ ── Shared memory ───────────────────────────────────────────────
+SMEMSZ                      S2R          0x32         \\ total shared memory size
+SMEMBANKS                   S2R          0x33         \\ shared memory bank count
+
+\\ ── Error status ────────────────────────────────────────────────
+GLOBALERRORSTATUS            S2R          0x40         \\ global error status
+CGAERRORSTATUS               S2R          0x41         \\ CGA error status
+WARPERRORSTATUS              S2R          0x42         \\ warp error status
+ESR_PC                       S2R          0x54         \\ exception status: PC low
+ESR_PC_HI                    S2R          0x55         \\ exception status: PC high
+
+\\ ── Performance counters ────────────────────────────────────────
+PM0                         S2R          0x64         \\ perf monitor counter 0
+PM_HI0                      S2R          0x65         \\ perf monitor counter 0 high
+PM1                         S2R          0x66         \\ perf monitor counter 1
+PM_HI1                      S2R          0x67         \\ perf monitor counter 1 high
+PM2                         S2R          0x68         \\ perf monitor counter 2
+PM_HI2                      S2R          0x69         \\ perf monitor counter 2 high
+PM3                         S2R          0x6A         \\ perf monitor counter 3
+PM_HI3                      S2R          0x6B         \\ perf monitor counter 3 high
+PM4                         S2R          0x6C         \\ perf monitor counter 4
+PM_HI4                      S2R          0x6D         \\ perf monitor counter 4 high
+PM5                         S2R          0x6E         \\ perf monitor counter 5
+PM_HI5                      S2R          0x6F         \\ perf monitor counter 5 high
+PM6                         S2R          0x70         \\ perf monitor counter 6
+PM_HI6                      S2R          0x71         \\ perf monitor counter 6 high
+PM7                         S2R          0x72         \\ perf monitor counter 7
+PM_HI7                      S2R          0x73         \\ perf monitor counter 7 high
+
+\\ ── Resource allocation ─────────────────────────────────────────
+REGALLOC                    S2R          0x3D         \\ register allocation info
+BARRIERALLOC                S2R          0x3E         \\ barrier allocation info
+CTAREGPOOLSZ                S2R          0x8B         \\ CTA register pool size
+
+\\ ── Memory windows ──────────────────────────────────────────────
+LWINHI                      S2R          0x2E         \\ local window high
+LWINLO                      S2R          0x34         \\ local window low
+LWINSZ                      S2R          0x35         \\ local window size
+LMEMLOSZ                    S2R          0x36         \\ local memory low size
+LMEMHIOFF                   S2R          0x37         \\ local memory high offset
+SWINHI                      S2R          0x2F         \\ shared window high
+SWINLO                      S2R          0x30         \\ shared window low
+SWINSZ                      S2R          0x31         \\ shared window size
+SM_SPA_VERSION              S2R          0x2C         \\ SM SPA version
+
+\\ ── Hopper-specific (CGA / warp groups) ─────────────────────────
+ORDERING_TICKET             S2R          0x0F         \\ ordering ticket
+WARPGROUP_INFO              S2R          0x86         \\ warp group info
+WARPGROUPID                 S2R          0x87         \\ warp group ID
+CGA_CTAID                   S2R          0x88         \\ CGA-local CTA ID
+GPC_LOCAL_CGAID             S2R          0x89         \\ GPC-local CGA ID
+HWTASKID                    S2R          0x60         \\ hardware task ID
+
+\\ ── Miscellaneous ───────────────────────────────────────────────
+AFFINITY                    S2R          0x1C         \\ thread affinity
+MACHINE_ID_1                S2R          0x19         \\ machine ID 1
+MACHINE_ID_2                S2R          0x1A         \\ machine ID 2
+MACHINE_ID_3                S2R          0x1B         \\ machine ID 3
+SW_SCRATCH                  S2R          0x18         \\ software scratch register
+VARIABLE_RATE               S2R          0x84         \\ variable rate shading

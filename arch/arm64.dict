@@ -1,0 +1,27 @@
+\\ ARM64 system register dictionary
+\\ Encoding: op0:op1:CRn:CRm:op2 packed as ((op0-2)<<14 | op1<<11 | CRn<<7 | CRm<<3 | op2)
+\\ Only registers useful for Lithos runtime (timing, identity, cache, TLS)
+\\
+\\ name                instruction  encoding   description
+
+\\ ── Timing ──────────────────────────────────────────────────────
+CNTVCT_EL0              MRS          0x5F02    \\ virtual timer count (cycle counter)
+CNTFRQ_EL0              MRS          0x5F00    \\ counter frequency (Hz)
+CNTPCT_EL0              MRS          0x5F01    \\ physical timer count
+
+\\ ── CPU identity ────────────────────────────────────────────────
+MIDR_EL1                MRS          0x4000    \\ main ID register (implementer, part, revision)
+MPIDR_EL1               MRS          0x4005    \\ multiprocessor affinity (core ID, cluster)
+
+\\ ── Thread-local storage ────────────────────────────────────────
+TPIDR_EL0               MRS          0x5E82    \\ user-mode thread pointer (TLS base)
+
+\\ ── Cache geometry ──────────────────────────────────────────────
+CTR_EL0                 MRS          0x5801    \\ cache type (line size, L1 policy)
+DCZID_EL0               MRS          0x5807    \\ data cache zero-line size
+CLIDR_EL1               MRS          0x4801    \\ cache level ID (number of levels, types)
+CCSIDR_EL1              MRS          0x4800    \\ cache size ID (sets, ways, line size)
+
+\\ ── Floating-point control ──────────────────────────────────────
+FPCR                    MRS          0x5A20    \\ FP control (rounding mode, exceptions)
+FPSR                    MRS          0x5A21    \\ FP status (flags, cumulative exceptions)
