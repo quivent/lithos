@@ -7,12 +7,12 @@ Everything that can run simultaneously does. Blocked items wait.
 ## PROGRESS
 
 ```
-WAVE 1:  [██████░░] 6/8 complete
+WAVE 1:  [███████░] 6/8 complete, 2 running (1a, 1d)
 WAVE 2:  [░░░░░░░░] 0/1 blocked
 WAVE 3:  [░░░░░░░░] 0/4 blocked
 WAVE 4:  [░░░░░░░░] 0/3 blocked
 WAVE 5:  [░░░░░░░░] 0/2 blocked
-TOTAL:   [███░░░░░] 6/18
+TOTAL:   [████░░░░] 6/18
 ```
 
 ---
@@ -21,10 +21,10 @@ TOTAL:   [███░░░░░] 6/18
 
 ```
 1a. [░░] Wire compiler.ls              IN PROGRESS — worker running
-1b. [░░] Rewrite 9 inference kernels   IN PROGRESS — worker running
-1c. [░░] arch/hopper.dict + arm64.dict IN PROGRESS — worker running
-1d. [░░] QMD differential probe        IN PROGRESS — worker running
-1e. [░░] Update HTML docs (.li→.ls)    IN PROGRESS — worker running
+1b. [██] Rewrite 9 inference kernels   DONE
+1c. [██] arch/hopper.dict + arm64.dict DONE (99 + 27 lines)
+1d. [░░] QMD differential probe        IN PROGRESS — 4 probe tools written, no fields.md yet
+1e. [██] Update HTML docs (.li→.ls)    DONE (language.html live, pipeline/roadmap updated)
 1f. [██] Reconcile .ls precursors      DONE
 1g. [██] Delete dead code (93 files)   DONE
 1h. [██] GPU register model design     DONE
