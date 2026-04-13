@@ -215,7 +215,7 @@ def main() -> int:
     tc_mod = gpu.load_cubin(f"{KERNEL_DIR}/gptq_matvec_tc.cubin")
     tc_func = gpu.get_function(tc_mod, "gptq_matvec_tc")
 
-    GRID_TC = math.ceil(N / 64)
+    GRID_TC = math.ceil(N / 128)
     d_tc_output = gpu.mem_alloc(N * 4)
     gpu.memcpy_htod(d_tc_output, zero_buf.ctypes.data_as(ctypes.c_void_p), N * 4)
 
@@ -234,7 +234,7 @@ def main() -> int:
             ctypes.c_uint32(N),
             ctypes.c_uint32(K),
         ],
-        shared_mem=20768,
+        shared_mem=20480,
     )
     gpu.synchronize()
 
@@ -254,7 +254,7 @@ def main() -> int:
                 ctypes.c_uint32(N),
                 ctypes.c_uint32(K),
             ],
-            shared_mem=20768,
+            shared_mem=20480,
         )
     gpu.synchronize()
     t1 = time.perf_counter()

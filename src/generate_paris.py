@@ -535,10 +535,10 @@ class PrefillEngine:
 
         if layer_type == "full_attention":
             self.run_full_attention(layer_idx, self.d_norm_out, position)
+            attn_out = download_f32(gpu, self.d_attn_out, HIDDEN_DIM)
         else:  # linear_attention
             self.run_deltanet(layer_idx, self.d_norm_out)
-
-        attn_out = download_f32(gpu, self.d_attn_out, HIDDEN_DIM)
+            attn_out = download_f32(gpu, self.d_attn_out, HIDDEN_DIM)
         x = residual + attn_out
         residual = x.copy()
         gpu.mem_free(d_x_gpu)
@@ -567,6 +567,13 @@ class PrefillEngine:
                 if has_nan or has_inf:
                     print(f"    Layer {layer_idx}: norm={x_norm:.4f} NaN={has_nan} Inf={has_inf} -- ABORTING")
                     return None
+
+        # Print DeltaNet state statistics after processing this token
+        if token_pos == 0 or token_pos == 4:  # first and last token
+            s_norms = []
+            for i in sorted(self.dn_S.keys())[:3]:  # first 3 DeltaNet layers
+                s_norms.append(np.linalg.norm(self.dn_S[i]))
+            print(f"    DeltaNet state norms (first 3 layers): {[f'{n:.4f}' for n in s_norms]}")
 
         return x
 
