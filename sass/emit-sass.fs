@@ -130,19 +130,13 @@ variable max-reg-used  0 max-reg-used !
 
 : sass-reset  0 sass-pos !  0 max-reg-used ! ;
 
-\ Emit one 16-byte instruction: 8-byte inst word + 8-byte ctrl word
+\ Emit one 16-byte instruction from four u32 values.
+\ DEPRECATED — use sinst, instead. Fixed to delegate rather than use
+\ broken r-stack manipulation that corrupted ctrl word.
 : sass,  ( inst-lo inst-hi ctrl-lo ctrl-hi -- )
-  >r >r
-  sass-buf sass-pos @ + >r
-  \ inst word (little-endian, low 32 bits first)
-  over r@ !          \ inst-lo at offset 0
-  r@ 4 + !           \ inst-hi at offset 4
-  \ ctrl word
-  r> 8 + >r
-  r@ r> ! drop       \ ctrl-lo at offset 8 — simplified
-  \ TODO: proper 64-bit store for both words
-  16 sass-pos +!
-  r> drop ;
+  swap 32 lshift swap or >r    \ combine ctrl-hi|ctrl-lo -> ctrl64
+  swap 32 lshift swap or       \ combine inst-hi|inst-lo -> inst64
+  r> sinst, ;
 
 \ Simpler: emit raw bytes
 : sb,  ( byte -- )  sass-buf sass-pos @ + c!  1 sass-pos +! ;
@@ -206,7 +200,8 @@ $27 constant SR-CTAID-Z
   $7221 or r> or r> or
   ctrl-fadd sinst, ;
 
-\ FFMA Rd, Ra, Rb, Rc (fused multiply-add)  [stub — real impl below]
+\ FFMA placeholder — immediately overridden by the full definition below.
+\ Kept so that forward references (if any) resolve during compilation.
 : ffma,  ( rd ra rb rc -- )
   drop drop drop drop
   $0000000502097223 0 ctrl-ffma sinst, ;
@@ -216,10 +211,7 @@ $27 constant SR-CTAID-Z
 \ Encodings verified against probe disassembly (probe*.sass)
 \ ============================================================
 
-\ Corrected opcode constants (bits[15:0] including PT predicate $7xxx)
-\ Extend the existing OP-* table with missing GEMV ops
-$7947 constant OP-BRA
-$7c0c constant OP-ISETP
+\ (OP-BRA and OP-ISETP already defined above in the opcode table.)
 
 \ LDG.E Rd, [Ra]  — 32-bit global load, no offset
 \ Verified: LDG.E R0, [R2.64] -> inst=0x0000000402007981 ctrl=0x000ea8000c1e1900
@@ -469,7 +461,7 @@ $7c0c constant OP-ISETP
   \ SHF.R.U32 Rd, Rs, shamt, RZ
   32 lshift >r              \ shamt -> bits[47:32]
   24 lshift >r              \ rs    -> bits[31:24]
-  16 lshift                 \ rd    -> bits[23:16]
+  track-rd 16 lshift        \ rd    -> bits[23:16]
   $7819 or r> or            \ rs
   $ff 48 lshift or          \ RZ funnel source at bits[55:48]
   r> or                     \ shamt
@@ -490,7 +482,7 @@ $7c0c constant OP-ISETP
   \ LOP3.LUT Rd, Rs, imm32, RZ, 0xC0  (Rd = Rs AND imm32)
   32 lshift >r              \ imm32 -> bits[63:32]
   24 lshift >r              \ rs    -> bits[31:24]
-  16 lshift                 \ rd    -> bits[23:16]
+  track-rd 16 lshift        \ rd    -> bits[23:16]
   $7812 or r> or r> or
   $c0 ctrl-lop3 sinst, ;    \ LUT=0xC0 = AND(A,B,C)=A&B
 
@@ -506,7 +498,7 @@ $7c0c constant OP-ISETP
 : i2f-s32-f32,  ( rd rs -- )
   \ I2F.F32.S32 Rd, Rs
   24 lshift >r              \ rs -> bits[31:24]
-  16 lshift                 \ rd -> bits[23:16]
+  track-rd 16 lshift        \ rd -> bits[23:16]
   $7306 or r> or
   ctrl-i2f sinst, ;
 
@@ -609,7 +601,7 @@ $7c0c constant OP-ISETP
 : lds,  ( rd ra off -- )
   32 lshift >r              \ off -> bits[47:32]
   24 lshift >r              \ ra  -> bits[31:24]
-  16 lshift                 \ rd  -> bits[23:16]
+  track-rd 16 lshift        \ rd  -> bits[23:16]
   $7984 or r> or r> or
   ctrl-lds sinst, ;
 
