@@ -173,6 +173,23 @@ def _load_libcuda() -> ctypes.CDLL:
     lib.cuMemsetD8Async.argtypes = [CUdeviceptr, ctypes.c_ubyte, c_size_t, CUstream]
     lib.cuMemsetD8Async.restype = CUresult
 
+    # -- cuLaunchCooperativeKernel --------------------------------------------
+    lib.cuLaunchCooperativeKernel.argtypes = [
+        CUfunction,           # f
+        c_uint, c_uint, c_uint,  # gridDimX/Y/Z
+        c_uint, c_uint, c_uint,  # blockDimX/Y/Z
+        c_uint,               # sharedMemBytes
+        CUstream,             # hStream
+        c_void_p,             # kernelParams (void**)
+    ]
+    lib.cuLaunchCooperativeKernel.restype = CUresult
+
+    # -- cuOccupancyMaxActiveBlocksPerMultiprocessor --------------------------
+    lib.cuOccupancyMaxActiveBlocksPerMultiprocessor.argtypes = [
+        POINTER(c_int), CUfunction, c_int, c_size_t
+    ]
+    lib.cuOccupancyMaxActiveBlocksPerMultiprocessor.restype = CUresult
+
     return lib
 
 
@@ -377,6 +394,66 @@ class CUDADriver:
                 None,               # extra
             ),
         )
+
+    # -- Cooperative kernel launch -------------------------------------------
+    def launch_cooperative(
+        self,
+        func: CUfunction,
+        grid: tuple[int, int, int],
+        block: tuple[int, int, int],
+        args: Sequence[Any],
+        shared_mem: int = 0,
+        stream: CUstream | None = None,
+    ) -> None:
+        """Launch a cooperative kernel (requires cuLaunchCooperativeKernel).
+
+        All blocks must be resident simultaneously.  The grid size must not
+        exceed the occupancy limit for the kernel.
+        """
+        n = len(args)
+        packed: list[Any] = []
+        for a in args:
+            if isinstance(a, int):
+                packed.append(ctypes.c_uint32(a))
+            elif isinstance(a, float):
+                packed.append(ctypes.c_float(a))
+            elif isinstance(a, ctypes.c_uint64):
+                packed.append(a)
+            elif isinstance(a, ctypes.c_uint32):
+                packed.append(a)
+            elif isinstance(a, ctypes.c_float):
+                packed.append(a)
+            elif isinstance(a, ctypes.c_int32):
+                packed.append(a)
+            else:
+                packed.append(a)
+
+        param_ptrs = (c_void_p * n)()
+        for i, p in enumerate(packed):
+            param_ptrs[i] = ctypes.cast(byref(p), c_void_p).value
+
+        _check(
+            "cuLaunchCooperativeKernel",
+            self._lib.cuLaunchCooperativeKernel(
+                func,
+                grid[0], grid[1], grid[2],
+                block[0], block[1], block[2],
+                shared_mem,
+                stream,
+                param_ptrs,
+            ),
+        )
+
+    def max_active_blocks(self, func: CUfunction, block_size: int, shared_mem: int = 0) -> int:
+        """Query max active blocks per SM for a cooperative launch."""
+        num_blocks = c_int()
+        _check(
+            "cuOccupancyMaxActiveBlocksPerMultiprocessor",
+            self._lib.cuOccupancyMaxActiveBlocksPerMultiprocessor(
+                byref(num_blocks), func, block_size, c_size_t(shared_mem)
+            ),
+        )
+        return num_blocks.value
 
     # -- Cleanup -------------------------------------------------------------
     def close(self) -> None:
