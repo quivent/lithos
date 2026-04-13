@@ -34,6 +34,7 @@ SRCS=(
     lithos-bootstrap.s
     lithos-lexer.s
     lithos-parser.s
+    lithos-compose.s
     lithos-expr.s
     emit-arm64.s
     lithos-elf-writer.s
@@ -199,6 +200,7 @@ LINK_ORDER=(
     "$BUILD/lithos-bootstrap.o"
     "$BUILD/lithos-lexer.o"
     "$BUILD/lithos-parser.o"
+    "$BUILD/lithos-compose.o"
     "$BUILD/lithos-expr.o"
     "$BUILD/emit-arm64.o"
     "$BUILD/lithos-elf-writer.o"

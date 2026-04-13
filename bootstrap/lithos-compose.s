@@ -422,10 +422,9 @@ parse_binding_compose:
     cmp     w0, #TOK_IDENT
     b.ne    parse_error
 
-    // Save name token's offset and length (for sym_add later)
-    ldr     w5, [x19, #4]          // name offset in source
-    ldr     w6, [x19, #8]          // name length
-    stp     x5, x6, [sp, #-16]!
+    // Save pointer to the name token (x19 points into token buffer)
+    // We need this after parse_expr to call sym_add.
+    str     x19, [sp, #-16]!       // save name token pointer
 
     // Skip the name — advance to expression
     add     x19, x19, #TOK_STRIDE_SZ
@@ -435,21 +434,13 @@ parse_binding_compose:
     bl      parse_expr
 
     // w0 = register holding expression result
-    // x19 is now PAST the expression tokens (correct position to continue)
-    mov     w4, w0
+    // x19 is now PAST the expression tokens — do NOT rewind it
+    mov     w4, w0                  // stash result reg
 
-    // Recover saved name offset/length
-    ldp     x5, x6, [sp], #16
-
-    // Point x19 temporarily at a fake token with the name's offset/length
-    // so sym_add can read it. We use the stack as scratch.
-    sub     sp, sp, #16
-    mov     w0, #TOK_IDENT
-    str     w0, [sp, #0]           // token type
-    str     w5, [sp, #4]           // name offset
-    str     w6, [sp, #8]           // name length
-    mov     x20, x19               // save real x19 (post-expr position)
-    mov     x19, sp                // point x19 at fake token
+    // Save post-expr token position, restore x19 to name token for sym_add
+    ldr     x5, [sp]               // x5 = saved name token pointer
+    str     x19, [sp]              // overwrite with post-expr position
+    mov     x19, x5                // x19 = name token (sym_add reads from x19)
 
     // Register the binding: name → result register
     mov     w1, #KIND_LOCAL_REG
@@ -459,9 +450,8 @@ parse_binding_compose:
     ldr     w3, [x3]
     bl      sym_add
 
-    // Restore real token position (past the expression)
-    mov     x19, x20
-    add     sp, sp, #16
+    // Restore x19 to post-expr position (past the expression)
+    ldr     x19, [sp], #16
 
     ldp     x29, x30, [sp], #16
     ret

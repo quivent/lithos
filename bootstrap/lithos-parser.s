@@ -76,6 +76,8 @@
 .equ TOK_SHR,       65
 .equ TOK_LBRACK,    67
 .equ TOK_RBRACK,    68
+.equ TOK_LPAREN,    69
+.equ TOK_RPAREN,    70
 .equ TOK_COLON,     72
 .equ TOK_SUM,       75
 .equ TOK_MAX,       76
@@ -445,8 +447,10 @@ free_reg:
 reset_regs:
     adrp    x0, next_reg
     add     x0, x0, :lo12:next_reg
-    mov     w1, #REG_FIRST
-    str     w1, [x0]
+    adrp    x1, reg_floor
+    add     x1, x1, :lo12:reg_floor
+    ldr     w2, [x1]           // reset to floor, not REG_FIRST
+    str     w2, [x0]
     ret
 
 // ============================================================
@@ -990,7 +994,11 @@ parse_tokens:
     add     x0, x0, :lo12:scope_depth
     str     wzr, [x0]
 
-    // Reset register allocator
+    // Initialize register floor and reset allocator
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    mov     w1, #REG_FIRST
+    str     w1, [x0]
     bl      reset_regs
 
     // Parse top-level declarations
@@ -1131,6 +1139,17 @@ parse_composition:
     ldr     w4, [x0]
     stp     x4, xzr, [sp, #-16]!  // save old ls_sym_count
 
+    // Save old reg_floor and next_reg, set new floor = current next_reg
+    // so that reset_regs inside the body never reclaims outer-scope regs
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    ldr     w4, [x0]              // old reg_floor
+    adrp    x1, next_reg
+    add     x1, x1, :lo12:next_reg
+    ldr     w5, [x1]              // old next_reg (= first reg after outer vars)
+    stp     x4, x5, [sp, #-16]!   // save [old_floor, old_next_reg]
+    str     w5, [x0]              // reg_floor = next_reg (protect outer regs)
+
     // Increment scope depth
     adrp    x0, scope_depth
     add     x0, x0, :lo12:scope_depth
@@ -1158,7 +1177,7 @@ parse_composition:
     MOVI32   w0, 0x910003FD     // ADD X29, SP, #0
     bl      emit32
 
-    // Reset register allocator for this function
+    // reg_floor already set above — reset_regs will use it
     bl      reset_regs
 
     // Parse parameters (idents before the colon)
@@ -1218,6 +1237,15 @@ parse_composition:
     str     w1, [x0]
     mov     w0, w1
     bl      sym_pop_scope
+
+    // Restore old reg_floor and next_reg
+    ldp     x4, x5, [sp], #16   // [old_floor, old_next_reg]
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    str     w4, [x0]            // restore reg_floor
+    adrp    x0, next_reg
+    add     x0, x0, :lo12:next_reg
+    str     w5, [x0]            // restore next_reg
 
     // Restore old ls_sym_count (actually sym_pop_scope handles this)
     add     sp, sp, #16         // drop saved old ls_sym_count
@@ -1426,6 +1454,17 @@ parse_ident_stmt:
     cmp     w0, #TOK_EQ
     b.eq    .Lident_assign
 
+    // If next token is NEWLINE or EOF, it's a bare call (no args)
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Lident_call
+    cmp     w0, #TOK_EOF
+    b.eq    .Lident_call
+
+    // Otherwise: name followed by expression tokens → binding (no = sign)
+    bl      parse_binding_compose
+    ldp     x29, x30, [sp], #16
+    ret
+
 .Lident_call:
     bl      parse_comp_call
     ldp     x29, x30, [sp], #16
@@ -1579,10 +1618,14 @@ parse_var_decl:
 
     add     x19, x19, #TOK_STRIDE_SZ  // skip 'var'
 
-    // Expect IDENT (name)
+    // Expect IDENT or keyword-as-name (e.g. "var buf 0" where buf is TOK_BUF)
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq    .Lvar_name_ok
+    // Accept any token with a valid source text (keywords reused as names)
+    ldr     w1, [x19, #8]          // length
+    cbz     w1, parse_error
+.Lvar_name_ok:
 
     // Allocate register for this variable
     stp     x19, xzr, [sp, #-16]!
@@ -2450,9 +2493,16 @@ parse_bitwise:
     ldp     w4, w5, [sp], #16
     mov     w6, w0
 
+    // Pick result register: reuse left if scratch (avoids pressure buildup
+    // in chains like  a | b | c | d), otherwise allocate fresh.
+    cmp     w4, #REG_FIRST
+    b.lt    .Lbit_alloc
+    mov     w7, w4              // reuse left scratch register as dest
+    b       .Lbit_emit
+.Lbit_alloc:
     bl      alloc_reg
     mov     w7, w0
-
+.Lbit_emit:
     cmp     w5, #TOK_AMP
     b.eq    .Lbit_and
     cmp     w5, #TOK_PIPE
@@ -2462,18 +2512,24 @@ parse_bitwise:
     mov     w1, w4
     mov     w2, w6
     bl      emit_eor_reg
-    b       .Lbit_next
+    b       .Lbit_reclaim
 .Lbit_and:
     mov     w0, w7
     mov     w1, w4
     mov     w2, w6
     bl      emit_and_reg
-    b       .Lbit_next
+    b       .Lbit_reclaim
 .Lbit_or:
     mov     w0, w7
     mov     w1, w4
     mov     w2, w6
     bl      emit_orr_reg
+.Lbit_reclaim:
+    // Reclaim all scratch temps above result: next_reg = w7 + 1
+    cmp     w7, #REG_FIRST
+    b.lt    .Lbit_next
+    add     w0, w7, #1
+    bl      free_reg
 .Lbit_next:
     mov     w0, w7
     b       .Lbit_loop
@@ -2509,6 +2565,12 @@ parse_shift:
     ldp     w4, w5, [sp], #16
     mov     w6, w0
 
+    // Reclaim sub-expression temporaries above w6
+    cmp     w6, #REG_FIRST
+    b.lt    1f
+    add     w0, w6, #1
+    bl      free_reg            // next_reg = w6 + 1
+1:
     bl      alloc_reg
     mov     w7, w0
 
@@ -2560,6 +2622,12 @@ parse_additive:
     ldp     w4, w5, [sp], #16
     mov     w6, w0
 
+    // Reclaim sub-expression temporaries above w6
+    cmp     w6, #REG_FIRST
+    b.lt    1f
+    add     w0, w6, #1
+    bl      free_reg
+1:
     bl      alloc_reg
     mov     w7, w0
 
@@ -2611,6 +2679,12 @@ parse_multiplicative:
     ldp     w4, w5, [sp], #16
     mov     w6, w0
 
+    // Reclaim sub-expression temporaries above w6
+    cmp     w6, #REG_FIRST
+    b.lt    1f
+    add     w0, w6, #1
+    bl      free_reg
+1:
     bl      alloc_reg
     mov     w7, w0
 
@@ -2653,6 +2727,14 @@ parse_atom:
     cmp     w0, #TOK_IDENT
     b.eq    .Latom_ident
 
+    // Parenthesized expression
+    cmp     w0, #TOK_LPAREN
+    b.eq    .Latom_paren
+
+    // Unary minus
+    cmp     w0, #TOK_MINUS
+    b.eq    .Latom_unary_neg
+
     // Unary math operators
     cmp     w0, #TOK_SQRT
     b.eq    .Latom_unary_math
@@ -2679,11 +2761,16 @@ parse_atom:
     cmp     w0, #TOK_REG_WRITE
     b.eq    .Latom_reg_write
 
-    // trap (syscall)
-    // Check if ident is "trap"
-    cmp     w0, #TOK_IDENT
-    b.ne    .Latom_error
-    b       .Latom_error        // unreachable, but safe
+    // Keyword tokens used as variable names (e.g. "buf" from "var buf 0")
+    // Try symbol lookup — if found, treat as identifier reference
+    ldr     w1, [x19, #8]          // check token has nonzero length
+    cbz     w1, .Latom_error
+    bl      sym_lookup
+    cbz     x0, .Latom_error      // not found → real error
+    ldr     w0, [x0, #SYM_REG]
+    add     x19, x19, #TOK_STRIDE_SZ
+    ldp     x29, x30, [sp], #16
+    ret
 
 .Latom_int:
     bl      parse_int_literal
@@ -2757,6 +2844,44 @@ parse_atom:
     // Treat as a call, result in X0
     bl      parse_comp_call
     mov     w0, #0              // result in x0
+    ldp     x29, x30, [sp], #16
+    ret
+
+.Latom_paren:
+    // ( expr ) — parenthesized sub-expression
+    add     x19, x19, #TOK_STRIDE_SZ   // consume '('
+    bl      parse_expr                  // recursively parse inner expression
+    mov     w4, w0                      // save result register
+    // Reclaim sub-expression temporaries, keep only the result
+    cmp     w4, #REG_FIRST
+    b.lt    1f
+    add     w0, w4, #1
+    bl      free_reg                    // next_reg = result + 1
+1:
+    // Expect and consume ')'
+    cmp     x19, x27
+    b.hs    .Latom_error
+    ldr     w1, [x19]
+    cmp     w1, #TOK_RPAREN
+    b.ne    .Latom_error
+    add     x19, x19, #TOK_STRIDE_SZ   // consume ')'
+    mov     w0, w4                      // restore result
+    ldp     x29, x30, [sp], #16
+    ret
+
+.Latom_unary_neg:
+    // Unary minus: -expr
+    add     x19, x19, #TOK_STRIDE_SZ   // consume '-'
+    bl      parse_atom                  // parse operand
+    mov     w4, w0                      // operand register
+    bl      alloc_reg                   // w0 = dest register
+    mov     w5, w0
+    // Emit SUB Xd, XZR, Xoperand (NEG)
+    mov     w0, w5                      // rd
+    mov     w1, #31                     // rn = XZR
+    mov     w2, w4                      // rm = operand
+    bl      emit_sub_reg
+    mov     w0, w5                      // return dest register
     ldp     x29, x30, [sp], #16
     ret
 
@@ -2974,6 +3099,8 @@ scope_depth: .space 4
 
 // Register allocator — parser-private
 next_reg:   .space 4
+    .align 3
+reg_floor:  .space 4
     .align 3
 
 // Code emission cursor — parser-private (writes into ls_code_buf)
