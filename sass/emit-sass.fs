@@ -894,7 +894,7 @@ $23 constant EIATTR-CRS-STACK-SIZE
   SN-text @      1  6 0  text-off @  text-size @  3 3  128  0  shdr64,                  \ [5] .text.<k>
   SN-nvinfo-k @  $70000000  $40 0  nvinfo-k-off @  nvinfo-k-size @  3 5  4  0  shdr64,  \ [6] .nv.info.<k>
   SN-shared @    8  3 0  const0-off @  shmem-size @  0 0  16  0  shdr64,                \ [7] .nv.shared
-  SN-const0 @    1  $22 0  const0-off @  const0-size @  0 3  4  0  shdr64,              \ [8] .nv.const0
+  SN-const0 @    1  $42 0  const0-off @  const0-size @  0 5  4  0  shdr64,              \ [8] .nv.const0 (info=text section)
 
   \ 10. Patch ELF header
   0            32 put-u64    \ e_phoff  = 0  (no program headers)
