@@ -377,12 +377,12 @@ footer {
 
 <div class="glossary-entry" id="term-cubin">
 <div class="glossary-term">cubin &mdash; Compiled GPU Binary</div>
-<div class="glossary-def">A GPU executable in ELF format containing <span class="term" data-term="SASS">SASS</span> machine code, constant data, and metadata in NVIDIA-specific ELF sections (<code>.text.&lt;kernel&gt;</code>, <code>.nv.info</code>, <code>.nv.constant0</code>). <span class="term" data-term="Lithos">Lithos</span> generates cubins either by compiling <span class="term" data-term="PTX">PTX</span> through <span class="term" data-term="ptxas">ptxas</span> or (in future) by emitting <span class="term" data-term="SASS">SASS</span> directly into the ELF structure. A <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="cubin">cubin</span> is ~4 KB; the entire set is ~32 KB.</div>
+<div class="glossary-def">A GPU executable in ELF format containing <span class="term" data-term="SASS">SASS</span> machine code, constant data, and metadata in NVIDIA-specific ELF sections (<code>.text.&lt;kernel&gt;</code>, <code>.nv.info</code>, <code>.nv.constant0</code>). <span class="term" data-term="Lithos">Lithos</span> generates cubins by emitting <span class="term" data-term="SASS">SASS</span> directly into the ELF structure &mdash; no <span class="term" data-term="ptxas">ptxas</span> in the pipeline. A <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="cubin">cubin</span> is ~4 KB; the entire set is ~32 KB.</div>
 </div>
 
 <div class="glossary-entry" id="term-cudnn">
 <div class="glossary-term">cuDNN &mdash; CUDA Deep Neural Network Library</div>
-<div class="glossary-def">NVIDIA's library of optimized primitives for convolutions, normalization, attention, and activations. Hundreds of MB of pre-compiled kernels covering many architectures and configurations. <span class="term" data-term="Lithos">Lithos</span> replaces <span class="term" data-term="cuDNN">cuDNN</span> entirely with fused kernels built from <span class="term" data-term="PTX">PTX</span> &mdash; purpose-built for the target model's exact dimensions and operations.</div>
+<div class="glossary-def">NVIDIA's library of optimized primitives for convolutions, normalization, attention, and activations. Hundreds of MB of pre-compiled kernels covering many architectures and configurations. <span class="term" data-term="Lithos">Lithos</span> replaces <span class="term" data-term="cuDNN">cuDNN</span> entirely with fused SASS kernels &mdash; purpose-built for the target model's exact dimensions and operations.</div>
 </div>
 
 <div class="glossary-entry" id="term-culaunchkernel">
@@ -444,7 +444,7 @@ footer {
 
 <div class="glossary-entry" id="term-forth">
 <div class="glossary-term">Forth</div>
-<div class="glossary-def">A stack-based programming language invented by Charles Moore in 1970. Programs are sequences of <em>words</em> that manipulate a data stack. <span class="term" data-term="Lithos">Lithos</span> is <span class="term" data-term="Forth">Forth</span>-derived: each word takes register IDs from the stack, emits <span class="term" data-term="PTX">PTX</span> or <span class="term" data-term="SASS">SASS</span> instructions, and returns result register IDs. Compilation is string concatenation &mdash; a full inference <span class="term" data-term="Kernel">kernel</span> compiles in <em>microseconds</em>.</div>
+<div class="glossary-def">A stack-based programming language invented by Charles Moore in 1970. Programs are sequences of <em>words</em> that manipulate a data stack. <span class="term" data-term="Lithos">Lithos</span> is <span class="term" data-term="Forth">Forth</span>-derived: each word takes register IDs from the stack, emits <span class="term" data-term="SASS">SASS</span> instructions, and returns result register IDs. Compilation is direct binary emission &mdash; a full inference <span class="term" data-term="Kernel">kernel</span> compiles in <em>microseconds</em>.</div>
 </div>
 
 <div class="glossary-entry" id="term-fp8">
@@ -522,7 +522,7 @@ footer {
 
 <div class="glossary-entry" id="term-kernel">
 <div class="glossary-term">Kernel</div>
-<div class="glossary-def">A function that runs on the GPU, executed by thousands of threads organized into thread blocks. In <span class="term" data-term="Lithos">Lithos</span>, kernels are compiled from <span class="term" data-term="Forth">Forth</span> words into <span class="term" data-term="PTX">PTX</span> or <span class="term" data-term="SASS">SASS</span>. A <em>fused <span class="term" data-term="Kernel">kernel</span></em> combines multiple operations (e.g., norm + projection + activation + residual) into a single launch, eliminating inter-<span class="term" data-term="Kernel">kernel</span> <span class="term" data-term="HBM">HBM</span> round-trips. <span class="term" data-term="Lithos">Lithos</span> targets <em>5 fused <span class="term" data-term="Kernel">kernel</span> types</em> for production inference.</div>
+<div class="glossary-def">A function that runs on the GPU, executed by thousands of threads organized into thread blocks. In <span class="term" data-term="Lithos">Lithos</span>, kernels are compiled from <span class="term" data-term="Forth">Forth</span> words directly into <span class="term" data-term="SASS">SASS</span>. A <em>fused <span class="term" data-term="Kernel">kernel</span></em> combines multiple operations (e.g., norm + projection + activation + residual) into a single launch, eliminating inter-<span class="term" data-term="Kernel">kernel</span> <span class="term" data-term="HBM">HBM</span> round-trips. <span class="term" data-term="Lithos">Lithos</span> targets <em>5 fused <span class="term" data-term="Kernel">kernel</span> types</em> for production inference.</div>
 </div>
 
 <div class="glossary-entry" id="term-kv-cache">
@@ -553,7 +553,7 @@ footer {
 
 <div class="glossary-entry" id="term-lithos">
 <div class="glossary-term">Lithos</div>
-<div class="glossary-def">A <span class="term" data-term="Forth">Forth</span>-derived GPU compute language that emits <span class="term" data-term="PTX">PTX</span> and <span class="term" data-term="SASS">SASS</span> for NVIDIA GPUs. Built for inference on <span class="term" data-term="GH200">GH200</span>. Replaces PyTorch, <span class="term" data-term="cuBLAS">cuBLAS</span>, <span class="term" data-term="cuDNN">cuDNN</span>, and the <span class="term" data-term="CUDA">CUDA</span> runtime with <em>direct <span class="term" data-term="Kernel">kernel</span> compilation in microseconds</em>. Framework size: ~30 MB (just libcuda.so). <span class="term" data-term="Kernel">Kernel</span> binaries: 32 KB total. Named from <em>lithography</em> &mdash; writing on stone, the process that puts circuits on silicon.</div>
+<div class="glossary-def">A <span class="term" data-term="Forth">Forth</span>-derived GPU compute language that emits <span class="term" data-term="SASS">SASS</span> directly into cubins for NVIDIA GPUs. Built for inference on <span class="term" data-term="GH200">GH200</span>. Replaces PyTorch, <span class="term" data-term="cuBLAS">cuBLAS</span>, <span class="term" data-term="cuDNN">cuDNN</span>, and the <span class="term" data-term="CUDA">CUDA</span> runtime with <em>direct <span class="term" data-term="Kernel">kernel</span> compilation in microseconds</em>. Framework size: ~30 MB (just libcuda.so). <span class="term" data-term="Kernel">Kernel</span> binaries: 32 KB total. Named from <em>lithography</em> &mdash; writing on stone, the process that puts circuits on silicon.</div>
 </div>
 
 <div class="glossary-entry" id="term-lpddr5x">
@@ -590,7 +590,7 @@ footer {
 
 <div class="glossary-entry" id="term-nn-module">
 <div class="glossary-term"><code>nn.Module</code></div>
-<div class="glossary-def">PyTorch's base class for neural network layers. Holds parameters (weights), sub-modules, and forward logic. Used for model definitions &mdash; every custom layer, every transformer block subclasses <span class="term" data-term="nn.Module">nn.Module</span>. The stateful counterpart to <span class="term" data-term="torch.nn.functional">torch.nn.functional</span>'s stateless API. <span class="term" data-term="Lithos">Lithos</span> has no equivalent &mdash; models are compiled from <span class="term" data-term="Forth">Forth</span> words directly to <span class="term" data-term="PTX">PTX</span>.</div>
+<div class="glossary-def">PyTorch's base class for neural network layers. Holds parameters (weights), sub-modules, and forward logic. Used for model definitions &mdash; every custom layer, every transformer block subclasses <span class="term" data-term="nn.Module">nn.Module</span>. The stateful counterpart to <span class="term" data-term="torch.nn.functional">torch.nn.functional</span>'s stateless API. <span class="term" data-term="Lithos">Lithos</span> has no equivalent &mdash; models are compiled from <span class="term" data-term="Forth">Forth</span> words directly to <span class="term" data-term="SASS">SASS</span>.</div>
 </div>
 
 <div class="glossary-entry" id="term-nvlink-c2c">
@@ -622,12 +622,12 @@ footer {
 
 <div class="glossary-entry" id="term-ptx">
 <div class="glossary-term">PTX &mdash; Parallel Thread Execution</div>
-<div class="glossary-def">NVIDIA's virtual instruction set architecture &mdash; an intermediate representation between high-level code and GPU machine code (<span class="term" data-term="SASS">SASS</span>). A stable text ISA, compiled to <span class="term" data-term="SASS">SASS</span> by the driver (<code>ptxas</code>) at load time. This is the layer <span class="term" data-term="Lithos">Lithos</span> emits directly, bypassing <span class="term" data-term="CUDA">CUDA</span> C++ compilation. The programmer controls instruction selection, register count, and memory access patterns; <span class="term" data-term="ptxas">ptxas</span> handles final scheduling.</div>
+<div class="glossary-def">NVIDIA's virtual instruction set architecture &mdash; an intermediate representation between high-level code and GPU machine code (<span class="term" data-term="SASS">SASS</span>). A stable text ISA, compiled to <span class="term" data-term="SASS">SASS</span> by the driver (<code>ptxas</code>) at load time. <span class="term" data-term="Lithos">Lithos</span> bypasses PTX entirely, emitting <span class="term" data-term="SASS">SASS</span> directly into <span class="term" data-term="cubin">cubin</span> files.</div>
 </div>
 
 <div class="glossary-entry" id="term-ptxas">
 <div class="glossary-term">ptxas &mdash; PTX Assembler</div>
-<div class="glossary-def">NVIDIA's <span class="term" data-term="PTX">PTX</span> assembler. Compiles <span class="term" data-term="PTX">PTX</span> to <span class="term" data-term="SASS">SASS</span>. Runs inside the driver when you call <code>cuModuleLoadData</code> with <span class="term" data-term="PTX">PTX</span>. Typical compile time: <em>100ms&ndash;2s per <span class="term" data-term="Kernel">kernel</span></em>. The compilation step <span class="term" data-term="Lithos">Lithos</span> will eventually eliminate by emitting <span class="term" data-term="SASS">SASS</span> directly into <span class="term" data-term="cubin">cubin</span> ELF files, skipping the <span class="term" data-term="ptxas">ptxas</span> JIT entirely.</div>
+<div class="glossary-def">NVIDIA's <span class="term" data-term="PTX">PTX</span> assembler. Compiles <span class="term" data-term="PTX">PTX</span> to <span class="term" data-term="SASS">SASS</span>. Runs inside the driver when you call <code>cuModuleLoadData</code> with <span class="term" data-term="PTX">PTX</span>. Typical compile time: <em>100ms&ndash;2s per <span class="term" data-term="Kernel">kernel</span></em>. <span class="term" data-term="Lithos">Lithos</span> eliminates this step by emitting <span class="term" data-term="SASS">SASS</span> directly into <span class="term" data-term="cubin">cubin</span> ELF files &mdash; <span class="term" data-term="ptxas">ptxas</span> is not in the pipeline.</div>
 </div>
 
 <div class="glossary-entry" id="term-pytorch-dispatcher">
@@ -674,7 +674,7 @@ footer {
 
 <div class="glossary-entry" id="term-sass">
 <div class="glossary-term">SASS &mdash; Shader Assembly</div>
-<div class="glossary-def">The actual GPU machine code that runs on NVIDIA hardware. Each instruction is <em>16 bytes</em>: an 8-byte instruction word (opcode in bits [15:0], operands, modifiers) and an 8-byte control word (stall counts, yield hints, read/write barriers, <span class="term" data-term="Register reuse flags">register reuse flags</span>). <span class="term" data-term="Lithos">Lithos</span> has reverse-engineered 47+ <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SASS">SASS</span> opcodes and aims to emit <span class="term" data-term="SASS">SASS</span> directly, bypassing <span class="term" data-term="ptxas">ptxas</span> for full scheduling control.</div>
+<div class="glossary-def">The actual GPU machine code that runs on NVIDIA hardware. Each instruction is <em>16 bytes</em>: an 8-byte instruction word (opcode in bits [15:0], operands, modifiers) and an 8-byte control word (stall counts, yield hints, read/write barriers, <span class="term" data-term="Register reuse flags">register reuse flags</span>). <span class="term" data-term="Lithos">Lithos</span> has reverse-engineered 47+ <span class="term" data-term="Hopper">Hopper</span> <span class="term" data-term="SASS">SASS</span> opcodes and emits <span class="term" data-term="SASS">SASS</span> directly into cubins, bypassing <span class="term" data-term="ptxas">ptxas</span> for full scheduling control.</div>
 </div>
 
 <div class="glossary-entry" id="term-scaled-dot-product-attention">
@@ -704,7 +704,7 @@ footer {
 
 <div class="glossary-entry" id="term-silu">
 <div class="glossary-term">SiLU &mdash; Sigmoid Linear Unit</div>
-<div class="glossary-def">The activation function <code>x * sigmoid(x)</code>, computed as <code>x / (1 + exp(-x))</code>. Used in every MLP layer of Qwen 3.5 (64 layers). <span class="term" data-term="Lithos">Lithos</span> computes <span class="term" data-term="SiLU">SiLU</span> in <em>6 <span class="term" data-term="PTX">PTX</span> instructions</em> entirely in registers using <code>ex2.approx</code> and <code>rcp.approx</code>, with no intermediate memory access. Always fused into the MLP <span class="term" data-term="Kernel">kernel</span>.</div>
+<div class="glossary-def">The activation function <code>x * sigmoid(x)</code>, computed as <code>x / (1 + exp(-x))</code>. Used in every MLP layer of Qwen 3.5 (64 layers). <span class="term" data-term="Lithos">Lithos</span> computes <span class="term" data-term="SiLU">SiLU</span> in <em>6 SASS instructions</em> entirely in registers using <code>ex2.approx</code> and <code>rcp.approx</code>, with no intermediate memory access. Always fused into the MLP <span class="term" data-term="Kernel">kernel</span>.</div>
 </div>
 
 <div class="glossary-entry" id="term-sm">

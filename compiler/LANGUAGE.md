@@ -65,7 +65,7 @@ TYPE is `u32` or `f32`.
 
 ### For Loops
 
-`for COUNTER START BOUND STEP` ... `endfor` emits a PTX loop.
+`for COUNTER START BOUND STEP` ... `endfor` emits a counted loop.
 COUNTER is a new u32 variable. START/BOUND/STEP can be literals or variables.
 
 ### Integer / Bitwise Operations
@@ -92,7 +92,7 @@ COUNTER is a new u32 variable. START/BOUND/STEP can be literals or variables.
 
 ### Float Constants
 
-Literals like `0.0`, `1.0`, `0.5` are encoded as IEEE 754 hex in PTX.
+Literals like `0.0`, `1.0`, `0.5` are encoded as IEEE 754 hex constants.
 
 ### Type Conversions
 
@@ -100,7 +100,7 @@ Literals like `0.0`, `1.0`, `0.5` are encoded as IEEE 754 hex in PTX.
 
 ### Predication
 
-`@pN INSTRUCTION` emits a predicated PTX instruction.
+`@pN INSTRUCTION` emits a predicated instruction.
 `setp CMP TYPE PRED SRC1 SRC2` sets a predicate register.
 
 ### Bounds Check / Early Exit
@@ -137,11 +137,9 @@ fn residual_add projected residual -> output
 ## Compilation
 
 ```
-forth-bootstrap lithos.fs input.li --emit ptx -o output.ptx
+forth-bootstrap lithos.fs input.li --emit sass -o output.cubin
 ```
 
 The compiler is written in Forth, hosted by forth-bootstrap. It reads `.li`
-source files, parses the function definitions, and emits PTX text.
-
-PTX is validated with `ptxas -arch=sm_90` and produces cubins that run
-on the GH200.
+source files, parses the function definitions, and emits SASS directly into
+a cubin ELF for the GH200 (sm_90a), with no `ptxas` step in the pipeline.

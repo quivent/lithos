@@ -508,7 +508,7 @@ Memory profiling (probe HBM) 36 s
 CUDA context creation        127 ms
   <span class="step">(NVIDIA driver handshake; nobody avoids this)</span>
 Kernel compilation            92 ms
-  <span class="step">(11 cubins via ptxas, fanned across cores)</span>
+  <span class="step">(11 SASS cubins emitted directly, fanned across cores)</span>
 Cubin load                   0.6 ms
   <span class="step">(11 &times; cuModuleLoadData)</span>
 Model mmap (18.21 GB)          9 ms

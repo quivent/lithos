@@ -488,7 +488,7 @@ print(llm("Hello", max_tokens=128)["choices"][0]["text"])</pre>
   <p>Published <code>mlx-lm</code> benchmarks: Llama-3-8B Q4 on M2 Ultra <span class="hw-context">~69 tok/s</span>; M3 Max <span class="hw-context">~85 tok/s</span>; M4 Max <span class="hw-context">~95 tok/s</span>. Our Qwen-27B Q4 with adaptive MTP chain on M4 Max 128 GB: <span class="hw-context">51.1 tok/s</span>. Llama-70B Q4 on M2 Ultra: <span class="hw-context">~12 tok/s</span>.</p>
 
   <h4 class="arch">How it compares to Lithos</h4>
-  <p>Architecturally the closest peer: both reject framework overhead, both build on unified memory, both are language + engine in one. Diverges on (1) hardware &mdash; Apple Silicon vs. Hopper; (2) compiler transparency &mdash; opaque Metal vs. inspectable PTX/SASS; (3) instruction control &mdash; <code>simdgroup_matrix</code> floor for MLX vs. Lithos emitting <code>mma.sync.m16n8k16</code> directly; (4) scope &mdash; MLX includes autograd and training, Lithos is inference-only.</p>
+  <p>Architecturally the closest peer: both reject framework overhead, both build on unified memory, both are language + engine in one. Diverges on (1) hardware &mdash; Apple Silicon vs. Hopper; (2) compiler transparency &mdash; opaque Metal vs. inspectable SASS; (3) instruction control &mdash; <code>simdgroup_matrix</code> floor for MLX vs. Lithos emitting SASS directly; (4) scope &mdash; MLX includes autograd and training, Lithos is inference-only.</p>
 
   <h4 class="code">Code surface</h4>
 <pre><span class="dim"># pip install mlx-lm</span>
@@ -714,11 +714,11 @@ print(client.generate("Hello", max_new_tokens=128)[0].generated_text)</pre>
   </div>
   <p class="engine-origin">This project. A <span class="term" data-term="Forth">Forth</span>-derived language that happens to host an inference engine. Framework <em>and</em> engine, like MLX.</p>
 
-  <p><strong>Lithos is a language first.</strong> <code>core.fs</code> (255 lines) and <code>patterns.fs</code> (1,204 lines) define a Forth vocabulary whose words emit PTX. The Python in <code>src/</code> is a temporary host runtime until the language self-hosts.</p>
+  <p><strong>Lithos is a language first.</strong> <code>core.fs</code> (255 lines) and <code>patterns.fs</code> (1,204 lines) define a Forth vocabulary whose words emit SASS. The Python in <code>src/</code> is a temporary host runtime until the language self-hosts.</p>
 
   <h4 class="why">Why it will be fast</h4>
   <ul>
-    <li><strong>Direct PTX/SASS emission.</strong> No compiler chain between the programmer and the GPU. Forth words emit PTX; the planned SASS backend emits binary GPU instructions. Every scheduling decision is explicit.</li>
+    <li><strong>Direct SASS emission.</strong> No compiler chain between the programmer and the GPU. Forth words emit binary SASS instructions directly into cubin ELF files. Every scheduling decision is explicit.</li>
     <li><strong>Fused mega-kernels.</strong> One kernel per transformer layer. RMSNorm, attention, GEMV, activation, residual &mdash; all fused into a single launch. No HBM round-trips between ops.</li>
     <li><strong>mmap weight loading on unified memory (GH200).</strong> <code>mmap</code> sets up virtual address mappings in <span class="hw-context">~9 ms</span> with zero weight bytes in memory. PyTorch's 3&ndash;5 s "load" copies all 18 GB into RAM/HBM before returning. On GH200's unified memory, the GPU reads resident pages directly at 900 GB/s (NVLink-C2C) or 4 TB/s (HBM3e) after hardware page migration.</li>
     <li><strong>No framework, no Python in the inference path.</strong> Runtime is Rust calling the CUDA driver API. Launch overhead: <span class="hw-context">2.3 &micro;s</span> (Lithos) vs <span class="hw-context">4.48 &micro;s</span> (cuBLAS).</li>
@@ -727,7 +727,7 @@ print(client.generate("Hello", max_new_tokens=128)[0].generated_text)</pre>
   </ul>
 
   <h4 class="arch">Architecture</h4>
-  <p>Two layers: language and engine. The language is Forth: <code>core.fs</code> + <code>patterns.fs</code> (1,459 lines) define words that emit PTX, plus <code>sass/emit-sass.fs</code> for raw SASS. The engine is the host runtime that invokes the Forth, calls <code>ptxas</code>, loads the cubin via <code>cuModuleLoadData</code>, and dispatches with <code>cuLaunchKernel</code>.</p>
+  <p>Two layers: language and engine. The language is Forth: <code>core.fs</code> + <code>patterns.fs</code> (1,459 lines) define words that emit SASS via <code>emit-sass.fs</code>. The engine is the host runtime that invokes the Forth, builds the cubin ELF, loads it via <code>cuModuleLoadData</code>, and dispatches with <code>cuLaunchKernel</code>. No <code>ptxas</code> in the pipeline.</p>
 
   <h4 class="tradeoffs">Tradeoffs</h4>
   <ul>
@@ -866,7 +866,7 @@ def rmsnorm_kernel(x_ptr, w_ptr, y_ptr, N,
     tl.store(y_ptr + row*N + cols, (x / rms) * w, mask=mask)</pre>
 </div>
 
-<p class="small mt-2">The pattern: engines <em>use</em> these libraries to build their compute path. Lithos bypasses all of them &mdash; its ~32 KB of cubins replace cuBLAS's 800 MB, its fused mega-kernels replace the attention library, and its PTX emission replaces the Triton compiler. The tradeoff is that the optimisation breadth of NVIDIA's thousands of cuBLAS variants must be replaced by a small number of hand-tuned kernels for the specific shapes Lithos cares about.</p>
+<p class="small mt-2">The pattern: engines <em>use</em> these libraries to build their compute path. Lithos bypasses all of them &mdash; its ~32 KB of cubins replace cuBLAS's 800 MB, its fused mega-kernels replace the attention library, and its SASS-direct emission replaces the Triton compiler. The tradeoff is that the optimisation breadth of NVIDIA's thousands of cuBLAS variants must be replaced by a small number of hand-tuned kernels for the specific shapes Lithos cares about.</p>
 
 </section>
 
@@ -892,8 +892,8 @@ def rmsnorm_kernel(x_ptr, w_ptr, y_ptr, N,
     <tr><td>ExLlamaV2</td><td>Python/CUDA</td><td>~10 s</td><td class="num">~135</td><td>RTX 4090</td><td>Limited</td><td>Custom CUDA</td><td>Minimal</td><td>Yes</td></tr>
     <tr><td>MLC-LLM</td><td>Python/TVM</td><td>minutes</td><td class="num">~165</td><td>RTX 4090</td><td>Yes</td><td>Auto-scheduled TIR</td><td>TVM</td><td>Yes</td></tr>
     <tr><td>DeepSpeed-FastGen</td><td>Python</td><td>~30 s</td><td class="num">~180</td><td>A100</td><td>SplitFuse</td><td>Custom CUDA + cuBLAS</td><td>PyTorch</td><td>Yes</td></tr>
-    <tr class="lithos-row"><td><strong>Lithos</strong> <span class="small">(measured)</span></td><td>Forth; Python host today</td><td>~228 ms</td><td class="num">~2</td><td>GH200</td><td>Planned</td><td>PTX/SASS direct</td><td>libcuda only</td><td>Yes</td></tr>
-    <tr class="lithos-row"><td><strong>Lithos</strong> <span class="small">(target)</span></td><td>Forth; Python host today</td><td>~228 ms</td><td class="num">&gt;400</td><td>GH200</td><td>Planned</td><td>PTX/SASS direct</td><td>libcuda only</td><td>Yes</td></tr>
+    <tr class="lithos-row"><td><strong>Lithos</strong> <span class="small">(measured)</span></td><td>Forth; Python host today</td><td>~228 ms</td><td class="num">~2</td><td>GH200</td><td>Planned</td><td>SASS direct</td><td>libcuda only</td><td>Yes</td></tr>
+    <tr class="lithos-row"><td><strong>Lithos</strong> <span class="small">(target)</span></td><td>Forth; Python host today</td><td>~228 ms</td><td class="num">&gt;400</td><td>GH200</td><td>Planned</td><td>SASS direct</td><td>libcuda only</td><td>Yes</td></tr>
   </tbody>
 </table>
 </div>
@@ -912,7 +912,7 @@ def rmsnorm_kernel(x_ptr, w_ptr, y_ptr, N,
 
 <h3>Where Lithos stands today (measured, April 2025)</h3>
 
-<p>First end-to-end run: <span class="measure">~2 tok/s</span> on GH200, <span class="measure">90&times; slower</span> than vLLM's 179 tok/s. Output is correct &mdash; "Paris" rank 1, logit 18.057, all 64 layers verified layer-by-layer (cosine 1.0). The gap is entirely kernel optimization: our hand-written PTX projection kernel does not use tensor cores for the batch=1 GEMV. vLLM's cuBLAS runs at 3460 GB/s (86% peak); our kernel does not come close. The architecture is proven. The kernels need tensor core tiling, WGMMA instructions, and TMA async loads. This is the next phase of work.</p>
+<p>First end-to-end run: <span class="measure">~2 tok/s</span> on GH200, <span class="measure">90&times; slower</span> than vLLM's 179 tok/s. Output is correct &mdash; "Paris" rank 1, logit 18.057, all 64 layers verified layer-by-layer (cosine 1.0). The gap is entirely kernel optimization: our projection kernel does not yet use tensor cores for the batch=1 GEMV. vLLM's cuBLAS runs at 3460 GB/s (86% peak); our kernel does not come close. The architecture is proven. The kernels need tensor core tiling, WGMMA instructions, and TMA async loads. This is the next phase of work.</p>
 
 </section>
 

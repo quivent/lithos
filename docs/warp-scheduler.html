@@ -299,7 +299,7 @@ footer {
 <h2>What Lithos Can Influence</h2>
 
 <h4>1. Occupancy (Number of Resident Warps)</h4>
-<p>More resident warps give each scheduler more choices, improving the odds that at least one warp is ready every cycle. Occupancy is determined by register count per thread: fewer registers per thread means more threads (and therefore more warps) fit on the SM simultaneously. Lithos controls register count directly via <code>.maxnreg</code> declarations in PTX, rather than relying on compiler heuristics.</p>
+<p>More resident warps give each scheduler more choices, improving the odds that at least one warp is ready every cycle. Occupancy is determined by register count per thread: fewer registers per thread means more threads (and therefore more warps) fit on the SM simultaneously. Lithos controls register count directly at the SASS level via cubin metadata, rather than relying on compiler heuristics.</p>
 
 <h4>2. Instruction Mix</h4>
 <p>Interleaving memory loads with arithmetic gives the scheduler something to issue while loads are in flight. If a kernel issues 10 loads in a row, all warps quickly become blocked waiting on memory. Lithos patterns explicitly alternate <code>ld.global</code> with <code>fma</code> sequences &mdash; load a value, compute on a previous value, load the next, compute again. This keeps the scheduler fed.</p>

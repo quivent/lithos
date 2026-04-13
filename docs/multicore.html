@@ -402,7 +402,7 @@ footer {
   <tr><td><span class="term" data-term="KV Cache">KV cache</span> rotation / eviction</td><td>CPU core</td><td>Pointer bookkeeping over coherent memory</td></tr>
   <tr><td>Speculative draft</td><td>CPU core(s)</td><td>Small draft model runs well on SVE2; CPU drafts, GPU verifies</td></tr>
   <tr><td>Speculative verification</td><td>GPU</td><td>Parallel verification of <em>k</em> draft tokens in one batch</td></tr>
-  <tr><td><span class="term" data-term="Kernel">Kernel</span> compilation (startup)</td><td>CPU cores (fan-out)</td><td><span class="term" data-term="Forth">Forth</span> emission + <span class="term" data-term="ptxas">ptxas</span> JIT, one <span class="term" data-term="Kernel">kernel</span> per core</td></tr>
+  <tr><td><span class="term" data-term="Kernel">Kernel</span> compilation (startup)</td><td>CPU cores (fan-out)</td><td><span class="term" data-term="Forth">Forth</span> SASS emission, one <span class="term" data-term="Kernel">kernel</span> per core</td></tr>
   <tr><td>Model loading (shards)</td><td>CPU cores (fan-out)</td><td><span class="term" data-term="mmap">mmap</span> + JSON header parse per shard</td></tr>
   <tr><td><span class="term" data-term="SASS">SASS</span> probe / reverse-engineering</td><td>CPU cores (fan-out)</td><td>Independent probe kernels compile in parallel</td></tr>
 </tbody>

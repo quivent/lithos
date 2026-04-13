@@ -346,7 +346,7 @@ footer {
   <span class="punct">}</span>
 <span class="punct">}</span></pre>
 
-<p>Every field is a compile-time constant in some <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="Kernel">kernel</span> &mdash; baked into the <span class="term" data-term="PTX">PTX</span> before <code>ptxas</code> runs. No runtime dispatch reads these values.</p>
+<p>Every field is a compile-time constant in some <span class="term" data-term="Lithos">Lithos</span> <span class="term" data-term="Kernel">kernel</span> &mdash; baked into the <span class="term" data-term="SASS">SASS</span> as immediates. No runtime dispatch reads these values.</p>
 
 </section>
 
@@ -467,12 +467,12 @@ footer {
   <li>Derive the <span class="term" data-term="Kernel">kernel</span> list from the four rules above &mdash; <strong>instant</strong>.</li>
   <li>Check the cache. Cache key = hash of the config.json subset that affects <span class="term" data-term="Kernel">kernel</span> code.</li>
   <li>If cached: load cubins from disk &mdash; <span class="numbers">0.6 ms for all 11</span>.</li>
-  <li>If not cached: generate <span class="term" data-term="PTX">PTX</span>, compile via <code>ptxas</code>, cache the cubins &mdash; <span class="numbers">~92 ms</span>.</li>
+  <li>If not cached: emit SASS cubins directly &mdash; <span class="numbers">microseconds</span>. No <code>ptxas</code> in the pipeline.</li>
 </ol>
 
-<h3>Step 5b &mdash; <span class="term" data-term="SASS">SASS</span> Emission Path (future / experimental)</h3>
+<h3>SASS-Direct Compilation</h3>
 
-<p>Instead of emitting <span class="term" data-term="PTX">PTX</span> and letting <code>ptxas</code> compile it, <span class="term" data-term="Lithos">Lithos</span> can emit <strong><span class="term" data-term="SASS">SASS</span></strong> binary directly &mdash; the driver JIT is skipped entirely.</p>
+<p><span class="term" data-term="Lithos">Lithos</span> emits <strong><span class="term" data-term="SASS">SASS</span></strong> binary directly into cubin ELF files &mdash; no <code>ptxas</code> JIT step.</p>
 
 <ol class="steps">
   <li><span class="term" data-term="Lithos">Lithos</span> compiler emits <strong><span class="term" data-term="SASS">SASS</span> bytes</strong> &mdash; <span class="numbers">16 bytes per instruction</span> (8-byte opcode + 8-byte control word).</li>
@@ -480,33 +480,18 @@ footer {
   <li>Write <span class="term" data-term="cubin">cubin</span> to disk or pass directly to <code>cuModuleLoadData</code> &mdash; the driver loads it as-is, no JIT step.</li>
 </ol>
 
-<h4>Time savings</h4>
-<table>
-<tr><th>Path</th><th>Per <span class="term" data-term="Kernel">kernel</span></th><th style="text-align: right;">11 kernels</th></tr>
-<tr><td><span class="term" data-term="PTX">PTX</span> &rarr; <code>ptxas</code></td><td><span class="numbers">~8.4 ms</span> to compile</td><td class="count"><span class="numbers">~92 ms</span></td></tr>
-<tr><td><span class="term" data-term="SASS">SASS</span> direct</td><td><span class="numbers">microseconds</span> (just byte emission)</td><td class="count"><span class="numbers">&lt; 1 ms</span></td></tr>
-<tr class="total"><td><strong>Speedup</strong></td><td></td><td class="count"><strong>~1000&times;</strong></td></tr>
-</table>
-
-<h4>Why we'd do this</h4>
+<h4>Why SASS-direct</h4>
 <ul class="kernel-list">
-  <li><strong>Instant recompilation</strong> &mdash; change a constant, regenerate a <span class="term" data-term="Kernel">kernel</span>, load in microseconds instead of waiting for <code>ptxas</code>.</li>
-  <li><strong>Full scheduling control</strong> &mdash; set stall counts and <span class="term" data-term="Register reuse flags">register reuse flags</span> deliberately instead of whatever <code>ptxas</code>'s heuristics pick.</li>
+  <li><strong>Instant recompilation</strong> &mdash; change a constant, regenerate a <span class="term" data-term="Kernel">kernel</span>, load in microseconds.</li>
+  <li><strong>Full scheduling control</strong> &mdash; set stall counts and <span class="term" data-term="Register reuse flags">register reuse flags</span> deliberately instead of relying on <code>ptxas</code> heuristics.</li>
   <li><strong>No dependency on <code>ptxas</code></strong> &mdash; the compiler that lives inside the NVIDIA driver.</li>
 </ul>
 
-<h4>Why we don't yet</h4>
+<h4>Current status</h4>
 <ul class="kernel-list">
-  <li><code>ptxas</code> does useful work: instruction scheduling, register allocation, <span class="term" data-term="Bank Conflict">bank conflict</span> avoidance.</li>
-  <li>The scheduling control <span class="term" data-term="Lithos">Lithos</span> would add requires knowing <span class="term" data-term="Hopper">Hopper</span>'s pipeline depths, dual-issue rules, and register bank layout &mdash; reverse engineered so far but not exhaustive.</li>
-  <li>Current status: <span class="numbers">47 opcodes</span> mapped, memory-op control words still being probed.</li>
-</ul>
-
-<h4>When we'd use it</h4>
-<ul class="kernel-list">
-  <li>After we've benchmarked <span class="term" data-term="PTX">PTX</span> output and know exactly where the <code>ptxas</code> schedule is suboptimal for our specific kernels.</li>
-  <li>Once the memory-op control words are fully characterized (in progress).</li>
-  <li>For the inner loops of the hottest kernels &mdash; <strong>PROJECTION</strong> tensor-core loop, <strong><span class="term" data-term="DeltaNet">DELTANET</span></strong> recurrence.</li>
+  <li><span class="numbers">47 opcodes</span> mapped via probing. Vector-add cubin runs correctly on GH200.</li>
+  <li>Memory-op control words still being characterized &mdash; <span class="term" data-term="Hopper">Hopper</span> pipeline depths, dual-issue rules, and register bank layout are reverse-engineered but not exhaustive.</li>
+  <li>Focus areas: <strong>PROJECTION</strong> tensor-core loop, <strong><span class="term" data-term="DeltaNet">DELTANET</span></strong> recurrence.</li>
 </ul>
 
 <div class="callout">

@@ -323,7 +323,7 @@ footer {
 <!-- What Lithos Is -->
 <section id="what">
 <h2>What Lithos Is</h2>
-<p>Lithos is a Forth-derived language that writes computation directly onto GPU silicon. It emits PTX (and eventually SASS) for NVIDIA GPUs, dispatched from ARM64 CPUs. No C++, no nvcc, no framework.</p>
+<p>Lithos is a Forth-derived language that writes computation directly onto GPU silicon. It emits SASS directly into cubin ELF files for NVIDIA GPUs, dispatched from ARM64 CPUs. No C++, no nvcc, no ptxas, no framework.</p>
 </section>
 
 <!-- The Problem -->
@@ -346,7 +346,7 @@ footer {
     <span class="problem-title">Compiler Quality</span>
   </div>
   <p>nvcc passes through 6-7 intermediate representations. ptxas makes generic scheduling decisions. NVIDIA's own cuBLAS uses hand-written SASS for peak GEMM performance because the compiler can't match it.</p>
-  <p>Lithos emits PTX directly. The programmer controls instruction interleaving, register allocation, shared memory access patterns, and async copy pipelines. Every pattern in the vocabulary encodes a known-good scheduling decision.</p>
+  <p>Lithos emits SASS directly. The programmer controls instruction interleaving, register allocation, shared memory access patterns, and async copy pipelines. Every pattern in the vocabulary encodes a known-good scheduling decision.</p>
 </div>
 
 <div class="problem">
@@ -373,7 +373,7 @@ footer {
     <span class="problem-title">Compilation Latency</span>
   </div>
   <p>nvcc compiles a FlashAttention kernel in <span class="numbers">10-60 seconds</span>. CUTLASS template instantiation takes hours. TensorRT model compilation takes minutes.</p>
-  <p>Lithos compilation is string concatenation. Vocabulary words append PTX text to a buffer. A full inference kernel compiles in <span class="numbers">microseconds</span>. Specialize kernels at runtime for exact model config, sequence length, batch size. Recompile instantly when conditions change.</p>
+  <p>Lithos compilation is direct binary emission. Vocabulary words emit SASS instructions into a cubin buffer. A full inference kernel compiles in <span class="numbers">microseconds</span>. Specialize kernels at runtime for exact model config, sequence length, batch size. Recompile instantly when conditions change.</p>
 </div>
 
 </section>
@@ -466,22 +466,7 @@ footer {
 <section id="architecture">
 <h2>Architecture</h2>
 
-<h3>Current Path: Lithos &rarr; PTX &rarr; SASS</h3>
-<div class="diagram"><span class="accent">Lithos Source</span>                          <span class="dim">Forth words that emit PTX</span>
-       <span class="dim">|</span>
-       <span class="dim">|</span> <span class="highlight">microseconds</span>           <span class="dim">string concatenation</span>
-       <span class="dim">v</span>
-<span class="accent">PTX Text Buffer</span>                        <span class="dim">valid PTX, ready to load</span>
-       <span class="dim">|</span>
-       <span class="dim">|</span> <span class="highlight">cuModuleLoadData</span>        <span class="dim">driver JITs to SASS</span>
-       <span class="dim">v</span>
-<span class="accent">SASS on GPU</span>                            <span class="dim">cached after first load</span>
-       <span class="dim">|</span>
-       <span class="dim">|</span> <span class="highlight"><span class="term" data-term="cuLaunchKernel">cuLaunchKernel</span></span>          <span class="dim">one call</span>
-       <span class="dim">v</span>
-<span class="accent">GPU Execution</span></div>
-
-<h3>Future Path: Lithos &rarr; SASS Direct</h3>
+<h3>Compilation Path: Lithos &rarr; SASS &rarr; cubin</h3>
 <div class="diagram"><span class="accent">Lithos Source</span>
        <span class="dim">|</span>
        <span class="dim">|</span> <span class="highlight">emit-sass.fs</span>            <span class="dim">raw 16-byte SASS instructions</span>
@@ -494,7 +479,7 @@ footer {
        <span class="dim">|</span>
        <span class="dim">|</span> <span class="highlight">cuModuleLoadData</span>        <span class="dim">no JIT, direct load</span>
        <span class="dim">v</span>
-<span class="accent">GPU Execution</span>                          <span class="dim">skip ptxas entirely</span></div>
+<span class="accent">GPU Execution</span>                          <span class="dim">no ptxas anywhere in the pipeline</span></div>
 
 <p>The GPU never runs Forth. The GPU runs whatever Lithos compiled for it. The CPU orchestrates: token input, KV cache management, sampling, speculative decode logic. On GH200, both share the same memory. The orchestration is pointer passing, not data copying.</p>
 
@@ -503,15 +488,15 @@ footer {
 <!-- Vocabulary -->
 <section id="vocabulary">
 <h2>Vocabulary</h2>
-<p class="small mb-1">Lithos words are organized in layers. Lower layers emit individual PTX instructions. Higher layers compose them into complete kernels. Each word takes register IDs from the Forth stack, allocates new registers, emits PTX, and returns result register IDs.</p>
+<p class="small mb-1">Lithos words are organized in layers. Lower layers emit individual SASS instructions. Higher layers compose them into complete kernels. Each word takes register IDs from the Forth stack, allocates new registers, emits SASS, and returns result register IDs.</p>
 
 <!-- Layer 0 -->
 <div class="vocab-layer">
 <div class="vocab-layer-header">
   <span class="layer-num">L0</span>
-  <span class="layer-name">PTX Primitives</span>
+  <span class="layer-name">GPU Primitives</span>
 </div>
-<p class="layer-desc">Direct 1:1 mapping to PTX instructions. ~65 instruction words, ~20 type modifiers, ~6 memory space qualifiers.</p>
+<p class="layer-desc">Direct 1:1 mapping to GPU instructions (PTX mnemonic names, compiled to SASS). ~65 instruction words, ~20 type modifiers, ~6 memory space qualifiers.</p>
 
 <h4><code>add.f32</code> &mdash; Float add</h4>
 <pre class="forth"><span class="stack">( fa fb -- fc )</span>
@@ -570,7 +555,7 @@ footer {
   tab <span class="string">s" mov.u32 "</span> ptx+ r@ <span class="number">1</span> - %r <span class="string">s" , %ntid.x"</span> ptx+ ;ptx
   tab <span class="string">s" mad.lo.s32 "</span> ptx+ r@ %r ,ptx r@ <span class="number">2</span> - %r ,ptx r@ <span class="number">1</span> - %r ,ptx r@ <span class="number">3</span> - %r ;ptx
   r&gt; <span class="keyword">;</span></pre>
-<p class="small">Emits PTX for <code>blockIdx.x * blockDim.x + threadIdx.x</code> &mdash; the most common pattern in every kernel.</p>
+<p class="small">Emits GPU instructions for <code>blockIdx.x * blockDim.x + threadIdx.x</code> &mdash; the most common pattern in every kernel.</p>
 
 <h4><code>warp-reduce-sum.f32</code> &mdash; Butterfly reduction</h4>
 <pre class="forth"><span class="stack">( fin -- fout )</span>
@@ -598,7 +583,7 @@ footer {
   <span class="layer-num">L2</span>
   <span class="layer-name">Fused Operations</span>
 </div>
-<p class="layer-desc">Multiple PTX instructions that always appear together in inference kernels. Fusion eliminates intermediate memory traffic. ~30 composite words.</p>
+<p class="layer-desc">Multiple GPU instructions that always appear together in inference kernels. Fusion eliminates intermediate memory traffic. ~30 composite words.</p>
 
 <h4><code>silu-elem.f32</code> &mdash; SiLU activation</h4>
 <pre class="forth"><span class="stack">( fin -- fout )</span>    <span class="comment">\ x * sigmoid(x) = x / (1 + exp(-x))</span>
@@ -943,7 +928,7 @@ footer {
   <li><strong>13 compiled cubins</strong> + 3 fused + DeltaNet-specific kernels (132 KB total).</li>
   <li><strong>GPTQ W4A16 dequantization correct</strong> (zero-point 8.0 per auto-GPTQ convention).</li>
   <li><strong>GH200 unified memory:</strong> mmap'd weight pointers passed directly to GPU kernels.</li>
-  <li><strong>Lithos compiler in Forth:</strong> produces valid PTX from <code>.li</code> files.</li>
+  <li><strong>Lithos compiler in Forth:</strong> compiles <code>.li</code> files to SASS cubins.</li>
   <li><strong>SASS emitter:</strong> vector-add runs correctly on GH200 (direct cubin, no ptxas).</li>
   <li><strong>5 quantization schemes</strong> designed + implementations.</li>
   <li><strong>23+ documentation pages.</strong></li>
@@ -976,7 +961,7 @@ footer {
 </tbody>
 </table>
 
-<p>The architecture is proven. The kernels need work. Our projection kernel is hand-written PTX without tensor core tiling for the batch=1 GEMV case. vLLM's cuBLAS runs at 3460 GB/s (86% of 4 TB/s peak). The next phase is tensor core optimization via WGMMA instructions and TMA async loads.</p>
+<p>The architecture is proven. The kernels need work. Our projection kernel does not yet use tensor core tiling for the batch=1 GEMV case. vLLM's cuBLAS runs at 3460 GB/s (86% of 4 TB/s peak). The next phase is tensor core optimization via WGMMA instructions and TMA async loads.</p>
 
 </section>
 
@@ -1016,61 +1001,45 @@ ptx-reset ptx-header
   <span class="number">2</span> pick over st-global-f32     <span class="comment">\ store result</span>
 }kernel</pre>
 
-<h3>2. The PTX It Produces</h3>
-<pre class="ptx"><span class="directive">.version</span> <span class="number">8.0</span>
-<span class="directive">.target</span> sm_90
-<span class="directive">.address_size</span> <span class="number">64</span>
+<h3>2. The SASS It Produces</h3>
+<pre><span class="comment">// SASS disassembly of vec_add cubin (sm_90, Hopper)</span>
+<span class="comment">// cubin loaded directly via cuModuleLoadData &mdash; no ptxas</span>
 
-<span class="directive">.visible .entry</span> vec_add <span class="punct">(</span>
-  <span class="directive">.param .u64</span> ptr_a<span class="punct">,</span>
-  <span class="directive">.param .u64</span> ptr_b<span class="punct">,</span>
-  <span class="directive">.param .u64</span> ptr_out<span class="punct">,</span>
-  <span class="directive">.param .u32</span> n
-<span class="punct">)</span>
-<span class="punct">{</span>
-  <span class="directive">.reg .b32</span>  <span class="register">%r</span>&lt;<span class="number">8</span>&gt;;
-  <span class="directive">.reg .b64</span>  <span class="register">%rd</span>&lt;<span class="number">6</span>&gt;;
-  <span class="directive">.reg .f32</span>  <span class="register">%f</span>&lt;<span class="number">4</span>&gt;;
+<span class="comment">// Load parameters from constant bank</span>
+  <span class="mnemonic">LDC</span>     <span class="register">R2</span>, c[0x0][0x210] ;          <span class="comment">// ptr_a (lo)</span>
+  <span class="mnemonic">LDC</span>     <span class="register">R3</span>, c[0x0][0x214] ;          <span class="comment">// ptr_a (hi)</span>
+  <span class="mnemonic">LDC</span>     <span class="register">R4</span>, c[0x0][0x218] ;          <span class="comment">// ptr_b (lo)</span>
+  <span class="mnemonic">LDC</span>     <span class="register">R5</span>, c[0x0][0x21c] ;          <span class="comment">// ptr_b (hi)</span>
+  <span class="mnemonic">LDC</span>     <span class="register">R6</span>, c[0x0][0x220] ;          <span class="comment">// ptr_out (lo)</span>
+  <span class="mnemonic">LDC</span>     <span class="register">R7</span>, c[0x0][0x224] ;          <span class="comment">// ptr_out (hi)</span>
 
-  <span class="comment">// Load parameters</span>
-  <span class="mnemonic">ld.param.u64</span>    <span class="register">%rd0</span>, [ptr_a];
-  <span class="mnemonic">ld.param.u64</span>    <span class="register">%rd1</span>, [ptr_b];
-  <span class="mnemonic">ld.param.u64</span>    <span class="register">%rd2</span>, [ptr_out];
+<span class="comment">// Global thread ID: blockIdx.x * blockDim.x + threadIdx.x</span>
+  <span class="mnemonic">S2R</span>     <span class="register">R0</span>, SR_TID.X ;
+  <span class="mnemonic">S2R</span>     <span class="register">R8</span>, SR_CTAID.X ;
+  <span class="mnemonic">IMAD</span>    <span class="register">R0</span>, <span class="register">R8</span>, c[0x0][0x0], <span class="register">R0</span> ;   <span class="comment">// tid = ctaid * ntid + tid</span>
 
-  <span class="comment">// Global thread ID</span>
-  <span class="mnemonic">mov.u32</span>         <span class="register">%r0</span>, %tid.x;
-  <span class="mnemonic">mov.u32</span>         <span class="register">%r1</span>, %ctaid.x;
-  <span class="mnemonic">mov.u32</span>         <span class="register">%r2</span>, %ntid.x;
-  <span class="mnemonic">mad.lo.s32</span>      <span class="register">%r3</span>, <span class="register">%r1</span>, <span class="register">%r2</span>, <span class="register">%r0</span>;
+<span class="comment">// Coalesced load from ptr_a[tid]</span>
+  <span class="mnemonic">IMAD.WIDE</span> <span class="register">R2</span>, <span class="register">R0</span>, 0x4, <span class="register">R2</span> ;       <span class="comment">// addr = ptr_a + tid*4</span>
+  <span class="mnemonic">LDG.E</span>   <span class="register">R10</span>, [<span class="register">R2</span>] ;                 <span class="comment">// load a[tid]</span>
 
-  <span class="comment">// Coalesced load: addr + tid*4</span>
-  <span class="mnemonic">cvt.u64.u32</span>     <span class="register">%rd3</span>, <span class="register">%r3</span>;
-  <span class="mnemonic">mul.wide.u32</span>    <span class="register">%rd3</span>, <span class="register">%rd3</span>, <span class="number">4</span>;
-  <span class="mnemonic">add.u64</span>         <span class="register">%rd3</span>, <span class="register">%rd3</span>, <span class="register">%rd0</span>;
-  <span class="mnemonic">ld.global.f32</span>   <span class="register">%f0</span>, [<span class="register">%rd3</span>];
+<span class="comment">// Coalesced load from ptr_b[tid]</span>
+  <span class="mnemonic">IMAD.WIDE</span> <span class="register">R4</span>, <span class="register">R0</span>, 0x4, <span class="register">R4</span> ;       <span class="comment">// addr = ptr_b + tid*4</span>
+  <span class="mnemonic">LDG.E</span>   <span class="register">R11</span>, [<span class="register">R4</span>] ;                 <span class="comment">// load b[tid]</span>
 
-  <span class="mnemonic">cvt.u64.u32</span>     <span class="register">%rd4</span>, <span class="register">%r3</span>;
-  <span class="mnemonic">mul.wide.u32</span>    <span class="register">%rd4</span>, <span class="register">%rd4</span>, <span class="number">4</span>;
-  <span class="mnemonic">add.u64</span>         <span class="register">%rd4</span>, <span class="register">%rd4</span>, <span class="register">%rd1</span>;
-  <span class="mnemonic">ld.global.f32</span>   <span class="register">%f1</span>, [<span class="register">%rd4</span>];
+<span class="comment">// Add</span>
+  <span class="mnemonic">FADD</span>    <span class="register">R10</span>, <span class="register">R10</span>, <span class="register">R11</span> ;
 
-  <span class="comment">// Add</span>
-  <span class="mnemonic">add.f32</span>         <span class="register">%f2</span>, <span class="register">%f0</span>, <span class="register">%f1</span>;
+<span class="comment">// Coalesced store to ptr_out[tid]</span>
+  <span class="mnemonic">IMAD.WIDE</span> <span class="register">R6</span>, <span class="register">R0</span>, 0x4, <span class="register">R6</span> ;       <span class="comment">// addr = ptr_out + tid*4</span>
+  <span class="mnemonic">STG.E</span>   [<span class="register">R6</span>], <span class="register">R10</span> ;                 <span class="comment">// store c[tid]</span>
 
-  <span class="comment">// Coalesced store</span>
-  <span class="mnemonic">cvt.u64.u32</span>     <span class="register">%rd5</span>, <span class="register">%r3</span>;
-  <span class="mnemonic">mul.wide.u32</span>    <span class="register">%rd5</span>, <span class="register">%rd5</span>, <span class="number">4</span>;
-  <span class="mnemonic">add.u64</span>         <span class="register">%rd5</span>, <span class="register">%rd5</span>, <span class="register">%rd2</span>;
-  <span class="mnemonic">st.global.f32</span>   [<span class="register">%rd5</span>], <span class="register">%f2</span>;
-
-  <span class="mnemonic">exit</span>;
-<span class="punct">}</span></pre>
+  <span class="mnemonic">EXIT</span> ;</pre>
 
 <h3>3. How It Launches</h3>
-<pre class="forth"><span class="comment">\ Compile PTX and launch on GPU</span>
-ptx$                             <span class="comment">\ -- addr u    (PTX text buffer)</span>
+<pre class="forth"><span class="comment">\ Build cubin and launch on GPU</span>
+build-cubin                      <span class="comment">\ -- addr u    (cubin ELF buffer)</span>
 
-<span class="comment">\ Load PTX module via CUDA driver API</span>
+<span class="comment">\ Load cubin module via CUDA driver API</span>
 cuModuleLoadData                 <span class="comment">\ -- module</span>
 <span class="string">s" vec_add"</span> cuModuleGetFunction  <span class="comment">\ -- func</span>
 
@@ -1081,7 +1050,7 @@ n <span class="number">255</span> + <span class="number">256</span> / <span clas
 <span class="comment">\ Launch — one call, one kernel, the GPU executes</span>
 cuLaunchKernel                   <span class="comment">\ GPU runs vec_add</span></pre>
 
-<p class="mt-2">Forth words concatenate PTX strings. <code>ptx$</code> returns the buffer. The driver JITs it to SASS. One <code>cuLaunchKernel</code> call. No framework, template instantiation, or intermediate representations between Forth and PTX.</p>
+<p class="mt-2">Forth words emit SASS binary instructions into a cubin buffer. <code>build-cubin</code> wraps them in the ELF sections the driver expects. <code>cuModuleLoadData</code> loads directly &mdash; no JIT, no ptxas. One <code>cuLaunchKernel</code> call. No framework, template instantiation, or intermediate representations between Forth and the GPU.</p>
 
 <p class="mt-1">Because compilation is microseconds, kernels specialize at runtime: generate a kernel tuned for the exact <code>hidden_dim</code>, <code>num_heads</code>, <code>head_dim</code>. Regenerate when batch size changes. Inline constants. Unroll loops to exact layer count.</p>
 

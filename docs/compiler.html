@@ -303,11 +303,11 @@ footer {
 </div>
 </section>
 
-<!-- Section 2: Three Backends -->
+<!-- Section 2: Two Backends -->
 <section id="backends">
-<h2>Three Backends</h2>
+<h2>Two Backends</h2>
 
-<p>Same language, three output formats:</p>
+<p>Same language, two output formats:</p>
 
 <div class="compile-flow">
   <div class="compile-node source"><span class="term" data-term="Lithos">lithos</span> source <span class="sub">.li</span></div>
@@ -315,24 +315,20 @@ footer {
   <div class="compile-node stage">Lexer &rarr; Parser &rarr; AST<span class="sub">stack-based IR</span></div>
   <div class="compile-arrow"></div>
   <div class="compile-node router">Backend Router<span class="sub">per-definition: <span class="term" data-term="Kernel">kernel</span> or host?</span></div>
-  <div class="compile-fork-rail"><span></span><span></span><span></span></div>
+  <div class="compile-fork-rail"><span></span><span></span></div>
   <div class="compile-fork">
-    <div class="compile-target"><div class="name"><span class="term" data-term="PTX">PTX</span></div><div class="what">GPU text</div></div>
-    <div class="compile-target"><div class="name"><span class="term" data-term="SASS">SASS</span></div><div class="what">GPU binary</div></div>
+    <div class="compile-target"><div class="name"><span class="term" data-term="SASS">SASS</span></div><div class="what">GPU binary (cubin)</div></div>
     <div class="compile-target"><div class="name">ARM64</div><div class="what">CPU binary</div></div>
   </div>
 </div>
 
-<h3><span class="term" data-term="PTX">PTX</span> backend</h3>
-<p>Emits human-readable <span class="term" data-term="PTX">PTX</span> text. The <span class="term" data-term="CUDA">CUDA</span> driver JITs to <span class="term" data-term="SASS">SASS</span> at load. Portable across NVIDIA GPUs. Slow compile step at first run &mdash; driver JIT takes <span class="numbers">100 ms &ndash; 2 s</span>. After that, the driver caches the result.</p>
-
 <h3><span class="term" data-term="SASS">SASS</span> backend</h3>
-<p>Emits <span class="term" data-term="cubin">cubin</span> binary directly. Skips the driver JIT. Loads in microseconds. <span class="term" data-term="Hopper">Hopper</span>-specific. Based on the reverse-engineered <span class="numbers">47-opcode</span> encoding. This is what eliminates the <code>ptxas</code> dependency entirely.</p>
+<p>Emits <span class="term" data-term="cubin">cubin</span> binary directly. Skips the driver JIT. Loads in microseconds. <span class="term" data-term="Hopper">Hopper</span>-specific. Based on the reverse-engineered <span class="numbers">47-opcode</span> encoding. This is the only GPU-side backend &mdash; no <code>ptxas</code> anywhere in the pipeline.</p>
 
 <h3>ARM64 backend</h3>
 <p>Emits ELF executables for the CPU-side orchestrator: the layer loop, <span class="term" data-term="KV Cache">KV cache</span> management, tokenization, sampling, and API server. Reuses Eighth's ARM64 encoding tables.</p>
 
-<p><strong>One compiler. One source language. Three outputs.</strong></p>
+<p><strong>One compiler. One source language. Two outputs.</strong></p>
 </section>
 
 <!-- Section 3: Why Not Other Languages -->
@@ -353,7 +349,7 @@ footer {
 
 <div class="reject">
 <div class="reject-name">C</div>
-<p>Would work. But C is prefix-and-infix. Our target languages (<span class="term" data-term="PTX">PTX</span>, <span class="term" data-term="SASS">SASS</span>, ARM64) are postfix assembly. <span class="term" data-term="Forth">Forth</span> matches the target semantics; C fights them. Writing a stack-based emitter in a non-stack language means hand-rolling the stack in every function.</p>
+<p>Would work. But C is prefix-and-infix. Our target languages (<span class="term" data-term="SASS">SASS</span>, ARM64) are postfix assembly. <span class="term" data-term="Forth">Forth</span> matches the target semantics; C fights them. Writing a stack-based emitter in a non-stack language means hand-rolling the stack in every function.</p>
 </div>
 
 <div class="reject">
@@ -379,7 +375,7 @@ footer {
   <div class="chain-edge"><span class="verb">interprets</span></div>
   <div class="chain-node"><span class="term" data-term="Lithos">Lithos</span> compiler<span class="sub"><span class="term" data-term="Forth">Forth</span> source</span></div>
   <div class="chain-edge"><span class="verb">compiles</span></div>
-  <div class="chain-node"><span class="term" data-term="PTX">PTX</span> / <span class="term" data-term="SASS">SASS</span> / ARM64 binaries</div>
+  <div class="chain-node"><span class="term" data-term="SASS">SASS</span> cubins / ARM64 binaries</div>
 </div>
 
 <h3>Future (once Eighth self-hosts)</h3>
@@ -390,7 +386,7 @@ footer {
   <div class="chain-edge"><span class="verb">compiles</span></div>
   <div class="chain-node"><span class="term" data-term="Lithos">Lithos</span> compiler<span class="sub">native ARM64 binary</span></div>
   <div class="chain-edge"><span class="verb">compiles</span></div>
-  <div class="chain-node"><span class="term" data-term="PTX">PTX</span> / <span class="term" data-term="SASS">SASS</span> / ARM64 binaries</div>
+  <div class="chain-node"><span class="term" data-term="SASS">SASS</span> cubins / ARM64 binaries</div>
 </div>
 
 <p>No Python anywhere. No Rust. No frameworks. Just a few small native binaries.</p>
@@ -400,9 +396,9 @@ footer {
 <section id="surface">
 <h2>Language Surface</h2>
 
-<p>Stack-based, register-stack semantics &mdash; matching Eighth's <code>X0</code>&ndash;<code>X8</code> model extended to <span class="term" data-term="PTX">PTX</span> register pools (<code>%r</code>, <code>%rd</code>, <code>%f</code>). Same syntax. Same stack model. Different emitter based on context.</p>
+<p>Stack-based, register-stack semantics &mdash; matching Eighth's <code>X0</code>&ndash;<code>X8</code> model extended to GPU register pools (<code>R0</code>&ndash;<code>R255</code>). Same syntax. Same stack model. Different emitter based on context.</p>
 
-<h3>GPU <span class="term" data-term="Kernel">kernel</span> (&rarr; <span class="term" data-term="PTX">PTX</span>)</h3>
+<h3>GPU <span class="term" data-term="Kernel">kernel</span> (&rarr; <span class="term" data-term="SASS">SASS</span>)</h3>
 <pre class="forth"><span class="keyword">kernel</span> <span class="def">vadd</span>
     <span class="keyword">param:</span> a u64
     <span class="keyword">param:</span> b u64
@@ -417,7 +413,7 @@ footer {
     st.global.f32 c
 <span class="keyword">;</span></pre>
 
-<p class="small">The parser sees <code>kernel</code> and routes every word inside to the <span class="term" data-term="PTX">PTX</span> emitter. Register allocation is explicit; memory spaces are explicit; the stack carries register IDs, not values.</p>
+<p class="small">The parser sees <code>kernel</code> and routes every word inside to the <span class="term" data-term="SASS">SASS</span> emitter. Register allocation is explicit; memory spaces are explicit; the stack carries register IDs, not values.</p>
 
 <h3>Host code (&rarr; ARM64)</h3>
 <pre class="forth"><span class="keyword">host</span> <span class="def">main</span>
@@ -442,8 +438,7 @@ footer {
 &#x251c;&#x2500;&#x2500; lithos.fs          <span style="color:var(--text-dim)">Main entry point</span>
 &#x251c;&#x2500;&#x2500; lexer.fs           <span style="color:var(--text-dim)">Whitespace tokenizer (thin &mdash; Forth does this natively)</span>
 &#x251c;&#x2500;&#x2500; parser.fs          <span style="color:var(--text-dim)">Token dispatch table</span>
-&#x251c;&#x2500;&#x2500; emit-ptx.fs        <span style="color:var(--text-dim)">PTX text emission</span>
-&#x251c;&#x2500;&#x2500; emit-sass.fs       <span style="color:var(--text-dim)">SASS binary emission</span>
+&#x251c;&#x2500;&#x2500; emit-sass.fs       <span style="color:var(--text-dim)">SASS binary emission (primary GPU backend)</span>
 &#x251c;&#x2500;&#x2500; emit-arm64.fs      <span style="color:var(--text-dim)">ARM64 machine code</span>
 &#x251c;&#x2500;&#x2500; cubin-wrap.fs      <span style="color:var(--text-dim)">Wraps SASS into cubin ELF</span>
 &#x2514;&#x2500;&#x2500; elf-wrap.fs        <span style="color:var(--text-dim)">Wraps ARM64 into executable ELF</span></pre>
@@ -454,8 +449,7 @@ footer {
   <tr><td><code>lithos.fs</code></td><td>Argument parsing, file I/O, top-level dispatch to the backend router.</td></tr>
   <tr><td><code>lexer.fs</code></td><td>Thin wrapper over <span class="term" data-term="Forth">Forth</span>'s native <code>parse-name</code>. <span class="term" data-term="Lithos">Lithos</span> source is already whitespace-delimited tokens &mdash; <span class="term" data-term="Forth">Forth</span>'s host loop already tokenizes.</td></tr>
   <tr><td><code>parser.fs</code></td><td>Dispatch table mapping word &rarr; handler. <code>kernel</code>, <code>host</code>, <code>param:</code>, <code>if</code>, <code>then</code>, <code>;</code> are parser directives; everything else is emitted by the current backend.</td></tr>
-  <tr><td><code>emit-ptx.fs</code></td><td><span class="term" data-term="PTX">PTX</span> text emission. Register pool allocation (<code>%r</code>, <code>%rd</code>, <code>%f</code>). <span class="term" data-term="Kernel">Kernel</span> envelope (<code>.version</code>, <code>.target</code>, <code>.entry</code>).</td></tr>
-  <tr><td><code>emit-sass.fs</code></td><td>Raw 16-byte <span class="term" data-term="SASS">SASS</span> instruction emission. Opcode constants from the probe disassembly. No driver JIT.</td></tr>
+  <tr><td><code>emit-sass.fs</code></td><td>Raw 16-byte <span class="term" data-term="SASS">SASS</span> instruction emission &mdash; the only GPU-side emitter. Opcode constants from the probe disassembly. No driver JIT, no <code>ptxas</code>.</td></tr>
   <tr><td><code>emit-arm64.fs</code></td><td>ARM64 machine code. Reuses Eighth's instruction encoders. Stack-machine model on <code>X0</code>&ndash;<code>X8</code>.</td></tr>
   <tr><td><code>cubin-wrap.fs</code></td><td>Wraps <span class="term" data-term="SASS">SASS</span> bytes into a <span class="term" data-term="cubin">cubin</span> ELF with the NVIDIA sections (<code>.text.&lt;kernel&gt;</code>, <code>.nv.info</code>, <code>.nv.constant0</code>) that <code>cuModuleLoadData</code> expects.</td></tr>
   <tr><td><code>elf-wrap.fs</code></td><td>Wraps ARM64 bytes into a standard Linux executable ELF with <code>.text</code>, <code>.data</code>, a program header, and an entry point.</td></tr>

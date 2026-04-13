@@ -2,7 +2,7 @@
 
 ## What Lithos Is
 
-A Forth-derived language for writing GPU compute kernels that compile to PTX and SASS. One language, three backends (PTX text, SASS binary, ARM64 native). The compiler is written in Forth, hosted by an ARM64 assembly bootstrap interpreter.
+A Forth-derived language for writing GPU compute kernels that compile directly to SASS cubins. One language, two backends (SASS binary for NVIDIA GPUs, ARM64 native for the host). The compiler is written in Forth, hosted by an ARM64 assembly bootstrap interpreter.
 
 ## Correct Inference: YES
 
@@ -68,7 +68,7 @@ Written in Forth. 647 lines across 8 files. Hosted by forth-bootstrap (4831 line
 - Float constants (IEEE 754 hex), type conversions
 - Predication, bounds checks
 
-GEMV test kernel compiles from .li source through the Lithos compiler to valid PTX that passes ptxas.
+GEMV test kernel compiles from .li source through the Lithos compiler to a SASS cubin that loads and runs on GH200.
 
 ### Primitives (in design)
 
@@ -89,7 +89,7 @@ Constants: e (2.71828...), computed from primitives via Taylor series to 12 term
 
 A DeltaNet layer is 22 named operations that decompose to ~60 lines of primitives (+ * / √ on vectors and matrices). The language should express this math directly.
 
-5 .li files replace 21 hand-written PTX kernels:
+5 .li files replace 21 hand-written kernels:
 - gemv.li (replaces 6 kernels)
 - elementwise.li (replaces 4)
 - reduce.li (replaces 2)
@@ -100,7 +100,7 @@ A DeltaNet layer is 22 named operations that decompose to ~60 lines of primitive
 
 ### GPU Kernels
 
-21 hand-written PTX kernels (being replaced by 5 .li compiled kernels):
+21 hand-written kernels (legacy PTX artifacts, being replaced by 5 .li kernels compiled to SASS directly):
 - gptq_matvec, gptq_matvec_tc, gptq_gemv_tc, gptq_gemv_fast — projection variants
 - embed, embed_f16 — token embedding
 - norm — RMSNorm
@@ -176,11 +176,11 @@ forth-bootstrap.s: 4831 lines ARM64 assembly. Include STATE save/restore bug fix
 
 2. **Use CUDA graphs from the native launcher.** Record the kernel sequence once, replay per token. Zero dispatch overhead.
 
-3. **Use the Lithos compiler for the actual kernels.** The compiler works. The 5 .li files exist. Wire them into the pipeline instead of hand-written PTX.
+3. **Use the Lithos compiler for the actual kernels.** The compiler works. The 5 .li files exist. Wire them into the pipeline instead of the legacy hand-written kernels.
 
 4. **Close the GEMV bandwidth gap.** 1610 GB/s → 3460 GB/s. Carmack's coalescing + split-K techniques applied to individual kernel launches.
 
-5. **Complete the full fused kernel.** forward_pass_full.ptx has DeltaNet, but attention layers are placeholder. Add attention for the 16 full-attention layers.
+5. **Complete the full fused kernel.** forward_pass_full has DeltaNet, but attention layers are placeholder. Add attention for the 16 full-attention layers.
 
 6. **Language design.** The primitives are + * / √. Everything decomposes. The language should express the math directly. A DeltaNet layer is 60 lines of primitive math operations.
 
