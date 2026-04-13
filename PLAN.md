@@ -61,13 +61,13 @@ TOTAL:   [█████░░░] 8/18 — Wave 1 done, Wave 2 running
 - [ ] Write results to docs/qmd_fields.md
 - [ ] Audit: each offset confirmed by two independent diffs
 
-### 1e. Update HTML docs
-- [ ] .li → .ls across all HTML files
-- [ ] Create docs/language.html (grammar spec page)
-- [ ] Update pipeline diagram for self-hosting era
-- [ ] Update roadmap status
-- [ ] Add language.html to navigation
-- [ ] Audit: no .li references remain in any HTML file
+### 1e. Update HTML docs ✓
+- [x] .li → .ls across all HTML files (9 files)
+- [x] Create docs/language.html (grammar spec page, live at /language)
+- [x] Update pipeline diagram for self-hosting era
+- [x] Update roadmap status (green banner, per-item badges)
+- [x] Add language.html to navigation (index, architecture, pipeline, roadmap)
+- [x] Audit: no .li references remain in any HTML file
 
 ### 1f. Reconcile .ls precursor files ✓
 - [x] kernels.ls — compositions, \\, △ ▽ # ≅ ≡
