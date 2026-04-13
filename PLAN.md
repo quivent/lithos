@@ -264,6 +264,39 @@ Not blocking for correctness. Blocking for closing the performance gap.
 
 Zero error handling exists. Silent failures will waste debugging time.
 
+**Error model:** Lithos has no error handling as a language feature, and this
+is correct. Compiled Forth has none either — `ABORT` resets stacks and returns
+to the interpreter, `CATCH`/`THROW` are interpreter-level and don't survive
+compilation to threaded code. Lithos compiles to bare machine code (ARM64 and
+SASS). Machine code doesn't have error handling — it has branches.
+
+The error model is a **convention, not a language feature:**
+- Compositions that can fail return a status (register or stack value).
+- Caller checks via `if< result 0` or equivalent branch.
+- No stack unwinding, no exception frames, no `try/catch`.
+- Like C's `errno` or Go's `if err != nil` — the language doesn't enforce it,
+  the programmer follows it.
+
+**Three error surfaces:**
+
+1. **ARM64 host (syscalls):** `openat`, `mmap`, `ioctl`, `fstat`, `write` return
+   negative values on failure. ~5 call sites in the launcher. Each needs a
+   `if< result 0` → trap or exit. ~3-5 ARM64 instructions per check.
+
+2. **GPU (SASS):** No error concept — the SM either executes or hangs. The only
+   detection is the completion semaphore never being written. `sync_wait_flag_timeout`
+   (sync.ls line 52) polls N times then gives up. "Gives up" means exit —
+   a hung GPU context may need `nvidia-smi -r` or process kill. Lithos can
+   detect but not fix.
+
+3. **Inference (numerical):** NaN propagation, softmax overflow, wrong tensor
+   shapes are silent in FP32/FP16 arithmetic. No runtime detection — these are
+   caught at validation time (cosine similarity vs reference), not at runtime.
+
+**Total scope:** ~20 branch instructions across the entire codebase. Not a
+language feature — a handful of guards at known points using existing control
+flow (`if>=`, `label`, `goto`).
+
 ```
 Critical now:
 [ ] Check openat/fstat/mmap return values in launcher.ls load_file
