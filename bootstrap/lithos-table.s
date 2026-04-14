@@ -113,8 +113,10 @@
 .equ ARM64_SVC_0,   0xD4000001
 
 // Register allocator range
+// X9-X17 = 9 scratch registers. X18 is macOS platform register.
+// X19-X28 are callee-saved and used by the parser/DTC — DO NOT ALLOCATE.
 .equ REG_FIRST,     9
-.equ REG_LAST,      28
+.equ REG_LAST,      17
 
 // Condition codes
 .equ CC_EQ, 0
@@ -319,25 +321,95 @@ alloc_reg:
     add     x0, x0, :lo12:next_reg
     ldr     w1, [x0]
     cmp     w1, #REG_LAST
-    b.gt    parse_error_regspill
+    b.gt    .Lalloc_spill
     add     w2, w1, #1
     str     w2, [x0]
     mov     w0, w1
     ret
 
+.Lalloc_spill:
+    // All physical registers exhausted. Spill the oldest (REG_FIRST)
+    // into the TARGET program's stack, then recycle that register.
+    // Emit: STR X<REG_FIRST>, [SP, #-16]!  (pre-index push)
+    stp     x29, x30, [sp, #-16]!
+    // ARM64 encoding: STR Xt, [SP, #-16]! = 0xF81F0FE0 | Rt
+    mov     w0, #0x0FE0
+    movk    w0, #0xF81F, lsl #16
+    add     w0, w0, #REG_FIRST
+    bl      emit32
+    // Increment spill count
+    adrp    x0, spill_count
+    add     x0, x0, :lo12:spill_count
+    ldr     w1, [x0]
+    add     w1, w1, #1
+    str     w1, [x0]
+    ldp     x29, x30, [sp], #16
+    // Return REG_FIRST as the recycled register
+    // (caller will overwrite its contents — the old value is on target stack)
+    mov     w0, #REG_FIRST
+    ret
+
 free_reg:
+    // Reclaim: set next_reg = w0 (frees everything above)
+    // If spilled registers exist and we're freeing below the spill point,
+    // emit fills to restore them.
     adrp    x1, next_reg
     add     x1, x1, :lo12:next_reg
     str     w0, [x1]
+    // Check if we need to restore spilled registers
+    stp     x29, x30, [sp, #-16]!
+    adrp    x2, spill_count
+    add     x2, x2, :lo12:spill_count
+    ldr     w3, [x2]
+    cbz     w3, .Lfree_done
+    // Emit LDR X<REG_FIRST>, [SP], #16 for each spilled register (LIFO)
+.Lfree_fill_loop:
+    cbz     w3, .Lfree_fill_done
+    // ARM64 encoding: LDR Xt, [SP], #16 = 0xF8410FE0 | Rt
+    stp     w0, w3, [sp, #-16]!
+    stp     x1, x2, [sp, #-16]!
+    mov     w0, #0x0FE0
+    movk    w0, #0xF841, lsl #16
+    add     w0, w0, #REG_FIRST
+    bl      emit32
+    ldp     x1, x2, [sp], #16
+    ldp     w0, w3, [sp], #16
+    sub     w3, w3, #1
+    b       .Lfree_fill_loop
+.Lfree_fill_done:
+    str     wzr, [x2]              // spill_count = 0
+.Lfree_done:
+    ldp     x29, x30, [sp], #16
     ret
 
 reset_regs:
+    stp     x29, x30, [sp, #-16]!
     adrp    x0, next_reg
     add     x0, x0, :lo12:next_reg
     adrp    x1, reg_floor
     add     x1, x1, :lo12:reg_floor
     ldr     w2, [x1]
     str     w2, [x0]
+    // Emit fills for any outstanding spills (balance target stack)
+    adrp    x0, spill_count
+    add     x0, x0, :lo12:spill_count
+    ldr     w3, [x0]
+    cbz     w3, .Lreset_no_spills
+.Lreset_fill:
+    cbz     w3, .Lreset_fill_done
+    stp     x0, x3, [sp, #-16]!
+    // Emit: LDR X<REG_FIRST>, [SP], #16
+    mov     w0, #0x0FE0
+    movk    w0, #0xF841, lsl #16
+    add     w0, w0, #REG_FIRST
+    bl      emit32
+    ldp     x0, x3, [sp], #16
+    sub     w3, w3, #1
+    b       .Lreset_fill
+.Lreset_fill_done:
+    str     wzr, [x0]              // spill_count = 0
+.Lreset_no_spills:
+    ldp     x29, x30, [sp], #16
     ret
 
 // ============================================================
@@ -2638,14 +2710,14 @@ parse_error:
     add     x1, x1, :lo12:err_parse
     mov     x2, #13
     mov     x0, #2
-    mov     x8, #64
+    mov     x8, #64             // SYS_WRITE
     svc     #0
     // Print token position info
     adrp    x1, err_at_tok
     add     x1, x1, :lo12:err_at_tok
     mov     x2, #10
     mov     x0, #2
-    mov     x8, #64
+    mov     x8, #64             // SYS_WRITE
     svc     #0
     // Print token offset as rough position indicator
     ldr     w0, [x19, #4]
@@ -2654,10 +2726,10 @@ parse_error:
     add     x1, x1, :lo12:err_nl
     mov     x2, #1
     mov     x0, #2
-    mov     x8, #64
+    mov     x8, #64             // SYS_WRITE
     svc     #0
     mov     x0, #1
-    mov     x8, #93
+    mov     x8, #93             // SYS_EXIT
     svc     #0
 
 parse_error_regspill:
@@ -2665,10 +2737,10 @@ parse_error_regspill:
     add     x1, x1, :lo12:err_regspill
     mov     x2, #22
     mov     x0, #2
-    mov     x8, #64
+    mov     x8, #64             // SYS_WRITE
     svc     #0
     mov     x0, #1
-    mov     x8, #93
+    mov     x8, #93             // SYS_EXIT
     svc     #0
 
 // print_dec — print w0 as decimal to stderr
@@ -2692,7 +2764,7 @@ print_dec:
     add     x1, x2, #1
     mov     x2, x3
     mov     x0, #2
-    mov     x8, #64
+    mov     x8, #64             // SYS_WRITE
     svc     #0
     add     sp, sp, #32
     ldp     x29, x30, [sp], #16
@@ -2799,6 +2871,8 @@ current_indent: .space 4
 next_reg:   .space 4
     .align 3
 reg_floor:  .space 4
+    .align 3
+spill_count: .space 4
     .align 3
 emit_ptr:   .space 8
     .align 3
