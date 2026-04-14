@@ -1220,7 +1220,14 @@ handle_composition:
     add     x1, x1, :lo12:next_reg
     ldr     w5, [x1]
     str     w5, [sp, #8]           // [sp+8] = old next_reg
-    str     w5, [x0]               // reg_floor = next_reg
+    // Cap reg_floor: compositions always start with fresh registers.
+    // If top-level vars consumed all registers (next_reg > REG_LAST),
+    // reset to REG_FIRST so the composition has a full register window.
+    cmp     w5, #REG_LAST
+    b.le    1f
+    mov     w5, #REG_FIRST
+1:  str     w5, [x0]               // reg_floor = min(next_reg, REG_FIRST)
+    str     w5, [x1]               // next_reg = reg_floor
 
     // Increment scope
     adrp    x0, scope_depth
