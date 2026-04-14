@@ -502,8 +502,11 @@ class Parser:
                 if tok.indent < body_indent:
                     # Dedent -> end of block
                     break
-                # Consume the INDENT token and parse a statement
+                # Consume the INDENT token
                 self._advance()
+                # If followed by NEWLINE, it was a blank/comment line -- skip
+                if self._peek_type() == TT.NEWLINE:
+                    continue
                 s = self._parse_statement()
                 if s is not None:
                     stmts.append(s)
@@ -512,14 +515,10 @@ class Parser:
             if tok.type == TT.EOF:
                 break
 
-            # If we hit a non-INDENT, non-NEWLINE token it means we're on
-            # the same line (e.g., the rest of a single-line body).  Parse
-            # one statement and stop.
-            s = self._parse_statement()
-            if s is not None:
-                stmts.append(s)
-            # After a statement on the same line, continue looking for
-            # more lines at body_indent.
+            # Non-INDENT, non-NEWLINE token at start of iteration means
+            # we're at a line with no indentation (column 0), which is
+            # always a dedent from any body. Break out.
+            break
 
         return stmts
 
@@ -827,11 +826,13 @@ class Parser:
         right = self._parse_expr()
 
         # Optional label target (for flat-style: if>= a b skip_label)
+        # The label can be an IDENT or a keyword like 'exit'.
         label = None
         nxt = self._peek()
-        if nxt.type == TT.IDENT and nxt.text not in _STMT_KEYWORDS:
-            # Check if there's a NEWLINE soon -- if the ident is followed by
-            # NEWLINE, it's likely a branch-target label.
+        if nxt.type in (TT.IDENT, TT.EXIT, TT.RETURN) or \
+           (nxt.type == TT.IDENT and nxt.text not in _STMT_KEYWORDS):
+            # Check if there's a NEWLINE soon -- if the token is followed by
+            # NEWLINE, it's a branch-target label (flat if form).
             saved = self.pos
             self._advance()
             after = self._peek()
@@ -1238,9 +1239,9 @@ def dump_ast(nodes, indent=0):
             print(f'{prefix}If {node.op} {node.left} {node.right}{lbl}:')
             dump_ast(node.body, indent + 1)
         elif isinstance(node, Assignment):
-            print(f'{prefix}{node.target} = {node.text}')
+            print(f'{prefix}{node.target} = {node.value}')
         elif isinstance(node, Store):
-            print(f'{prefix}Store({node.width}) [{node.addr}] = {node.text}')
+            print(f'{prefix}Store({node.width}) [{node.addr}] = {node.value}')
         elif isinstance(node, list):
             dump_ast(node, indent)
         else:
@@ -1419,17 +1420,22 @@ def trivial_tokenize(source: str) -> List[Token]:
                     while i < len(text) and (text[i].isalnum() or text[i] in '_.<>!='):
                         # Allow dots for bar.sync, shfl.bfly
                         # Allow < > = ! for if==, if>=, u32>f32, etc.
-                        # But stop if we hit a space or operator context
                         if text[i] in '<>!=':
-                            # Only continue if this looks like part of a keyword
-                            # (if==, if>=, u32>f32, etc.)
                             rest = text[start:i]
-                            if rest.startswith('if') or '>' in rest or rest.endswith('>'):
+                            if rest.startswith('if'):
+                                i += 1
+                                continue
+                            # Type cast: u32>f32, f32>u32, etc.
+                            if text[i] == '>' and rest in (
+                                'u32', 'f32', 's32', 'f16', 'u16'):
+                                i += 1
+                                continue
+                            # Already past a '>' in a type cast
+                            if '>' in rest:
                                 i += 1
                                 continue
                             break
                         if text[i] == '.':
-                            # Only for known dotted names
                             rest = text[start:i]
                             if rest in ('bar', 'shfl'):
                                 i += 1
