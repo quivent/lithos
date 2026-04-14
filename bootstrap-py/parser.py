@@ -500,10 +500,23 @@ class Parser:
 
             if tok.type == TT.INDENT:
                 if tok.indent < body_indent:
-                    # Dedent -> end of block
+                    # Check if this is just a blank/comment line (indent 0
+                    # followed by NEWLINE).  If so, skip it rather than
+                    # treating it as a dedent — the real body may continue
+                    # after intervening blank/comment lines.
+                    saved = self.pos
+                    self._advance()  # consume INDENT
+                    if self._peek_type() == TT.NEWLINE:
+                        # Blank/comment line — skip and keep parsing the block
+                        continue
+                    # Real dedent — restore position and break
+                    self.pos = saved
                     break
-                # Consume the INDENT token and parse a statement
+                # Consume the INDENT token
                 self._advance()
+                # If followed by NEWLINE, it was a blank/comment line -- skip
+                if self._peek_type() == TT.NEWLINE:
+                    continue
                 s = self._parse_statement()
                 if s is not None:
                     stmts.append(s)
@@ -512,14 +525,10 @@ class Parser:
             if tok.type == TT.EOF:
                 break
 
-            # If we hit a non-INDENT, non-NEWLINE token it means we're on
-            # the same line (e.g., the rest of a single-line body).  Parse
-            # one statement and stop.
-            s = self._parse_statement()
-            if s is not None:
-                stmts.append(s)
-            # After a statement on the same line, continue looking for
-            # more lines at body_indent.
+            # Non-INDENT, non-NEWLINE token at start of iteration means
+            # we're at a line with no indentation (column 0), which is
+            # always a dedent from any body. Break out.
+            break
 
         return stmts
 
@@ -713,6 +722,10 @@ class Parser:
         if tt == TT.REG_READ:
             return self._parse_expr()
 
+        # ---- dollar-prefixed call: $NAME arg1 arg2 ... -------------------
+        if tt == TT.DOLLAR:
+            return self._parse_dollar_call()
+
         # ---- expression statement (fallback) ------------------------------
         expr = self._parse_expr()
         return expr
@@ -827,11 +840,13 @@ class Parser:
         right = self._parse_expr()
 
         # Optional label target (for flat-style: if>= a b skip_label)
+        # The label can be an IDENT or a keyword like 'exit'.
         label = None
         nxt = self._peek()
-        if nxt.type == TT.IDENT and nxt.text not in _STMT_KEYWORDS:
-            # Check if there's a NEWLINE soon -- if the ident is followed by
-            # NEWLINE, it's likely a branch-target label.
+        if nxt.type in (TT.IDENT, TT.EXIT, TT.RETURN) or \
+           (nxt.type == TT.IDENT and nxt.text not in _STMT_KEYWORDS):
+            # Check if there's a NEWLINE soon -- if the token is followed by
+            # NEWLINE, it's a branch-target label (flat if form).
             saved = self.pos
             self._advance()
             after = self._peek()
@@ -903,12 +918,26 @@ class Parser:
             val = IntLit(value=0)
         return ConstDecl(name=name_tok.text, value=val)
 
+    def _parse_dollar_call(self):
+        """$NAME arg1 arg2 ... — call via dollar-prefixed variable."""
+        self._advance()  # consume '$'
+        name_tok = self._advance()  # consume the name
+        name = '$' + name_tok.text
+        args = []
+        while self._peek_type() not in (TT.NEWLINE, TT.EOF, TT.INDENT) and \
+              self._is_expr_start(self._peek()):
+            args.append(self._parse_expr())
+        return FuncCall(name=name, args=args)
+
     def _parse_trap(self):
-        """trap sysnum arg1 arg2 ..."""
+        """trap [sysnum arg1 arg2 ...]  -- bare trap (no args) is valid."""
         self._advance()  # consume 'trap' / 'syscall'
+        # Bare trap: no arguments means SVC #0 with no register setup
+        if self._peek_type() in (TT.NEWLINE, TT.EOF, TT.INDENT):
+            return Trap(sysnum=None, args=[])
         sysnum = self._parse_expr()
         args = []
-        while self._peek_type() not in (TT.NEWLINE, TT.EOF):
+        while self._peek_type() not in (TT.NEWLINE, TT.EOF, TT.INDENT):
             args.append(self._parse_expr())
         return Trap(sysnum=sysnum, args=args)
 
@@ -992,11 +1021,22 @@ class Parser:
             addr = self._parse_expr()
             return Assignment(target=name, value=Load(width=width, addr=addr))
 
-        # If next token starts an expression, treat as implicit assignment:
-        # ``name expr``  means  ``name = expr``
+        # If next token starts an expression, it could be:
+        #   name expr              -> implicit assignment (name = expr)
+        #   name expr expr ...     -> function call (name(expr, expr, ...))
+        # Parse the first expression, then check if more follow on the line.
         if self._is_expr_start(nxt):
-            val = self._parse_expr()
-            return Assignment(target=name, value=val)
+            first = self._parse_expr()
+            # Check if more expression-start tokens follow on the same line
+            nxt2 = self._peek()
+            if self._is_expr_start(nxt2):
+                # Multi-argument: this is a function call
+                args = [first]
+                while self._peek_type() not in (TT.NEWLINE, TT.EOF, TT.INDENT) and \
+                      self._is_expr_start(self._peek()):
+                    args.append(self._parse_expr())
+                return FuncCall(name=name, args=args)
+            return Assignment(target=name, value=first)
 
         # Bare identifier on a line -- could be a nullary function call
         return FuncCall(name=name, args=[])
@@ -1238,9 +1278,9 @@ def dump_ast(nodes, indent=0):
             print(f'{prefix}If {node.op} {node.left} {node.right}{lbl}:')
             dump_ast(node.body, indent + 1)
         elif isinstance(node, Assignment):
-            print(f'{prefix}{node.target} = {node.text}')
+            print(f'{prefix}{node.target} = {node.value}')
         elif isinstance(node, Store):
-            print(f'{prefix}Store({node.width}) [{node.addr}] = {node.text}')
+            print(f'{prefix}Store({node.width}) [{node.addr}] = {node.value}')
         elif isinstance(node, list):
             dump_ast(node, indent)
         else:
@@ -1419,17 +1459,22 @@ def trivial_tokenize(source: str) -> List[Token]:
                     while i < len(text) and (text[i].isalnum() or text[i] in '_.<>!='):
                         # Allow dots for bar.sync, shfl.bfly
                         # Allow < > = ! for if==, if>=, u32>f32, etc.
-                        # But stop if we hit a space or operator context
                         if text[i] in '<>!=':
-                            # Only continue if this looks like part of a keyword
-                            # (if==, if>=, u32>f32, etc.)
                             rest = text[start:i]
-                            if rest.startswith('if') or '>' in rest or rest.endswith('>'):
+                            if rest.startswith('if'):
+                                i += 1
+                                continue
+                            # Type cast: u32>f32, f32>u32, etc.
+                            if text[i] == '>' and rest in (
+                                'u32', 'f32', 's32', 'f16', 'u16'):
+                                i += 1
+                                continue
+                            # Already past a '>' in a type cast
+                            if '>' in rest:
                                 i += 1
                                 continue
                             break
                         if text[i] == '.':
-                            # Only for known dotted names
                             rest = text[start:i]
                             if rest in ('bar', 'shfl'):
                                 i += 1
