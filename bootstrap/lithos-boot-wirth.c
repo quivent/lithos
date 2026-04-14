@@ -1314,16 +1314,15 @@ static void parse_stmt(void) {
     if (t->type == TOK_TRAP) {
         tk++;
         /* Two forms:
-         *   `trap`                   — bare syscall (SVC #0x80). X0/X16 should
-         *                               have been set via ↓ $N. exit convention.
+         *   `trap`                   — bare SVC. Whatever the program set in
+         *                               X16 (via ↓ $16 N) + args in X0-X7 is
+         *                               the syscall. DO NOT clobber X16.
          *   `trap name num [arg...]` — syscall with args: put num in X16, args
          *                               in X0..X7, issue SVC, bind result into
-         *                               `name` as a new local. Used for syscall
-         *                               calls in compiler-darwin.ls (open/read
-         *                               /write/close). */
+         *                               `name` as a new local. */
         int nx = cur()->type;
         if (nx == TOK_NEWLINE || nx == TOK_EOF || nx == TOK_INDENT) {
-            emit_mov_imm64(16, 1);
+            /* Bare trap: just SVC. The caller already set X16/X0-X7. */
             emit_svc(0x80);
             return;
         }

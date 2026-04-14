@@ -185,6 +185,11 @@ const SYS_BRK       12
 buf arm64_buf 1048576
 var arm64_pos 0
 
+\\ mmap_file writes its two outputs here, for bootstraps without
+\\ multi-return support.
+var mmap_base 0
+var mmap_size 0
+
 arm64_emit32 val :
     \\ Write a 32-bit little-endian word at current position and advance by 4.
     ← 32 arm64_buf + arm64_pos val
@@ -4920,8 +4925,9 @@ elf_build_arm64 code_buf code_size :
 \\ Host trap helpers for main
 \\ ============================================================
 
-\\ mmap_file — open, get size via lseek, mmap, close fd
-\\ Returns base pointer and file size.
+\\ mmap_file — open, get size via lseek, mmap, close fd.
+\\ Stores base pointer in global mmap_base and file size in mmap_size.
+\\ Bootstraps that don't support multi-return read these globals directly.
 host mmap_file path :
     \\ openat(AT_FDCWD, path, O_RDONLY, 0)
     ↓ $16 463
@@ -4939,6 +4945,7 @@ host mmap_file path :
     ↓ $2 2
     trap
     file_size ↑ $0
+    mmap_size file_size
 
     \\ mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0)
     ↓ $16 197
@@ -4950,11 +4957,15 @@ host mmap_file path :
     ↓ $5 0
     trap
     base ↑ $0
+    mmap_base base
 
     \\ close(fd)
     ↓ $16 6
     ↓ $0 fd
     trap
+
+    \\ Return base in X0 for single-return callers.
+    ↓ $0 base
 
 \\ write_file — open (create/trunc), write buffer, close
 host write_file path buf buf_len :
@@ -5026,8 +5037,10 @@ host lithos_main argc argv :
     src_path → 64 argv 8          \\ argv[1]
     out_path → 64 argv 16         \\ argv[2]
 
-    \\ Step 1: mmap the source file
-    src_base src_size mmap_file src_path
+    \\ Step 1: mmap the source file (writes mmap_base, mmap_size globals)
+    mmap_file src_path
+    src_base mmap_base
+    src_size mmap_size
 
     \\ Step 2: Lex the source
     lithos_lex src_base src_size
