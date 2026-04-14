@@ -1593,10 +1593,10 @@ handle_ident_stmt:
 
 .Lhi_reassign:
     // Known variable: name expr → evaluate expr, MOV into variable's register
+    // DON'T skip name — the expression includes it: "count + 1" means count=count+1
     ldr     w5, [x0, #SYM_REG]     // existing register
-    add     x19, x19, #TOK_STRIDE_SZ   // skip name
     stp     w5, wzr, [sp, #-16]!
-    bl      parse_expr              // new value in w0
+    bl      parse_expr              // parses "count + 1" as expression
     ldp     w5, wzr, [sp], #16
     cmp     w0, w5
     b.eq    .Lhi_reassign_done      // same register, no MOV needed
