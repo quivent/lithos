@@ -9,10 +9,10 @@
 //   bar4_base      -- .quad, virtual address of BAR4 mmap (HBM window)
 //   bar4_phys      -- .quad, physical address of BAR4 (== GPU VA on GH200)
 //
-// PCI BDF is set by pci_bdf_slot below.  Default 0000:09:00.0.
+// PCI BDF is set by pci_bdf_slot below.  Default 0000:dd:00.0 (this host).
 // To change, patch the ASCII string before calling bar_map_init.
 //
-// !!! WARNING: THE BDF STRING "09:00" IS DUPLICATED IN THREE PLACES !!!
+// !!! WARNING: THE BDF STRING "dd:00" IS DUPLICATED IN THREE PLACES !!!
 //     pci_bdf_slot   (bar0_path)
 //     pci_bdf_slot4  (bar4_path)
 //     pci_bdf_slot_r (resource_path)
@@ -65,19 +65,21 @@ bar4_phys:      .quad 0               // BAR4 physical base (parsed from sysfs)
 .global bar4_phys
 
 // PCI sysfs paths -- BDF slot is embedded in the string.
-// Default: 0000:09:00.0 (typical GH200 integrated GPU).
-// Patch pci_bdf_slot (5 bytes "09:00") to match your system.
+// Default: 0000:dd:00.0 (observed on this GH200; typical integrated-GPU BDF
+// on older GH200 units is 0000:09:00.0 — patch all three .ascii sites below
+// to match `lspci -D | grep NVIDIA`).
+// Patch pci_bdf_slot (5 bytes "dd:00") to match your system.
 bar0_path:
     .ascii "/sys/bus/pci/devices/0000:"
 pci_bdf_slot:                                // !!! BDF COPY 1/3 -- MUST MATCH pci_bdf_slot4 AND pci_bdf_slot_r !!!
-    .ascii "09:00"
+    .ascii "dd:00"
     .ascii ".0/resource0"
     .byte 0
 
 bar4_path:
     .ascii "/sys/bus/pci/devices/0000:"
 pci_bdf_slot4:                               // !!! BDF COPY 2/3 -- MUST MATCH pci_bdf_slot AND pci_bdf_slot_r !!!
-    .ascii "09:00"
+    .ascii "dd:00"
     .ascii ".0/resource4"
     .byte 0
 
@@ -85,7 +87,7 @@ pci_bdf_slot4:                               // !!! BDF COPY 2/3 -- MUST MATCH p
 resource_path:
     .ascii "/sys/bus/pci/devices/0000:"
 pci_bdf_slot_r:                              // !!! BDF COPY 3/3 -- MUST MATCH pci_bdf_slot AND pci_bdf_slot4 !!!
-    .ascii "09:00"
+    .ascii "dd:00"
     .ascii ".0/resource"
     .byte 0
 
