@@ -57,6 +57,13 @@
 .equ TOK_STAR,      52
 .equ TOK_SLASH,     53
 .equ TOK_EQ,        54
+// Type keywords (also used as variable names in compiler.ls)
+.equ TOK_F32,       40
+.equ TOK_U32,       41
+.equ TOK_S32,       42
+.equ TOK_F16,       43
+.equ TOK_PTR,       44
+
 .equ TOK_EQEQ,     55
 .equ TOK_NEQ,       56
 .equ TOK_LT,        57
@@ -1336,20 +1343,29 @@ parse_body:
     b       .Lbody_loop
 .Lbody_newline:
     add     x19, x19, #TOK_STRIDE_SZ
-    // After newline: peek at next token. If it's NOT indent
-    // (or indent < body level), the body is over. This detects
-    // dedent back to column 0 (next top-level composition).
+    // After newline: peek at next token to detect dedent.
     cmp     x19, x27
     b.hs    .Lbody_done
     ldr     w0, [x19]
     cmp     w0, #TOK_NEWLINE
-    b.eq    .Lbody_loop         // blank line — keep going
+    b.eq    .Lbody_loop         // blank line (NEWLINE NEWLINE) — skip
     cmp     w0, #TOK_EOF
     b.eq    .Lbody_done
     cmp     w0, #TOK_INDENT
-    b.eq    .Lbody_loop         // has indent — let the loop check its level
-    // Non-indent token right after newline = column 0 = body over
-    b       .Lbody_done
+    b.ne    .Lbody_done         // non-indent after newline = column 0 = done
+    // It's an INDENT — check if it's a blank line (INDENT(0) + NEWLINE)
+    ldr     w1, [x19, #8]      // indent level
+    cbnz    w1, .Lbody_loop    // real indent → let loop check level
+    // INDENT(0): peek ahead — if next is NEWLINE, it's a blank line, skip both
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lbody_done
+    ldr     w2, [x4]
+    cmp     w2, #TOK_NEWLINE
+    b.ne    .Lbody_done         // INDENT(0) + non-newline = real dedent
+    // Blank line: skip INDENT(0) + NEWLINE
+    add     x19, x19, #TOK_STRIDE_SZ
+    b       .Lbody_newline      // process the NEWLINE (will advance + peek again)
 .Lbody_stmt:
     bl      parse_statement
     bl      reset_regs
@@ -1394,6 +1410,17 @@ parse_statement:
     cmp     w0, #TOK_LABEL
     b.eq    .Ls_label
     cmp     w0, #TOK_IDENT
+    b.eq    .Ls_ident
+    // Type keywords used as variable names
+    cmp     w0, #TOK_PTR
+    b.eq    .Ls_ident
+    cmp     w0, #TOK_F32
+    b.eq    .Ls_ident
+    cmp     w0, #TOK_U32
+    b.eq    .Ls_ident
+    cmp     w0, #TOK_F16
+    b.eq    .Ls_ident
+    cmp     w0, #TOK_S32
     b.eq    .Ls_ident
     cmp     w0, #TOK_TRAP
     b.eq    .Ls_trap
@@ -2647,6 +2674,17 @@ parse_atom:
     b.eq    .La_int             // treat float as int for bootstrap
     cmp     w0, #TOK_IDENT
     b.eq    .La_ident
+    // Type keywords used as variable names in compiler.ls
+    cmp     w0, #TOK_PTR
+    b.eq    .La_ident
+    cmp     w0, #TOK_F32
+    b.eq    .La_ident
+    cmp     w0, #TOK_U32
+    b.eq    .La_ident
+    cmp     w0, #TOK_F16
+    b.eq    .La_ident
+    cmp     w0, #TOK_S32
+    b.eq    .La_ident
     cmp     w0, #TOK_LPAREN
     b.eq    .La_paren
     cmp     w0, #TOK_MINUS
@@ -2922,13 +2960,14 @@ parse_atom:
     ret
 
 .La_load:
-    add     x19, x19, #TOK_STRIDE_SZ
-    bl      parse_atom
-    mov     w4, w0
-    bl      parse_atom
-    mov     w5, w0
+    add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
+    bl      parse_atom                  // width (8, 16, 32, 64)
+    mov     w4, w0                      // width register (ignored for now)
+    bl      parse_expr                  // address expression (can include + - etc.)
+    mov     w5, w0                      // address register
     bl      alloc_reg
-    mov     w6, w0
+    mov     w6, w0                      // result register
+    // Emit: LDR Xresult, [Xaddr, #0]
     mov     w0, w6
     mov     w1, w5
     mov     w2, #0
