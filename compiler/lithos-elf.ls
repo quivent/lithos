@@ -454,7 +454,8 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     nvinfo_off = cubin_pos
 
     \\ REGCOUNT (sym_idx=3 = kernel symbol)
-    reg_val = reg_count
+    \\ reg_count is the highest register index; REGCOUNT needs the count (index + 1)
+    reg_val = reg_count + 1
     if< reg_val 8
         reg_val = 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
@@ -518,11 +519,19 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
             cd_emit gs_off
         endfor
 
-    \\ EXIT_INSTR_OFFSETS: fmt=04 attr=0x1c size=4 val=0x100 (safe default)
+    \\ EXIT_INSTR_OFFSETS: emit actual EXIT byte offsets tracked during emission
     cb_emit 4
     cb_emit EIATTR_EXIT_INSTR_OFFSETS
-    cw_emit 4
-    cd_emit 256    \\ 0x100
+    if> exit_count 0
+        cw_emit (exit_count * 4)
+        for ei 0 exit_count 1
+            ex_off = load_u32 (exit_offsets + ei * 4)
+            cd_emit ex_off
+        endfor
+    if== exit_count 0
+        \\ fallback: emit code_size - 16 (last instruction) if no EXIT was recorded
+        cw_emit 4
+        cd_emit code_size - 16
 
     \\ CBANK_PARAM_SIZE (HVAL; total param bytes)
     param_bytes = n_kparams * 8

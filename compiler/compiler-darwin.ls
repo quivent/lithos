@@ -994,10 +994,21 @@ record_gridsync :
     ← 32 gridsync_offsets + gridsync_count * 4 gpu_pos
     gridsync_count + 1
 
+\\ EXIT instruction offset tracking (up to 256 sites).
+buf exit_offsets 1024
+var exit_count 0
+
+record_exit :
+    if>= exit_count 256
+        \\ silently clamp at 256 sites
+    ← 32 exit_offsets + exit_count * 4 gpu_pos
+    exit_count + 1
+
 gpu_reset :
     gpu_pos 0
     max_reg 0
     gridsync_count 0
+    exit_count 0
     gpu_cooperative 0
 
 \\ ============================================================
@@ -1563,6 +1574,7 @@ emit_bra_pred byte_offset pred :
     sinst iword_masked ctrl_bra
 
 emit_exit :
+    record_exit
     sinst 0x000000000000794D ctrl_exit
 
 \\ ============================================================
@@ -4660,7 +4672,8 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     \\ .nv.info (section 4)
     calign 4
     nvinfo_off cubin_pos
-    reg_val reg_count
+    \\ reg_count is the highest register index; REGCOUNT needs the count (index + 1)
+    reg_val reg_count + 1
     if< reg_val 8
         reg_val 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
@@ -4712,10 +4725,19 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
             cd_emit gs_off
         endfor
 
+    \\ EXIT_INSTR_OFFSETS: emit actual EXIT byte offsets tracked during emission
     cb_emit 4
     cb_emit EIATTR_EXIT_INSTR_OFFSETS
-    cw_emit 4
-    cd_emit 256
+    if> exit_count 0
+        cw_emit (exit_count * 4)
+        for ei 0 exit_count 1
+            ex_off → 32 (exit_offsets + ei * 4)
+            cd_emit ex_off
+        endfor
+    if== exit_count 0
+        \\ fallback: emit code_size - 16 (last instruction) if no EXIT was recorded
+        cw_emit 4
+        cd_emit code_size - 16
 
     param_bytes n_kparams * 8
     cb_emit 3

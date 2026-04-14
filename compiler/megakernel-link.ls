@@ -654,6 +654,9 @@ link_forward_megakernel data_region w_embed w_final_ln w_lm_head :
     append_to_forward
 
     \\ Step 8: Wrap in cooperative ELF via lithos-elf.ls
+    \\ Set exit_offsets for elf_build: EXIT is at forward_pos - gpu_pos (the pos before append)
+    exit_count 1
+    ← 32 exit_offsets forward_pos - 16
     \\ Kernel name: "lithos_forward"
     \\ 4 kernel params: sync_counter, done_flag, activation_buf, position
     elf_build "lithos_forward" 15 forward_buf forward_pos 4 forward_max_reg forward_max_smem 1 forward_sync_offsets forward_sync_count
@@ -713,6 +716,10 @@ link_recurrence_megakernel data_region :
     gpu_reset
     emit_exit
     append_to_recur
+
+    \\ Set exit_offsets for elf_build: EXIT is at recur_pos - 16 (last 128-bit instruction)
+    exit_count 1
+    ← 32 exit_offsets recur_pos - 16
 
     \\ Wrap in cooperative ELF
     elf_build "lithos_recurrence" 18 recur_buf recur_pos 3 recur_max_reg recur_max_smem 1 recur_sync_offsets recur_sync_count
