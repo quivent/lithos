@@ -500,7 +500,17 @@ class Parser:
 
             if tok.type == TT.INDENT:
                 if tok.indent < body_indent:
-                    # Dedent -> end of block
+                    # Check if this is just a blank/comment line (indent 0
+                    # followed by NEWLINE).  If so, skip it rather than
+                    # treating it as a dedent — the real body may continue
+                    # after intervening blank/comment lines.
+                    saved = self.pos
+                    self._advance()  # consume INDENT
+                    if self._peek_type() == TT.NEWLINE:
+                        # Blank/comment line — skip and keep parsing the block
+                        continue
+                    # Real dedent — restore position and break
+                    self.pos = saved
                     break
                 # Consume the INDENT token
                 self._advance()
@@ -712,6 +722,10 @@ class Parser:
         if tt == TT.REG_READ:
             return self._parse_expr()
 
+        # ---- dollar-prefixed call: $NAME arg1 arg2 ... -------------------
+        if tt == TT.DOLLAR:
+            return self._parse_dollar_call()
+
         # ---- expression statement (fallback) ------------------------------
         expr = self._parse_expr()
         return expr
@@ -904,12 +918,26 @@ class Parser:
             val = IntLit(value=0)
         return ConstDecl(name=name_tok.text, value=val)
 
+    def _parse_dollar_call(self):
+        """$NAME arg1 arg2 ... — call via dollar-prefixed variable."""
+        self._advance()  # consume '$'
+        name_tok = self._advance()  # consume the name
+        name = '$' + name_tok.text
+        args = []
+        while self._peek_type() not in (TT.NEWLINE, TT.EOF, TT.INDENT) and \
+              self._is_expr_start(self._peek()):
+            args.append(self._parse_expr())
+        return FuncCall(name=name, args=args)
+
     def _parse_trap(self):
-        """trap sysnum arg1 arg2 ..."""
+        """trap [sysnum arg1 arg2 ...]  -- bare trap (no args) is valid."""
         self._advance()  # consume 'trap' / 'syscall'
+        # Bare trap: no arguments means SVC #0 with no register setup
+        if self._peek_type() in (TT.NEWLINE, TT.EOF, TT.INDENT):
+            return Trap(sysnum=None, args=[])
         sysnum = self._parse_expr()
         args = []
-        while self._peek_type() not in (TT.NEWLINE, TT.EOF):
+        while self._peek_type() not in (TT.NEWLINE, TT.EOF, TT.INDENT):
             args.append(self._parse_expr())
         return Trap(sysnum=sysnum, args=args)
 
@@ -993,11 +1021,22 @@ class Parser:
             addr = self._parse_expr()
             return Assignment(target=name, value=Load(width=width, addr=addr))
 
-        # If next token starts an expression, treat as implicit assignment:
-        # ``name expr``  means  ``name = expr``
+        # If next token starts an expression, it could be:
+        #   name expr              -> implicit assignment (name = expr)
+        #   name expr expr ...     -> function call (name(expr, expr, ...))
+        # Parse the first expression, then check if more follow on the line.
         if self._is_expr_start(nxt):
-            val = self._parse_expr()
-            return Assignment(target=name, value=val)
+            first = self._parse_expr()
+            # Check if more expression-start tokens follow on the same line
+            nxt2 = self._peek()
+            if self._is_expr_start(nxt2):
+                # Multi-argument: this is a function call
+                args = [first]
+                while self._peek_type() not in (TT.NEWLINE, TT.EOF, TT.INDENT) and \
+                      self._is_expr_start(self._peek()):
+                    args.append(self._parse_expr())
+                return FuncCall(name=name, args=args)
+            return Assignment(target=name, value=first)
 
         # Bare identifier on a line -- could be a nullary function call
         return FuncCall(name=name, args=[])
