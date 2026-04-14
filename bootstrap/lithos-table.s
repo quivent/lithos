@@ -1442,10 +1442,30 @@ parse_statement:
 .Ls_check_trap:
     cmp     w0, #TOK_TRAP
     b.eq    .Ls_trap
+    // Bare expressions as statements (return values): INT, MINUS (negative), LOAD
+    cmp     w0, #TOK_INT
+    b.eq    .Ls_bare_expr
+    cmp     w0, #TOK_MINUS
+    b.eq    .Ls_bare_expr
+    cmp     w0, #TOK_LOAD
+    b.eq    .Ls_bare_expr
+    cmp     w0, #TOK_LPAREN
+    b.eq    .Ls_bare_expr
 
     // Unknown — skip
     add     x19, x19, #TOK_STRIDE_SZ
     ldp     x29, x30, [sp], #16
+    ret
+
+.Ls_bare_expr:
+    // Bare expression as statement — evaluate and emit MOV X0, result
+    bl      parse_expr
+    cmp     w0, #0
+    b.eq    1f
+    mov     w1, w0
+    mov     w0, #0
+    bl      emit_mov_reg
+1:  ldp     x29, x30, [sp], #16
     ret
 
 .Ls_store:
@@ -1641,6 +1661,8 @@ handle_ident_stmt:
     ldr     w0, [x4]
     cmp     w0, #TOK_EQ
     b.eq    .Lhi_assign
+    cmp     w0, #TOK_COLON
+    b.eq    .Lhi_label
 
     // If next is NEWLINE/EOF/INDENT → bare call (no args)
     cmp     w0, #TOK_NEWLINE
@@ -1686,6 +1708,7 @@ handle_ident_stmt:
     b.eq    .Lhi_reassign_full
 .Lhi_reassign_skip:
     // Check for multi-line: NEWLINE + INDENT + operator means keep name
+    mov     w3, w0                     // save original next-token for later
     cmp     w0, #TOK_NEWLINE
     b.ne    .Lhi_reassign_do_skip
     // Peek further: NEWLINE + INDENT + operator?
@@ -1705,9 +1728,10 @@ handle_ident_stmt:
     b.eq    .Lhi_reassign_full
     cmp     w0, #TOK_PLUS
     b.eq    .Lhi_reassign_full
-    cmp     w0, #TOK_MINUS
-    b.eq    .Lhi_reassign_full
+    // NOTE: TOK_MINUS not included — "-1" on next line is a separate statement
 .Lhi_reassign_do_skip:
+    // Restore original next-token (multi-line peek may have clobbered w0)
+    mov     w0, w3
     // Check if there's actually a value expression to parse.
     // If next is NEWLINE/EOF, it's a bare read (return value), not reassignment.
     cmp     w0, #TOK_NEWLINE
@@ -1746,6 +1770,20 @@ handle_ident_stmt:
 
 .Lhi_bare_call:
     bl      handle_call
+    ldp     x29, x30, [sp], #16
+    ret
+
+.Lhi_label:
+    // Label definition: "name:" — record current code address as symbol
+    bl      emit_cur
+    mov     w2, w0                  // code address
+    mov     w1, #KIND_COMP          // labels use KIND_COMP (goto targets)
+    adrp    x3, scope_depth
+    add     x3, x3, :lo12:scope_depth
+    ldr     w3, [x3]
+    bl      sym_add
+    add     x19, x19, #TOK_STRIDE_SZ   // skip name
+    add     x19, x19, #TOK_STRIDE_SZ   // skip ':'
     ldp     x29, x30, [sp], #16
     ret
 
