@@ -1126,17 +1126,7 @@ handle_var:
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
 
-    // Raise reg_floor to protect this var's register
-    add     w0, w4, #1
-    adrp    x1, reg_floor
-    add     x1, x1, :lo12:reg_floor
-    ldr     w2, [x1]
-    cmp     w0, w2
-    b.le    .Lvar_floor_ok
-    str     w0, [x1]
-    adrp    x1, next_reg
-    add     x1, x1, :lo12:next_reg
-    str     w0, [x1]
+    // Same approach: parse_body skips reset after var declarations.
 .Lvar_floor_ok:
 
     // Check for initial value
@@ -1167,6 +1157,7 @@ handle_var:
     mov     x1, #0
     bl      emit_mov_imm64
 .Lvar_done:
+    mov     w0, #1                 // return 1 = var decl (don't reset regs)
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1435,6 +1426,10 @@ parse_body:
     b       .Lbody_newline      // process the NEWLINE (will advance + peek again)
 .Lbody_stmt:
     bl      parse_statement
+    // parse_statement returns w0: handle_binding/handle_var return 1,
+    // all others return arbitrary values. Only skip reset on exactly 1.
+    cmp     w0, #1
+    b.eq    .Lbody_loop            // binding — don't recycle its register
     bl      reset_regs
     b       .Lbody_loop
 .Lbody_done:
@@ -1864,27 +1859,13 @@ parse_binding_compose:
     ldr     w3, [x3]
     bl      sym_add
 
-    // Raise reg_floor to protect this variable's register across
-    // statement boundaries. Without this, reset_regs recycles it.
-    cmp     w4, #REG_FIRST
-    b.lt    .Lbind_no_floor        // param registers (X0-X8) don't need floor
-    add     w0, w4, #1
-    adrp    x1, reg_floor
-    add     x1, x1, :lo12:reg_floor
-    ldr     w2, [x1]
-    cmp     w0, w2
-    b.le    .Lbind_no_floor        // don't lower the floor
-    str     w0, [x1]
-    // Also advance next_reg if needed
-    adrp    x1, next_reg
-    add     x1, x1, :lo12:next_reg
-    ldr     w2, [x1]
-    cmp     w0, w2
-    b.le    .Lbind_no_floor
-    str     w0, [x1]
-.Lbind_no_floor:
+    // NOTE: we do NOT raise reg_floor here. Instead, parse_body
+    // skips reset_regs after binding statements (w0=1 flag).
+    // This prevents register recycling for bindings without
+    // exhausting the register window in large compositions.
 
     ldr     x19, [sp], #16         // restore post-expr position
+    mov     w0, #1                 // return 1 = binding (don't reset regs)
     ldp     x29, x30, [sp], #16
     ret
 
