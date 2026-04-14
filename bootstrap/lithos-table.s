@@ -2731,9 +2731,81 @@ parse_atom:
     ret
 
 .La_ident_unknown:
-    // Treat as composition call — result in X0
-    bl      handle_call
+    // Composition call inside expression — parse ONE argument only.
+    // Statement-level calls use handle_call (greedy, until newline).
+    // Expression-level calls are "func arg" — single arg, result in X0.
+    bl      sym_lookup
+    mov     x5, x0                  // sym entry (or NULL)
+    add     x19, x19, #TOK_STRIDE_SZ   // skip name
+
+    // Check if next token is a valid expression start (not operator/newline)
+    cmp     x19, x27
+    b.hs    .La_call_no_arg
+    ldr     w0, [x19]
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_EOF
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_RPAREN
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_INDENT
+    b.eq    .La_call_no_arg
+    // Check for binary operators — these mean no arg (e.g., "track_rd << 16")
+    cmp     w0, #TOK_PLUS
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_MINUS
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_STAR
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_SLASH
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_AMP
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_PIPE
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_CARET
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_LSHIFT
+    b.eq    .La_call_no_arg
+    cmp     w0, #TOK_RSHIFT
+    b.eq    .La_call_no_arg
+
+    // Has argument — parse ONE expression as the single argument
+    stp     x5, xzr, [sp, #-16]!
+    bl      parse_atom              // parse single arg (atom, not full expr)
+    ldp     x5, xzr, [sp], #16
+    // Move result to X0 (arg register)
+    cmp     w0, #0
+    b.eq    .La_call_emit
+    mov     w1, w0
     mov     w0, #0
+    bl      emit_mov_reg
+    b       .La_call_emit
+
+.La_call_no_arg:
+    // No argument — bare call
+.La_call_emit:
+    cbz     x5, .La_call_nop        // symbol not found
+    ldr     w0, [x5, #SYM_KIND]
+    cmp     w0, #KIND_COMP
+    b.ne    .La_call_nop
+    // Emit BL to composition
+    ldr     w1, [x5, #SYM_REG]     // code address
+    bl      emit_cur
+    sub     w1, w1, w0
+    asr     w1, w1, #2
+    and     w1, w1, #0x3FFFFFF
+    movk    w1, #0x9400, lsl #16
+    mov     w0, w1
+    bl      emit32
+    b       .La_call_done
+.La_call_nop:
+    // Unknown composition — emit NOP
+    mov     w0, #0x201F
+    movk    w0, #0xD503, lsl #16
+    bl      emit32
+.La_call_done:
+    mov     w0, #0                  // result assumed in X0
     ldp     x29, x30, [sp], #16
     ret
 

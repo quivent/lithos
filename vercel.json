@@ -1,5 +1,5 @@
 {
-  "outputDirectory": "docs",
+  "outputDirectory": "site",
   "cleanUrls": true,
   "headers": [
     {
