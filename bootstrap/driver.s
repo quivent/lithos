@@ -447,11 +447,43 @@ drv_lithos_pipeline:
     cmp     x0, #2
     b.eq    .Lwrite_cubin
 
-    // ARM64: push (data-buf=0 data-len=0 bss-len=0 path), then ELF-WRITE-ARM64
+    // ARM64: push (data-buf=0 data-len=0 bss-len path), then ELF-WRITE-ARM64
+    // bss-len: sum all buf declarations from the symbol table.
+    // Walk ls_sym_table[0..ls_sym_count), accumulate sizes for KIND_BUF entries.
     str     x22, [x24, #-8]!     // text-len → NOS
     mov     x22, #0              // data-buf
     str     x22, [x24, #-8]!
     str     x22, [x24, #-8]!     // data-len
+
+    // Compute BSS size from symbol table
+    adrp    x0, ls_sym_count
+    add     x0, x0, :lo12:ls_sym_count
+    ldr     w1, [x0]             // w1 = sym_count
+    adrp    x2, ls_sym_table
+    add     x2, x2, :lo12:ls_sym_table
+    mov     x3, #0               // x3 = bss_total
+    mov     x4, #0               // x4 = index
+.Lbss_scan:
+    cmp     w4, w1
+    b.ge    .Lbss_done
+    // Each sym entry: [name_off:4][name_len:4][kind:4][reg/value:4][depth:4][pad:4] = 24 bytes
+    // kind at offset 8 (SYM_KIND), buf size at offset 12 (SYM_REG)
+    mov     x5, #24
+    mul     x5, x4, x5
+    add     x5, x2, x5           // x5 = &sym_table[i]
+    ldr     w6, [x5, #8]         // kind
+    cmp     w6, #3                // KIND_BUF = 3
+    b.ne    .Lbss_next
+    ldr     w7, [x5, #12]        // value = buf size
+    add     x3, x3, x7
+.Lbss_next:
+    add     w4, w4, #1
+    b       .Lbss_scan
+.Lbss_done:
+    // Align BSS to 16 bytes
+    add     x3, x3, #15
+    bic     x3, x3, #15
+    mov     x22, x3
     str     x22, [x24, #-8]!     // bss-len
     adrp    x0, drv_output_path
     add     x0, x0, :lo12:drv_output_path

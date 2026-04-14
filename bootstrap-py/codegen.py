@@ -4,7 +4,7 @@ Lithos code generator — AST walker that emits machine code.
 Takes an AST (from parser.py) and an emitter backend (ARM64 or SM90),
 walks the tree, and emits target-specific machine code.
 
-Register allocation: simple linear allocation from a pool.
+Register allocation: linear allocation from a pool with LRU spilling.
   - ARM64: X9..X28 for general purpose (X0..X8 reserved for syscall ABI,
     X29=FP, X30=LR, X31=SP/XZR)
   - SM90: R0..R254 general purpose
@@ -82,7 +82,7 @@ class Emitter(Protocol):
 
 @dataclass
 class RegisterAllocator:
-    """Simple linear register allocator.
+    """Register allocator with temporary recycling and LRU spilling.
 
     ARM64 convention:
       X0-X7:  argument / result registers (managed by ABI, not allocated)
@@ -91,29 +91,98 @@ class RegisterAllocator:
       X29:    frame pointer
       X30:    link register
       X31:    SP / XZR
+
+    Temporaries (__tmp_*) are expression intermediates that only live within
+    a single statement.  free_temps() releases them back to the pool so they
+    can be reused by subsequent statements.
+
+    When the pool is exhausted and a new register is needed, the
+    least-recently-used variable is spilled to a stack slot (STR to
+    [X29, #-offset]) and its register is reused.  When a spilled variable
+    is accessed again, it is reloaded from its stack slot.
     """
 
     # Pool of allocatable registers
     pool: list[int] = field(default_factory=lambda: list(range(9, 29)))
-    next_idx: int = 0
 
     # Map from variable name to allocated register
     bindings: dict[str, int] = field(default_factory=dict)
 
+    # Set of registers currently available for allocation
+    free_set: list[int] = field(default_factory=list)
+
+    # LRU tracking: list of variable names in access order (most recent last)
+    access_order: list[str] = field(default_factory=list)
+
+    # Spill state: variable name -> stack offset (negative, relative to FP)
+    spilled: dict[str, int] = field(default_factory=dict)
+    next_spill_slot: int = 0  # count of spill slots allocated
+
+    # Emitter reference for spill/reload (set by CodeGenerator before use)
+    emitter: Any = None
+
+    def __post_init__(self):
+        # Initially all pool registers are free
+        self.free_set = list(reversed(self.pool))  # pop from end for efficiency
+
+    def _touch(self, name: str) -> None:
+        """Mark a variable as most-recently-used."""
+        try:
+            self.access_order.remove(name)
+        except ValueError:
+            pass
+        self.access_order.append(name)
+
+    def _spill_lru(self) -> int:
+        """Spill the least-recently-used pool variable to the stack."""
+        pool_set = set(self.pool)
+        for name in list(self.access_order):
+            if name in self.bindings and self.bindings[name] in pool_set:
+                reg = self.bindings.pop(name)
+                self.access_order.remove(name)
+                # Assign a spill slot if not already spilled before
+                if name not in self.spilled:
+                    self.next_spill_slot += 1
+                    # Slot N at [FP, #-(16 + N*8)]: below saved FP/LR pair
+                    self.spilled[name] = -(16 + self.next_spill_slot * 8)
+                # Emit STR to save the register value
+                if self.emitter is not None:
+                    self.emitter.emit_store(reg, 29, self.spilled[name])
+                return reg
+        raise RuntimeError("register allocator exhausted: no spillable variables")
+
     def alloc(self, name: str) -> int:
         """Allocate a register for a variable name."""
         if name in self.bindings:
+            self._touch(name)
             return self.bindings[name]
-        if self.next_idx >= len(self.pool):
-            raise RuntimeError(f"register allocator exhausted (need reg for '{name}')")
-        reg = self.pool[self.next_idx]
-        self.next_idx += 1
+        # Check if this variable was previously spilled -- reload it
+        if name in self.spilled:
+            if not self.free_set:
+                reg = self._spill_lru()
+            else:
+                reg = self.free_set.pop()
+            self.bindings[name] = reg
+            self._touch(name)
+            # Emit LDR to reload from stack slot
+            if self.emitter is not None:
+                self.emitter.emit_load(reg, 29, self.spilled[name])
+            return reg
+        # Fresh allocation
+        if not self.free_set:
+            reg = self._spill_lru()
+        else:
+            reg = self.free_set.pop()
         self.bindings[name] = reg
+        self._touch(name)
         return reg
 
     def lookup(self, name: str) -> int | None:
         """Look up a variable's register, or None if not allocated."""
-        return self.bindings.get(name)
+        r = self.bindings.get(name)
+        if r is not None:
+            self._touch(name)
+        return r
 
     def get_or_alloc(self, name: str) -> int:
         """Return existing register or allocate a new one."""
@@ -121,12 +190,39 @@ class RegisterAllocator:
 
     def reset(self) -> None:
         """Reset all allocations (e.g. at function boundary)."""
-        self.next_idx = 0
         self.bindings.clear()
+        self.free_set = list(reversed(self.pool))
+        self.access_order.clear()
+        self.spilled.clear()
+        self.next_spill_slot = 0
+
+    @property
+    def spill_area_bytes(self) -> int:
+        """Total bytes needed for spill slots (16-byte aligned)."""
+        raw = self.next_spill_slot * 8
+        return (raw + 15) & ~15
 
     def temp(self) -> int:
         """Allocate an anonymous temporary register."""
-        return self.alloc(f"__tmp_{self.next_idx}")
+        name = f"__tmp_{id(object())}"
+        return self.alloc(name)
+
+    def free_temps(self) -> None:
+        """Release all __tmp_* temporaries back to the free pool.
+
+        Called at statement boundaries so expression intermediates are recycled.
+        """
+        to_free = [name for name in self.bindings if name.startswith("__tmp_")]
+        for name in to_free:
+            reg = self.bindings.pop(name)
+            self.free_set.append(reg)
+            try:
+                self.access_order.remove(name)
+            except ValueError:
+                pass
+            self.spilled.pop(name, None)
+        # Keep free_set sorted (highest first) so we pop lowest first -- deterministic
+        self.free_set.sort(reverse=True)
 
 
 # ============================================================
@@ -162,6 +258,16 @@ class CodeGenerator:
     symtab: SymbolTable = field(default_factory=SymbolTable)
     label_counter: int = 0
     current_func: str | None = None
+
+    def __post_init__(self):
+        # Wire the emitter into the register allocator so it can emit
+        # spill (STR) and reload (LDR) instructions when needed.
+        self.regs.emitter = self.emitter
+
+    @property
+    def is_gpu(self) -> bool:
+        """True if emitting for SM90 GPU target."""
+        return hasattr(self.emitter, 'emit_s2r')
 
     def fresh_label(self, prefix: str = "L") -> str:
         self.label_counter += 1
@@ -200,6 +306,7 @@ class CodeGenerator:
                 'Label': 'label', 'Goto': 'goto', 'Each': 'each',
                 'Shared': 'shared', 'Stride': 'stride',
                 'Comment': 'comment', 'EndFor': 'endfor',
+                'ArrayStore': 'arraystore',
             }
             kind = kind_map.get(cls_name, cls_name.lower())
         handler = getattr(self, f"_emit_{kind}", None)
@@ -235,7 +342,7 @@ class CodeGenerator:
         self.emitter.emit_mov_imm(reg, init)
 
     def _emit_buf(self, node) -> None:
-        """buf NAME SIZE — reserve a buffer label (address resolved at link time)."""
+        """buf NAME SIZE -- reserve a buffer label (address resolved at link time)."""
         name = self._get(node, "name")
         size = self._get(node, "size")
         if isinstance(size, IntLit):
@@ -255,26 +362,40 @@ class CodeGenerator:
         # Reset register allocator for this function scope
         self.regs.reset()
 
-        # Bind parameters to registers (ARM64: X0..X7 for first 8 params)
-        for i, pname in enumerate(params):
-            if i < 8:
-                self.regs.bindings[pname] = i  # X0..X7
-            else:
-                # Spill to stack — not implemented in bootstrap
+        if self.is_gpu:
+            # GPU: parameters come from constant bank 0 (cbuf0).
+            from emit_sm90 import SR_TID_X, SR_CTAID_X
+            for i, pname in enumerate(params):
                 reg = self.regs.alloc(pname)
-                # Would need stack load here
+                cbuf_offset = 0x210 + i * 8
+                self.emitter.emit_ldc(reg, 0, cbuf_offset)
+        else:
+            # ARM64: parameters in X0..X7 for first 8 params
+            for i, pname in enumerate(params):
+                if i < 8:
+                    self.regs.bindings[pname] = i  # X0..X7
+                else:
+                    reg = self.regs.alloc(pname)
 
-        # Emit function label and prologue
+        # Emit function label and prologue.
+        # Reserve generous stack space for spill slots (32 extra slots).
         self.emitter.emit_label(name)
         n_locals = max(0, len(params) - 8)
-        self.emitter.emit_prologue(name, n_locals)
+        spill_headroom = 32
+        self.emitter.emit_prologue(name, n_locals + spill_headroom)
 
-        # Emit body
+        # Emit body -- free temporaries after each statement so registers recycle
         for stmt in body:
             self._emit_node(stmt)
+            self.regs.free_temps()
 
-        # Emit epilogue and return
-        self.emitter.emit_epilogue()
+        # Emit epilogue and return.
+        # The epilogue must use the same frame_size as the prologue.
+        if not self.is_gpu:
+            frame_size = max(16, ((n_locals + spill_headroom + 2) * 8 + 15) & ~15)
+            self.emitter.emit_epilogue(frame_size)
+        else:
+            self.emitter.emit_epilogue()
         self.emitter.emit_ret()
 
         self.current_func = None
@@ -292,11 +413,32 @@ class CodeGenerator:
             self.emitter.emit_mov_reg(dst_reg, val_reg)
 
     def _emit_call(self, node) -> None:
-        """Composition call: name arg1 arg2 ..."""
+        """Composition call: name arg1 arg2 ...
+
+        On GPU, certain intrinsic names map to MUFU or SASS instructions.
+        """
         name = self._get(node, "name")
         args = self._get(node, "args", [])
 
-        # Load arguments into X0..X7
+        if self.is_gpu:
+            from emit_sm90 import RZ
+            if name == "neg" and len(args) == 2:
+                dst_reg = self._emit_expr(args[0])
+                src_reg = self._emit_expr(args[1])
+                self.emitter.emit_sub(dst_reg, RZ, src_reg)
+                return
+            elif name == "exp" and len(args) == 2:
+                dst_reg = self._emit_expr(args[0])
+                src_reg = self._emit_expr(args[1])
+                self.emitter.emit_mufu_ex2(dst_reg, src_reg)
+                return
+            elif name == "rcp" and len(args) == 2:
+                dst_reg = self._emit_expr(args[0])
+                src_reg = self._emit_expr(args[1])
+                self.emitter.emit_mufu_rcp(dst_reg, src_reg)
+                return
+
+        # Default: ARM64-style call via registers + BL
         for i, arg in enumerate(args):
             if i >= 8:
                 break
@@ -308,7 +450,7 @@ class CodeGenerator:
         self.emitter.emit_bl(0)  # offset 0 placeholder
 
     def _emit_assign_call(self, node) -> None:
-        """result = call(args) — call then move X0 to result register."""
+        """result = call(args) -- call then move X0 to result register."""
         call_node = self._get(node, "call")
         self._emit_call(call_node if call_node else node)
         target_name = self._get(node, "target")
@@ -317,24 +459,21 @@ class CodeGenerator:
             self.emitter.emit_mov_reg(dst_reg, 0)  # result in X0
 
     def _emit_store(self, node) -> None:
-        """<- width addr value — memory store."""
-        # Evaluate address expression fully (includes any offset arithmetic)
+        """<- width addr value -- memory store."""
         addr_reg = self._emit_expr(self._get(node, "addr"))
         val_reg = self._emit_expr(self._get(node, "value"))
-        # Store at [addr_reg, #0] — offset is already folded into addr via BinOp
         self.emitter.emit_store(val_reg, addr_reg, 0)
 
     def _emit_load(self, node) -> int:
-        """-> width addr — memory load, returns register with loaded value."""
+        """-> width addr -- memory load, returns register with loaded value."""
         addr_reg = self._emit_expr(self._get(node, "addr"))
         dst_reg = self.regs.temp()
         self.emitter.emit_load(dst_reg, addr_reg, 0)
         return dst_reg
 
     def _emit_regwrite(self, node) -> None:
-        """↓ $N value — write a value to hardware register $N."""
+        """down-arrow $N value -- write a value to hardware register $N."""
         reg_node = self._get(node, "reg")
-        # reg may be a RegRef or int
         if isinstance(reg_node, RegRef):
             hw_reg = int(reg_node.name) if reg_node.name.isdigit() else self.regs.get_or_alloc(reg_node.name)
         elif isinstance(reg_node, int):
@@ -346,7 +485,7 @@ class CodeGenerator:
             self.emitter.emit_mov_reg(hw_reg, val_reg)
 
     def _emit_regread(self, node) -> int:
-        """↑ $N — read hardware register $N into a temp."""
+        """up-arrow $N -- read hardware register $N into a temp."""
         reg_node = self._get(node, "reg")
         if isinstance(reg_node, RegRef):
             hw_reg = int(reg_node.name) if reg_node.name.isdigit() else 0
@@ -357,7 +496,7 @@ class CodeGenerator:
         return hw_reg
 
     def _emit_trap(self, node) -> None:
-        """trap — emit SVC #0 syscall."""
+        """trap -- emit SVC #0 syscall."""
         sysnum = self._get(node, "sysnum", None)
         if isinstance(sysnum, IntLit):
             sysnum = sysnum.value
@@ -367,8 +506,6 @@ class CodeGenerator:
 
     def _emit_if(self, node) -> None:
         """if<cond> lhs rhs / body / else body"""
-        # Dataclass If: op, left, right, body, label
-        # Dict-based: cond, lhs, rhs, body, else_body
         cond = self._get(node, "op") or self._get(node, "cond")
         lhs = self._get(node, "left") or self._get(node, "lhs")
         rhs = self._get(node, "right") or self._get(node, "rhs")
@@ -380,6 +517,7 @@ class CodeGenerator:
         end_label = self.fresh_label("endif")
 
         self.emitter.emit_cmp(lhs_reg, rhs_reg)
+        self.regs.free_temps()  # condition operands no longer needed
 
         # Branch to end on OPPOSITE condition
         inv = {"<": "emit_branch_ge", ">": "emit_branch_le",
@@ -392,6 +530,7 @@ class CodeGenerator:
         # Then body
         for stmt in body:
             self._emit_node(stmt)
+            self.regs.free_temps()
 
         self.emitter.emit_label(end_label)
 
@@ -404,6 +543,15 @@ class CodeGenerator:
 
         self.emitter.emit_mov_reg(loop_reg, start_reg)
 
+        # end_reg must stay live through the loop (used in cmp each iteration),
+        # so give it a stable non-temp name if it was a temporary.
+        end_binding = [k for k, v in self.regs.bindings.items() if v == end_reg and k.startswith("__tmp_")]
+        if end_binding:
+            old_name = end_binding[0]
+            del self.regs.bindings[old_name]
+            self.regs.bindings[f"__for_end_{self.label_counter}"] = end_reg
+        self.regs.free_temps()
+
         top_label = self.fresh_label("for_top")
         end_label = self.fresh_label("for_end")
 
@@ -413,6 +561,7 @@ class CodeGenerator:
 
         for stmt in self._get(node, "body", []):
             self._emit_node(stmt)
+            self.regs.free_temps()
 
         self.emitter.emit_add_imm(loop_reg, loop_reg, 1)
         self.emitter.emit_branch(top_label)
@@ -438,43 +587,79 @@ class CodeGenerator:
         self.emitter.emit_ret()
 
     def _emit_barrier(self, node) -> None:
-        """barrier — emit DSB SY / membar."""
-        self.emitter.emit_nop()  # placeholder; real emitter would emit DSB
+        """barrier -- emit DSB SY / membar."""
+        self.emitter.emit_nop()
 
     def _emit_membar(self, node) -> None:
-        """membar_sys — emit DSB SY."""
+        """membar_sys -- emit DSB SY."""
         self.emitter.emit_dsb_sy()
 
     def _emit_exit_node(self, node) -> None:
-        """exit — emit return/exit."""
+        """exit -- emit return/exit."""
         self.emitter.emit_ret()
 
     def _emit_comment(self, node) -> None:
-        """comment — skip."""
+        """comment -- skip."""
         pass
 
     def _emit_endfor(self, node) -> None:
-        """endfor — handled by for body, skip."""
+        """endfor -- handled by for body, skip."""
         pass
 
     def _emit_each(self, node) -> None:
-        """each — GPU-specific, emit NOP placeholder."""
-        self.emitter.emit_nop()
+        """each VAR -- GPU: compute global thread index."""
+        var_name = self._get(node, "var")
+        if self.is_gpu:
+            from emit_sm90 import SR_TID_X, SR_CTAID_X, RZ
+            idx_reg = self.regs.get_or_alloc(var_name)
+            tid_reg = self.regs.temp()
+            ctaid_reg = self.regs.temp()
+            self.emitter.emit_s2r(tid_reg, SR_TID_X)
+            self.emitter.emit_s2r(ctaid_reg, SR_CTAID_X)
+            blockdim_reg = self.regs.temp()
+            self.emitter.emit_mov_imm(blockdim_reg, 256)
+            self.emitter.emit_imad(idx_reg, ctaid_reg, blockdim_reg, tid_reg)
+        else:
+            self.emitter.emit_nop()
 
     def _emit_shared(self, node) -> None:
-        """shared — GPU-specific, skip."""
+        """shared -- GPU-specific, skip."""
         pass
 
     def _emit_stride(self, node) -> None:
-        """stride — GPU-specific, skip."""
+        """stride -- GPU-specific, skip."""
         pass
 
     def _emit_param(self, node) -> None:
-        """param — handled at function level, skip."""
+        """param -- handled at function level, skip."""
         pass
 
+    def _emit_arraystore(self, node) -> None:
+        """target [ index ] = value -- array element store."""
+        target_name = self._get(node, "target")
+        index_node = self._get(node, "index")
+        value_node = self._get(node, "value")
+
+        base_reg = self._emit_expr(Ident(name=target_name) if isinstance(target_name, str) else target_name)
+        idx_reg = self._emit_expr(index_node)
+        val_reg = self._emit_expr(value_node)
+
+        if self.is_gpu:
+            offset_reg = self.regs.temp()
+            four_reg = self.regs.temp()
+            self.emitter.emit_mov_imm(four_reg, 4)
+            from emit_sm90 import RZ
+            self.emitter.emit_imad(offset_reg, idx_reg, four_reg, RZ)
+            addr_reg = self.regs.temp()
+            self.emitter.emit_iadd3(addr_reg, base_reg, offset_reg, RZ)
+            self.emitter.emit_store(val_reg, addr_reg, 0)
+        else:
+            addr_reg = self.regs.temp()
+            self.emitter.emit_add(addr_reg, base_reg, idx_reg)
+            self.emitter.emit_store(val_reg, addr_reg, 0)
+
     # ----------------------------------------------------------
-    # Expression evaluator — returns register number
+    # Expression evaluator -- returns register number
     # ----------------------------------------------------------
 
     def _emit_expr(self, node) -> int:
@@ -485,7 +670,6 @@ class CodeGenerator:
             return reg
 
         if isinstance(node, str):
-            # Variable reference or constant
             sym = self.symtab.lookup(node)
             if sym and sym.kind == "const":
                 reg = self.regs.temp()
@@ -494,19 +678,18 @@ class CodeGenerator:
             r = self.regs.lookup(node)
             if r is not None:
                 return r
-            # Unknown name — allocate
             return self.regs.get_or_alloc(node)
 
-        # -- Dataclass AST nodes --
         if isinstance(node, IntLit):
             reg = self.regs.temp()
             self.emitter.emit_mov_imm(reg, node.value)
             return reg
 
         if isinstance(node, FloatLit):
-            # Treat as integer bits for now (bootstrap)
+            import struct as _struct
+            f32_bits = _struct.unpack('<I', _struct.pack('<f', node.value))[0]
             reg = self.regs.temp()
-            self.emitter.emit_mov_imm(reg, int(node.value))
+            self.emitter.emit_mov_imm(reg, f32_bits)
             return reg
 
         if isinstance(node, Ident):
@@ -553,19 +736,28 @@ class CodeGenerator:
         if isinstance(node, ArrayIndex):
             base_reg = self._emit_expr(node.base)
             idx_reg = self._emit_expr(node.index)
-            # Compute address = base + index*8, load from it
-            addr_reg = self.regs.temp()
-            self.emitter.emit_add(addr_reg, base_reg, idx_reg)
-            dst_reg = self.regs.temp()
-            self.emitter.emit_load(dst_reg, addr_reg, 0)
-            return dst_reg
+            if self.is_gpu:
+                from emit_sm90 import RZ
+                offset_reg = self.regs.temp()
+                four_reg = self.regs.temp()
+                self.emitter.emit_mov_imm(four_reg, 4)
+                self.emitter.emit_imad(offset_reg, idx_reg, four_reg, RZ)
+                addr_reg = self.regs.temp()
+                self.emitter.emit_iadd3(addr_reg, base_reg, offset_reg, RZ)
+                dst_reg = self.regs.temp()
+                self.emitter.emit_load(dst_reg, addr_reg, 0)
+                return dst_reg
+            else:
+                addr_reg = self.regs.temp()
+                self.emitter.emit_add(addr_reg, base_reg, idx_reg)
+                dst_reg = self.regs.temp()
+                self.emitter.emit_load(dst_reg, addr_reg, 0)
+                return dst_reg
 
         if isinstance(node, Reduction):
-            # Placeholder: just evaluate the operand
             return self._emit_expr(node.operand)
 
         if isinstance(node, UnaryOp):
-            # Placeholder: just evaluate the operand
             return self._emit_expr(node.operand)
 
         # -- Dict-based fallback (for compatibility) --

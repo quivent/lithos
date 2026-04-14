@@ -1169,12 +1169,26 @@ handle_buf:
 parse_buf_decl:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x20, x21, [sp, #-16]!
     add     x19, x19, #TOK_STRIDE_SZ   // skip 'buf'
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
     b.ne    parse_error
+    mov     x20, x19                    // x20 = save name token pos
+    // Check if size follows the name
+    add     x21, x19, #TOK_STRIDE_SZ   // peek at next token
+    ldr     w0, [x21]
+    mov     w2, #0                      // default buf size = 0
+    cmp     w0, #TOK_INT
+    b.ne    .Lbuf_add_sym
+    // Parse the int literal to get the size value
+    mov     x19, x21                    // point x19 at the int token
+    bl      parse_int_literal           // x0 = parsed integer value
+    mov     w2, w0                      // w2 = buf size for SYM_REG
+    mov     x19, x20                    // restore x19 to name token
+.Lbuf_add_sym:
     mov     w1, #KIND_BUF
-    mov     w2, #0
+    // w2 = buf size (stored in SYM_REG field for BSS computation)
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
@@ -1183,9 +1197,9 @@ parse_buf_decl:
     ldr     w0, [x19]
     cmp     w0, #TOK_INT
     b.ne    .Lbuf_no_size
-    bl      parse_int_literal
-    add     x19, x19, #TOK_STRIDE_SZ
+    add     x19, x19, #TOK_STRIDE_SZ   // skip size (already parsed)
 .Lbuf_no_size:
+    ldp     x20, x21, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 

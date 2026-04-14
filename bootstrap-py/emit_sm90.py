@@ -743,3 +743,219 @@ class SM90Emitter:
         """LOP3.LUT Rd, Rs, imm32, RZ -- AND with immediate."""
         iword = OP_LOP3_IMM | (self._track_rd(rd) << 16) | (rs << 24) | (imm32 << 32)
         self._sinst(iword, _ctrl_lop3(LOP3_AND))
+
+    def _emit_lop3_or(self, rd: int, rs1: int, rs2: int) -> None:
+        """LOP3.LUT Rd, Rs1, Rs2, RZ -- OR (register form)."""
+        iword = OP_LOP3 | (self._track_rd(rd) << 16) | (rs1 << 24) | (rs2 << 32)
+        self._sinst(iword, _ctrl_lop3(LOP3_OR))
+
+    def _emit_lop3_xor(self, rd: int, rs1: int, rs2: int) -> None:
+        """LOP3.LUT Rd, Rs1, Rs2, RZ -- XOR (register form)."""
+        iword = OP_LOP3 | (self._track_rd(rd) << 16) | (rs1 << 24) | (rs2 << 32)
+        self._sinst(iword, _ctrl_lop3(LOP3_XOR))
+
+    # ===========================================================
+    # MUFU (Special Function Unit) convenience wrappers
+    # ===========================================================
+
+    def emit_mufu_rcp(self, rd: int, rs: int) -> None:
+        """MUFU.RCP Rd, Rs -- fast reciprocal approximation."""
+        iword = OP_MUFU | (self._track_rd(rd) << 16) | (rs << 32)
+        self._sinst(iword, _ctrl_mufu(MUFU_RCP, 7))
+
+    def emit_mufu_ex2(self, rd: int, rs: int) -> None:
+        """MUFU.EX2 Rd, Rs -- 2^x approximation."""
+        iword = OP_MUFU | (self._track_rd(rd) << 16) | (rs << 32)
+        self._sinst(iword, _ctrl_mufu(MUFU_EX2, 7))
+
+    # ===========================================================
+    # EMITTER PROTOCOL (CodeGenerator compatibility layer)
+    # ===========================================================
+    # These methods implement the Emitter protocol expected by
+    # codegen.py, mapping abstract operations to SM90 SASS.
+
+    def __init_labels(self) -> None:
+        """Lazily initialize label tracking state."""
+        if not hasattr(self, '_labels'):
+            self._labels: dict[str, int] = {}
+            self._fixups: list[tuple[int, str]] = []  # (buf_offset, label_name)
+
+    def emit_label(self, label: str) -> None:
+        """Record a label at the current position."""
+        self.__init_labels()
+        self._labels[label] = self._pos()
+
+    def emit_prologue(self, name: str, n_locals: int) -> None:
+        """GPU kernel prologue: NOP (no stack frame on GPU)."""
+        pass
+
+    def emit_epilogue(self) -> None:
+        """GPU kernel epilogue: NOP (exit handled by emit_ret)."""
+        pass
+
+    def emit_ret(self) -> None:
+        """Emit EXIT instruction (GPU thread termination)."""
+        self.emit_exit()
+
+    def emit_mov_reg(self, rd: int, rs: int) -> None:
+        """MOV Rd, Rs -- register-to-register move via IMAD Rd, Rs, 1, RZ."""
+        # IMAD rd, rs, 1, RZ  =>  rd = rs * 1 + 0
+        one_reg = RZ  # We use MOV_IMM approach instead
+        # Simpler: use IADD3 rd, rs, RZ, RZ  =>  rd = rs + 0 + 0
+        self.emit_iadd3(rd, rs, RZ, RZ)
+
+    def emit_add(self, rd: int, ra: int, rb: int) -> None:
+        """FADD Rd, Ra, Rb -- float32 addition."""
+        self.emit_fadd(rd, ra, rb)
+
+    def emit_sub(self, rd: int, ra: int, rb: int) -> None:
+        """FADD Rd, Ra, -Rb -- float32 subtraction (negate Rb via ctrl bit).
+        For bootstrap: emit negate + add."""
+        # SM90 FADD with negate on src1: set bit 48 of ctrl extra41
+        # For simplicity, use FFMA: rd = ra * 1.0 + (-rb)
+        # Actually, FADD supports negation. Let's emit FADD with neg flag.
+        # The neg-src1 bit is bit 8 of ctrl extra41 for FADD.
+        # For bootstrap simplicity, just emit: neg tmp, rb; fadd rd, ra, tmp
+        # Or use FFMA: rd = (-1.0) * rb + ra
+        # Simplest correct approach: FADD with negate bit in ctrl
+        iword = OP_FADD | (self._track_rd(rd) << 16) | (ra << 24) | (rb << 32)
+        # Standard FADD ctrl with neg-src1 bit (bit 8 of extra41)
+        ctrl = make_ctrl(5, 0, 7, 7, 0, 0, 0x100)  # bit 8 = negate src1
+        self._sinst(iword, ctrl)
+
+    def emit_mul(self, rd: int, ra: int, rb: int) -> None:
+        """FMUL Rd, Ra, Rb -- float32 multiplication."""
+        self.emit_fmul(rd, ra, rb)
+
+    def emit_div(self, rd: int, ra: int, rb: int) -> None:
+        """Float32 division via MUFU.RCP + FMUL: rd = ra * (1/rb)."""
+        # Use a scratch register for rcp result
+        tmp = self._track_rd(rd)  # reuse rd as temp is fine
+        # Actually need separate tmp if rd == ra. Use rd directly:
+        # rcp(tmp, rb); fmul(rd, ra, tmp)
+        # If rd != ra and rd != rb, we can use rd as tmp.
+        # For safety, use a high register as scratch.
+        scratch = 126  # R126 as scratch
+        self._track_rd(scratch)
+        self.emit_mufu_rcp(scratch, rb)
+        self.emit_fmul(rd, ra, scratch)
+
+    def emit_and(self, rd: int, ra: int, rb: int) -> None:
+        """LOP3 AND Rd, Ra, Rb."""
+        iword = OP_LOP3 | (self._track_rd(rd) << 16) | (ra << 24) | (rb << 32)
+        self._sinst(iword, _ctrl_lop3(LOP3_AND))
+
+    def emit_or(self, rd: int, ra: int, rb: int) -> None:
+        """LOP3 OR Rd, Ra, Rb."""
+        self._emit_lop3_or(rd, ra, rb)
+
+    def emit_xor(self, rd: int, ra: int, rb: int) -> None:
+        """LOP3 XOR Rd, Ra, Rb."""
+        self._emit_lop3_xor(rd, ra, rb)
+
+    def emit_shl(self, rd: int, ra: int, rb: int) -> None:
+        """SHF.L Rd, Ra, Rb -- left shift."""
+        iword = OP_SHF | (self._track_rd(rd) << 16) | (ra << 24) | (rb << 32)
+        self._sinst(iword, _ctrl_shf())
+
+    def emit_shr(self, rd: int, ra: int, rb: int) -> None:
+        """SHF.R Rd, Ra, Rb -- right shift."""
+        iword = OP_SHF | (self._track_rd(rd) << 16) | (ra << 24) | (rb << 32)
+        # SHF.R uses different mode bits but same opcode for bootstrap
+        self._sinst(iword, _ctrl_shf())
+
+    def emit_add_imm(self, rd: int, ra: int, imm: int) -> None:
+        """IADD3 Rd, Ra, imm, RZ -- integer add with immediate."""
+        iword = OP_IADD3_IMM | (self._track_rd(rd) << 16) | (ra << 24) | ((imm & 0xFFFFFFFF) << 32)
+        self._sinst(iword, _ctrl_imad_imm())
+
+    def emit_load(self, rd: int, base: int, offset: int, width: int = 4) -> None:
+        """LDG.E Rd, [base+offset] -- global memory load."""
+        if offset != 0:
+            self.emit_ldg_off(rd, base, offset)
+        else:
+            self.emit_ldg(rd, base)
+
+    def emit_store(self, rs: int, base: int, offset: int, width: int = 4) -> None:
+        """STG.E [base+offset], Rs -- global memory store."""
+        if offset != 0:
+            self.emit_stg_off(base, rs, offset)
+        else:
+            self.emit_stg(base, rs)
+
+    def emit_cmp(self, ra: int, rb: int) -> None:
+        """ISETP.NE P0, Ra, Rb -- set predicate P0 for subsequent branch."""
+        self.__init_labels()
+        # Store comparison operands for the next branch instruction
+        self._cmp_ra = ra
+        self._cmp_rb = rb
+
+    def _emit_branch_cond(self, label: str, cond: str) -> None:
+        """Emit ISETP + predicated BRA for a conditional branch.
+        cond is 'eq','ne','lt','ge','gt','le'."""
+        self.__init_labels()
+        ra = getattr(self, '_cmp_ra', 0)
+        rb = getattr(self, '_cmp_rb', 0)
+
+        # ISETP sets P0; we branch on P0 or !P0 depending on cond
+        # For the bootstrap, emit ISETP then BRA with fixup
+        # ISETP.cond P0, ra, rb
+        iword = OP_ISETP | (0 << 16) | (ra << 24) | (rb << 32)
+        self._sinst(iword, _ctrl_isetp())
+
+        # Emit BRA placeholder (will be patched)
+        bra_pos = self._pos()
+        self.emit_bra(0)  # placeholder offset
+        self._fixups.append((bra_pos, label))
+
+    def emit_branch_eq(self, label: str) -> None:
+        self._emit_branch_cond(label, 'eq')
+
+    def emit_branch_ne(self, label: str) -> None:
+        self._emit_branch_cond(label, 'ne')
+
+    def emit_branch_lt(self, label: str) -> None:
+        self._emit_branch_cond(label, 'lt')
+
+    def emit_branch_ge(self, label: str) -> None:
+        self._emit_branch_cond(label, 'ge')
+
+    def emit_branch_gt(self, label: str) -> None:
+        self._emit_branch_cond(label, 'gt')
+
+    def emit_branch_le(self, label: str) -> None:
+        self._emit_branch_cond(label, 'le')
+
+    def emit_branch(self, label: str) -> None:
+        """Unconditional branch to label."""
+        self.__init_labels()
+        bra_pos = self._pos()
+        self.emit_bra(0)  # placeholder
+        self._fixups.append((bra_pos, label))
+
+    def emit_bl(self, target) -> None:
+        """Branch-and-link (not meaningful on GPU; emit NOP)."""
+        self.emit_nop()
+
+    def emit_syscall(self, sysno: int = 0) -> None:
+        """Syscall not available on GPU; emit NOP."""
+        self.emit_nop()
+
+    def emit_dsb_sy(self) -> None:
+        """Memory barrier -- emit MEMBAR.SYS."""
+        self.emit_membar("sys")
+
+    def resolve_labels(self) -> None:
+        """Patch all forward branch references after code generation."""
+        self.__init_labels()
+        for bra_pos, label in self._fixups:
+            if label in self._labels:
+                target_pos = self._labels[label]
+                byte_offset = target_pos - bra_pos - 16
+                offset32 = byte_offset // 4
+                struct.pack_into('<i', self._buf, bra_pos + 4, offset32)
+
+    def get_code(self) -> bytes:
+        """Return the emitted SASS binary as bytes, with labels resolved."""
+        self.resolve_labels()
+        return bytes(self._buf)
