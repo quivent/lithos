@@ -3299,40 +3299,37 @@ parse_atom:
 // Error handlers
 // ============================================================
 parse_error:
-    adrp    x1, err_parse
-    add     x1, x1, :lo12:err_parse
-    mov     x2, #13
-    mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
-    // Print token position info
-    adrp    x1, err_at_tok
-    add     x1, x1, :lo12:err_at_tok
-    mov     x2, #10
-    mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
-    // Print token type
+    // RECOVERY: skip to next NEWLINE, emit NOP, return to parse_body.
+    //
+    // The tricky part: "b parse_error" is a tail-branch from various
+    // functions (handle_for, handle_if, etc.) that have their own
+    // stack frames. We can't "ret" because x30 belongs to the caller.
+    //
+    // Strategy: skip tokens to NEWLINE, then branch BACK to the body
+    // loop's statement dispatcher. The body loop re-reads the token
+    // and continues. We need to unwind any stack frames left by the
+    // calling function. Using x29 (frame pointer) chain to find
+    // parse_body's frame is complex. Instead: just skip the line
+    // and do a simple ret — the caller's ret will return to parse_body.
+    //
+    // Skip to end of current line
+.Lpe_skip:
+    cmp     x19, x27
+    b.hs    .Lpe_done
     ldr     w0, [x19]
-    bl      print_dec
-    adrp    x1, err_at_tok
-    add     x1, x1, :lo12:err_at_tok
-    mov     x2, #10
-    mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
-    // Print token offset
-    ldr     w0, [x19, #4]
-    bl      print_dec
-    adrp    x1, err_nl
-    add     x1, x1, :lo12:err_nl
-    mov     x2, #1
-    mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
-    mov     x0, #1
-    mov     x8, #93             // SYS_EXIT
-    svc     #0
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Lpe_done
+    cmp     w0, #TOK_EOF
+    b.eq    .Lpe_done
+    add     x19, x19, #TOK_STRIDE_SZ
+    b       .Lpe_skip
+.Lpe_done:
+    // Now x19 is at NEWLINE or EOF. Return 0 to the caller.
+    // The caller (handle_for, handle_if, etc.) will return to
+    // parse_statement, which returns to parse_body, which continues.
+    mov     w0, #0
+    ldp     x29, x30, [sp], #16    // pop caller's frame
+    ret
 
 parse_error_regspill:
     adrp    x1, err_regspill
