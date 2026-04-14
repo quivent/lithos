@@ -1285,6 +1285,10 @@ handle_composition:
     bl      emit_cur
     mov     w2, w0                  // code address
     str     x0, [sp, #16]          // save comp start address
+    // Track last composition for entry point (bottom-of-file = entry)
+    adrp    x6, ls_last_comp_addr
+    add     x6, x6, :lo12:ls_last_comp_addr
+    str     x0, [x6]
     mov     w1, #KIND_COMP
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth

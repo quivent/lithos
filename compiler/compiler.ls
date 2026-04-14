@@ -144,20 +144,8 @@
 \\ ENTRY POINT — must be FIRST composition (ELF entry = start of code buffer)
 \\ ============================================================================
 \\ Linux ARM64: argc at [SP], argv at SP+8
-main :
-    \\ After prologue STP [SP,#-16]!, X29=SP. Original SP = X29+16.
-    \\ Use explicit register writes to avoid expression codegen issues.
-    \\ X29 (frame ptr) = post-prologue SP. argc at [X29+16], argv at [X29+24].
-    ↓ $9 $29
-    ↓ $10 16
-    entry_sp $9 + $10
-    argc → 64 entry_sp
-    ↓ $10 8
-    argv entry_sp + $10
-    lithos_main argc argv
-    ↓ $8 93
-    ↓ $0 0
-    trap
+\\ prologue is at the end of the file so all compositions are defined
+\\ before the entry point (bootstrap is single-pass, no forward refs).
 
 \\ ============================================================================
 \\ Lexer token buffer + syscall constants
@@ -2111,12 +2099,12 @@ classify_number src offset length :
 lex src src_len :
     pos 0
     token_count 0
-    line_start 1
+    lineprologue 1
 
     while pos < src_len
         c src [ pos ]
 
-        if line_start
+        if lineprologue
             indent 0
             while pos < src_len
                 ic src [ pos ]
@@ -2130,7 +2118,7 @@ lex src src_len :
                     goto indent_done
             label indent_done
             emit_token 2 pos indent
-            line_start 0
+            lineprologue 0
             if pos >= src_len
                 return
             c src [ pos ]
@@ -2138,7 +2126,7 @@ lex src src_len :
         if c == 10
             emit_token 1 pos 1
             pos pos + 1
-            line_start 1
+            lineprologue 1
             if pos < src_len
                 c2 src [ pos ]
                 if c2 == 13
@@ -2148,7 +2136,7 @@ lex src src_len :
         if c == 13
             emit_token 1 pos 1
             pos pos + 1
-            line_start 1
+            lineprologue 1
             if pos < src_len
                 c2 src [ pos ]
                 if c2 == 10
@@ -2428,7 +2416,7 @@ var branch_depth 0
 
 buf comp_names 16384
 buf comp_lens 1024
-buf comp_tok_starts 1024
+buf comp_tokprologues 1024
 buf comp_arg_counts 1024
 var n_comps 0
 
@@ -4221,7 +4209,7 @@ parse_composition :
     expect 72
 
     cidx n_comps
-    ← 32 comp_tok_starts cidx * 4 tok_pos
+    ← 32 comp_tokprologues cidx * 4 tok_pos
     ← 32 comp_arg_counts cidx * 4 arg_count
     clen name_len
     if>= clen 32
@@ -5070,7 +5058,7 @@ host write_file path buf buf_len :
     trap
 
 \\ ============================================================
-\\ lithos_main — Compiler entry point
+\\ main — Compiler entry point
 \\ ============================================================
 \\
 \\ Usage: lithos <source.ls> <output> [weights.safetensors]
@@ -5088,7 +5076,7 @@ host write_file path buf buf_len :
 \\   6. Write output file
 \\   7. Exit
 
-host lithos_main argc argv :
+main argc argv :
     \\ Validate argument count (need at least source and output)
     if< argc 3
         \\ Too few arguments — exit with error
@@ -5133,3 +5121,6 @@ host lithos_main argc argv :
     ↓ $0 0
     trap
 
+    ↓ $8 93
+    ↓ $0 0
+    trap

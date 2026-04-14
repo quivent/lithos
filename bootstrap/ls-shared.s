@@ -79,6 +79,9 @@ ls_source_len:      .quad 0           // total source bytes
 .globl ls_data_pos
 ls_data_pos:        .quad 0           // byte offset into ls_data_buf
 
+.globl ls_last_comp_addr
+ls_last_comp_addr:  .quad 0           // code offset of last composition (entry point)
+
 // ------------------------------------------------------------
 // .bss — the big shared buffers
 // ------------------------------------------------------------
