@@ -1921,15 +1921,85 @@ handle_if:
 
     add     x19, x19, #TOK_STRIDE_SZ   // skip 'if'
 
+    // Check for compound conditional: if>= if< if== if!= if> if<=
+    ldr     w0, [x19]
+    cmp     w0, #TOK_GTE
+    b.eq    .Lif_compound
+    cmp     w0, #TOK_LTE
+    b.eq    .Lif_compound
+    cmp     w0, #TOK_LT
+    b.eq    .Lif_compound
+    cmp     w0, #TOK_GT
+    b.eq    .Lif_compound
+    cmp     w0, #TOK_EQEQ
+    b.eq    .Lif_compound
+    cmp     w0, #TOK_NEQ
+    b.eq    .Lif_compound
+
+    // Simple if: if expr → CBZ
     bl      parse_expr
     mov     w4, w0
-
-    // Emit CBZ Xcond, else_branch (placeholder)
     bl      emit_cur
     str     x0, [sp, #0]           // patch address
+    str     wzr, [sp, #16]         // patch type 0 = CBZ
     mov     w0, w4
     mov     x1, #0
     bl      emit_cbz
+    b       .Lif_body
+
+.Lif_compound:
+    // Compound conditional: if>= a b → CMP a,b + B.!cond
+    mov     w5, w0                  // save comparison token
+    add     x19, x19, #TOK_STRIDE_SZ   // skip comparison operator
+    bl      parse_expr              // left operand
+    mov     w4, w0
+    bl      parse_expr              // right operand
+    mov     w6, w0
+    // Emit CMP
+    mov     w0, w4
+    mov     w1, w6
+    bl      emit_cmp_reg
+    // Emit B.!cond placeholder (inverted condition)
+    bl      emit_cur
+    str     x0, [sp, #0]           // patch address
+    // Map comparison to INVERTED condition for skip
+    cmp     w5, #TOK_GTE
+    b.eq    .Lif_cc_lt
+    cmp     w5, #TOK_LT
+    b.eq    .Lif_cc_ge
+    cmp     w5, #TOK_GT
+    b.eq    .Lif_cc_le
+    cmp     w5, #TOK_LTE
+    b.eq    .Lif_cc_gt
+    cmp     w5, #TOK_EQEQ
+    b.eq    .Lif_cc_ne
+    // TOK_NEQ → skip if EQ
+    mov     w1, #CC_EQ
+    b       .Lif_cc_emit
+.Lif_cc_lt:
+    mov     w1, #CC_LT
+    b       .Lif_cc_emit
+.Lif_cc_ge:
+    mov     w1, #CC_GE
+    b       .Lif_cc_emit
+.Lif_cc_le:
+    mov     w1, #CC_LE
+    b       .Lif_cc_emit
+.Lif_cc_gt:
+    mov     w1, #CC_GT
+    b       .Lif_cc_emit
+.Lif_cc_ne:
+    mov     w1, #CC_NE
+    b       .Lif_cc_emit
+.Lif_cc_emit:
+    // Emit B.cond placeholder (condition in w1)
+    mov     w0, #0                  // placeholder offset
+    bl      emit_b_cond
+    mov     w0, #1
+    str     w0, [sp, #16]          // patch type 1 = B.cond
+    b       .Lif_body
+
+.Lif_body:
 
     bl      skip_newlines
     mov     w9, #4
@@ -1946,11 +2016,17 @@ handle_if:
     mov     x0, #0
     bl      emit_b
 
-    // Patch CBZ to here
+    // Patch branch to here (CBZ or B.cond depending on type)
     bl      emit_cur
     mov     x1, x0
     ldr     x0, [sp, #0]
+    ldr     w2, [sp, #16]          // patch type
+    cbnz    w2, .Lif_patch_bcond
     bl      patch_cbz
+    b       .Lif_patch_done
+.Lif_patch_bcond:
+    bl      patch_b_cond
+.Lif_patch_done:
 
     // Check for elif/else
     bl      skip_newlines
