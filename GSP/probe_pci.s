@@ -120,6 +120,9 @@ msg_lwidth_len = . - msg_lwidth
 
 msg_newline:    .ascii "\n"
 
+msg_no_device:  .ascii "probe_pci: vendor ID = 0xFFFF -- device not present on bus\n"
+msg_no_dev_len = . - msg_no_device
+
 msg_open_fail:  .ascii "probe_pci: failed to open sysfs file\n"
 msg_open_flen = . - msg_open_fail
 
@@ -189,6 +192,22 @@ _start:
 
     // -- Vendor ID (offset 0, u16) --
     ldrh    w21, [x20, #0]
+
+    // CHECK: 0xFFFF vendor ID means device not present on bus
+    movz    w0, #0xFFFF
+    cmp     w21, w0
+    b.ne    .vendor_present
+    mov     x0, #2              // stderr
+    adrp    x1, msg_no_device
+    add     x1, x1, :lo12:msg_no_device
+    mov     x2, #msg_no_dev_len
+    mov     x8, #SYS_WRITE
+    svc     #0
+    mov     x0, #3
+    mov     x8, #SYS_EXIT
+    svc     #0
+.vendor_present:
+
     adrp    x1, msg_vendor
     add     x1, x1, :lo12:msg_vendor
     mov     w2, #msg_vendor_len
@@ -938,6 +957,7 @@ _start:
     // Skip spaces
 .phf_skip_space:
     ldrb    w11, [x10]
+    cbz     w11, .phf_done      // NUL check: stop at end of buffer
     cmp     w11, #' '
     b.ne    .phf_check_0x
     add     x10, x10, #1
@@ -946,9 +966,11 @@ _start:
 .phf_check_0x:
     // Check for "0x" prefix
     ldrb    w11, [x10]
+    cbz     w11, .phf_done      // NUL check
     cmp     w11, #'0'
     b.ne    .phf_parse
     ldrb    w11, [x10, #1]
+    cbz     w11, .phf_parse     // NUL after '0' -- treat '0' as value
     cmp     w11, #'x'
     b.ne    .phf_parse
     add     x10, x10, #2       // skip "0x"
@@ -957,6 +979,7 @@ _start:
     mov     x0, #0
 .phf_loop:
     ldrb    w11, [x10]
+    cbz     w11, .phf_done      // NUL check: stop at end of buffer
     // Check if hex digit
     cmp     w11, #'0'
     b.lt    .phf_done

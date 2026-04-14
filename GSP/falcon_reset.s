@@ -141,7 +141,8 @@ falcon_reset:
     b.lt    .falcon_assert_timeout    // clock_gettime failed -- treat as timeout
     ldr     x21, [sp, #48]           // x21 = start_seconds
 
-    isb                               // serialize before first MMIO read
+    dsb     sy                        // full barrier: ensure write visible before read
+    isb                               // serialize pipeline before first MMIO read
 .poll_asserted:
     ldr     w0, [x20]                 // read FALCON_ENGINE
     and     w0, w0, #STATUS_MASK      // isolate bits[10:8]
@@ -160,6 +161,7 @@ falcon_reset:
     cmp     x0, #FALCON_TIMEOUT_SECS
     b.ge    .falcon_assert_timeout
 
+    dsb     ld                        // ensure previous MMIO read completed
     isb
     mov     w0, #100
 .assert_delay:
@@ -190,7 +192,8 @@ falcon_reset:
     b.lt    .falcon_deassert_timeout  // clock_gettime failed -- treat as timeout
     ldr     x21, [sp, #48]           // x21 = start_seconds
 
-    isb                               // serialize before first MMIO read
+    dsb     sy                        // full barrier: ensure write visible before read
+    isb                               // serialize pipeline before first MMIO read
 .poll_deasserted:
     ldr     w0, [x20]                 // read FALCON_ENGINE
     and     w0, w0, #STATUS_MASK      // isolate bits[10:8]
@@ -209,6 +212,7 @@ falcon_reset:
     cmp     x0, #FALCON_TIMEOUT_SECS
     b.ge    .falcon_deassert_timeout
 
+    dsb     ld                        // ensure previous MMIO read completed
     isb
     mov     w0, #100
 .deassert_delay:
@@ -229,6 +233,13 @@ falcon_reset:
     b       .falcon_return
 
 .falcon_assert_timeout:
+    // Deassert reset to undo the partial assert and restore Falcon to
+    // its pre-call state.  Without this, Falcon is stuck with bit[0]=1
+    // written but RESET_STATUS never confirmed -- an undefined limbo.
+    mov     w0, #0
+    str     w0, [x20]                 // BAR0+0x1103C0 <- 0 (deassert)
+    dsb     sy                        // ensure deassert reaches device
+
     adrp    x1, msg_assert_timeout
     add     x1, x1, :lo12:msg_assert_timeout
     mov     x2, #msg_assert_timeout_len
@@ -237,10 +248,24 @@ falcon_reset:
     b       .falcon_return
 
 .falcon_deassert_timeout:
-    // Re-assert reset to leave Falcon in known state
+    // Re-assert reset to leave Falcon in a known held-in-reset state,
+    // then poll briefly to confirm the re-assert actually took effect.
     mov     w22, #1
     str     w22, [x20]               // BAR0+0x1103C0 <- 1 (re-assert)
-    dsb     st                        // ensure re-assert write reaches device
+    dsb     sy                        // full barrier: ensure write reaches device
+    isb
+
+    // Brief poll (up to ~1000 iterations) to confirm re-assert.
+    // If this also fails, we still return -2 -- but at least we tried.
+    mov     w22, #1000
+.reassert_poll:
+    ldr     w0, [x20]
+    and     w0, w0, #STATUS_MASK
+    cmp     w0, #STATUS_ASSERTED
+    b.eq    .reassert_confirmed
+    subs    w22, w22, #1
+    b.ne    .reassert_poll
+.reassert_confirmed:
 
     adrp    x1, msg_deassert_timeout
     add     x1, x1, :lo12:msg_deassert_timeout

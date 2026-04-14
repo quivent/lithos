@@ -183,10 +183,20 @@ mq_write:
     mov x21, x2                         // x21 = message buffer ptr
     mov x22, x3                         // x22 = message length
 
+    // Validate message length: must not exceed QUEUE_BUF_SIZE minus element overhead.
+    // This prevents buffer overrun that would corrupt the ring.
+    add w9, w22, #MQ_ELEM_HDR_SIZE      // total element size
+    add w9, w9, #7
+    and w9, w9, #0xFFFFFFF8             // aligned element size
+    mov w10, #QUEUE_BUF_SIZE             // 0x40000 -- too large for cmp immediate
+    cmp w9, w10
+    b.hs .mq_write_fail                 // element too large for queue
+
     // Read current command queue head from BAR0 register
     // NV_PGSP_QUEUE_HEAD(0) = BAR0+0x110C00
     load_qhead_off x8, 0
     ldr w0, [x19, x8]                   // w0 = current head offset
+    mov w9, w0                          // w9 = saved original head offset
 
     // Compute write position in queue buffer
     add x1, x20, x0                     // x1 = queue_va + head_offset
@@ -216,8 +226,7 @@ mq_write:
     add w2, w2, #7
     and w2, w2, #0xFFFFFFF8             // align to 8 bytes
     load_qhead_off x8, 0
-    ldr w0, [x19, x8]                   // re-read current head
-    add w0, w0, w2                      // new head
+    add w0, w9, w2                      // new head = saved_head + aligned_size
     // Wrap modulo QUEUE_BUF_SIZE (power of two)
     mov w3, #(QUEUE_BUF_SIZE - 1)
     and w0, w0, w3
@@ -227,6 +236,12 @@ mq_write:
     dsb sy
 
     mov x0, #0                          // success
+    b .mq_write_epilog
+
+.mq_write_fail:
+    mov x0, #-1                         // error: message too large for queue
+
+.mq_write_epilog:
     ldp x21, x22, [sp, #32]
     ldp x19, x20, [sp, #16]
     ldp x29, x30, [sp], #48
@@ -282,9 +297,10 @@ mq_poll_response:
     load_qhead_off x8, 1
     ldr w1, [x19, x8]                   // w1 = status queue head
 
-    // If head > tail, there is a new message
+    // If head != tail, there is a new message (handles wrap-around correctly,
+    // since both head and tail are wrapped modulo QUEUE_BUF_SIZE)
     cmp w1, w23
-    b.hi .poll_got_response
+    b.ne .poll_got_response
 
     // Decrement timeout counter
     subs x24, x24, #1
@@ -307,7 +323,7 @@ mq_poll_response:
     ldr w4, [x2, #0x18]                 // sequence
     // Verify sequence matches
     cmp w4, w21
-    b.ne .poll_stat_loop                // wrong sequence, keep polling
+    b.ne .poll_seq_mismatch             // wrong sequence, skip this element
 
     // Advance tail past this element
     ldr w5, [x1]                        // read element_length from MQ header
@@ -325,6 +341,22 @@ mq_poll_response:
     mov w1, w3                          // rpc_result
     add x2, x2, #RPC_HDR_SIZE           // payload starts after RPC header
     b .poll_done
+
+.poll_seq_mismatch:
+    // Consume the mismatched element: advance tail past it so we don't
+    // re-read the same element forever (which would infinite-loop).
+    ldr w5, [x1]                        // element_length from MQ header
+    add w5, w5, #7
+    and w5, w5, #0xFFFFFFF8             // align to 8
+    add w23, w23, w5                    // advance tail
+    mov w6, #(QUEUE_BUF_SIZE - 1)
+    and w23, w23, w6                    // wrap modulo QUEUE_BUF_SIZE
+    load_qtail_off x8, 1
+    str w23, [x19, x8]                  // update tail register
+    // Decrement timeout so we cannot spin forever
+    subs x24, x24, #1
+    b.eq .poll_timeout
+    b .poll_stat_loop
 
 .poll_timeout:
     mov x0, #-1
@@ -377,12 +409,14 @@ format_rpc_header:
     str wzr, [x0, #0x10]                // rpc_result
     str wzr, [x0, #0x14]                // rpc_result_private
 
-    // sequence number (load, increment, store)
+    // sequence number (atomic increment via load-exclusive/store-exclusive
+    // to prevent duplicate sequence numbers under concurrent access)
     adrp x3, rpc_sequence
     add x3, x3, :lo12:rpc_sequence
-    ldr x4, [x3]
+1:  ldxr x4, [x3]
     add x5, x4, #1
-    str x5, [x3]
+    stxr w6, x5, [x3]
+    cbnz w6, 1b                          // retry if exclusive store failed
     str w4, [x0, #0x18]                 // sequence
 
     // spare = 0
@@ -475,6 +509,7 @@ gsp_rpc_alloc_channel:
     add x2, sp, #96                     // message buffer
     mov x3, #(RPC_HDR_SIZE + RPC_ALLOC_ROOT_PAYLOAD)
     bl mq_write
+    cbnz x0, .rpc_fail                  // check mq_write result
 
     // Poll for response
     adrp x3, rpc_sequence
@@ -485,6 +520,7 @@ gsp_rpc_alloc_channel:
     mov x1, x22                         // stat_queue_va
     bl mq_poll_response
     cbnz x0, .rpc_fail
+    cbnz w1, .rpc_fail                  // check rpc_result != 0 => GSP error
 
     // ================================================================
     // RPC 2: NV_RM_RPC_ALLOC_DEVICE (function=3)
@@ -511,6 +547,7 @@ gsp_rpc_alloc_channel:
     add x2, sp, #96
     mov x3, #(RPC_HDR_SIZE + RPC_ALLOC_DEVICE_PAYLOAD)
     bl mq_write
+    cbnz x0, .rpc_fail                  // check mq_write result
 
     adrp x3, rpc_sequence
     add x3, x3, :lo12:rpc_sequence
@@ -520,6 +557,7 @@ gsp_rpc_alloc_channel:
     mov x1, x22
     bl mq_poll_response
     cbnz x0, .rpc_fail
+    cbnz w1, .rpc_fail                  // check rpc_result != 0 => GSP error
 
     // ================================================================
     // RPC 3: NV_RM_RPC_ALLOC_SUBDEVICE (function=19)
@@ -553,6 +591,7 @@ gsp_rpc_alloc_channel:
     add x2, sp, #96
     mov x3, #(RPC_HDR_SIZE + RPC_ALLOC_SUBDEVICE_PAYLOAD)
     bl mq_write
+    cbnz x0, .rpc_fail                  // check mq_write result
 
     adrp x3, rpc_sequence
     add x3, x3, :lo12:rpc_sequence
@@ -562,6 +601,7 @@ gsp_rpc_alloc_channel:
     mov x1, x22
     bl mq_poll_response
     cbnz x0, .rpc_fail
+    cbnz w1, .rpc_fail                  // check rpc_result != 0 => GSP error
 
     // ================================================================
     // Bump-allocate GPFIFO ring from BAR4 (8KB, page-aligned)
@@ -665,6 +705,7 @@ gsp_rpc_alloc_channel:
     add x2, sp, #96
     mov x3, #(RPC_HDR_SIZE + RPC_ALLOC_CHANNEL_PAYLOAD)
     bl mq_write
+    cbnz x0, .rpc_fail                  // check mq_write result
 
     // Poll for response
     adrp x3, rpc_sequence
@@ -675,6 +716,7 @@ gsp_rpc_alloc_channel:
     mov x1, x22
     bl mq_poll_response
     cbnz x0, .rpc_fail
+    cbnz w1, .rpc_fail                  // check rpc_result != 0 => GSP error
 
     // ================================================================
     // Extract channel_id from response

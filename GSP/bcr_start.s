@@ -125,6 +125,16 @@ gsp_bcr_start:
     // Barrier: ensure all 6 BCR address writes are committed before lock
     dsb     st
 
+    // Read-back BCR_FMCCODE_LO to verify BAR0 writes are landing.
+    // If this doesn't match, the other 5 BCR regs are suspect too.
+    mov x8, #0x1678
+    movk x8, #0x0011, lsl #16           // x8 = 0x111678 (BCR_FMCCODE_LO)
+    ldr w9, [x0, x8]
+    add x6, x2, x3                      // recompute expected: fmc_image_pa + code_offset
+    lsr x6, x6, #RISCV_BR_ADDR_SHIFT
+    cmp w9, w6
+    b.ne    .bcr_write_verify_fail
+
     // ----------------------------------------------------------------
     // 5. Lock BCR and set DMA target = coherent sysmem
     //    bit 31 = LOCK (prevent further BCR modification)
@@ -181,6 +191,10 @@ gsp_bcr_start:
     // Restore return value
     mov     x0, x9
     ret
+
+.bcr_write_verify_fail:
+    mov x0, #-3                         // BCR address register write-back mismatch
+    b       .bcr_unblock_return         // unblock signals before returning
 
 .align 3
 .Lbcr_sigmask:

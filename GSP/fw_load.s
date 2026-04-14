@@ -88,8 +88,8 @@ msg_fw_fwimg_oob: .asciz "gsp: .fwimage section out of file bounds\n"
 msg_fw_fwimg_oob_len = . - msg_fw_fwimg_oob - 1
 msg_fw_seg_oob:   .asciz "gsp: code/data/manifest offset out of .fwimage bounds\n"
 msg_fw_seg_oob_len = . - msg_fw_seg_oob - 1
-msg_fw_alloc_oom: .asciz "gsp: BAR4 allocator out of memory for firmware image\n"
-msg_fw_alloc_oom_len = . - msg_fw_alloc_oom - 1
+msg_fw_alloc_err: .asciz "gsp: BAR4 allocation for firmware failed\n"
+msg_fw_alloc_err_len = . - msg_fw_alloc_err - 1
 msg_fw_ok:        .asciz "gsp: firmware loaded to BAR4\n"
 msg_fw_ok_len = . - msg_fw_ok - 1
 
@@ -269,9 +269,11 @@ gsp_fw_load:
     bl      hbm_alloc                   // returns cpu_addr in x0, gpu_va in x1
     ldp     x22, x23, [sp], #16
 
-    // Check for OOM (hbm_alloc returns x0=-1 on failure)
-    cmn     x0, #1
-    b.eq    .fw_alloc_oom
+    // Check hbm_alloc success: x0 == (uint64)-1 means OOM.
+    // Also reject x0 == 0 as a null pointer (should never happen).
+    cmn     x0, #1                      // compare x0 with -1
+    b.eq    .fw_alloc_fail
+    cbz     x0, .fw_alloc_fail
 
     mov     x24, x0                     // x24 = BAR4 cpu addr
     mov     x25, x1                     // x25 = BAR4 phys addr (gpu_va)
@@ -552,13 +554,13 @@ gsp_fw_load:
     mov     x8, SYS_EXIT
     svc     #0
 
-.fw_alloc_oom:
-    // BAR4 bump allocator returned OOM.  Print error, close fd, exit.
+.fw_alloc_fail:
+    // Print error, close fd, exit.  fd is in x19.
     mov     x8, #64                     // SYS_WRITE
     mov     x0, #2                      // stderr
-    adrp    x1, msg_fw_alloc_oom
-    add     x1, x1, :lo12:msg_fw_alloc_oom
-    mov     x2, msg_fw_alloc_oom_len
+    adrp    x1, msg_fw_alloc_err
+    add     x1, x1, :lo12:msg_fw_alloc_err
+    mov     x2, msg_fw_alloc_err_len
     svc     #0
     mov     x8, SYS_CLOSE
     mov     x0, x19

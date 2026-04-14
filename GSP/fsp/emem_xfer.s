@@ -77,6 +77,10 @@
 .type  fsp_emem_write, %function
 .balign 4
 fsp_emem_write:
+    // Validate channel index (must be 0..7)
+    cmp     w1, #7
+    b.hi    .Lwrite_bad_channel
+
     // Compute EMEMC / EMEMD MMIO addresses for this channel.
     //   x7  = &EMEMC(ch)
     //   x9  = &EMEMD(ch) = &EMEMC(ch) + 4
@@ -110,6 +114,10 @@ fsp_emem_write:
     mov     x0, #0
     ret
 
+.Lwrite_bad_channel:
+    mov     x0, #-1                         // invalid channel index
+    ret
+
 
 // ====================================================================
 // fsp_emem_read -- drain bytes from FSP EMEM via the EMEMC/EMEMD window
@@ -131,6 +139,10 @@ fsp_emem_write:
 .type  fsp_emem_read, %function
 .balign 4
 fsp_emem_read:
+    // Validate channel index (must be 0..7)
+    cmp     w1, #7
+    b.hi    .Lread_bad_channel
+
     bar0_reg_addr x7, x0, w1, w8, 0x008F2AC0
     add     x9, x7, #4                      // EMEMD addr
 
@@ -161,6 +173,10 @@ fsp_emem_read:
     mov     x0, #0
     ret
 
+.Lread_bad_channel:
+    mov     x0, #-1                         // invalid channel index
+    ret
+
 
 // ====================================================================
 // fsp_queue_advance_head -- publish a new CPU->FSP queue head to signal FSP
@@ -182,6 +198,10 @@ fsp_emem_read:
 .type  fsp_queue_advance_head, %function
 .balign 4
 fsp_queue_advance_head:
+    // Validate channel index (must be 0..7)
+    cmp     w1, #7
+    b.hi    .Lhead_bad_channel
+
     // x7 = &QUEUE_HEAD(ch)
     bar0_reg_addr x7, x0, w1, w8, 0x008F2C00
 
@@ -192,4 +212,8 @@ fsp_queue_advance_head:
     dsb     sy
 
     mov     x0, #0
+    ret
+
+.Lhead_bad_channel:
+    mov     x0, #-1                         // invalid channel index
     ret

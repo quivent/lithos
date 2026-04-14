@@ -141,6 +141,11 @@ cot_build_payload:
     stp     x19, x20, [sp, #16]
     stp     x21, x22, [sp, #32]
 
+    // --- Validate inputs before trusting them ---
+    // x0 = fw_image_bar4_cpu, x1 = manifest_offset, x2 = dst_buf
+    cbz     x0, .cot_build_fail        // NULL firmware image pointer
+    cbz     x2, .cot_build_fail        // NULL destination buffer
+
     // x19 = manifest base = fw_image_base + manifest_offset
     add     x19, x0, x1
     mov     x20, x2                    // x20 = dst buffer base
@@ -195,9 +200,29 @@ cot_build_payload:
     add     x1, x20, #COT_OFF_SIG
     bl      cot_extract_signature
 
-    // ---- 6. Return payload length ----
+    // ---- 6. Sanity-check: hash must not be all-zero ----
+    // An all-zero SHA-384 means the manifest region was unmapped/corrupt.
+    // Check first 8 bytes; if zero, spot-check bytes 8..15 and 16..23.
+    ldr     x3, [x20, #COT_OFF_HASH]
+    cbnz    x3, .cot_hash_ok
+    ldr     x3, [x20, #(COT_OFF_HASH + 8)]
+    cbnz    x3, .cot_hash_ok
+    ldr     x3, [x20, #(COT_OFF_HASH + 16)]
+    cbnz    x3, .cot_hash_ok
+    // All three 8-byte chunks are zero -- almost certainly invalid
+    b       .cot_build_fail
+
+.cot_hash_ok:
+    // ---- 7. Return payload length ----
     mov     w0, #COT_PAYLOAD_BYTES
 
+    ldp     x21, x22, [sp, #32]
+    ldp     x19, x20, [sp, #16]
+    ldp     x29, x30, [sp], #48
+    ret
+
+.cot_build_fail:
+    mov     x0, #-1                    // return negative = failure
     ldp     x21, x22, [sp, #32]
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #48

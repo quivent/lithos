@@ -111,15 +111,20 @@ sample_loop:
     mov     x8, #SYS_CLOCK_GETTIME
     svc     #0
 
-    // Read GPU PTIMER: TIME_1 first, then TIME_0
+    // Read GPU PTIMER atomically: read hi, lo, re-read hi.
+    // If hi changed (lo wrapped between reads), retry.
     movz    x0, #PTIMER_TIME_1
-    add     x0, x20, x0
-    ldr     w24, [x0]                      // high 32
+    add     x0, x20, x0                    // &TIME_1
+    movz    x1, #PTIMER_TIME_0
+    add     x1, x20, x1                    // &TIME_0
 
-    movz    x0, #PTIMER_TIME_0
-    add     x0, x20, x0
-    ldr     w25, [x0]                      // low 32
-
+.Lptimer_read_retry:
+    ldr     w24, [x0]                      // high 32  (first read)
+    ldr     w25, [x1]                      // low 32
+    ldr     w26, [x0]                      // high 32  (re-read)
+    cmp     w24, w26
+    b.ne    .Lptimer_read_retry            // hi changed -> lo wrapped, retry
+    // w26 == w24, safe to combine
     orr     x24, x25, x24, lsl #32         // combine: x24 = (hi<<32)|lo
 
     // Store GPU time at entry+0
@@ -154,7 +159,11 @@ sample_loop:
     ldr     x26, [sp]               // start_sec
     ldr     x27, [sp, #8]           // start_nsec
 
+    movz    x28, #0x4C, lsl #16     // max iterations (~5M) as timeout guard
+    movk    x28, #0x4B40            // x28 = 0x004C4B40 = 5,000,000
 spin_wait:
+    subs    x28, x28, #1
+    b.eq    .Lspin_timeout          // safety: break out after max iters
     mov     x0, #CLOCK_MONOTONIC
     mov     x1, sp
     mov     x8, #SYS_CLOCK_GETTIME
@@ -175,6 +184,7 @@ spin_wait:
     movk    x4, #0x05F5, lsl #16
     cmp     x2, x4
     b.lt    spin_wait
+.Lspin_timeout:
 
     add     sp, sp, #32
     b       sample_loop
@@ -188,6 +198,21 @@ samples_done:
     mov     x0, #216
     ldr     x25, [x21, x0]          // last
     sub     x26, x25, x24           // delta GPU ns
+
+    // SAFETY: check if GPU timer is stuck (delta == 0)
+    cbnz    x26, .Ltimer_ok
+    adr     x1, timer_stuck_str
+    mov     x2, #timer_stuck_len
+    bl      print_stdout
+    add     sp, sp, #256
+    mov     x0, x20
+    mov     x1, #MAP_SIZE
+    mov     x8, #SYS_MUNMAP
+    svc     #0
+    mov     x0, #2
+    mov     x8, #SYS_EXIT
+    svc     #0
+.Ltimer_ok:
 
     adr     x1, delta_str
     mov     x2, #delta_len
@@ -510,6 +535,10 @@ dot_str:
 ghz_suffix:
     .ascii  " GHz\n"
     .equ    ghz_suffix_len, . - ghz_suffix
+
+timer_stuck_str:
+    .ascii  "CRITICAL: GPU PTIMER is stuck (delta=0). Timer not ticking!\n"
+    .equ    timer_stuck_len, . - timer_stuck_str
 
 open_fail_str:
     .ascii  "ERROR: Failed to open BAR0 resource0\n"

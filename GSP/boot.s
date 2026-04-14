@@ -38,9 +38,21 @@
 //   4 = gsp_poll_lockdown failed (lockdown timeout or FMC error)
 //   5 = gsp_rpc_alloc_channel failed
 //   6 = hbm_alloc_init failed
+//   7 = gsp_bcr_start failed
+//   8 = gsp_fw_load failed (if it returns error instead of SYS_EXIT)
+// Note: fw_load.s also exits directly with codes 1-12 on internal errors.
 
-.equ SYS_WRITE,     64
-.equ SYS_EXIT,      93
+.equ SYS_WRITE,          64
+.equ SYS_EXIT,           93
+.equ SYS_CLOCK_GETTIME,  113
+.equ CLOCK_MONOTONIC,    1
+
+// ---- Boot watchdog ----
+// If the full 9-step boot exceeds this wall-clock budget, abort.
+// Individual step timeouts (falcon 5s, lockdown 30s) sum to ~40s;
+// the 120s outer envelope catches unexpected hangs (e.g., MMIO
+// returning 0xFFFFFFFF from a powered-down BAR).
+.equ BOOT_WATCHDOG_SECS, 120
 
 // ---- BAR4 reservation for GSP control structures ----
 // The first 64 MB of BAR4 is reserved for things the bump allocator
@@ -118,6 +130,8 @@ msg_step5_begin:     .asciz "gsp: [5/9] gsp_fw_load -- loading firmware ELF into
 msg_step5_begin_len  = . - msg_step5_begin - 1
 msg_step5_done:      .asciz "gsp: [5/9] gsp_fw_load -- OK\n"
 msg_step5_done_len   = . - msg_step5_done - 1
+msg_step5_fail:      .asciz "gsp: [5/9] gsp_fw_load -- FAILED, aborting\n"
+msg_step5_fail_len   = . - msg_step5_fail - 1
 
 // Step 7 placeholder -- FSP communication (TODO -- NOT IMPLEMENTED)
 msg_step_fsp_todo:   .asciz "gsp: [7/9] FSP communication -- TODO -- NOT IMPLEMENTED (see docs/gsp-native.md sec 7)\n"
@@ -150,10 +164,17 @@ msg_step8_fail_len   = . - msg_step8_fail - 1
 msg_success:         .asciz "gsp: ================== GSP boot complete ==================\n"
 msg_success_len      = . - msg_success - 1
 
+msg_watchdog:        .asciz "gsp: FATAL: boot watchdog expired (>120s) -- aborting\n"
+msg_watchdog_len     = . - msg_watchdog - 1
+
 // Bump pointer variable for RPC channel allocator (separate from the
 // main hbm_alloc bump -- RPC module owns its own u64 cursor).
 .align 3
 rpc_bump:   .quad 0
+
+// Boot start time (tv_sec from CLOCK_MONOTONIC, captured at _start).
+.align 3
+boot_start_sec:  .quad 0
 
 // ============================================================
 // Text section
@@ -163,6 +184,18 @@ rpc_bump:   .quad 0
 
 .global _start
 _start:
+    // ---- Capture boot start time for watchdog ----
+    sub     sp, sp, #16                       // allocate timespec on stack
+    mov     x0, #CLOCK_MONOTONIC
+    mov     x1, sp
+    mov     x8, #SYS_CLOCK_GETTIME
+    svc     #0
+    ldr     x9, [sp]                          // x9 = boot start seconds
+    adrp    x10, boot_start_sec
+    add     x10, x10, :lo12:boot_start_sec
+    str     x9, [x10]
+    add     sp, sp, #16                       // free timespec
+
     // ---- Banner ----
     adrp    x1, msg_banner
     add     x1, x1, :lo12:msg_banner
@@ -260,7 +293,10 @@ _start:
     bl      boot_print
 
     bl      gsp_fw_load
-    // gsp_fw_load SYS_EXITs on failure internally; no return check needed.
+    // gsp_fw_load currently SYS_EXITs on failure internally, but add a
+    // defensive check: if it ever changes to return errors, catch them.
+    cmp     x0, #0
+    b.le    .boot_fail_step5
 
     adrp    x1, msg_step5_done
     add     x1, x1, :lo12:msg_step5_done
@@ -433,6 +469,15 @@ _start:
     mov     x8, #SYS_EXIT
     svc     #0
 
+.boot_fail_step5:
+    adrp    x1, msg_step5_fail
+    add     x1, x1, :lo12:msg_step5_fail
+    mov     x2, #msg_step5_fail_len
+    bl      boot_print
+    mov     x0, #8                            // exit code for fw_load failure
+    mov     x8, #SYS_EXIT
+    svc     #0
+
 .boot_fail_step6:
     adrp    x1, msg_step6_fail
     add     x1, x1, :lo12:msg_step6_fail
@@ -470,6 +515,19 @@ _start:
     svc     #0
 
 // ------------------------------------------------------------
+// boot_watchdog_fail -- boot exceeded BOOT_WATCHDOG_SECS
+// Prints fatal message and exits with code 99.
+// ------------------------------------------------------------
+.boot_watchdog_fail:
+    adrp    x1, msg_watchdog
+    add     x1, x1, :lo12:msg_watchdog
+    mov     x2, #msg_watchdog_len
+    bl      boot_print
+    mov     x0, #99
+    mov     x8, #SYS_EXIT
+    svc     #0
+
+// ------------------------------------------------------------
 // boot_print -- write x2 bytes from x1 to stderr (fd 2)
 // Clobbers: x0, x8
 // ------------------------------------------------------------
@@ -478,4 +536,28 @@ boot_print:
     mov     x0, #2                            // stderr
     mov     x8, #SYS_WRITE
     svc     #0
+    ret
+
+// ------------------------------------------------------------
+// boot_check_watchdog -- check total elapsed boot time
+// If > BOOT_WATCHDOG_SECS, jumps to .boot_watchdog_fail (no return).
+// Otherwise returns normally.
+// Clobbers: x0, x1, x8, x9, x10
+// Uses 16 bytes of stack for timespec.
+// ------------------------------------------------------------
+.align 4
+boot_check_watchdog:
+    sub     sp, sp, #16
+    mov     x0, #CLOCK_MONOTONIC
+    mov     x1, sp
+    mov     x8, #SYS_CLOCK_GETTIME
+    svc     #0
+    ldr     x9, [sp]                          // current seconds
+    add     sp, sp, #16
+    adrp    x10, boot_start_sec
+    add     x10, x10, :lo12:boot_start_sec
+    ldr     x10, [x10]                        // start seconds
+    sub     x9, x9, x10                       // elapsed
+    cmp     x9, #BOOT_WATCHDOG_SECS
+    b.ge    .boot_watchdog_fail
     ret

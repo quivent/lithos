@@ -88,6 +88,10 @@ hbm_alloc_init:
 // ---------------------------------------------------------------
 .globl hbm_alloc
 hbm_alloc:
+    // Reject zero-size allocations -- a zero request should not
+    // silently round up to 2MB and waste HBM.
+    cbz     x0, .alloc_zero
+
     // Align size up to 2MB: size = (size + 0x1FFFFF) & ~0x1FFFFF
     mov     x9, x0                  // x9 = original requested size (for overflow check)
     mov     x2, ALIGN_2MB_MASK
@@ -110,6 +114,10 @@ hbm_alloc:
 
     // Compute new bump = aligned old bump + aligned size
     add     x5, x4, x0
+
+    // Overflow check: if new_bump < old_bump, the addition wrapped.
+    cmp     x5, x4
+    b.lo    .alloc_oom
 
     // bounds check: new_bump (cpu_va) must not exceed limit
     adrp    x6, hbm_limit
@@ -138,6 +146,22 @@ hbm_alloc:
     ldr     x3, [x3]
     add     x1, x3, x4             // x1 = gpu_va (== physical addr)
 
+    ret
+
+.alloc_zero:
+    // Zero-size request: return current position without advancing.
+    // cpu_addr = hbm_base + current bump, gpu_va = hbm_phys + current bump
+    adrp    x3, hbm_bump
+    add     x3, x3, :lo12:hbm_bump
+    ldr     x4, [x3]
+    adrp    x3, hbm_base
+    add     x3, x3, :lo12:hbm_base
+    ldr     x3, [x3]
+    add     x0, x3, x4
+    adrp    x3, hbm_phys
+    add     x3, x3, :lo12:hbm_phys
+    ldr     x3, [x3]
+    add     x1, x3, x4
     ret
 
 .alloc_oom:

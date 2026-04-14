@@ -1,8 +1,9 @@
 # GSP boot — ARM64 assembly, no libc, raw syscalls.
 # Minimal Makefile: `as` to assemble, `ld` to link.
 
-AS  := as
-LD  := ld
+AS      := as
+LD      := ld
+ASFLAGS := --fatal-warnings
 
 # Step files (library-style routines).
 SRCS := \
@@ -60,23 +61,39 @@ OBJS := $(SRCS:.s=.o)
 
 BIN := gsp_boot
 
-.PHONY: all clean check
+# Test probe binary — exercises Steps 1 & 2 (bar_map + pmc_check) only.
+TEST_PROBE_SRCS := test_probe.s bar_map.s pmc_check.s gsp_common.s
+TEST_PROBE_OBJS := $(TEST_PROBE_SRCS:.s=.o)
+TEST_PROBE_BIN  := gsp_probe
+
+.PHONY: all clean check test
 all: $(BIN)
 
 # Link all .o into the final executable. No libc.
 $(BIN): $(OBJS)
 	$(LD) -o $@ $(OBJS)
 
-# Assemble each .s into .o. Rebuilds if the .s changes.
-%.o: %.s
-	$(AS) -o $@ $<
+# Test probe binary (read-only, safe to run).
+test: $(TEST_PROBE_BIN)
 
-# Syntax check: assemble each source to /dev/null.
+$(TEST_PROBE_BIN): $(TEST_PROBE_OBJS)
+	$(LD) -o $@ $(TEST_PROBE_OBJS)
+
+# Assemble each .s into .o. Rebuilds if the .s changes.
+# Every .o depends on gsp_common.s because constant definitions
+# are duplicated and must stay in sync.
+%.o: %.s gsp_common.s
+	$(AS) $(ASFLAGS) -o $@ $<
+
+# Syntax check: assemble every source (including test) to /dev/null.
+# sort -u deduplicates files shared between SRCS and TEST_PROBE_SRCS.
+ALL_SRCS := $(sort $(SRCS) $(TEST_PROBE_SRCS))
 check:
-	@set -e; for f in $(SRCS); do \
+	@set -e; for f in $(ALL_SRCS); do \
 		echo "check $$f"; \
-		$(AS) -o /dev/null $$f; \
+		$(AS) $(ASFLAGS) -o /dev/null $$f; \
 	done
+	@echo "All $(words $(ALL_SRCS)) sources pass syntax check."
 
 clean:
-	rm -f $(OBJS) $(BIN)
+	rm -f $(OBJS) $(TEST_PROBE_OBJS) $(BIN) $(TEST_PROBE_BIN)

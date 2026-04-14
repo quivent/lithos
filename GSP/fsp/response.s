@@ -142,14 +142,16 @@ fsp_response_poll:
 
 
 // =========================================================================
-// fsp_response_parse(response_buf)
-//   x0 = pointer to 16-byte response (4 DW)
+// fsp_response_parse(response_buf, buf_len)
+//   x0 = pointer to response buffer (must be >= 16 bytes / 4 DW)
+//   w1 = length of response buffer in bytes
 // Returns:
-//   w0 = 0 on FSP_OK, otherwise the FSP error code (positive), with
-//        a short diagnostic tag emitted to stderr.
+//   w0 = 0 on FSP_OK
+//   w0 = -1 (0xFFFFFFFF) if buf_len < 16 (truncated response)
+//   w0 = positive FSP error code otherwise, with a diagnostic tag
+//        emitted to stderr.
 //
-// We do NOT return negative values directly; callers treat non-zero
-// as failure. The DW0 field from FSP is an unsigned status code.
+// Callers treat any non-zero return as failure.
 // =========================================================================
 .globl fsp_response_parse
 .type  fsp_response_parse, %function
@@ -160,6 +162,12 @@ fsp_response_parse:
     str x19, [sp, #16]
 
     mov x19, x0                     // x19 = response buffer
+    // FIX: Validate that the response buffer contains at least 16 bytes
+    // (4 DWs) before reading.  A truncated or empty response packet
+    // would cause us to read garbage or fault.
+    cmp     w1, #16
+    b.lo    .Lpar_too_short
+
     // Raw EMEM data has 8 bytes of MCTP+NVDM headers (SOM packet):
     //   DW0 = MCTP transport constBlob (SOM|EOM|SEQ|EID)
     //   DW1 = NVDM msgType + vendorId + nvdmType
@@ -213,6 +221,15 @@ fsp_response_parse:
     bl  _fsp_stderr_write
     b   .Lpar_return
 
+.Lpar_too_short:
+    // FIX: Response buffer too small (< 16 bytes).  Return 0xFFFFFFFF (-1)
+    // to signal a parse error distinct from any valid FSP status code.
+    adr x0, .Lmsg_err_short
+    mov x1, #.Lmsg_err_short_end - .Lmsg_err_short
+    bl  _fsp_stderr_write
+    mov w0, #-1
+    b   .Lpar_done
+
 .Lpar_return:
     // Reload the raw status DW so the caller sees the exact code.
     ldr w0, [x19]
@@ -241,13 +258,23 @@ fsp_response_parse:
 fsp_response_ack:
     and w1, w1, #0x7
     lsl w1, w1, #3                  // w1 = ch*8
-    mov x3, #0x2C84
-    movk x3, #0x008F, lsl #16       // x3 = MSGQ_TAIL_BASE
+
+    // FIX: Read MSGQ_HEAD first to bound the advance.  MSGQ_TAIL must not
+    // exceed MSGQ_HEAD; advancing past head corrupts the ring and confuses
+    // the FSP.  We clamp the new tail to min(tail + consumed, head).
+    mov x3, #0x2C80
+    movk x3, #0x008F, lsl #16       // x3 = MSGQ_HEAD_BASE
     add x3, x0, x3
-    add x3, x3, w1, uxtw            // x3 = bar0 + MSGQ_TAIL(ch)
+    add x3, x3, w1, uxtw            // x3 = bar0 + MSGQ_HEAD(ch)
+    ldr w5, [x3]                    // w5 = current head
+
+    add x3, x3, #4                  // x3 = bar0 + MSGQ_TAIL(ch)
 
     ldr w4, [x3]                    // current tail
     add w4, w4, w2                  // += consumed_bytes
+    // Clamp: if new_tail > head, set new_tail = head
+    cmp w4, w5
+    csel w4, w5, w4, hi             // w4 = min(new_tail, head)
     str w4, [x3]
     dsb     st                          // ensure MSGQ_TAIL write is committed
     // MMIO posted-write barrier: read-back to force ordering.
@@ -305,3 +332,7 @@ _fsp_stderr_write:
 .Lmsg_err_knob:
     .ascii "fsp_response_parse: FSP_ERR_PRC_ERROR_INVALID_KNOB_ID (0x1E3)\n"
 .Lmsg_err_knob_end:
+
+.Lmsg_err_short:
+    .ascii "fsp_response_parse: response buffer too short (< 16 bytes)\n"
+.Lmsg_err_short_end:

@@ -349,6 +349,10 @@ fsp_diag_dump_queues:
 
     mov     x19, x0                   // bar0
     uxtw    x20, w1                   // n_channels
+    // Clamp to 8 channels max to avoid reading past FSP queue registers
+    mov     x3, #8
+    cmp     x20, x3
+    csel    x20, x20, x3, le          // x20 = min(n_channels, 8)
     mov     x21, #0                   // i
 
     // Reserve 16 bytes of stack for a per-iter prefix buffer:

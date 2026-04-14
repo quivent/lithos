@@ -108,8 +108,7 @@ _start:
     mov     x0, #AT_FDCWD
     adrp    x1, bar0_path
     add     x1, x1, :lo12:bar0_path
-    movz    x2, #0x1002
-    movk    x2, #0x0010, lsl #16    // O_RDWR | O_SYNC
+    mov     x2, #0                  // O_RDONLY (read-only probe)
     mov     x3, #0
     mov     x8, #SYS_OPENAT
     svc     #0
@@ -165,7 +164,13 @@ _start:
     mov     x2, #msg_fsp_no_len
     mov     x8, #SYS_WRITE
     svc     #0
+    // FSP not booted -- exit with error after dumping diagnostics
+    // Set flag in x28 so we exit non-zero at the end
+    mov     w28, #1
+    b       .fsp_chk_done_noset
 .fsp_chk_done:
+    mov     w28, #0               // FSP OK, will exit 0
+.fsp_chk_done_noset:
 
     // ---- SCRATCH_GROUP_2 (8 dwords at stride 4) ----
     mov     x0, #1
@@ -268,12 +273,12 @@ _start:
     b       .mq_loop
 .mq_done:
 
-    // ---- Exit 0 ----
+    // ---- Exit with status based on FSP boot check ----
     ldp     x23, x24, [sp, #48]
     ldp     x21, x22, [sp, #32]
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #64
-    mov     x0, #0
+    mov     x0, x28              // 0 if FSP OK, 1 if not booted
     mov     x8, #SYS_EXIT
     svc     #0
 

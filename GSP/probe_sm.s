@@ -307,16 +307,49 @@ _start:
     add  x0, x0, :lo12:s_num_gpcs
     bl   print_str
     LOAD_BAR0_REG w21, x20, PTOP_SCAL_NUM_GPCS
+    // Guard: if priv-faulted (0xBADF5040) or unreasonably large (>31),
+    // clamp to 0 to avoid billion-iteration loop and undefined shifts.
+    LOAD_PRIV_FAULT w9
+    cmp  w21, w9
+    b.eq .Lnum_gpcs_faulted
+    cmp  w21, #32
+    b.lt .Lnum_gpcs_ok
+.Lnum_gpcs_faulted:
     mov  w0, w21
     bl   print_dec_nl
+    adrp x0, s_priv_fault
+    add  x0, x0, :lo12:s_priv_fault
+    bl   print_str
+    mov  w21, #0             // clamp to 0 so loops are skipped
+    b    .Lnum_gpcs_done
+.Lnum_gpcs_ok:
+    mov  w0, w21
+    bl   print_dec_nl
+.Lnum_gpcs_done:
 
     // ── PTOP_SCAL_NUM_TPC_PER_GPC ──────────────────────────────────
     adrp x0, s_num_tpc
     add  x0, x0, :lo12:s_num_tpc
     bl   print_str
     LOAD_BAR0_REG w22, x20, PTOP_SCAL_NUM_TPC_PER_GPC
+    // Guard: same priv-fault / sanity check as above
+    LOAD_PRIV_FAULT w9
+    cmp  w22, w9
+    b.eq .Lnum_tpc_faulted
+    cmp  w22, #32
+    b.lt .Lnum_tpc_ok
+.Lnum_tpc_faulted:
     mov  w0, w22
     bl   print_dec_nl
+    adrp x0, s_priv_fault
+    add  x0, x0, :lo12:s_priv_fault
+    bl   print_str
+    mov  w22, #0             // clamp to 0 so shift mask is safe
+    b    .Lnum_tpc_done
+.Lnum_tpc_ok:
+    mov  w0, w22
+    bl   print_dec_nl
+.Lnum_tpc_done:
 
     // ── FUSE_STATUS_OPT_GPC ────────────────────────────────────────
     adrp x0, s_fuse_gpc
