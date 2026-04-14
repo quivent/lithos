@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos &mdash; Documentation</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0f; --bg-raised: #12121e; --bg-card: #14142a;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --green: #5ecc5e; --red: #e05555; --blue: #6e8ed0;
+  --cyan: #6ec8d0; --yellow: #e0c040; --border: #1e1e30;
+}
+html { font-size: 16px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { max-width: 1060px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav .nav-docs { color: var(--bg); background: var(--accent); padding: 0.25rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
+nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
+
+.hero { padding: 4rem 0 2.5rem; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 2.6rem; font-weight: 200; letter-spacing: 0.1em; text-transform: uppercase; }
+.hero .sub { color: var(--text-dim); font-size: 1.15rem; margin-top: 0.5rem; letter-spacing: 0.04em; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; padding: 2.5rem 0; }
+
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 1.8rem; }
+.card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); margin-bottom: 1rem; font-weight: 600; }
+.card ul { list-style: none; }
+.card li { padding: 0.4rem 0; border-bottom: 1px solid #111120; font-size: 0.92rem; }
+.card li:last-child { border-bottom: none; }
+.card li a { color: var(--text); }
+.card li a:hover { color: var(--accent); }
+.card li .desc { color: var(--text-dim); font-size: 0.82rem; display: block; margin-top: 0.1rem; }
+.card li .badge { display: inline-block; font-size: 0.7rem; padding: 0.1rem 0.5rem; border-radius: 3px; font-weight: 600; letter-spacing: 0.04em; margin-left: 0.5rem; vertical-align: middle; }
+.badge-spec { background: #1a2a0a; color: var(--green); border: 1px solid #2a4a1a; }
+.badge-new { background: #2a1a00; color: var(--accent); border: 1px solid #4a3000; }
+.badge-key { background: #0a1a2a; color: var(--cyan); border: 1px solid #1a3a4a; }
+
+.section { padding: 2rem 0; }
+.section h2 { font-size: 1.1rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 1rem; }
+
+.timestamp { color: var(--text-faint); font-size: 0.78rem; text-align: center; padding: 3rem 0 2rem; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/compiler">The Compiler</a>
+  <a href="/pipeline">Inference Stack</a>
+  <a href="/status">Status</a>
+  <a href="/language">Language Reference</a>
+  <a href="/glossary">Glossary</a>
+  <a href="/docs" class="nav-docs">Docs</a>
+</div>
+</nav>
+
+<div class="container">
+
+<div class="hero">
+  <h1>Documentation</h1>
+  <p class="sub">Specifications, design documents, and engineering reference for the Lithos project.</p>
+</div>
+
+<div class="grid">
+
+  <div class="card">
+    <h2>Language</h2>
+    <ul>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/language/SPECIFICATION.md">Language Specification <span class="badge badge-spec">SPEC</span></a>
+        <span class="desc">Complete reference &mdash; grammar, 12 primitive families, type system, memory model, compilation model</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/language/primitives.md">Grammar Quick Reference</a>
+        <span class="desc">All symbols, examples, architecture register dictionaries</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/language/VOCABULARY.md">Vocabulary</a>
+        <span class="desc">DeltaNet layer as 41 primitive steps with dimensional table</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/language/deltanet-lineage.md">DeltaNet Lineage Map <span class="badge badge-new">NEW</span></a>
+        <span class="desc">Full decomposition: framework kernels &rarr; Lithos compositions &rarr; SASS instructions</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/language/REVIEW.md">Language Review <span class="badge badge-new">NEW</span></a>
+        <span class="desc">Chuck Moore&rsquo;s review &mdash; identifies three-language problem, 9 implementer blockers</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/language/tokenizer-design.md">Tokenizer Design</a>
+        <span class="desc">BPE tokenizer architecture for Qwen 3.5 (248K vocab)</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Compiler</h2>
+    <ul>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/compiler/design/architecture.md">Compiler Architecture <span class="badge badge-key">KEY</span></a>
+        <span class="desc">Self-hosting compiler overview &mdash; 7 sections, dual backend</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/compiler/design/regalloc.md">Register Allocator</a>
+        <span class="desc">Linear-scan design for straight-line GPU kernels</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/compiler/design/register-strategy.md">Register Strategy</a>
+        <span class="desc">Register utilization as the central design constraint</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/compiler/design/difficulty-analysis.md">Difficulty Analysis</a>
+        <span class="desc">Shannon-derived assessment of compiler complexity</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/compiler/arm64-encodings.md">ARM64 Encodings</a>
+        <span class="desc">Instruction encoding reference for the ARM64 emitter</span></li>
+      <li><a href="https://github.com/quivent/lithos/tree/main/docs/compiler/bootstrap">Bootstrap Reports</a>
+        <span class="desc">6 wave-2 bootstrap attempt reports</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Runtime &amp; GPU</h2>
+    <ul>
+      <li><a href="https://github.com/quivent/lithos/blob/main/GSP/fsp_plan.md">FSP Boot Plan <span class="badge badge-key">KEY</span></a>
+        <span class="desc">Step 7 of GPU boot &mdash; FSP communication, register layouts, MCTP protocol</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/runtime/qmd-hopper.md">QMD Structure</a>
+        <span class="desc">Hopper sm_90 queue meta data &mdash; empirically observed</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/runtime/qmd-fields.md">QMD Field Offsets</a>
+        <span class="desc">Field-level offsets from differential pushbuffer probing</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/runtime/cbuf0-fields.md">Constant Buffer Fields</a>
+        <span class="desc">Shader descriptor fields including register_count at SPD 0x094</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/runtime/nvidia-driver-abi.md">NVIDIA Driver ABI</a>
+        <span class="desc">ioctl reference from open-gpu-kernel-modules</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/runtime/libcuda-ioctl.md">libcuda ioctl Catalog</a>
+        <span class="desc">Empirical trace &mdash; 25 unique calls replacing 80 MB of libcuda.so</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/runtime/gsp-native.md">GSP Native Boot</a>
+        <span class="desc">Design proposal &mdash; eliminating C from GPU access path</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Inference</h2>
+    <ul>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/inference/deltanet-operations.md">DeltaNet Operations</a>
+        <span class="desc">10 operations: kernel name &rarr; English &rarr; primitives &rarr; stack notation</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/inference/deltanet-stack-primitives.md">DeltaNet Stack Primitives</a>
+        <span class="desc">Full layer in pure primitive stack operations</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/inference/model-config.md">Model Configuration</a>
+        <span class="desc">Qwen 3.5 27B &mdash; dimensions, layer types, GQA ratios, quantization</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/inference/hybrid-layers.md">Hybrid Layers</a>
+        <span class="desc">Cooperative megakernel architecture for DeltaNet + attention</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Hardware</h2>
+    <ul>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/hardware/gpu-register-model.md">GPU Register Model</a>
+        <span class="desc">Full Hopper sm_90a register architecture</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/hardware/performance-spectrum.md">Performance Spectrum</a>
+        <span class="desc">Speculative full-stack compilation analysis</span></li>
+      <li><a href="https://github.com/quivent/lithos/tree/main/docs/encoding">SASS Encodings</a>
+        <span class="desc">5 files &mdash; arithmetic, memory, SFU, warp control, integer/atomic</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Project</h2>
+    <ul>
+      <li><a href="https://github.com/quivent/lithos/blob/main/STATUS.md">Master Status <span class="badge badge-key">KEY</span></a>
+        <span class="desc">Progress tracking, open gaps, critical path, milestones</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/SHIPPING.md">What Ships</a>
+        <span class="desc">Two files on disk &mdash; one binary, one weights file</span></li>
+      <li><a href="https://github.com/quivent/lithos/blob/main/docs/INCONSISTENCIES.md">Inconsistency Audit</a>
+        <span class="desc">Cross-calibration report &mdash; open issues tracked here</span></li>
+      <li><a href="https://github.com/quivent/lithos/tree/main/docs/minds">Brilliant Minds</a>
+        <span class="desc">Shannon, Turing, Lovelace, von Neumann, Ferrucci on quantization</span></li>
+      <li><a href="https://github.com/quivent/lithos/tree/main/docs/lore">Lore</a>
+        <span class="desc">10 narrative chapters &mdash; the story of how Lithos was built</span></li>
+    </ul>
+  </div>
+
+</div>
+
+<p class="timestamp">Last updated: 2026-04-14</p>
+
+</div>
+</body>
+</html>

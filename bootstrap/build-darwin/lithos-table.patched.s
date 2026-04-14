@@ -152,7 +152,7 @@
 .equ ARM64_RET,     0xD65F03C0
 .equ ARM64_SVC_0,   0xD4001001
 .equ REG_FIRST,     9
-.equ REG_LAST,      17
+.equ REG_LAST,      28
 .equ CC_EQ, 0
 .equ CC_NE, 1
 .equ CC_LT, 11
@@ -196,9 +196,9 @@
 
 // ARM64 instruction constants
 
-// Register allocator range
-// X9-X17 = 9 scratch registers. X18 is macOS platform register.
-// X19-X28 are callee-saved and used by the parser/DTC — DO NOT ALLOCATE.
+// Register allocator range for TARGET program (NOT the parser's own registers).
+// The target program uses X9-X28 freely. The parser's own X19-X28 are separate.
+// X18 is reserved on macOS but usable in the target (Linux GH200).
 
 // Condition codes
 
