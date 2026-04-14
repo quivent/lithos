@@ -127,7 +127,9 @@
 // ARM64 instruction constants
 .equ ARM64_NOP,     0xD503201F
 .equ ARM64_RET,     0xD65F03C0
-.equ ARM64_SVC_0,   0xD4000001
+// TARGET program SVC — must stay Linux encoding even on macOS builds.
+// Split into hi/lo to prevent darwin transform from matching "svc #0".
+.equ ARM64_SVC_0,   (0xD400 << 16) | 0x0001
 
 // Register allocator range for TARGET program (NOT the parser's own registers).
 // The target program uses X9-X28 freely. The parser's own X19-X28 are separate.
