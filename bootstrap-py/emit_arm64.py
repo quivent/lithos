@@ -108,6 +108,8 @@ class ARM64Emitter:
         self._patches: List[Tuple[int, str]] = []
         # Label support: name -> buf_offset
         self._labels: Dict[str, int] = {}
+        # Pending label-based patches: list of (buf_offset, kind, label_name)
+        self._pending_patches: List[Tuple[int, str, str]] = []
 
     # ------------------------------------------------------------------
     # Buffer primitives
@@ -784,18 +786,129 @@ class ARM64Emitter:
     # FUNCTION PROLOGUE / EPILOGUE (AAPCS64)
     # ------------------------------------------------------------------
 
-    def emit_prologue(self, frame_size: int = 16) -> None:
+    def emit_prologue(self, name_or_size=16, n_locals: int = 0) -> None:
         """
         Standard function prologue: save FP/LR, set up frame pointer.
-        *frame_size* must be a multiple of 16 (AAPCS64 stack alignment).
+        Accepts either (frame_size) or (name, n_locals) for codegen compat.
         """
+        if isinstance(name_or_size, str):
+            # Called as emit_prologue(name, n_locals) from codegen
+            frame_size = max(16, ((n_locals + 2) * 8 + 15) & ~15)
+        else:
+            frame_size = name_or_size
         self.emit_stp_pre(FP, LR, SP, -frame_size)
         self.emit_mov_reg(FP, SP)
 
     def emit_epilogue(self, frame_size: int = 16) -> None:
-        """Restore FP/LR and return."""
+        """Restore FP/LR (does NOT emit RET — caller should emit_ret separately)."""
         self.emit_ldp_post(FP, LR, SP, frame_size)
-        self.emit_ret()
+
+    # ------------------------------------------------------------------
+    # CODEGEN-FRIENDLY ALIASES
+    # Simplified interface used by codegen.py's CodeGenerator.
+    # ------------------------------------------------------------------
+
+    def emit_add(self, rd: int, rn: int, rm: int) -> None:
+        self.emit_add_reg(rd, rn, rm)
+
+    def emit_sub(self, rd: int, rn: int, rm: int) -> None:
+        self.emit_sub_reg(rd, rn, rm)
+
+    def emit_and(self, rd: int, rn: int, rm: int) -> None:
+        self.emit_and_reg(rd, rn, rm)
+
+    def emit_or(self, rd: int, rn: int, rm: int) -> None:
+        self.emit_orr_reg(rd, rn, rm)
+
+    def emit_xor(self, rd: int, rn: int, rm: int) -> None:
+        self.emit_eor_reg(rd, rn, rm)
+
+    def emit_div(self, rd: int, rn: int, rm: int) -> None:
+        self.emit_sdiv(rd, rn, rm)
+
+    def emit_shl(self, rd: int, rn: int, rm: int) -> None:
+        # LSL by register: uses LSLV encoding
+        # LSLV Xd, Xn, Xm: sf=1, op2=0b10, Rm, 0b001000, Rn, Rd
+        insn = (0b1_00_11010110 << 21) | (rm << 16) | (0b001000 << 10) | (rn << 5) | rd
+        self._emit32(insn)
+
+    def emit_shr(self, rd: int, rn: int, rm: int) -> None:
+        # LSR by register: LSRV Xd, Xn, Xm
+        insn = (0b1_00_11010110 << 21) | (rm << 16) | (0b001001 << 10) | (rn << 5) | rd
+        self._emit32(insn)
+
+    def emit_mul(self, rd: int, rn: int, rm: int) -> None:
+        self.emit_madd(rd, rn, rm, XZR)
+
+    def emit_cmp(self, rn: int, rm: int) -> None:
+        # CMP Xn, Xm = SUBS XZR, Xn, Xm
+        self.emit_subs_reg(XZR, rn, rm)
+
+    def emit_load(self, rt: int, rn: int, offset: int = 0) -> None:
+        self.emit_ldr(rt, rn, offset)
+
+    def emit_store(self, rt: int, rn: int, offset: int = 0) -> None:
+        self.emit_str(rt, rn, offset)
+
+    def emit_branch(self, target=0) -> None:
+        """B target — unconditional branch. target may be int offset or label string."""
+        if isinstance(target, str):
+            if target in self._labels:
+                offset = self._labels[target] - self._pos
+                self.emit_b(offset)
+            else:
+                self._pending_patches.append((self._pos, 'b', target))
+                self.emit_b(0)
+        else:
+            self.emit_b(target)
+
+    def _emit_branch_cond(self, cond: int, target=0) -> None:
+        """B.cond target — conditional branch. target may be int offset or label string."""
+        if isinstance(target, str):
+            if target in self._labels:
+                offset = self._labels[target] - self._pos
+                self.emit_b_cond(cond, offset)
+            else:
+                self._pending_patches.append((self._pos, 'bcond', target))
+                self.emit_b_cond(cond, 0)
+        else:
+            self.emit_b_cond(cond, target)
+
+    def emit_branch_eq(self, target=0) -> None:
+        self._emit_branch_cond(COND_EQ, target)
+
+    def emit_branch_ne(self, target=0) -> None:
+        self._emit_branch_cond(COND_NE, target)
+
+    def emit_branch_lt(self, target=0) -> None:
+        self._emit_branch_cond(COND_LT, target)
+
+    def emit_branch_ge(self, target=0) -> None:
+        self._emit_branch_cond(COND_GE, target)
+
+    def emit_branch_gt(self, target=0) -> None:
+        self._emit_branch_cond(COND_GT, target)
+
+    def emit_branch_le(self, target=0) -> None:
+        self._emit_branch_cond(COND_LE, target)
+
+    def emit_label(self, name: str) -> None:
+        """Record a label at the current code position and patch any pending
+        forward references to this label."""
+        self._labels[name] = self._pos
+        # Patch any pending forward references
+        remaining = []
+        for (mark_pos, kind, label) in self._pending_patches:
+            if label == name:
+                if kind == 'b':
+                    self.patch_b(mark_pos, self._pos)
+                elif kind == 'bcond':
+                    self.patch_bcond(mark_pos, self._pos)
+                elif kind == 'bl':
+                    self.patch_bl(mark_pos, self._pos)
+            else:
+                remaining.append((mark_pos, kind, label))
+        self._pending_patches = remaining
 
     def emit_save_callee_saved(self, pairs: List[Tuple[int, int]], base_offset: int = 16) -> None:
         """Save pairs of callee-saved registers at [SP, #offset]."""

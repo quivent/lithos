@@ -13,13 +13,13 @@ import sys
 from pathlib import Path
 
 # -- Bootstrap modules (same package) --
+from bridge import lex_and_convert
 from lexer import lex, dump_tokens
-from parser import parse
-from codegen import generate
+from parser import Parser, dump_ast
+from codegen import CodeGenerator
 from emit_arm64 import ARM64Emitter
 from emit_sm90 import SM90Emitter
-from elf_writer import ELFWriter
-from cubin_writer import CubinWriter
+from elf_writer import ELFWriter, CubinWriter
 
 
 # ============================================================
@@ -75,45 +75,31 @@ def read_source(path: str) -> str:
 def compile_arm64(ast: list, output_path: str) -> None:
     """Emit ARM64 machine code from AST and write an ELF binary."""
     emitter = ARM64Emitter()
-    generate(ast, emitter)
+    cg = CodeGenerator(emitter)
+    cg.generate(ast)
 
     code = emitter.get_code()
-    code_size = emitter.get_code_size()
 
     writer = ELFWriter()
-    elf_bytes = writer.build(
-        text=code,
-        text_size=code_size,
-        data=b"",
-        data_size=0,
-        bss_size=0,
-    )
-
-    out = Path(output_path)
-    out.write_bytes(elf_bytes)
-    print(f"lithos: wrote {out} ({len(elf_bytes)} bytes, ARM64 ELF)")
+    writer.add_text(".text", code)
+    writer.write(output_path)
+    print(f"lithos: wrote {output_path} ({Path(output_path).stat().st_size} bytes, ARM64 ELF)")
 
 
 def compile_gpu(ast: list, output_path: str) -> None:
     """Emit SM90 GPU code from AST and write a cubin."""
     emitter = SM90Emitter()
-    generate(ast, emitter)
+    cg = CodeGenerator(emitter)
+    cg.generate(ast)
 
     code = emitter.get_code()
-    code_size = emitter.get_code_size()
+    regcount = emitter.get_register_count()
 
     writer = CubinWriter()
-    cubin_bytes = writer.build(
-        text=code,
-        text_size=code_size,
-        num_registers=emitter.max_registers_used(),
-        shared_mem_size=emitter.shared_mem_size(),
-        num_params=emitter.num_params(),
-    )
-
-    out = Path(output_path)
-    out.write_bytes(cubin_bytes)
-    print(f"lithos: wrote {out} ({len(cubin_bytes)} bytes, SM90 cubin)")
+    writer.add_text("kernel", code)
+    writer.add_nv_info(regcount=regcount)
+    writer.write(output_path)
+    print(f"lithos: wrote {output_path} ({Path(output_path).stat().st_size} bytes, SM90 cubin)")
 
 
 # ============================================================
@@ -127,19 +113,20 @@ def main(argv: list[str] | None = None) -> int:
     source = read_source(args.input)
 
     # Step 2: Lex
-    tokens = lex(source)
+    raw_tokens = lex(source)
 
     if args.dump_tokens:
-        dump_tokens(tokens)
-        print(f"\nTotal tokens: {len(tokens)}")
+        dump_tokens(raw_tokens)
+        print(f"\nTotal tokens: {len(raw_tokens)}")
         return 0
 
     # Step 3: Parse
-    ast = parse(tokens)
+    tokens = lex_and_convert(source)
+    parser = Parser(tokens)
+    ast = parser.parse()
 
     if args.dump_ast:
-        import json
-        print(json.dumps(ast, indent=2, default=str))
+        print(dump_ast(ast))
         return 0
 
     # Step 4+5: Emit code and write output
