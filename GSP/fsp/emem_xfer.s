@@ -26,7 +26,7 @@
 // Exports:
 //   fsp_emem_write(bar0, channel, offset, src_buf, len_bytes) -> int
 //   fsp_emem_read (bar0, channel, offset, dst_buf, len_bytes) -> int
-//   fsp_queue_advance(bar0, channel, new_head)              -> int
+//   fsp_queue_advance_head(bar0, channel, new_head)              -> int
 //
 // AAPCS64.  No libc.  Clobbers x0-x9 only; all callee-saves preserved.
 //
@@ -159,7 +159,7 @@ fsp_emem_read:
 
 
 // ====================================================================
-// fsp_queue_advance -- publish a new CPU->FSP queue head to signal FSP
+// fsp_queue_advance_head -- publish a new CPU->FSP queue head to signal FSP
 //
 // Writes the new byte-offset head into NV_PFSP_QUEUE_HEAD(channel).
 // A DSB SY barrier before the store flushes all prior EMEM dword writes;
@@ -174,10 +174,10 @@ fsp_emem_read:
 // Returns:
 //   x0 = 0
 // ====================================================================
-.globl fsp_queue_advance
-.type  fsp_queue_advance, %function
+.globl fsp_queue_advance_head
+.type  fsp_queue_advance_head, %function
 .balign 4
-fsp_queue_advance:
+fsp_queue_advance_head:
     // x7 = &QUEUE_HEAD(ch)
     bar0_reg_addr x7, x0, w1, w8, 0x008F2C00
 
