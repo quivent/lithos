@@ -89,6 +89,8 @@ nav {
 nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
 nav a { color: var(--text-dim); }
 nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-docs { color: var(--bg); background: var(--accent); padding: 0.25rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
+nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
 nav a.active { color: var(--accent); }
 nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
 
@@ -248,6 +250,7 @@ footer {
   <a href="/language-design">Language Design</a>
   <a href="/glossary" class="active">Glossary</a>
 
+  <a href="https://github.com/quivent/lithos/tree/main/docs" class="nav-docs">Docs</a>
   <a href="#" class="nav-search" onclick="openSearch(event)" title="Search (Ctrl+K)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg></a>
 </div>
 </nav>

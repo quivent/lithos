@@ -1,6 +1,0 @@
-build-darwin/lithos-table.patched.s:2865:17: error: expected compatible register, symbol or integer in range [0, 4095]
-    cmp     w0, #TOK_LSHIFT
-                ^
-build-darwin/lithos-table.patched.s:2867:17: error: expected compatible register, symbol or integer in range [0, 4095]
-    cmp     w0, #TOK_RSHIFT
-                ^
