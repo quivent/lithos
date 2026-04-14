@@ -41,6 +41,9 @@ hbm_limit:  .quad 0     // BAR4 upper bound (base + 256MB)
 // ---------------------------------------------------------------
 .globl hbm_alloc_init
 hbm_alloc_init:
+    // Reject NULL bar4_base (caller should have checked, but defense-in-depth)
+    cbz     x0, .alloc_init_fail
+
     adrp    x3, hbm_base
     add     x3, x3, :lo12:hbm_base
     str     x0, [x3]               // hbm_base = mmap addr
@@ -61,6 +64,10 @@ hbm_alloc_init:
     str     x4, [x3]               // hbm_limit = bar4_base + 256MB
 
     mov     x0, #0                  // return 0 = success
+    ret
+
+.alloc_init_fail:
+    mov     x0, #-1                // NULL bar4_base
     ret
 
 // ---------------------------------------------------------------

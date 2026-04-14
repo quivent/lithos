@@ -160,7 +160,11 @@ fsp_response_parse:
     str x19, [sp, #16]
 
     mov x19, x0                     // x19 = response buffer
-    ldr w0, [x19]                   // DW0 = status
+    // Raw EMEM data has 8 bytes of MCTP+NVDM headers (SOM packet):
+    //   DW0 = MCTP transport constBlob (SOM|EOM|SEQ|EID)
+    //   DW1 = NVDM msgType + vendorId + nvdmType
+    //   DW2 = FSP status code (the actual payload)
+    ldr w0, [x19, #8]              // DW2 = status (skip 8-byte header)
     cbz w0, .Lpar_ok                // 0 -> success, no print
 
     // Non-zero: classify and print a short tag.
