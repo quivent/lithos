@@ -1685,8 +1685,46 @@ handle_ident_stmt:
     cmp     w0, #TOK_SHR
     b.eq    .Lhi_reassign_full
 .Lhi_reassign_skip:
+    // Check for multi-line: NEWLINE + INDENT + operator means keep name
+    cmp     w0, #TOK_NEWLINE
+    b.ne    .Lhi_reassign_do_skip
+    // Peek further: NEWLINE + INDENT + operator?
+    add     x4, x4, #TOK_STRIDE_SZ    // past NEWLINE
+    cmp     x4, x27
+    b.hs    .Lhi_reassign_do_skip
+    ldr     w0, [x4]
+    cmp     w0, #TOK_INDENT
+    b.ne    .Lhi_reassign_do_skip
+    add     x4, x4, #TOK_STRIDE_SZ    // past INDENT
+    cmp     x4, x27
+    b.hs    .Lhi_reassign_do_skip
+    ldr     w0, [x4]
+    cmp     w0, #TOK_PIPE
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_AMP
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_PLUS
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_MINUS
+    b.eq    .Lhi_reassign_full
+.Lhi_reassign_do_skip:
+    // Check if there's actually a value expression to parse.
+    // If next is NEWLINE/EOF, it's a bare read (return value), not reassignment.
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Lhi_reassign_bare
+    cmp     w0, #TOK_EOF
+    b.eq    .Lhi_reassign_bare
     // Value follows name: skip name, parse value
     add     x19, x19, #TOK_STRIDE_SZ
+    b       .Lhi_reassign_full
+.Lhi_reassign_bare:
+    // Bare variable read — just emit MOV X0, Xvar (return value convention)
+    mov     w1, w5                  // source = variable's register
+    mov     w0, #0                  // dest = X0
+    bl      emit_mov_reg
+    add     x19, x19, #TOK_STRIDE_SZ   // skip the variable name
+    ldp     x29, x30, [sp], #16
+    ret
 .Lhi_reassign_full:
     // Operator follows name: parse full expression (includes name)
     stp     w5, wzr, [sp, #-16]!
@@ -1862,11 +1900,35 @@ parse_mem_store:
 
     bl      parse_expr              // width
     mov     w4, w0
-    bl      parse_expr              // addr
+    bl      parse_expr              // addr (base, possibly with +offset inline)
     mov     w5, w0
-    bl      parse_expr              // val
+    bl      parse_expr              // value (or offset if there's a 4th operand)
+    mov     w6, w0
+    // Check for 4th operand: if present, w6 is offset and next expr is value
+    cmp     x19, x27
+    b.hs    .Lstore_emit
+    ldr     w0, [x19]
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Lstore_emit
+    cmp     w0, #TOK_EOF
+    b.eq    .Lstore_emit
+    cmp     w0, #TOK_INDENT
+    b.eq    .Lstore_emit
+    // 4th operand exists: addr = base + offset, value = this operand
+    // Emit ADD Xaddr, Xbase, Xoffset
+    stp     w4, w5, [sp, #-16]!
+    bl      alloc_reg
+    mov     w7, w0              // combined addr register
+    mov     w0, w7
+    mov     w1, w5              // old base
+    mov     w2, w6              // offset
+    bl      emit_add_reg
+    ldp     w4, w5, [sp], #16
+    mov     w5, w7              // addr = combined
+    bl      parse_expr          // real value
     mov     w6, w0
 
+.Lstore_emit:
     // STR Xval, [Xaddr, #0]
     mov     w0, w6
     mov     w1, w5
@@ -2502,6 +2564,8 @@ parse_expr:
     ret
 
 // parse_bitwise — & | ^
+// Handles multi-line continuation: if NEWLINE+INDENT is followed by
+// & | ^, skip the whitespace and continue the expression.
 parse_bitwise:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
@@ -2516,7 +2580,33 @@ parse_bitwise:
     b.eq    .Lbit_op
     cmp     w1, #TOK_CARET
     b.eq    .Lbit_op
+    // Check for multi-line continuation: NEWLINE + INDENT + operator
+    cmp     w1, #TOK_NEWLINE
+    b.ne    .Lbit_done
+    mov     x4, x19
+    add     x4, x4, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lbit_done
+    ldr     w2, [x4]
+    cmp     w2, #TOK_INDENT
+    b.ne    .Lbit_done
+    add     x4, x4, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lbit_done
+    ldr     w2, [x4]
+    cmp     w2, #TOK_PIPE
+    b.eq    .Lbit_cont
+    cmp     w2, #TOK_AMP
+    b.eq    .Lbit_cont
+    cmp     w2, #TOK_CARET
+    b.eq    .Lbit_cont
     b       .Lbit_done
+.Lbit_cont:
+    // Skip NEWLINE + INDENT, continue at the operator
+    add     x19, x19, #TOK_STRIDE_SZ
+    add     x19, x19, #TOK_STRIDE_SZ
+    ldr     w1, [x19]
+    b       .Lbit_op
 .Lbit_op:
     mov     w4, w0
     mov     w5, w1
@@ -3057,12 +3147,42 @@ parse_atom:
 .La_load:
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
     bl      parse_atom                  // width (8, 16, 32, 64)
-    mov     w4, w0                      // width register (ignored for now)
-    bl      parse_expr                  // address expression (can include + - etc.)
-    mov     w5, w0                      // address register
+    mov     w4, w0                      // width register
+    bl      parse_expr                  // address/base expression
+    mov     w5, w0                      // base register
+    // Check for offset operand (token on same line, not an operator)
+    cmp     x19, x27
+    b.hs    .La_load_simple
+    ldr     w0, [x19]
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .La_load_simple
+    cmp     w0, #TOK_EOF
+    b.eq    .La_load_simple
+    cmp     w0, #TOK_RPAREN
+    b.eq    .La_load_simple
+    cmp     w0, #TOK_INDENT
+    b.eq    .La_load_simple
+    // Has offset — parse it and emit indexed load: LDRB Wd, [Xbase, Xoff]
+    stp     w4, w5, [sp, #-16]!
+    bl      parse_atom                  // offset
+    ldp     w4, w5, [sp], #16
+    mov     w6, w0                      // offset register
     bl      alloc_reg
-    mov     w6, w0                      // result register
-    // Emit: LDR Xresult, [Xaddr, #0]
+    mov     w7, w0                      // result register
+    lsl     w1, w6, #16                 // Rm (offset)
+    lsl     w2, w5, #5                  // Rn (base)
+    orr     w0, w7, w1
+    orr     w0, w0, w2
+    movz    w3, #0x6800
+    movk    w3, #0x3860, lsl #16        // LDRB Wd, [Xn, Xm]
+    orr     w0, w0, w3
+    bl      emit32
+    mov     w0, w7
+    ldp     x29, x30, [sp], #16
+    ret
+.La_load_simple:
+    bl      alloc_reg
+    mov     w6, w0
     mov     w0, w6
     mov     w1, w5
     mov     w2, #0
