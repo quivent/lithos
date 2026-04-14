@@ -470,71 +470,14 @@ drv_lithos_pipeline:
 
 
     // ====== NATIVE PIPELINE (bypasses DTC trampoline) ======
-    stp     x19, x18, [sp, #-16]!
-    adrp    x0, dbg_msg_lex@PAGE
-    add     x0, x0, dbg_msg_lex@PAGEOFF
-    mov     x1, x0
-    mov     x0, #1
-    mov     x2, #4
-    mov     x16, #4
-    svc     #0x80
-    // print src_len (x18) as raw 8 bytes after LEN
-
-    adrp    x0, dbg_msg_len@PAGE
-    add     x0, x0, dbg_msg_len@PAGEOFF
-    mov     x1, x0
-    mov     x0, #1
-    mov     x2, #4
-    mov     x16, #4
-    svc     #0x80
-    adrp    x0, drv_src_len@PAGE
-    add     x0, x0, drv_src_len@PAGEOFF
-    mov     x1, x0
-    mov     x0, #1
-    mov     x2, #8
-    mov     x16, #4
-    svc     #0x80
-    // print SRC header + first 64 bytes of source buffer
-    adrp    x0, dbg_msg_src@PAGE
-    add     x0, x0, dbg_msg_src@PAGEOFF
-    mov     x1, x0
-    mov     x0, #1
-    mov     x2, #4
-    mov     x16, #4
-    svc     #0x80
-    ldp     x19, x18, [sp], #16
-    stp     x19, x18, [sp, #-16]!
-    mov     x1, x19
-    mov     x0, #1
-    mov     x2, #64
-    mov     x16, #4
-    svc     #0x80
-    ldp     x19, x18, [sp], #16
-
+    // Call do_lithos_lex(x0=src_buf, x1=src_len)
     mov     x0, x19
     mov     x1, x18
     stp     x19, x18, [sp, #-16]!
     bl      do_lithos_lex
     ldp     x19, x18, [sp], #16
 
-    stp     x19, x18, [sp, #-16]!
-    adrp    x0, dbg_msg_tok@PAGE
-    add     x0, x0, dbg_msg_tok@PAGEOFF
-    mov     x1, x0
-    mov     x0, #1
-    mov     x2, #5
-    mov     x16, #4
-    svc     #0x80
-    // write raw token_count bytes to stdout
-    adrp    x0, ls_token_count@PAGE
-    add     x0, x0, ls_token_count@PAGEOFF
-    mov     x1, x0
-    mov     x0, #1
-    mov     x2, #8
-    mov     x16, #4
-    svc     #0x80
-    ldp     x19, x18, [sp], #16
-
+    // Call parse_tokens(x0=token_buf, x1=token_count, x2=src_buf)
     adrp    x0, ls_token_count@PAGE
     add     x0, x0, ls_token_count@PAGEOFF
     ldr     x1, [x0]
@@ -545,24 +488,7 @@ drv_lithos_pipeline:
     bl      parse_tokens
     ldp     x19, x18, [sp], #16
 
-    stp     x19, x18, [sp, #-16]!
-    adrp    x0, dbg_msg_code@PAGE
-    add     x0, x0, dbg_msg_code@PAGEOFF
-    mov     x1, x0
-    mov     x0, #1
-    mov     x2, #6
-    mov     x16, #4
-    svc     #0x80
-    // write raw code_pos bytes to stdout
-    adrp    x0, ls_code_pos@PAGE
-    add     x0, x0, ls_code_pos@PAGEOFF
-    mov     x1, x0
-    mov     x0, #1
-    mov     x2, #8
-    mov     x16, #4
-    svc     #0x80
-    ldp     x19, x18, [sp], #16
-
+    // Push (code_buf, code_pos) onto DTC stack for ELF writer
     adrp    x0, ls_code_buf@PAGE
     add     x0, x0, ls_code_buf@PAGEOFF
     str     x22, [x24, #-8]!
@@ -573,15 +499,6 @@ drv_lithos_pipeline:
     str     x22, [x24, #-8]!
     mov     x22, x0
     // ====== END NATIVE PIPELINE ======
-
-.data
-.align 3
-dbg_msg_lex:  .byte 76,69,88,10
-dbg_msg_len:  .byte 76,69,78,10
-dbg_msg_src:  .byte 83,82,67,10
-dbg_msg_tok:  .byte 84,79,75,58,10
-dbg_msg_code: .byte 67,79,68,69,58,10
-.text
 
     // Branch on target for write
     adrp x0, drv_target@PAGE

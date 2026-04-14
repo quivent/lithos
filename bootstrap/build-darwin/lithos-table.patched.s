@@ -262,14 +262,15 @@ advance:
     ret
 
 skip_newlines:
-1:  ldr     w0, [x19]
+    // Skip ONLY newline tokens — preserve indents for body detection
+1:  cmp     x19, x27
+    b.hs    3f
+    ldr     w0, [x19]
     cmp     w0, #TOK_NEWLINE
-    b.eq    2f
-    cmp     w0, #TOK_INDENT
-    b.eq    2f
-    ret
-2:  add     x19, x19, #TOK_STRIDE_SZ
+    b.ne    3f
+    add     x19, x19, #TOK_STRIDE_SZ
     b       1b
+3:  ret
 
 // at_line_end — check if current token ends a line
 //   Returns: Z flag set if at line end (NEWLINE, EOF, or past end)
@@ -1356,12 +1357,12 @@ handle_composition:
 
     // Parse body
     bl      skip_newlines
-    mov     w9, #4                  // default indent
     ldr     w0, [x19]
     cmp     w0, #TOK_INDENT
-    b.ne    1f
-    ldr     w9, [x19, #8]
-1:  bl      parse_body
+    b.ne    .Lcomp_no_body          // no indent → empty body
+    ldr     w9, [x19, #8]           // w9 = body indent level
+    bl      parse_body
+.Lcomp_no_body:
 
     // Emit epilogue: LDP X29, X30, [SP], #16; RET
     MOVI32  w0, 0xA8C17BFD

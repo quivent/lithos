@@ -12,7 +12,7 @@ Lithos is a language that compiles .ls source files directly to raw Hopper binar
 The compiler is written in Lithos (.ls), bootstrapped from pure ARM64 assembly (bootstrap/*.s). The runtime replaces libcuda.so with direct GPU register writes via vfio-pci. The entire system -- compiler, runtime, and inference kernels -- ships as one ARM64 binary.
 
 Target: **Qwen 3.5 27B** (Huihui-abliterated, GPTQ W4A16) on GH200 480GB.
-64 hybrid layers: 3 DeltaNet + 1 full attention x 16.
+64 hybrid layers: 48 DeltaNet + 16 full attention (pattern: 3+1, repeating x16).
 
 ## Architecture
 
@@ -47,15 +47,41 @@ No Python, no CUDA toolkit, no PyTorch, no Docker, no conda.
 
 ## Current State
 
-See PLAN.md for detailed progress. The compiler, kernels, and runtime are written.
+See STATUS.md for detailed progress. The compiler, kernels, and runtime are written.
 Bootstrap parser work is blocking first compilation.
 
 ## Documentation
 
-26 pages at docs-delta-mauve.vercel.app. Key documents:
-- docs/language/primitives.md -- grammar spec
-- docs/inference/model-config.md -- Qwen 3.5 27B configuration
-- PLAN.md -- execution plan and progress tracking
+**Specs and reference:**
+
+| Area | Key document | What it covers |
+|------|-------------|----------------|
+| **Language** | [docs/language/SPECIFICATION.md](docs/language/SPECIFICATION.md) | Complete language spec — grammar, primitives, type system, memory model |
+| **Grammar** | [docs/language/primitives.md](docs/language/primitives.md) | Quick reference — all symbols, examples, arch dictionaries |
+| **DeltaNet** | [docs/language/deltanet-lineage.md](docs/language/deltanet-lineage.md) | Full decomposition: framework kernels → Lithos → SASS |
+| **Model** | [docs/inference/model-config.md](docs/inference/model-config.md) | Qwen 3.5 27B dimensions, layer config, quantization |
+| **GSP/FSP** | [GSP/fsp_plan.md](GSP/fsp_plan.md) | FSP boot-command implementation plan (Step 7 of GPU boot) |
+| **Compiler** | [docs/compiler/design/architecture.md](docs/compiler/design/architecture.md) | Self-hosting compiler architecture |
+| **Runtime** | [docs/runtime/](docs/runtime/) | QMD, driver ABI, libcuda ioctl catalog, GSP native boot |
+| **Review** | [docs/language/REVIEW.md](docs/language/REVIEW.md) | Chuck Moore's review of the language design |
+
+**Full docs tree:**
+
+```
+docs/
+  language/        spec, grammar, vocabulary, tokenizer, lineage case study
+  compiler/
+    design/        architecture, regalloc, register strategy
+    bootstrap/     wave 2 bootstrap attempt reports
+  runtime/         QMD, driver ABI, ioctl catalog, GSP boot
+  inference/       DeltaNet ops, model config, hybrid layers
+  hardware/        GPU registers, performance analysis
+  encoding/        SASS instruction bit encodings
+  minds/           brilliant minds analyses
+  legacy/          deprecated PLAN, GAPS, PRIMITIVES
+```
+
+26 pages also live at [docs-delta-mauve.vercel.app](https://docs-delta-mauve.vercel.app).
 
 ## License
 
