@@ -60,6 +60,9 @@ msg_first8_len= . - msg_first8
 
 msg_newline:    .ascii "\n"
 
+msg_hbm_dead:   .ascii "probe_bar4: HBM read returned 0xFFFFFFFFFFFFFFFF -- BAR4/C2C not responding\n"
+msg_hbm_dead_len = . - msg_hbm_dead
+
 msg_open_fail:  .ascii "probe_bar4: failed to open resource4\n"
 msg_opf_len   = . - msg_open_fail
 
@@ -221,6 +224,20 @@ _start:
     // ---- Read test: read first 8 bytes ----
     ldr     x21, [x20]          // first 8 bytes of HBM
 
+    // CHECK: all-ones means BAR4/HBM not accessible (link down, C2C not ready)
+    cmn     x21, #1             // sets Z if x21 == 0xFFFFFFFFFFFFFFFF
+    b.ne    .hbm_read_ok
+    mov     x0, #2              // stderr
+    adrp    x1, msg_hbm_dead
+    add     x1, x1, :lo12:msg_hbm_dead
+    mov     x2, #msg_hbm_dead_len
+    mov     x8, #SYS_WRITE
+    svc     #0
+    mov     x0, #3
+    mov     x8, #SYS_EXIT
+    svc     #0
+.hbm_read_ok:
+
     mov     x0, #1
     adrp    x1, msg_first8
     add     x1, x1, :lo12:msg_first8
@@ -244,7 +261,7 @@ _start:
     svc     #0
 
     // ---- Write/readback test at offset 0x100000 (1MB in) ----
-    // Save original value, write pattern, read back, restore
+    // Save original value, write pattern, read back, compare, restore
     movz    x1, #0x0010, lsl #16           // 0x100000 = 1MB
     add     x24, x20, x1                   // x24 = bar4 + 1MB
 
@@ -256,9 +273,8 @@ _start:
 
     str     x22, [x24]              // write pattern
     dsb     sy                      // ensure visible
-    ldr     x0, [x24]              // read back
-
-    str     x21, [x24]              // restore original
+    ldr     x23, [x24]             // read back into x23 (callee-saved)
+    str     x21, [x24]             // restore original
     dsb     sy
 
     mov     x0, #1
@@ -268,16 +284,7 @@ _start:
     mov     x8, #SYS_WRITE
     svc     #0
 
-    // Compare readback
-    ldr     x0, [x24]
-    // Actually re-read the pattern before restore... we already restored.
-    // Let me just re-do: write, read, compare, restore
-    str     x22, [x24]
-    dsb     sy
-    ldr     x0, [x24]
-    cmp     x0, x22
-    str     x21, [x24]             // restore either way
-    dsb     sy
+    cmp     x23, x22               // compare readback vs pattern
     b.ne    .write_fail
 
     mov     x0, #1
@@ -335,8 +342,9 @@ _start:
 // Hex printers
 // ============================================================
 .print_hex64_nl:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x19, [sp, #16]      // save callee-saved x19
     mov     x19, x0
     lsr     x0, x19, #32
     bl      .print_hex32
@@ -348,7 +356,8 @@ _start:
     mov     x2, #1
     mov     x8, #SYS_WRITE
     svc     #0
-    ldp     x29, x30, [sp], #16
+    ldr     x19, [sp, #16]      // restore x19
+    ldp     x29, x30, [sp], #32
     ret
 
 .print_hex32:

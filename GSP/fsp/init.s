@@ -48,8 +48,8 @@
 // Timeout is ~100M iterations (~1-2s on Grace at ~3GHz), matching the
 // convention used in falcon_reset.s.
 
-// ---- Syscall numbers ----
-.equ SYS_WRITE,                     64
+// Shared constants (syscalls, etc.)
+.include "gsp_common.s"
 
 // ---- FSP register offsets (absolute BAR0 offsets) ----
 // Constructed via movz/movk at use sites; listed here for reference.

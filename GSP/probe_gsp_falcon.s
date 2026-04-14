@@ -178,7 +178,7 @@ _start:
     mov     x8, #SYS_MMAP
     svc     #0
     cmn     x0, #4096
-    b.hi    .mmap_fail
+    b.hs    .mmap_fail
     mov     x20, x0
 
     mov     x0, x19
@@ -196,7 +196,6 @@ _start:
     bl      .print_reg
 
     // Reset state interpretation
-    and     w0, w21, #0x700
     mov     x0, #1
     adrp    x1, msg_reset
     add     x1, x1, :lo12:msg_reset

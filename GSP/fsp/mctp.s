@@ -62,6 +62,7 @@
     .equ MCTP_VID_LO,           0xDE
     .equ MCTP_VID_HI,           0x10        // 0x10DE = NVIDIA
     .equ NVDM_TYPE_COT,         0x14
+    .equ NVDM_TYPE_FSP_RESPONSE, 0x15
 
     .equ FLAG_SOM_BIT,          7
     .equ FLAG_EOM_BIT,          6
@@ -222,6 +223,8 @@ mctp_packetize:
     .equ SEND_FRAME,            352
     .equ SEND_BUF_OFF,          0
     .equ SEND_SAVE_OFF,         256
+    .equ FSP_EMEM_CMDQ_LIMIT,  512         // max bytes in the command queue
+    .equ FSP_CMDQ_MAX_SLOTS,   2           // 512 / 256 = 2 packet slots
 
 mctp_send_payload:
     stp     x29, x30, [sp, #-SEND_FRAME]!
@@ -240,6 +243,9 @@ mctp_send_payload:
     mov     w23, w3                     // total bytes (for first-packet check)
     mov     w24, #0                     // packet sequence counter (2 bits)
     mov     w25, #0                     // packet index (for EMEM offset calc)
+    // w25 tracks the slot index within the current batch (0..FSP_CMDQ_MAX_SLOTS-1).
+    // When w25 reaches FSP_CMDQ_MAX_SLOTS we must flush (advance head, poll
+    // for FSP to drain) before continuing at slot 0.
 
     add     x26, sp, #SEND_BUF_OFF      // scratch buffer base
 
@@ -317,18 +323,44 @@ mctp_send_payload:
     bl      mctp_packetize
     mov     w27, w0                     // w27 = pkt_len (<=256)
 
-    // fsp_emem_write(bar0, channel, offset, src, len)
-    //   offset = pkt_index * 256 (each packet occupies a 256-B EMEM slot)
+    // FIX (CRITICAL): Check if the current batch of EMEM slots is full.
+    // The command queue is 512 bytes = 2 x 256-byte slots.  When w25
+    // reaches FSP_CMDQ_MAX_SLOTS, we must flush: advance QUEUE_HEAD so
+    // FSP processes the batch, then poll QUEUE_TAIL == QUEUE_HEAD to
+    // confirm FSP has consumed, then reset w25 to 0 to reuse slot 0.
+    cmp     w25, #FSP_CMDQ_MAX_SLOTS
+    b.lo    .Lsend_write_slot
+
+    // ---- flush current batch ----
     mov     x0, x19
     mov     w1, w20
-    lsl     w2, w25, #8                 // byte_offset = pkt_index * 256
+    lsl     w2, w25, #8                 // new_head = slots_used * 256
+    bl      fsp_queue_advance_head
+    cbnz    w0, .Lsend_fail
+
+    // Poll QUEUE_TAIL until it equals QUEUE_HEAD (FSP consumed the batch).
+    // Uses a bounded spin with ~100M iteration timeout (~1-2s).
+    mov     x0, x19
+    mov     w1, w20
+    bl      .Lsend_poll_drain
+    cbnz    w0, .Lsend_fail
+
+    // Reset slot index -- next write goes to EMEM offset 0.
+    mov     w25, #0
+
+.Lsend_write_slot:
+    // fsp_emem_write(bar0, channel, offset, src, len)
+    //   offset = slot_index * 256 (each packet occupies a 256-B EMEM slot)
+    mov     x0, x19
+    mov     w1, w20
+    lsl     w2, w25, #8                 // byte_offset = slot_index * 256
     mov     x3, x26
     mov     w4, w27
     bl      fsp_emem_write
     cbnz    w0, .Lsend_fail
 
     // Advance counters / cursors.
-    add     w25, w25, #1                // pkt_index++
+    add     w25, w25, #1                // slot_index++
     add     x21, x21, x28, uxtw         // payload cursor += chunk_len
     sub     w22, w22, w28
     add     w24, w24, #1                // seq++ (used modulo 4 next iter)
@@ -336,11 +368,11 @@ mctp_send_payload:
     cbnz    w22, .Lsend_loop
 
 .Lsend_done:
-    // Advance QUEUE_HEAD by num_packets * 256 (each packet is a full
-    // 256-byte EMEM slot). fsp_queue_advance_head(bar0, channel, new_head).
+    // Advance QUEUE_HEAD by the remaining slots written in the final batch.
+    // This signals FSP to process the last batch of packets.
     mov     x0, x19
     mov     w1, w20
-    lsl     w2, w25, #8                 // new_head = num_packets * 256
+    lsl     w2, w25, #8                 // new_head = slots_used * 256
     bl      fsp_queue_advance_head
     // Treat its return as the final status. Zero = success.
 
@@ -351,6 +383,45 @@ mctp_send_payload:
     ldp     x25, x26, [sp, #SEND_SAVE_OFF + 48]
     ldp     x27, x28, [sp, #SEND_SAVE_OFF + 64]
     ldp     x29, x30, [sp], #SEND_FRAME
+    ret
+
+// ---- Internal helper: poll QUEUE_TAIL == QUEUE_HEAD for drain ----
+// Inputs: x19 = bar0 (preserved), w20 = channel (preserved)
+// Returns: w0 = 0 on drain, -1 on timeout
+// Clobbers: x0-x9
+.Lsend_poll_drain:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+
+    // Materialize QUEUE_HEAD and QUEUE_TAIL addresses for channel w20.
+    // QUEUE_HEAD(ch) = bar0 + 0x008F2C00 + ch*8
+    // QUEUE_TAIL(ch) = bar0 + 0x008F2C04 + ch*8
+    mov     w8, #0x2C00
+    movk    w8, #0x008F, lsl #16        // w8 = QUEUE_HEAD_BASE
+    add     w8, w8, w20, lsl #3         // + ch*8
+    add     x4, x19, x8, uxtw          // x4 = &QUEUE_HEAD(ch)
+    add     x5, x4, #4                  // x5 = &QUEUE_TAIL(ch)
+
+    // Timeout: ~100M iterations (conservative ~1-2s on Grace)
+    mov     w6, #0xE100
+    movk    w6, #0x05F5, lsl #16        // w6 = 100000000
+.Lsend_drain_spin:
+    ldr     w7, [x4]                    // head
+    ldr     w8, [x5]                    // tail
+    cmp     w7, w8
+    b.eq    .Lsend_drain_ok
+    isb
+    subs    w6, w6, #1
+    b.ne    .Lsend_drain_spin
+
+    // Timeout
+    mov     w0, #-1
+    ldp     x29, x30, [sp], #16
+    ret
+
+.Lsend_drain_ok:
+    mov     w0, #0
+    ldp     x29, x30, [sp], #16
     ret
 
 .Lsend_fail:
@@ -400,10 +471,13 @@ mctp_depacketize:
     cmp     w9, #MCTP_VID_HI
     b.ne    .Ldepk_eframe
 
-    // Validate NVDM type (byte 7).
+    // Validate NVDM type (byte 7): accept COT (0x14) or FSP_RESPONSE (0x15).
     ldrb    w9, [x0, #7]
     cmp     w9, #NVDM_TYPE_COT
+    b.eq    .Ldepk_nvdm_ok
+    cmp     w9, #NVDM_TYPE_FSP_RESPONSE
     b.ne    .Ldepk_eframe
+.Ldepk_nvdm_ok:
 
     // payload_len = src_len - 8.
     sub     w10, w1, #MCTP_PKT_OVERHEAD_SOM

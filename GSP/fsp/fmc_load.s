@@ -9,22 +9,18 @@
 // Build:
 //   as -I /home/ubuntu/lithos/GSP/fsp -o fmc_load.o fmc_load.s
 
-.equ SYS_READ,      63
-.equ SYS_OPENAT,    56
-.equ SYS_CLOSE,     57
-.equ SYS_LSEEK,     62
-.equ SYS_WRITE,     64
-
-.equ AT_FDCWD,      -100
-.equ O_RDONLY,       0
-.equ SEEK_SET,       0
-.equ SEEK_END,       2
+// Shared constants (syscalls, file flags, etc.)
+.include "gsp_common.s"
 
 // Minimum expected sizes for validation
 .equ FMC_IMAGE_MIN_SIZE,    165448      // gsp_fmc_image.bin
 .equ FMC_HASH_MIN_SIZE,     48          // SHA-384 = 48 bytes
 .equ FMC_PUBKEY_MIN_SIZE,   384         // RSA-3072 = 384 bytes
 .equ FMC_SIG_MIN_SIZE,      384         // RSA-3072 = 384 bytes
+
+// Maximum allowed blob size -- 64 MB.  A larger file is corrupt or
+// malicious and would exhaust BAR4 memory.
+.equ FMC_MAX_SIZE,          0x4000000   // 64 MB
 
 // ============================================================
 // Data section
@@ -80,6 +76,10 @@ msg_fmc_small_err:  .asciz "fmc: file too small: "
 msg_fmc_small_err_len = . - msg_fmc_small_err - 1
 msg_fmc_read_err:   .asciz "fmc: read failed on "
 msg_fmc_read_err_len = . - msg_fmc_read_err - 1
+msg_fmc_alloc_err:  .asciz "fmc: hbm_alloc failed for "
+msg_fmc_alloc_err_len = . - msg_fmc_alloc_err - 1
+msg_fmc_toobig_err: .asciz "fmc: file exceeds 64MB limit: "
+msg_fmc_toobig_err_len = . - msg_fmc_toobig_err - 1
 msg_newline:        .asciz "\n"
 msg_fmc_ok:         .asciz "fmc: all FMC blobs loaded to BAR4\n"
 msg_fmc_ok_len = . - msg_fmc_ok - 1
@@ -143,6 +143,12 @@ _load_one_blob:
     cmp     x22, x20
     b.lt    .lob_too_small
 
+    // ---- 3b. Validate size <= FMC_MAX_SIZE (64 MB) ----
+    mov     x9, #(FMC_MAX_SIZE & 0xFFFF)
+    movk    x9, #((FMC_MAX_SIZE >> 16) & 0xFFFF), lsl #16
+    cmp     x22, x9
+    b.gt    .lob_too_big
+
     // ---- 4. Seek back to start ----
     mov     x8, SYS_LSEEK
     mov     x0, x21
@@ -153,6 +159,9 @@ _load_one_blob:
     // ---- 5. Allocate BAR4 region via hbm_alloc ----
     mov     x0, x22                 // size = file_size
     bl      hbm_alloc               // returns cpu_addr in x0, gpu_va in x1
+    cmn     x0, #1                  // hbm_alloc returns -1 on OOM
+    b.eq    .lob_alloc_fail
+    cbz     x0, .lob_alloc_fail     // also reject NULL cpu_va
     mov     x23, x0                 // x23 = cpu_va (BAR4 mmap'd)
     mov     x24, x1                 // x24 = phys_va (GPU VA)
 
@@ -173,7 +182,11 @@ _load_one_blob:
     b.lt    .lob_read_loop
 
 .lob_read_done:
-    // ---- 7. Close fd ----
+    // ---- 7a. Verify full file was read (short read = corrupt blob) ----
+    cmp     x25, x22
+    b.ne    .lob_short_read
+
+    // ---- 7b. Close fd ----
     mov     x8, SYS_CLOSE
     mov     x0, x21
     svc     #0
@@ -181,7 +194,7 @@ _load_one_blob:
     // ---- 8. Return success ----
     mov     x0, x23                 // cpu_va
     mov     x1, x24                 // phys_va
-    mov     x2, x22                 // size
+    mov     x2, x25                 // size (actual bytes read)
 
     ldp     x25, x26, [sp, #64]
     ldp     x23, x24, [sp, #48]
@@ -218,10 +231,9 @@ _load_one_blob:
     mov     x8, SYS_CLOSE
     mov     x0, x21
     svc     #0
-    mov     x0, x25
-    cmp     x0, #0
-    csel    x0, x0, x25, lt         // ensure negative
-    mov     x0, #-1                 // force negative
+    // x25 holds lseek return: negative errno, or 0 for empty file.
+    // Either way, return -1 to signal failure to caller.
+    mov     x0, #-1
     b       .lob_epilogue
 
 .lob_too_small:
@@ -230,6 +242,51 @@ _load_one_blob:
     adrp    x1, msg_fmc_small_err
     add     x1, x1, :lo12:msg_fmc_small_err
     mov     x2, msg_fmc_small_err_len
+    svc     #0
+    bl      .lob_print_path
+    mov     x8, SYS_CLOSE
+    mov     x0, x21
+    svc     #0
+    mov     x0, #-1
+    b       .lob_epilogue
+
+.lob_too_big:
+    mov     x8, SYS_WRITE
+    mov     x0, #2
+    adrp    x1, msg_fmc_toobig_err
+    add     x1, x1, :lo12:msg_fmc_toobig_err
+    mov     x2, msg_fmc_toobig_err_len
+    svc     #0
+    bl      .lob_print_path
+    mov     x8, SYS_CLOSE
+    mov     x0, x21
+    svc     #0
+    mov     x0, #-1
+    b       .lob_epilogue
+
+.lob_alloc_fail:
+    // hbm_alloc returned NULL -- cannot proceed
+    mov     x8, SYS_WRITE
+    mov     x0, #2
+    adrp    x1, msg_fmc_alloc_err
+    add     x1, x1, :lo12:msg_fmc_alloc_err
+    mov     x2, msg_fmc_alloc_err_len
+    svc     #0
+    bl      .lob_print_path
+    // Close the fd we opened
+    mov     x8, SYS_CLOSE
+    mov     x0, x21
+    svc     #0
+    mov     x0, #-1
+    b       .lob_epilogue
+
+.lob_short_read:
+    // EOF before full file was read -- blob is truncated/corrupt
+    mov     x8, SYS_WRITE
+    mov     x0, #2
+    adrp    x1, msg_fmc_read_err
+    add     x1, x1, :lo12:msg_fmc_read_err
+    mov     x2, msg_fmc_read_err_len
     svc     #0
     bl      .lob_print_path
     mov     x8, SYS_CLOSE

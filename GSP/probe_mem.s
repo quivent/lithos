@@ -85,6 +85,10 @@ str_tp:         .asciz "  Throughput         = "
     .align 2
 str_mbs:        .asciz " MB/s\n"
     .align 2
+str_allfs:      .asciz " (WARN: all-Fs, likely dead)\n"
+    .align 2
+str_skip:       .asciz "(skipped: offset exceeds BAR4 size)\n"
+    .align 2
 str_err_res:    .asciz "ERROR: cannot open resource file\n"
     .align 2
 str_err_bar4:   .asciz "ERROR: cannot open BAR4\n"
@@ -189,9 +193,15 @@ _start:
     mov     x0, x24
     mov     x1, 0
     bl      probe_offset
+    cmn     x1, #2
+    b.eq    .off0_allfs
     cbnz    x1, .off0_fail
     bl      print_hex16
     adr     x1, str_ok
+    b       .off0_pr
+.off0_allfs:
+    bl      print_hex16
+    adr     x1, str_allfs
     b       .off0_pr
 .off0_fail:
     bl      print_hex16
@@ -199,37 +209,59 @@ _start:
 .off0_pr:
     bl      print_str
 
-    // Probe offset 64GB
+    // Probe offset 64GB -- skip if BAR4 < 64GB
     adr     x1, str_off64
     bl      print_str
-    mov     x0, x24
     mov     x1, 64
     lsl     x1, x1, 30
+    cmp     x23, x1
+    b.ls    .off64_skip
+    mov     x0, x24
     bl      probe_offset
+    cmn     x1, #2
+    b.eq    .off64_allfs
     cbnz    x1, .off64_fail
     bl      print_hex16
     adr     x1, str_ok
     b       .off64_pr
+.off64_allfs:
+    bl      print_hex16
+    adr     x1, str_allfs
+    b       .off64_pr
 .off64_fail:
     bl      print_hex16
     adr     x1, str_fail
+    b       .off64_pr
+.off64_skip:
+    adr     x1, str_skip
 .off64_pr:
     bl      print_str
 
-    // Probe offset 96GB
+    // Probe offset 96GB -- skip if BAR4 < 96GB
     adr     x1, str_off96
     bl      print_str
-    mov     x0, x24
     mov     x1, 96
     lsl     x1, x1, 30
+    cmp     x23, x1
+    b.ls    .off96_skip
+    mov     x0, x24
     bl      probe_offset
+    cmn     x1, #2
+    b.eq    .off96_allfs
     cbnz    x1, .off96_fail
     bl      print_hex16
     adr     x1, str_ok
     b       .off96_pr
+.off96_allfs:
+    bl      print_hex16
+    adr     x1, str_allfs
+    b       .off96_pr
 .off96_fail:
     bl      print_hex16
     adr     x1, str_fail
+    b       .off96_pr
+.off96_skip:
+    adr     x1, str_skip
 .off96_pr:
     bl      print_str
 
@@ -246,8 +278,8 @@ _start:
     mov     x5, 0
     mov     x8, SYS_mmap
     svc     0
-    cmn     x0, 1
-    b.eq    err_bar4
+    cmn     x0, #4096
+    b.hi    err_bar4
     mov     x25, x0             // mapped ptr
 
     // Save original value for restore
@@ -345,8 +377,8 @@ _start:
     mov     x5, 0
     mov     x8, SYS_mmap
     svc     0
-    cmn     x0, 1
-    b.eq    err_bar4
+    cmn     x0, #4096
+    b.hi    err_bar4
     mov     x25, x0
 
     dsb     sy
@@ -484,7 +516,14 @@ probe_offset:
     mov     x8, SYS_munmap
     svc     0
 
+    // Check for PCIe all-Fs (0xFFFFFFFF_FFFFFFFF) = dead/unmapped region
     mov     x0, x20
+    mvn     x1, xzr             // x1 = 0xFFFFFFFFFFFFFFFF
+    cmp     x20, x1
+    b.ne    .probe_val_ok
+    mov     x1, -2              // status -2 = all-Fs (suspect dead read)
+    b       .probe_ret
+.probe_val_ok:
     mov     x1, 0
     b       .probe_ret
 

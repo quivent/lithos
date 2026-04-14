@@ -24,13 +24,12 @@
 // Build:
 //   as -o bcr_start.o bcr_start.s
 
-// FMC addresses are >> 3 (8-byte alignment) before writing to BCR regs
-.equ RISCV_BR_ADDR_SHIFT,   3
+// Shared constants (RISCV_BR_ADDR_SHIFT, BCR offsets, etc.)
+.include "gsp_common.s"
 
-// ---- Syscall numbers ----
+// ---- File-specific constants ----
 .equ SYS_RT_SIGPROCMASK, 135
 
-// ---- Signal masking constants ----
 .equ SIG_BLOCK,          0
 .equ SIG_UNBLOCK,        1
 
@@ -50,8 +49,14 @@ gsp_bcr_start:
     cbz     x1, .bcr_bad_params
 
     // Block SIGTERM/SIGINT/SIGHUP during critical MMIO
-    // Save bar0 base (x0) across syscall -- kernel preserves x1-x7
-    mov     x9, x0
+    // Save x0-x3 across the sigprocmask syscall. The setup clobbers
+    // x0 (SIG_BLOCK), x1 (sigmask ptr), x2 (oldset=0), x3 (sigsetsize=8),
+    // and x8 (syscall nr). x4-x5 are untouched before svc, so the kernel
+    // preserves them. x0-x3 must be explicitly saved/restored.
+    mov     x9, x0               // save bar0 base
+    mov     x10, x1              // save fmc_params_pa
+    mov     x11, x2              // save fmc_image_pa
+    mov     x12, x3              // save code_offset
     mov     x0, #SIG_BLOCK
     adr     x1, .Lbcr_sigmask    // pointer to signal set
     mov     x2, #0               // don't save old set
@@ -59,7 +64,10 @@ gsp_bcr_start:
     mov     x8, #SYS_RT_SIGPROCMASK
     svc     #0
     mov     x0, x9               // restore bar0 base
-    // Note: x1-x5 preserved by kernel across syscall
+    mov     x1, x10              // restore fmc_params_pa
+    mov     x2, x11              // restore fmc_image_pa
+    mov     x3, x12              // restore code_offset
+    // x4-x5 untouched before svc, preserved by kernel
 
     // ----------------------------------------------------------------
     // 1. Write fmc_params_pa to MAILBOX0/1
@@ -83,9 +91,15 @@ gsp_bcr_start:
     mov x8, #0x1678
     movk x8, #0x0011, lsl #16           // x8 = 0x111678 (BCR_FMCCODE_LO)
     str w6, [x0, x8]                    // BAR0+0x111678 <- fmc_code[31:0]
+    ldr w9, [x0, x8]                    // read-back BCR_FMCCODE_LO
+    cmp w9, w6
+    b.ne    .bcr_write_verify_fail
     lsr x7, x6, #32
     add x8, x8, #4                      // x8 = 0x11167C (BCR_FMCCODE_HI)
     str w7, [x0, x8]                    // BAR0+0x11167C <- fmc_code[63:32]
+    ldr w9, [x0, x8]                    // read-back BCR_FMCCODE_HI
+    cmp w9, w7
+    b.ne    .bcr_write_verify_fail
 
     // ----------------------------------------------------------------
     // 3. Program BCR_FMCDATA_LO/HI with (fmc_image_pa + data_offset) >> 3
@@ -96,9 +110,15 @@ gsp_bcr_start:
     mov x8, #0x1680
     movk x8, #0x0011, lsl #16           // x8 = 0x111680 (BCR_FMCDATA_LO)
     str w6, [x0, x8]                    // BAR0+0x111680 <- fmc_data[31:0]
+    ldr w9, [x0, x8]                    // read-back BCR_FMCDATA_LO
+    cmp w9, w6
+    b.ne    .bcr_write_verify_fail
     lsr x7, x6, #32
     add x8, x8, #4                      // x8 = 0x111684 (BCR_FMCDATA_HI)
     str w7, [x0, x8]                    // BAR0+0x111684 <- fmc_data[63:32]
+    ldr w9, [x0, x8]                    // read-back BCR_FMCDATA_HI
+    cmp w9, w7
+    b.ne    .bcr_write_verify_fail
 
     // ----------------------------------------------------------------
     // 4. Program BCR_PKCPARAM_LO/HI with (fmc_image_pa + manifest_offset) >> 3
@@ -109,9 +129,15 @@ gsp_bcr_start:
     mov x8, #0x1670
     movk x8, #0x0011, lsl #16           // x8 = 0x111670 (BCR_PKCPARAM_LO)
     str w6, [x0, x8]                    // BAR0+0x111670 <- manifest[31:0]
+    ldr w9, [x0, x8]                    // read-back BCR_PKCPARAM_LO
+    cmp w9, w6
+    b.ne    .bcr_write_verify_fail
     lsr x7, x6, #32
     add x8, x8, #4                      // x8 = 0x111674 (BCR_PKCPARAM_HI)
     str w7, [x0, x8]                    // BAR0+0x111674 <- manifest[63:32]
+    ldr w9, [x0, x8]                    // read-back BCR_PKCPARAM_HI
+    cmp w9, w7
+    b.ne    .bcr_write_verify_fail
 
     // Barrier: ensure all 6 BCR address writes are committed before lock
     dsb     st
@@ -129,6 +155,8 @@ gsp_bcr_start:
     str w7, [x0, x8]                    // BAR0+0x11166C <- LOCK|COHERENT
     dsb     st                           // drain stores before readback
     ldr w9, [x0, x8]                    // read back DMACFG
+    cmp w9, w7                          // verify full DMACFG value
+    b.ne    .bcr_write_verify_fail
     tbnz    w9, #31, .bcr_locked        // bit 31 set = locked, good
     // lock failed
     mov x0, #-2
@@ -173,8 +201,12 @@ gsp_bcr_start:
     mov     x0, x9
     ret
 
+.bcr_write_verify_fail:
+    mov x0, #-3                         // BCR address register write-back mismatch
+    b       .bcr_unblock_return         // unblock signals before returning
+
 .align 3
 .Lbcr_sigmask:
-    .quad   0x8006               // bits for SIGHUP(1), SIGINT(2), SIGTERM(15)
+    .quad   0x4003               // SIGHUP(1)=bit0, SIGINT(2)=bit1, SIGTERM(15)=bit14
 
 .size gsp_bcr_start, . - gsp_bcr_start

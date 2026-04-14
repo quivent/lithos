@@ -9,8 +9,8 @@
 // Build:
 //   as -o hbm_alloc.o hbm_alloc.s
 
-.equ ALIGN_2MB,      0x200000          // 2MB alignment boundary
-.equ ALIGN_2MB_MASK, 0x1FFFFF          // mask for 2MB alignment
+// Shared constants (ALIGN_2MB, ALIGN_2MB_MASK, etc.)
+.include "gsp_common.s"
 
 // ============================================================
 // Data section
@@ -39,8 +39,17 @@ hbm_limit:  .quad 0     // BAR4 upper bound (base + 256MB)
 //
 // Clobbers: none beyond storing to data section
 // ---------------------------------------------------------------
+.equ BAR4_WINDOW_SIZE, 0x10000000       // 256 MB
+
 .globl hbm_alloc_init
 hbm_alloc_init:
+    // Reject NULL bar4_base (caller should have checked, but defense-in-depth)
+    cbz     x0, .alloc_init_fail
+    // Validate initial offset: must be less than BAR4 window size (256 MB).
+    mov     x3, #BAR4_WINDOW_SIZE
+    cmp     x2, x3
+    b.hs    .init_bad_offset
+
     adrp    x3, hbm_base
     add     x3, x3, :lo12:hbm_base
     str     x0, [x3]               // hbm_base = mmap addr
@@ -63,6 +72,14 @@ hbm_alloc_init:
     mov     x0, #0                  // return 0 = success
     ret
 
+.alloc_init_fail:
+    mov     x0, #-1                // NULL bar4_base
+    ret
+
+.init_bad_offset:
+    mov     x0, #-1                // initial offset >= BAR4 window size
+    ret
+
 // ---------------------------------------------------------------
 // hbm_alloc -- bump-allocate from BAR4
 //
@@ -81,6 +98,10 @@ hbm_alloc_init:
 // ---------------------------------------------------------------
 .globl hbm_alloc
 hbm_alloc:
+    // Reject zero-size allocations -- a zero request should not
+    // silently round up to 2MB and waste HBM.
+    cbz     x0, .alloc_zero
+
     // Align size up to 2MB: size = (size + 0x1FFFFF) & ~0x1FFFFF
     mov     x9, x0                  // x9 = original requested size (for overflow check)
     mov     x2, ALIGN_2MB_MASK
@@ -104,6 +125,10 @@ hbm_alloc:
     // Compute new bump = aligned old bump + aligned size
     add     x5, x4, x0
 
+    // Overflow check: if new_bump < old_bump, the addition wrapped.
+    cmp     x5, x4
+    b.lo    .alloc_oom
+
     // bounds check: new_bump (cpu_va) must not exceed limit
     adrp    x6, hbm_limit
     add     x6, x6, :lo12:hbm_limit
@@ -119,6 +144,8 @@ hbm_alloc:
     str     x5, [x3]               // store new bump offset
     dsb     st                      // ensure store visible before caller writes to BAR4
 
+    mov     x9, x0                  // x9 = aligned_size (for zeroing)
+
     // cpu_addr = hbm_base + aligned old bump
     adrp    x3, hbm_base
     add     x3, x3, :lo12:hbm_base
@@ -131,6 +158,26 @@ hbm_alloc:
     ldr     x3, [x3]
     add     x1, x3, x4             // x1 = gpu_va (== physical addr)
 
+    // Zero the newly allocated region to prevent stale data leaks.
+    // Region is 2MB-aligned so always 16-byte aligned.  Use stp xzr,xzr
+    // for 16 bytes per iteration.
+    mov     x2, x0                  // x2 = zeroing cursor (cpu_addr)
+    add     x3, x2, x9             // x3 = end address (cpu_addr + size)
+.Lzero_loop:
+    cmp     x2, x3
+    b.hs    .Lzero_done
+    stp     xzr, xzr, [x2], #16    // zero 16 bytes, advance cursor
+    b       .Lzero_loop
+.Lzero_done:
+    dsb     st                      // fence zeroing stores before return
+
+    ret
+
+.alloc_zero:
+    // Zero-size request: return NULL to signal "nothing allocated".
+    // Callers should not use a zero-size allocation as a valid pointer.
+    mov     x0, #0
+    mov     x1, #0
     ret
 
 .alloc_oom:

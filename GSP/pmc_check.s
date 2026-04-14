@@ -18,14 +18,8 @@
 //                0x6 = Pascal, 0x7 = Volta, 0x8 = Turing,
 //                0x9 = Ampere, 0xA = Hopper, 0xB = Blackwell
 
-// ---- Syscall numbers ----
-.equ SYS_WRITE,     64
-
-// ---- PMC register offset ----
-.equ PMC_BOOT_0,    0x000000
-
-// ---- Expected architecture field ----
-.equ ARCH_HOPPER,   0xA
+// Shared constants (syscalls, PMC offsets, etc.)
+.include "gsp_common.s"
 
 // ============================================================
 // Data section
@@ -97,11 +91,12 @@ pmc_check:
     svc     #0
     add     sp, sp, #16
 
-    // ---- Extract architecture field: bits[23:20] ----
-    // ubfx w1, w20, #20, #4  -- extract 4 bits starting at bit 20
-    ubfx    w1, w20, #20, #4
+    // ---- Extract chip_id field: bits[31:20] ----
+    // GH100 (Hopper) reports 0x180 in this 12-bit field.
+    // Older GPUs used bits[23:20] only, but Hopper widened the encoding.
+    lsr     w1, w20, #20            // w1 = PMC_BOOT_0 >> 20 (bits[31:20])
 
-    // Compare against Hopper (0xA)
+    // Compare against GH100 Hopper (0x180)
     cmp     w1, #ARCH_HOPPER
     b.ne    .pmc_not_hopper
 

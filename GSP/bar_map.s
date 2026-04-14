@@ -9,16 +9,9 @@
 //   bar4_base      -- .quad, virtual address of BAR4 mmap (HBM window)
 //   bar4_phys      -- .quad, physical address of BAR4 (== GPU VA on GH200)
 //
-// PCI BDF is set by pci_bdf_slot below.  Default 0000:dd:00.0 (this host).
-// To change, patch the ASCII string before calling bar_map_init.
-//
-// !!! WARNING: THE BDF STRING "dd:00" IS DUPLICATED IN THREE PLACES !!!
-//     pci_bdf_slot   (bar0_path)
-//     pci_bdf_slot4  (bar4_path)
-//     pci_bdf_slot_r (resource_path)
-// ALL THREE MUST BE PATCHED TOGETHER.  Patching only one will cause
-// BAR0/BAR4/phys-parse to reference different devices.  See the
-// comments next to each copy below.
+// PCI BDF is defined once in pci_bdf_slot (5 bytes, e.g. "dd:00").
+// bdf_patch_all propagates it to all three sysfs path buffers at init.
+// To change, patch pci_bdf_slot before calling bar_map_init.
 //
 // Calling convention: ARM64 AAPCS.  Clobbers x0-x8, x16-x17.
 // Returns: x0 = 0 on success, -1 on failure.
@@ -27,33 +20,14 @@
 // Requires: root (or udev ACL on sysfs resource files).
 //           nvidia.ko must be unbound from the device.
 
-// ---- Syscall numbers (aarch64) ----
-.equ SYS_OPENAT,    56
-.equ SYS_CLOSE,     57
-.equ SYS_MMAP,      222
-.equ SYS_READ,      63
-.equ SYS_WRITE,     64
-.equ SYS_EXIT,      93
+// Shared constants (syscalls, mmap flags, BAR sizes, etc.)
+.include "gsp_common.s"
+
+// ---- File-specific constants (not in gsp_common.s) ----
 .equ SYS_FLOCK,     32
 
-// ---- flock constants ----
 .equ LOCK_EX,       2
 .equ LOCK_NB,       4
-
-// ---- Constants ----
-.equ AT_FDCWD,      -100
-.equ PROT_READ,     1
-.equ PROT_WRITE,    2
-.equ PROT_RW,       3
-.equ MAP_SHARED,    1
-
-// BAR0 = 16 MB = 0x1000000
-.equ BAR0_SIZE,     0x1000000
-
-// BAR4 = 128 GB = 0x2000000000
-// For initial bring-up, map a 256 MB window (sufficient for GSP boot
-// structures).  Full 128 GB can be mapped later if needed.
-.equ BAR4_SIZE_LO,  0x10000000        // 256 MB
 
 // ============================================================
 // Data section
@@ -64,26 +38,31 @@
 bar0_base:      .quad 0               // mmap'd BAR0 virtual address
 bar4_base:      .quad 0               // mmap'd BAR4 virtual address
 bar4_phys:      .quad 0               // BAR4 physical base (parsed from sysfs)
+bar0_lock_fd:   .quad -1              // BAR0 resource fd kept open for flock
 
 .global bar0_base
 .global bar4_base
 .global bar4_phys
 
-// PCI sysfs paths -- BDF slot is embedded in the string.
-// Default: 0000:dd:00.0 (observed on this GH200; typical integrated-GPU BDF
-// on older GH200 units is 0000:09:00.0 — patch all three .ascii sites below
-// to match `lspci -D | grep NVIDIA`).
-// Patch pci_bdf_slot (5 bytes "dd:00") to match your system.
+// PCI BDF slot -- single source of truth (5 bytes: "dd:00").
+// Patch this one label to change the device.  bdf_patch_all copies it
+// into all three sysfs path buffers before any opens.
+.global pci_bdf_slot
+pci_bdf_slot:
+    .ascii "dd:00"
+.equ PCI_BDF_LEN, . - pci_bdf_slot          // 5
+
+// PCI sysfs paths -- BDF bytes are patched at runtime by bdf_patch_all.
 bar0_path:
     .ascii "/sys/bus/pci/devices/0000:"
-pci_bdf_slot:                                // !!! BDF COPY 1/3 -- MUST MATCH pci_bdf_slot4 AND pci_bdf_slot_r !!!
+pci_bdf_bar0:
     .ascii "dd:00"
     .ascii ".0/resource0"
     .byte 0
 
 bar4_path:
     .ascii "/sys/bus/pci/devices/0000:"
-pci_bdf_slot4:                               // !!! BDF COPY 2/3 -- MUST MATCH pci_bdf_slot AND pci_bdf_slot_r !!!
+pci_bdf_bar4:
     .ascii "dd:00"
     .ascii ".0/resource4"
     .byte 0
@@ -91,7 +70,7 @@ pci_bdf_slot4:                               // !!! BDF COPY 2/3 -- MUST MATCH p
 // Physical address resource file (for parsing BAR4 phys addr)
 resource_path:
     .ascii "/sys/bus/pci/devices/0000:"
-pci_bdf_slot_r:                              // !!! BDF COPY 3/3 -- MUST MATCH pci_bdf_slot AND pci_bdf_slot4 !!!
+pci_bdf_res:
     .ascii "dd:00"
     .ascii ".0/resource"
     .byte 0
@@ -131,6 +110,9 @@ bar_map_init:
     stp     x19, x20, [sp, #16]
     stp     x21, x22, [sp, #32]
     stp     x23, x24, [sp, #48]
+
+    // Propagate pci_bdf_slot into all three path buffers
+    bl      bdf_patch_all
 
     // ---- Parse BAR4 physical address from /resource file ----
     // The sysfs "resource" file has one line per BAR.
@@ -179,10 +161,12 @@ bar_map_init:
     add     x1, x1, :lo12:bar0_base
     str     x0, [x1]
 
-    // Close BAR0 fd (mmap persists after close)
-    mov     x0, x19
-    mov     x8, #SYS_CLOSE
-    svc     #0
+    // Keep BAR0 fd open -- flock is released on close, and we need
+    // the lock to persist for the lifetime of the boot sequence.
+    // The mmap persists independently of the fd.
+    adrp    x1, bar0_lock_fd
+    add     x1, x1, :lo12:bar0_lock_fd
+    str     x19, [x1]              // store fd for later cleanup
 
     // Print success
     adrp    x1, msg_bar0_ok
@@ -261,11 +245,22 @@ bar_map_init:
     b       .bar_map_return
 
 .bar4_mmap_fail:
-    // mmap failed but fd in x19 is still open -- close it before erroring
+    // mmap failed but BAR4 fd in x19 is still open -- close it
     mov     x0, x19
     mov     x8, #SYS_CLOSE
     svc     #0
 .bar4_open_fail:
+    // Also close BAR0 lock fd (release flock so retries/other processes aren't blocked)
+    adrp    x1, bar0_lock_fd
+    add     x1, x1, :lo12:bar0_lock_fd
+    ldr     x0, [x1]
+    cmn     x0, #1                    // skip if bar0_lock_fd == -1 (never set)
+    b.eq    .bar4_skip_lockfd_close
+    mov     x8, #SYS_CLOSE
+    svc     #0
+    mov     x0, #-1
+    str     x0, [x1]                  // reset to -1
+.bar4_skip_lockfd_close:
     adrp    x1, msg_bar4_fail
     add     x1, x1, :lo12:msg_bar4_fail
     mov     x2, #msg_bar4_fail_len
@@ -435,6 +430,40 @@ parse_bar4_phys:
     ldp     x21, x22, [sp, #32]
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #48
+    ret
+
+// ------------------------------------------------------------
+// bdf_patch_all -- copy pci_bdf_slot (5 bytes) into the three
+//                  sysfs path buffers so only one copy needs
+//                  to be patched.
+// Clobbers: x3, x4, x5, x6
+// ------------------------------------------------------------
+.align 4
+bdf_patch_all:
+    adrp    x3, pci_bdf_slot
+    add     x3, x3, :lo12:pci_bdf_slot     // x3 = source BDF (5 bytes)
+    // Load source bytes once
+    ldr     w5, [x3]                        // first 4 bytes (unaligned OK on AArch64)
+    ldrb    w6, [x3, #4]                    // 5th byte
+
+    // Patch pci_bdf_bar0
+    adrp    x4, pci_bdf_bar0
+    add     x4, x4, :lo12:pci_bdf_bar0
+    str     w5, [x4]
+    strb    w6, [x4, #4]
+
+    // Patch pci_bdf_bar4
+    adrp    x4, pci_bdf_bar4
+    add     x4, x4, :lo12:pci_bdf_bar4
+    str     w5, [x4]
+    strb    w6, [x4, #4]
+
+    // Patch pci_bdf_res
+    adrp    x4, pci_bdf_res
+    add     x4, x4, :lo12:pci_bdf_res
+    str     w5, [x4]
+    strb    w6, [x4, #4]
+
     ret
 
 // ------------------------------------------------------------

@@ -29,18 +29,8 @@
 // Build:
 //   as -o poll_lockdown.o poll_lockdown.s
 
-// ---- BAR0 register offsets ----
-// These exceed str immediate range, so loaded into a register.
-//   NV_PFALCON_FALCON_HWCFG2: BAR0+0x1100F4
-//   NV_PGSP_FALCON_MAILBOX0:  BAR0+0x110040
-.equ PRIV_LOCKDOWN_BIT,     13          // bit 13 = RISCV_BR_PRIV_LOCKDOWN
-
-// ---- Syscall numbers (aarch64) ----
-.equ SYS_CLOCK_GETTIME,     113
-.equ CLOCK_MONOTONIC,       1
-
-// ---- Timeout ----
-.equ TIMEOUT_SECS,          30
+// Shared constants (syscalls, clock IDs, Falcon offsets, timeouts, etc.)
+.include "gsp_common.s"
 
 .text
 .globl gsp_poll_lockdown

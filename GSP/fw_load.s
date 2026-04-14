@@ -7,6 +7,24 @@
 //
 // No libc -- raw syscalls only.
 //
+// Error handling: all error paths return negative error codes to the
+// caller (boot.s) instead of calling SYS_EXIT directly.  This allows
+// boot.s to perform structured error reporting and cleanup.
+//
+// Error codes returned in x0:
+//   -1  = failed to open firmware file
+//   -2  = mmap of firmware file failed
+//   -3  = bad ELF magic
+//   -4  = lseek failed or file empty
+//   -5  = firmware file too small for ELF64 header
+//   -6  = not ELF64 little-endian
+//   -7  = section header table out of bounds
+//   -8  = e_shstrndx >= e_shnum
+//   -9  = .fwimage section not found
+//   -10 = .fwimage section out of file bounds
+//   -11 = code/data/manifest offset out of .fwimage bounds
+//   -12 = BAR4 allocation for firmware failed
+//
 // Build:
 //   as -o fw_load.o fw_load.s
 
@@ -88,6 +106,8 @@ msg_fw_fwimg_oob: .asciz "gsp: .fwimage section out of file bounds\n"
 msg_fw_fwimg_oob_len = . - msg_fw_fwimg_oob - 1
 msg_fw_seg_oob:   .asciz "gsp: code/data/manifest offset out of .fwimage bounds\n"
 msg_fw_seg_oob_len = . - msg_fw_seg_oob - 1
+msg_fw_alloc_err: .asciz "gsp: BAR4 allocation for firmware failed\n"
+msg_fw_alloc_err_len = . - msg_fw_alloc_err - 1
 msg_fw_ok:        .asciz "gsp: firmware loaded to BAR4\n"
 msg_fw_ok_len = . - msg_fw_ok - 1
 
@@ -113,8 +133,9 @@ msg_fw_ok_len = . - msg_fw_ok - 1
 //   8. Store results, close file
 //
 // Output:
-//   x0 = BAR4 physical address of firmware image
+//   x0 = BAR4 physical address of firmware image (>0 on success)
 //   x1 = total .fwimage size
+//   On error: x0 = negative error code (-1..-12)
 //   (detailed results in fw_* globals)
 //
 // Clobbers: x0-x15, x30 (calls hbm_alloc)
@@ -267,6 +288,12 @@ gsp_fw_load:
     bl      hbm_alloc                   // returns cpu_addr in x0, gpu_va in x1
     ldp     x22, x23, [sp], #16
 
+    // Check hbm_alloc success: x0 == (uint64)-1 means OOM.
+    // Also reject x0 == 0 as a null pointer (should never happen).
+    cmn     x0, #1                      // compare x0 with -1
+    b.eq    .fw_alloc_fail
+    cbz     x0, .fw_alloc_fail
+
     mov     x24, x0                     // x24 = BAR4 cpu addr
     mov     x25, x1                     // x25 = BAR4 phys addr (gpu_va)
 
@@ -380,69 +407,22 @@ gsp_fw_load:
     ret
 
 // ---------------------------------------------------------------
-// Error handlers
+// Error handlers -- print message, close fd if open, return
+// negative error code in x0 to caller.
 // ---------------------------------------------------------------
 
 .fw_open_fail:
+    // fd not open yet -- just print and return error
     mov     x8, #64
     mov     x0, #2
     adrp    x1, msg_fw_open_err
     add     x1, x1, :lo12:msg_fw_open_err
     mov     x2, msg_fw_open_err_len
     svc     #0
-    mov     x0, #1
-    mov     x8, SYS_EXIT
-    svc     #0
-
-.fw_elf_bad:
-    // Print error, close fd, exit.  fd is in x19.
-    // (munmap of x21 omitted: single-shot init, kernel reaps on SYS_EXIT.)
-    mov     x8, #64
-    mov     x0, #2
-    adrp    x1, msg_fw_elf_err
-    add     x1, x1, :lo12:msg_fw_elf_err
-    mov     x2, msg_fw_elf_err_len
-    svc     #0
-    mov     x8, SYS_CLOSE
-    mov     x0, x19
-    svc     #0
-    mov     x0, #2
-    mov     x8, SYS_EXIT
-    svc     #0
-
-.fw_section_not_found:
-    // Print error, close fd, exit.  fd is in x19.
-    // (munmap of x21 omitted: single-shot init, kernel reaps on SYS_EXIT.)
-    mov     x8, #64
-    mov     x0, #2
-    adrp    x1, msg_fw_sec_err
-    add     x1, x1, :lo12:msg_fw_sec_err
-    mov     x2, msg_fw_sec_err_len
-    svc     #0
-    mov     x8, SYS_CLOSE
-    mov     x0, x19
-    svc     #0
-    mov     x0, #3
-    mov     x8, SYS_EXIT
-    svc     #0
-
-.fw_elf_too_small:
-    // Print error, close fd, exit.  fd is in x19, no mmap yet.
-    mov     x8, #64
-    mov     x0, #2
-    adrp    x1, msg_fw_too_small
-    add     x1, x1, :lo12:msg_fw_too_small
-    mov     x2, msg_fw_too_small_len
-    svc     #0
-    mov     x8, SYS_CLOSE
-    mov     x0, x19
-    svc     #0
-    mov     x0, #6
-    mov     x8, SYS_EXIT
-    svc     #0
+    mov     x0, #-1
+    b       .fw_error_return
 
 .fw_lseek_fail:
-    // Print error, close fd, exit.  fd is in x19.
     mov     x8, #64                     // SYS_WRITE
     mov     x0, #2                      // stderr
     adrp    x1, msg_fw_lseek_err
@@ -452,12 +432,23 @@ gsp_fw_load:
     mov     x8, SYS_CLOSE
     mov     x0, x19
     svc     #0
-    mov     x0, #4
-    mov     x8, SYS_EXIT
+    mov     x0, #-4
+    b       .fw_error_return
+
+.fw_elf_too_small:
+    mov     x8, #64
+    mov     x0, #2
+    adrp    x1, msg_fw_too_small
+    add     x1, x1, :lo12:msg_fw_too_small
+    mov     x2, msg_fw_too_small_len
     svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #-5
+    b       .fw_error_return
 
 .fw_mmap_fail:
-    // Print error, close fd, exit.  fd is in x19.
     mov     x8, #64                     // SYS_WRITE
     mov     x0, #2                      // stderr
     adrp    x1, msg_fw_mmap_err
@@ -467,12 +458,23 @@ gsp_fw_load:
     mov     x8, SYS_CLOSE
     mov     x0, x19
     svc     #0
-    mov     x0, #5
-    mov     x8, SYS_EXIT
+    mov     x0, #-2
+    b       .fw_error_return
+
+.fw_elf_bad:
+    mov     x8, #64
+    mov     x0, #2
+    adrp    x1, msg_fw_elf_err
+    add     x1, x1, :lo12:msg_fw_elf_err
+    mov     x2, msg_fw_elf_err_len
     svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #-3
+    b       .fw_error_return
 
 .fw_bad_elf_class:
-    // Print error, close fd, exit.  fd is in x19.
     mov     x8, #64                     // SYS_WRITE
     mov     x0, #2                      // stderr
     adrp    x1, msg_bad_elf_class
@@ -482,12 +484,10 @@ gsp_fw_load:
     mov     x8, SYS_CLOSE
     mov     x0, x19
     svc     #0
-    mov     x0, #7
-    mov     x8, SYS_EXIT
-    svc     #0
+    mov     x0, #-6
+    b       .fw_error_return
 
 .fw_shdr_oob:
-    // Print error, close fd, exit.  fd is in x19.
     mov     x8, #64                     // SYS_WRITE
     mov     x0, #2                      // stderr
     adrp    x1, msg_fw_shdr_oob
@@ -497,12 +497,10 @@ gsp_fw_load:
     mov     x8, SYS_CLOSE
     mov     x0, x19
     svc     #0
-    mov     x0, #8
-    mov     x8, SYS_EXIT
-    svc     #0
+    mov     x0, #-7
+    b       .fw_error_return
 
 .fw_shstrndx_bad:
-    // Print error, close fd, exit.  fd is in x19.
     mov     x8, #64                     // SYS_WRITE
     mov     x0, #2                      // stderr
     adrp    x1, msg_fw_shstrndx
@@ -512,12 +510,23 @@ gsp_fw_load:
     mov     x8, SYS_CLOSE
     mov     x0, x19
     svc     #0
-    mov     x0, #9
-    mov     x8, SYS_EXIT
+    mov     x0, #-8
+    b       .fw_error_return
+
+.fw_section_not_found:
+    mov     x8, #64
+    mov     x0, #2
+    adrp    x1, msg_fw_sec_err
+    add     x1, x1, :lo12:msg_fw_sec_err
+    mov     x2, msg_fw_sec_err_len
     svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #-9
+    b       .fw_error_return
 
 .fw_fwimg_oob:
-    // Print error, close fd, exit.  fd is in x19.
     mov     x8, #64                     // SYS_WRITE
     mov     x0, #2                      // stderr
     adrp    x1, msg_fw_fwimg_oob
@@ -527,12 +536,10 @@ gsp_fw_load:
     mov     x8, SYS_CLOSE
     mov     x0, x19
     svc     #0
-    mov     x0, #10
-    mov     x8, SYS_EXIT
-    svc     #0
+    mov     x0, #-10
+    b       .fw_error_return
 
 .fw_seg_oob:
-    // Print error, close fd, exit.  fd is in x19.
     mov     x8, #64                     // SYS_WRITE
     mov     x0, #2                      // stderr
     adrp    x1, msg_fw_seg_oob
@@ -542,9 +549,35 @@ gsp_fw_load:
     mov     x8, SYS_CLOSE
     mov     x0, x19
     svc     #0
-    mov     x0, #11
-    mov     x8, SYS_EXIT
+    mov     x0, #-11
+    b       .fw_error_return
+
+.fw_alloc_fail:
+    mov     x8, #64                     // SYS_WRITE
+    mov     x0, #2                      // stderr
+    adrp    x1, msg_fw_alloc_err
+    add     x1, x1, :lo12:msg_fw_alloc_err
+    mov     x2, msg_fw_alloc_err_len
     svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #-12
+    b       .fw_error_return
+
+// ---------------------------------------------------------------
+// .fw_error_return -- common epilogue for all error paths.
+// x0 must already hold the negative error code.
+// Restores callee-saved registers and returns to caller.
+// ---------------------------------------------------------------
+.fw_error_return:
+    ldp     x27, x28, [sp, #80]
+    ldp     x25, x26, [sp, #64]
+    ldp     x23, x24, [sp, #48]
+    ldp     x21, x22, [sp, #32]
+    ldp     x19, x20, [sp, #16]
+    ldp     x29, x30, [sp], #96
+    ret
 
 // ---------------------------------------------------------------
 // .strcmp8 -- compare two null-terminated strings (short strings)

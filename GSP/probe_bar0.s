@@ -91,6 +91,9 @@ msg_unlock_len= . - msg_unlocked
 
 msg_newline:    .ascii "\n"
 
+msg_dev_dead:   .ascii "probe: PMC_BOOT_0=0xFFFFFFFF -- device not responding (link down?)\n"
+msg_dev_dead_len = . - msg_dev_dead
+
 msg_open_fail:  .ascii "probe: failed to open resource0\n"
 msg_open_flen = . - msg_open_fail
 
@@ -146,6 +149,21 @@ _start:
 
     // PMC_BOOT_0
     ldr     w21, [x20, #PMC_BOOT_0]
+
+    // CHECK: 0xFFFFFFFF means device not responding (link down, D3, BAR disabled)
+    cmn     w21, #1             // cmn w21, #1 sets Z if w21 == 0xFFFFFFFF
+    b.ne    .device_ok
+    mov     x0, #2              // stderr
+    adrp    x1, msg_dev_dead
+    add     x1, x1, :lo12:msg_dev_dead
+    mov     x2, #msg_dev_dead_len
+    mov     x8, #SYS_WRITE
+    svc     #0
+    mov     x0, #3
+    mov     x8, #SYS_EXIT
+    svc     #0
+.device_ok:
+
     adrp    x1, msg_pmc0
     add     x1, x1, :lo12:msg_pmc0
     mov     w2, #msg_pmc0_len

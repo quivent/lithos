@@ -16,8 +16,8 @@
 // Style: AAPCS64, raw SYS_WRITE syscalls, no libc. Hex printing pattern
 // adapted from GSP/pmc_check.s (pmc_print_hex32).
 
-// ---- Syscall numbers ----
-.equ SYS_WRITE,     64
+// Shared constants (syscalls, etc.)
+.include "gsp_common.s"
 
 // ---- FSP register offsets (from fsp_plan.md table) ----
 // NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(i) = 0x8F0320 + i*4  (4 dwords)
@@ -349,6 +349,10 @@ fsp_diag_dump_queues:
 
     mov     x19, x0                   // bar0
     uxtw    x20, w1                   // n_channels
+    // Clamp to 8 channels max to avoid reading past FSP queue registers
+    mov     x3, #8
+    cmp     x20, x3
+    csel    x20, x20, x3, le          // x20 = min(n_channels, 8)
     mov     x21, #0                   // i
 
     // Reserve 16 bytes of stack for a per-iter prefix buffer:

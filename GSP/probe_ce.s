@@ -35,6 +35,9 @@
 // Dead-register sentinels
 .equ BADF_UPPER,    0xBADF          // upper 16 bits of 0xBADFxxxx
 
+// Safety: max consecutive 0xFFFFFFFF reads before we assume PCIe link down
+.equ MAX_CONSEC_FF, 256
+
 .data
 .align 3
 
@@ -114,6 +117,9 @@ msg_live_len  = . - msg_live
 msg_dead:       .ascii "Dead (0/badf) skipped: "
 msg_dead_len  = . - msg_dead
 
+msg_pcie_down:  .ascii "\nERROR: PCIe link appears down (256+ consecutive 0xFFFFFFFF reads). Aborting scan.\n"
+msg_pcie_dlen = . - msg_pcie_down
+
 msg_open_fail:  .ascii "probe_ce: failed to open resource0\n"
 msg_open_flen = . - msg_open_fail
 
@@ -166,7 +172,7 @@ _start:
     mov     x8, #SYS_MMAP
     svc     #0
     cmn     x0, #4096
-    b.hi    .mmap_fail
+    b.hs    .mmap_fail
     mov     x20, x0             // x20 = bar0 base
 
     // Close fd
@@ -214,6 +220,8 @@ _start:
     mov     w26, #-1               // no block ID printed yet
     movz    x27, #0x0000
     movk    x27, #0x0014, lsl #16   // 0x140000
+    // w22 = consecutive 0xFFFFFFFF counter (PCIe-down detection)
+    mov     w22, #0
 
 .scan_loop:
     cmp     x23, x27
@@ -221,6 +229,16 @@ _start:
 
     // Read register
     ldr     w21, [x20, x23]
+
+    // PCIe link-down detection: 0xFFFFFFFF typically means bus error
+    cmn     w21, #1                 // cmp w21, #0xFFFFFFFF
+    b.ne    .not_all_ff
+    add     w22, w22, #1
+    cmp     w22, #MAX_CONSEC_FF
+    b.ge    .pcie_down
+    b       .skip_dead
+.not_all_ff:
+    mov     w22, #0                 // reset consecutive counter
 
     // Check if dead: 0x00000000
     cbz     w21, .skip_dead
@@ -383,6 +401,15 @@ _start:
 .scan_next:
     add     x23, x23, #SCAN_STEP
     b       .scan_loop
+
+.pcie_down:
+    // PCIe link appears down -- abort scan early
+    mov     x0, #2
+    adrp    x1, msg_pcie_down
+    add     x1, x1, :lo12:msg_pcie_down
+    mov     x2, #msg_pcie_dlen
+    mov     x8, #SYS_WRITE
+    svc     #0
 
 .scan_done:
     // ---- Summary ----

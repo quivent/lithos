@@ -29,8 +29,10 @@
 // success, negative on failure.  Does not SYS_EXIT; caller (boot.s)
 // prints a banner and decides how to abort.
 
-.equ SYS_WRITE,     64
+// Shared constants (syscalls, etc.)
+.include "gsp_common.s"
 
+// ---- File-specific constants ----
 .equ COT_PAYLOAD_SIZE,      860      // NVDM_PAYLOAD_COT, byte-exact
 .equ COT_SCRATCH_STACK,     896      // 860 bumped to 16-byte alignment
 .equ RESP_BUF_SIZE,         256      // one EMEM packet
@@ -214,6 +216,13 @@ fsp_send_boot_commands:
 
     // =============================================================
     // Step 3: mctp_send_payload(bar0, ch=0, nvdm=COT, buf, len)
+    //
+    // The 860-byte COT payload requires 4 MCTP packets (248+252+252+108)
+    // but the EMEM command queue is only 512 bytes (2 x 256-byte slots).
+    // mctp_send_payload handles queue-boundary flushing internally: after
+    // filling the queue's worth of slots, it advances QUEUE_HEAD, polls
+    // for FSP to drain (QUEUE_TAIL == QUEUE_HEAD), then resumes writing
+    // at EMEM offset 0.
     // =============================================================
     adrp    x1, msg_fsp_send
     add     x1, x1, :lo12:msg_fsp_send

@@ -84,7 +84,7 @@
 
 // ---- PMC (Power Management Controller) ----
 .equ PMC_BOOT_0,            0x000000    // pmc_check.s
-.equ ARCH_HOPPER,           0xA        // pmc_check.s (bits[23:20])
+.equ ARCH_HOPPER,           0x180      // pmc_check.s -- GH100 chip_id in bits[31:20]
 
 // ---- Falcon engine control ----
 .equ FALCON_ENGINE,         0x1103C0    // falcon_reset.s
@@ -195,7 +195,31 @@
 .equ SH_SIZE,               0x20
 
 // ============================================================
-// 8. Shared data strings -- INTENTIONALLY NOT DEFINED HERE
+// 8. Watchdog / boot timeout constants
+//
+// The GSP boot sequence has no hardware watchdog.  If any step hangs
+// (e.g., an MMIO read to a powered-down BAR returns 0xFFFFFFFF
+// forever), the process blocks indefinitely and the machine appears
+// hung.
+//
+// Recommendation: boot.s should capture CLOCK_MONOTONIC at _start
+// and check elapsed time between steps.  If total boot exceeds
+// BOOT_WATCHDOG_SECS, abort with a diagnostic and exit.
+//
+// A host-side watchdog (systemd WatchdogSec= on the lithos service,
+// or an external ipmitool-based monitor) is the ultimate safety net
+// -- it can power-cycle the node if the GSP process wedges.
+//
+// These constants define the timeout budget.  Individual step
+// timeouts (FALCON_TIMEOUT_SECS=5, TIMEOUT_SECS=30, etc.) should
+// sum to less than BOOT_WATCHDOG_SECS.
+// ============================================================
+
+.equ BOOT_WATCHDOG_SECS,    120     // 2 minutes for full 9-step boot
+.equ STEP_WATCHDOG_SECS,    45      // max time for any single step
+
+// ============================================================
+// 9. Shared data strings -- INTENTIONALLY NOT DEFINED HERE
 //
 // Today the only cross-file duplicated data label is:
 //
