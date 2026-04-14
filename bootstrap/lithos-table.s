@@ -1248,14 +1248,27 @@ handle_composition:
     MOVI32  w0, 0x910003FD
     bl      emit32
 
-    // Parse arguments — identifiers before the colon
+    // Parse arguments — identifiers (or type keywords used as names) before the colon
     mov     w8, #0                  // arg index
 .Lcomp_args:
     ldr     w0, [x19]
     cmp     w0, #TOK_COLON
     b.eq    .Lcomp_args_done
+    // Accept IDENT or type keywords as parameter names
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_PTR
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_F32
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_U32
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_F16
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_S32
+    b.eq    .Lcomp_arg_ok
+    b       parse_error
+.Lcomp_arg_ok:
 
     // Register arg as param with register = arg index (X0-X7)
     mov     w1, #KIND_PARAM
