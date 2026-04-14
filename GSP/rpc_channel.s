@@ -35,77 +35,13 @@
 // Build:
 //   as -o rpc_channel.o rpc_channel.s
 
-// ---- BAR0 register offsets ----
-// Source: dev_gsp.h -- NV_PGSP_QUEUE_HEAD/TAIL
-// NV_PGSP_QUEUE_HEAD(i) = 0x110C00 + i*8
-// NV_PGSP_QUEUE_TAIL(i) = 0x110C04 + i*8
-// These are loaded into registers because they exceed str immediate range.
+// Shared constants (RPC codes, handles, classes, queue offsets, etc.)
+.include "gsp_common.s"
 
-// Queue indices (from message_queue_cpu.c)
-.equ RPC_CMD_QUEUE_IDX,     0           // command queue = index 0
-.equ RPC_STAT_QUEUE_IDX,    1           // status queue = index 1
+// ---- File-specific constants ----
 
-// ---- USERD layout (BAR0 offset, from clc86f.h) ----
-// USERD base for channel i = BAR0+0xFC0000 + chid*0x200
-.equ USERD_STRIDE,          0x200
-.equ USERD_GPPUT_OFF,       0x08C       // GPPut offset within USERD page
-
-// ---- GPFIFO sizing ----
-.equ GPFIFO_SIZE,           8192        // 8KB = 1024 entries * 8 bytes each
-.equ GPFIFO_ALIGN,          4096        // page-aligned
-
-// ---- RPC function codes (from rpc_global_enums.h) ----
-.equ NV_VGPU_MSG_FUNCTION_ALLOC_ROOT,        2
-.equ NV_VGPU_MSG_FUNCTION_ALLOC_DEVICE,      3
-.equ NV_VGPU_MSG_FUNCTION_ALLOC_CHANNEL_DMA, 6
-.equ NV_VGPU_MSG_FUNCTION_ALLOC_SUBDEVICE,   19
-
-// ---- RPC object classes ----
-.equ NV01_DEVICE_0,         0x0080      // device class
-.equ NV20_SUBDEVICE_0,      0x20E0      // subdevice class
-.equ HOPPER_CHANNEL_GPFIFO, 0xC86F      // Hopper GPFIFO channel class
-
-// ---- RPC object handles (arbitrary, must be unique per client) ----
-.equ HANDLE_CLIENT,         0x01000000
-.equ HANDLE_DEVICE,         0x01000001
-.equ HANDLE_SUBDEVICE,      0x01000002
-.equ HANDLE_CHANNEL,        0x01000003
-
-// Subdevice alloc payload: { u32 hClient, u32 hParent, u32 hSubdevice, u32 hClass }
-.equ RPC_ALLOC_SUBDEVICE_PAYLOAD, 16
-
-// ---- RPC message header layout (from rpc_headers.h / message_queue_cpu.c) ----
-// Each RPC message in the command queue has:
-//   offset 0x00: u32 header_version (= 0x02000000)
-//   offset 0x04: u32 signature      (= 0x43505246 "FRPC")
-//   offset 0x08: u32 length         (total message length in bytes)
-//   offset 0x0C: u32 function       (RPC function code)
-//   offset 0x10: u32 rpc_result     (0 on send, filled by GSP on reply)
-//   offset 0x14: u32 rpc_result_private (reserved)
-//   offset 0x18: u32 sequence       (monotonic sequence number)
-//   offset 0x1C: u32 spare          (0)
-//   offset 0x20: ... payload (function-specific)
-.equ RPC_HDR_SIZE,          0x20        // 32 bytes header
-
-// ---- RPC payload sizes ----
-.equ RPC_ALLOC_ROOT_PAYLOAD,    4       // u32 hClient
-.equ RPC_ALLOC_DEVICE_PAYLOAD,  12      // u32 hClient, u32 hDevice, u32 hClass
-.equ RPC_ALLOC_CHANNEL_PAYLOAD, 40      // full channel alloc params
-
-// ---- Message queue element wrapper ----
-// Source: msgq library -- each element has an 8-byte wrapper:
-//   offset 0x00: u32 element_length
-//   offset 0x04: u32 flags (0 = normal)
-//   offset 0x08: ... RPC header + payload
-.equ MQ_ELEM_HDR_SIZE,     8
-
-// ---- Timeout ----
-.equ RPC_POLL_LIMIT,       10000000    // ~10M iterations with MMIO = ~10s
-
-// ---- Queue buffer size ----
-// Each RPC queue (cmd and status) is a 256 KB ring in BAR4. head/tail are
-// byte offsets that must wrap modulo this size. For the 3-4 init RPCs used
-// here this will not actually wrap, but wrap-around is handled defensively.
+// Queue buffer size: each RPC queue (cmd and status) is a 256 KB ring in BAR4.
+// head/tail are byte offsets that wrap modulo this size.
 .equ QUEUE_BUF_SIZE,       0x40000     // 256 KB
 
 .data

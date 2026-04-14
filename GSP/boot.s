@@ -39,8 +39,10 @@
 //   5 = gsp_rpc_alloc_channel failed
 //   6 = hbm_alloc_init failed
 //   7 = gsp_bcr_start failed
-//   8 = gsp_fw_load failed (if it returns error instead of SYS_EXIT)
-// Note: fw_load.s also exits directly with codes 1-12 on internal errors.
+//   8 = gsp_fw_load failed (returns negative error code to caller)
+//  97 = GPU gone from PCI bus (PMC_BOOT_0 == 0xFFFFFFFF)
+//  98 = stack corruption detected
+//  99 = boot watchdog expired (>120s)
 
 .equ SYS_WRITE,          64
 .equ SYS_EXIT,           93
@@ -53,6 +55,13 @@
 // the 120s outer envelope catches unexpected hangs (e.g., MMIO
 // returning 0xFFFFFFFF from a powered-down BAR).
 .equ BOOT_WATCHDOG_SECS, 120
+
+// ---- Stack sentinel (canary) ----
+// Magic value stored 4KB below initial SP at _start.
+// boot_check_watchdog verifies it hasn't been overwritten.
+.equ STACK_SENTINEL_OFFSET, 4096
+.equ STACK_SENTINEL_LO, 0xCAFEF00D
+.equ STACK_SENTINEL_HI, 0xDEADBEEF
 
 // ---- BAR4 reservation for GSP control structures ----
 // The first 64 MB of BAR4 is reserved for things the bump allocator
@@ -167,6 +176,12 @@ msg_success_len      = . - msg_success - 1
 msg_watchdog:        .asciz "gsp: FATAL: boot watchdog expired (>120s) -- aborting\n"
 msg_watchdog_len     = . - msg_watchdog - 1
 
+msg_gpu_gone:        .asciz "gsp: FATAL: GPU gone from PCI bus (PMC_BOOT_0 == 0xFFFFFFFF) -- aborting\n"
+msg_gpu_gone_len     = . - msg_gpu_gone - 1
+
+msg_stack_corrupt:   .asciz "gsp: FATAL: stack corruption detected -- aborting\n"
+msg_stack_corrupt_len = . - msg_stack_corrupt - 1
+
 // Bump pointer variable for RPC channel allocator (separate from the
 // main hbm_alloc bump -- RPC module owns its own u64 cursor).
 .align 3
@@ -176,6 +191,10 @@ rpc_bump:   .quad 0
 .align 3
 boot_start_sec:  .quad 0
 
+// Address where stack sentinel was planted (set once at _start).
+.align 3
+stack_sentinel_addr:  .quad 0
+
 // ============================================================
 // Text section
 // ============================================================
@@ -184,6 +203,18 @@ boot_start_sec:  .quad 0
 
 .global _start
 _start:
+    // ---- Plant stack sentinel (canary) 4KB below initial SP ----
+    // Store 0xDEADBEEFCAFEF00D at [sp - 4096] as a corruption guard.
+    sub     x9, sp, #STACK_SENTINEL_OFFSET    // x9 = sentinel address
+    adrp    x10, stack_sentinel_addr
+    add     x10, x10, :lo12:stack_sentinel_addr
+    str     x9, [x10]                         // save address for later checks
+    movz    x11, #STACK_SENTINEL_LO & 0xFFFF
+    movk    x11, #(STACK_SENTINEL_LO >> 16) & 0xFFFF, lsl #16
+    movk    x11, #STACK_SENTINEL_HI & 0xFFFF, lsl #32
+    movk    x11, #(STACK_SENTINEL_HI >> 16) & 0xFFFF, lsl #48
+    str     x11, [x9]                         // plant sentinel
+
     // ---- Capture boot start time for watchdog ----
     sub     sp, sp, #16                       // allocate timespec on stack
     mov     x0, #CLOCK_MONOTONIC
@@ -204,7 +235,10 @@ _start:
 
     // =============================================================
     // Step 1: bar_map_init
+    // (No GPU liveness check -- BAR0 not mapped yet)
     // =============================================================
+    bl      boot_check_watchdog
+
     adrp    x1, msg_step1_begin
     add     x1, x1, :lo12:msg_step1_begin
     mov     x2, #msg_step1_begin_len
@@ -221,7 +255,11 @@ _start:
 
     // =============================================================
     // Step 2: pmc_check
+    // GPU liveness check before MMIO step
     // =============================================================
+    bl      boot_check_watchdog
+    bl      boot_check_gpu_live
+
     adrp    x1, msg_step2_begin
     add     x1, x1, :lo12:msg_step2_begin
     mov     x2, #msg_step2_begin_len
@@ -238,7 +276,11 @@ _start:
 
     // =============================================================
     // Step 3: falcon_reset
+    // GPU liveness check before MMIO step
     // =============================================================
+    bl      boot_check_watchdog
+    bl      boot_check_gpu_live
+
     adrp    x1, msg_step3_begin
     add     x1, x1, :lo12:msg_step3_begin
     mov     x2, #msg_step3_begin_len
@@ -258,7 +300,10 @@ _start:
     //   x0 = BAR4 CPU virtual address (from bar4_base)
     //   x1 = BAR4 physical base       (from bar4_phys, == GPU VA on GH200)
     //   x2 = initial bump offset      (skip 64MB reserved for GSP metadata)
+    // (No GPU liveness check -- metadata init, no BAR0 MMIO)
     // =============================================================
+    bl      boot_check_watchdog
+
     adrp    x1, msg_step4_begin
     add     x1, x1, :lo12:msg_step4_begin
     mov     x2, #msg_step4_begin_len
@@ -282,19 +327,22 @@ _start:
 
     // =============================================================
     // Step 5: gsp_fw_load -- parse ELF, copy .fwimage into BAR4
-    //   Returns: x0 = BAR4 phys addr of firmware image
+    //   Returns: x0 = BAR4 phys addr of firmware image (>0 on success)
     //            x1 = total .fwimage size
+    //   On error: x0 = negative error code (-1..-12)
     //   Side effects: fw_bar4_cpu, fw_bar4_phys, fw_code_offset,
     //                 fw_data_offset, fw_manifest_offset populated.
+    // (No GPU liveness check -- file I/O + BAR4 memcpy, no BAR0 MMIO)
     // =============================================================
+    bl      boot_check_watchdog
+
     adrp    x1, msg_step5_begin
     add     x1, x1, :lo12:msg_step5_begin
     mov     x2, #msg_step5_begin_len
     bl      boot_print
 
     bl      gsp_fw_load
-    // gsp_fw_load currently SYS_EXITs on failure internally, but add a
-    // defensive check: if it ever changes to return errors, catch them.
+    // gsp_fw_load returns negative error codes on failure.
     cmp     x0, #0
     b.le    .boot_fail_step5
 
@@ -313,7 +361,11 @@ _start:
     //   x3 = code_offset  (= fw_code_offset)
     //   x4 = data_offset  (= fw_data_offset)
     //   x5 = manifest_offset (= fw_manifest_offset)
+    // GPU liveness check before MMIO step
     // =============================================================
+    bl      boot_check_watchdog
+    bl      boot_check_gpu_live
+
     adrp    x1, msg_step6_begin
     add     x1, x1, :lo12:msg_step6_begin
     mov     x2, #msg_step6_begin_len
@@ -357,6 +409,8 @@ _start:
     bl      boot_print
 
     // Step 7: FSP -- not yet wired
+    bl      boot_check_watchdog
+
     adrp    x1, msg_step_fsp_todo
     add     x1, x1, :lo12:msg_step_fsp_todo
     mov     x2, #msg_step_fsp_todo_len
@@ -367,7 +421,11 @@ _start:
     //   x0 = bar0 base
     //   x1 = fmc_params_pa (must match what BCR step passed)
     //   Returns 0 on success, -1 on timeout, -2 on FMC error.
+    // GPU liveness check before MMIO step
     // =============================================================
+    bl      boot_check_watchdog
+    bl      boot_check_gpu_live
+
     adrp    x1, msg_step7_begin
     add     x1, x1, :lo12:msg_step7_begin
     mov     x2, #msg_step7_begin_len
@@ -395,7 +453,11 @@ _start:
     //   x4 = gpfifo_gpu_va (0 -> bump-allocate)
     //   x5 = gpfifo_entries
     //   x6 = pointer to u64 bump variable
+    // GPU liveness check before MMIO step
     // =============================================================
+    bl      boot_check_watchdog
+    bl      boot_check_gpu_live
+
     adrp    x1, msg_step8_begin
     add     x1, x1, :lo12:msg_step8_begin
     mov     x2, #msg_step8_begin_len
@@ -528,6 +590,32 @@ _start:
     svc     #0
 
 // ------------------------------------------------------------
+// boot_gpu_gone -- GPU disappeared from PCI bus
+// Prints fatal message and exits with code 97.
+// ------------------------------------------------------------
+.boot_gpu_gone:
+    adrp    x1, msg_gpu_gone
+    add     x1, x1, :lo12:msg_gpu_gone
+    mov     x2, #msg_gpu_gone_len
+    bl      boot_print
+    mov     x0, #97
+    mov     x8, #SYS_EXIT
+    svc     #0
+
+// ------------------------------------------------------------
+// boot_stack_corrupt -- stack sentinel was overwritten
+// Prints fatal message and exits with code 98.
+// ------------------------------------------------------------
+.boot_stack_corrupt:
+    adrp    x1, msg_stack_corrupt
+    add     x1, x1, :lo12:msg_stack_corrupt
+    mov     x2, #msg_stack_corrupt_len
+    bl      boot_print
+    mov     x0, #98
+    mov     x8, #SYS_EXIT
+    svc     #0
+
+// ------------------------------------------------------------
 // boot_print -- write x2 bytes from x1 to stderr (fd 2)
 // Clobbers: x0, x8
 // ------------------------------------------------------------
@@ -560,4 +648,35 @@ boot_check_watchdog:
     sub     x9, x9, x10                       // elapsed
     cmp     x9, #BOOT_WATCHDOG_SECS
     b.ge    .boot_watchdog_fail
+
+    // ---- Check stack sentinel ----
+    adrp    x10, stack_sentinel_addr
+    add     x10, x10, :lo12:stack_sentinel_addr
+    ldr     x10, [x10]                        // x10 = sentinel address
+    ldr     x9, [x10]                         // x9 = current value at sentinel
+    // Reconstruct expected magic 0xDEADBEEFCAFEF00D
+    movz    x10, #STACK_SENTINEL_LO & 0xFFFF
+    movk    x10, #(STACK_SENTINEL_LO >> 16) & 0xFFFF, lsl #16
+    movk    x10, #STACK_SENTINEL_HI & 0xFFFF, lsl #32
+    movk    x10, #(STACK_SENTINEL_HI >> 16) & 0xFFFF, lsl #48
+    cmp     x9, x10
+    b.ne    .boot_stack_corrupt
+    ret
+
+// ------------------------------------------------------------
+// boot_check_gpu_live -- read PMC_BOOT_0 (BAR0 + 0x0) and abort
+// if the value is 0xFFFFFFFF (GPU gone from PCI bus).
+// Must only be called AFTER bar_map_init (step 1) succeeds.
+// If GPU is gone, jumps to .boot_gpu_gone (no return).
+// Otherwise returns normally.
+// Clobbers: x9, x10
+// ------------------------------------------------------------
+.align 4
+boot_check_gpu_live:
+    adrp    x9, bar0_base
+    add     x9, x9, :lo12:bar0_base
+    ldr     x9, [x9]                          // x9 = BAR0 CPU va
+    ldr     w10, [x9]                          // w10 = PMC_BOOT_0 (BAR0+0x0)
+    cmn     w10, #1                            // compare w10 with 0xFFFFFFFF
+    b.eq    .boot_gpu_gone
     ret

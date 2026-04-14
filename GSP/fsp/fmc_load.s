@@ -9,22 +9,18 @@
 // Build:
 //   as -I /home/ubuntu/lithos/GSP/fsp -o fmc_load.o fmc_load.s
 
-.equ SYS_READ,      63
-.equ SYS_OPENAT,    56
-.equ SYS_CLOSE,     57
-.equ SYS_LSEEK,     62
-.equ SYS_WRITE,     64
-
-.equ AT_FDCWD,      -100
-.equ O_RDONLY,       0
-.equ SEEK_SET,       0
-.equ SEEK_END,       2
+// Shared constants (syscalls, file flags, etc.)
+.include "gsp_common.s"
 
 // Minimum expected sizes for validation
 .equ FMC_IMAGE_MIN_SIZE,    165448      // gsp_fmc_image.bin
 .equ FMC_HASH_MIN_SIZE,     48          // SHA-384 = 48 bytes
 .equ FMC_PUBKEY_MIN_SIZE,   384         // RSA-3072 = 384 bytes
 .equ FMC_SIG_MIN_SIZE,      384         // RSA-3072 = 384 bytes
+
+// Maximum allowed blob size -- 64 MB.  A larger file is corrupt or
+// malicious and would exhaust BAR4 memory.
+.equ FMC_MAX_SIZE,          0x4000000   // 64 MB
 
 // ============================================================
 // Data section
@@ -82,6 +78,8 @@ msg_fmc_read_err:   .asciz "fmc: read failed on "
 msg_fmc_read_err_len = . - msg_fmc_read_err - 1
 msg_fmc_alloc_err:  .asciz "fmc: hbm_alloc failed for "
 msg_fmc_alloc_err_len = . - msg_fmc_alloc_err - 1
+msg_fmc_toobig_err: .asciz "fmc: file exceeds 64MB limit: "
+msg_fmc_toobig_err_len = . - msg_fmc_toobig_err - 1
 msg_newline:        .asciz "\n"
 msg_fmc_ok:         .asciz "fmc: all FMC blobs loaded to BAR4\n"
 msg_fmc_ok_len = . - msg_fmc_ok - 1
@@ -144,6 +142,12 @@ _load_one_blob:
     // ---- 3. Validate size >= min_size ----
     cmp     x22, x20
     b.lt    .lob_too_small
+
+    // ---- 3b. Validate size <= FMC_MAX_SIZE (64 MB) ----
+    mov     x9, #(FMC_MAX_SIZE & 0xFFFF)
+    movk    x9, #((FMC_MAX_SIZE >> 16) & 0xFFFF), lsl #16
+    cmp     x22, x9
+    b.gt    .lob_too_big
 
     // ---- 4. Seek back to start ----
     mov     x8, SYS_LSEEK
@@ -238,6 +242,20 @@ _load_one_blob:
     adrp    x1, msg_fmc_small_err
     add     x1, x1, :lo12:msg_fmc_small_err
     mov     x2, msg_fmc_small_err_len
+    svc     #0
+    bl      .lob_print_path
+    mov     x8, SYS_CLOSE
+    mov     x0, x21
+    svc     #0
+    mov     x0, #-1
+    b       .lob_epilogue
+
+.lob_too_big:
+    mov     x8, SYS_WRITE
+    mov     x0, #2
+    adrp    x1, msg_fmc_toobig_err
+    add     x1, x1, :lo12:msg_fmc_toobig_err
+    mov     x2, msg_fmc_toobig_err_len
     svc     #0
     bl      .lob_print_path
     mov     x8, SYS_CLOSE

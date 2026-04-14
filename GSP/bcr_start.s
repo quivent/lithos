@@ -24,13 +24,12 @@
 // Build:
 //   as -o bcr_start.o bcr_start.s
 
-// FMC addresses are >> 3 (8-byte alignment) before writing to BCR regs
-.equ RISCV_BR_ADDR_SHIFT,   3
+// Shared constants (RISCV_BR_ADDR_SHIFT, BCR offsets, etc.)
+.include "gsp_common.s"
 
-// ---- Syscall numbers ----
+// ---- File-specific constants ----
 .equ SYS_RT_SIGPROCMASK, 135
 
-// ---- Signal masking constants ----
 .equ SIG_BLOCK,          0
 .equ SIG_UNBLOCK,        1
 
@@ -92,9 +91,15 @@ gsp_bcr_start:
     mov x8, #0x1678
     movk x8, #0x0011, lsl #16           // x8 = 0x111678 (BCR_FMCCODE_LO)
     str w6, [x0, x8]                    // BAR0+0x111678 <- fmc_code[31:0]
+    ldr w9, [x0, x8]                    // read-back BCR_FMCCODE_LO
+    cmp w9, w6
+    b.ne    .bcr_write_verify_fail
     lsr x7, x6, #32
     add x8, x8, #4                      // x8 = 0x11167C (BCR_FMCCODE_HI)
     str w7, [x0, x8]                    // BAR0+0x11167C <- fmc_code[63:32]
+    ldr w9, [x0, x8]                    // read-back BCR_FMCCODE_HI
+    cmp w9, w7
+    b.ne    .bcr_write_verify_fail
 
     // ----------------------------------------------------------------
     // 3. Program BCR_FMCDATA_LO/HI with (fmc_image_pa + data_offset) >> 3
@@ -105,9 +110,15 @@ gsp_bcr_start:
     mov x8, #0x1680
     movk x8, #0x0011, lsl #16           // x8 = 0x111680 (BCR_FMCDATA_LO)
     str w6, [x0, x8]                    // BAR0+0x111680 <- fmc_data[31:0]
+    ldr w9, [x0, x8]                    // read-back BCR_FMCDATA_LO
+    cmp w9, w6
+    b.ne    .bcr_write_verify_fail
     lsr x7, x6, #32
     add x8, x8, #4                      // x8 = 0x111684 (BCR_FMCDATA_HI)
     str w7, [x0, x8]                    // BAR0+0x111684 <- fmc_data[63:32]
+    ldr w9, [x0, x8]                    // read-back BCR_FMCDATA_HI
+    cmp w9, w7
+    b.ne    .bcr_write_verify_fail
 
     // ----------------------------------------------------------------
     // 4. Program BCR_PKCPARAM_LO/HI with (fmc_image_pa + manifest_offset) >> 3
@@ -118,22 +129,18 @@ gsp_bcr_start:
     mov x8, #0x1670
     movk x8, #0x0011, lsl #16           // x8 = 0x111670 (BCR_PKCPARAM_LO)
     str w6, [x0, x8]                    // BAR0+0x111670 <- manifest[31:0]
+    ldr w9, [x0, x8]                    // read-back BCR_PKCPARAM_LO
+    cmp w9, w6
+    b.ne    .bcr_write_verify_fail
     lsr x7, x6, #32
     add x8, x8, #4                      // x8 = 0x111674 (BCR_PKCPARAM_HI)
     str w7, [x0, x8]                    // BAR0+0x111674 <- manifest[63:32]
+    ldr w9, [x0, x8]                    // read-back BCR_PKCPARAM_HI
+    cmp w9, w7
+    b.ne    .bcr_write_verify_fail
 
     // Barrier: ensure all 6 BCR address writes are committed before lock
     dsb     st
-
-    // Read-back BCR_FMCCODE_LO to verify BAR0 writes are landing.
-    // If this doesn't match, the other 5 BCR regs are suspect too.
-    mov x8, #0x1678
-    movk x8, #0x0011, lsl #16           // x8 = 0x111678 (BCR_FMCCODE_LO)
-    ldr w9, [x0, x8]
-    add x6, x2, x3                      // recompute expected: fmc_image_pa + code_offset
-    lsr x6, x6, #RISCV_BR_ADDR_SHIFT
-    cmp w9, w6
-    b.ne    .bcr_write_verify_fail
 
     // ----------------------------------------------------------------
     // 5. Lock BCR and set DMA target = coherent sysmem
@@ -148,6 +155,8 @@ gsp_bcr_start:
     str w7, [x0, x8]                    // BAR0+0x11166C <- LOCK|COHERENT
     dsb     st                           // drain stores before readback
     ldr w9, [x0, x8]                    // read back DMACFG
+    cmp w9, w7                          // verify full DMACFG value
+    b.ne    .bcr_write_verify_fail
     tbnz    w9, #31, .bcr_locked        // bit 31 set = locked, good
     // lock failed
     mov x0, #-2

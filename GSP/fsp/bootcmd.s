@@ -29,8 +29,10 @@
 // success, negative on failure.  Does not SYS_EXIT; caller (boot.s)
 // prints a banner and decides how to abort.
 
-.equ SYS_WRITE,     64
+// Shared constants (syscalls, etc.)
+.include "gsp_common.s"
 
+// ---- File-specific constants ----
 .equ COT_PAYLOAD_SIZE,      860      // NVDM_PAYLOAD_COT, byte-exact
 .equ COT_SCRATCH_STACK,     896      // 860 bumped to 16-byte alignment
 .equ RESP_BUF_SIZE,         256      // one EMEM packet

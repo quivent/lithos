@@ -21,11 +21,10 @@
 //
 // Calling convention: ARM64 AAPCS.  Raw Linux syscalls, no libc.
 
-// ---- Syscall numbers (aarch64) ----
-.equ SYS_WRITE,     64
-.equ SYS_EXIT,      93
+// Shared constants (syscalls, etc.)
+.include "gsp_common.s"
 
-// ---- File descriptors ----
+// ---- File-specific constants ----
 .equ FD_STDOUT,     1
 .equ FD_STDERR,     2
 

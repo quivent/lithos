@@ -26,13 +26,13 @@
 // ---------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------
+// Shared constants (syscalls, clock IDs, etc.)
+.include "gsp_common.s"
+
+// ---- File-specific constants ----
 .equ MSGQ_HEAD_BASE,        0x8F2C80        // + ch*8
 .equ MSGQ_TAIL_BASE,        0x8F2C84        // + ch*8
 .equ MSGQ_STRIDE,           8
-
-.equ SYS_CLOCK_GETTIME,     113
-.equ SYS_WRITE,             64
-.equ CLOCK_MONOTONIC,       1
 .equ STDERR_FD,             2
 
 // ---- FSP status codes (kern_fsp_retval.h) ----

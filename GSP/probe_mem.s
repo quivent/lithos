@@ -87,6 +87,8 @@ str_mbs:        .asciz " MB/s\n"
     .align 2
 str_allfs:      .asciz " (WARN: all-Fs, likely dead)\n"
     .align 2
+str_skip:       .asciz "(skipped: offset exceeds BAR4 size)\n"
+    .align 2
 str_err_res:    .asciz "ERROR: cannot open resource file\n"
     .align 2
 str_err_bar4:   .asciz "ERROR: cannot open BAR4\n"
@@ -207,12 +209,14 @@ _start:
 .off0_pr:
     bl      print_str
 
-    // Probe offset 64GB
+    // Probe offset 64GB -- skip if BAR4 < 64GB
     adr     x1, str_off64
     bl      print_str
-    mov     x0, x24
     mov     x1, 64
     lsl     x1, x1, 30
+    cmp     x23, x1
+    b.ls    .off64_skip
+    mov     x0, x24
     bl      probe_offset
     cmn     x1, #2
     b.eq    .off64_allfs
@@ -227,15 +231,20 @@ _start:
 .off64_fail:
     bl      print_hex16
     adr     x1, str_fail
+    b       .off64_pr
+.off64_skip:
+    adr     x1, str_skip
 .off64_pr:
     bl      print_str
 
-    // Probe offset 96GB
+    // Probe offset 96GB -- skip if BAR4 < 96GB
     adr     x1, str_off96
     bl      print_str
-    mov     x0, x24
     mov     x1, 96
     lsl     x1, x1, 30
+    cmp     x23, x1
+    b.ls    .off96_skip
+    mov     x0, x24
     bl      probe_offset
     cmn     x1, #2
     b.eq    .off96_allfs
@@ -250,6 +259,9 @@ _start:
 .off96_fail:
     bl      print_hex16
     adr     x1, str_fail
+    b       .off96_pr
+.off96_skip:
+    adr     x1, str_skip
 .off96_pr:
     bl      print_str
 

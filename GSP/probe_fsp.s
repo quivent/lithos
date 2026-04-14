@@ -18,6 +18,7 @@
 .equ SYS_MMAP,      222
 .equ SYS_WRITE,     64
 .equ SYS_EXIT,      93
+.equ SYS_NANOSLEEP, 101
 .equ AT_FDCWD,      -100
 .equ PROT_READ,     1
 .equ MAP_SHARED,    1
@@ -79,22 +80,44 @@ msg_t_eq_len  = . - msg_t_eq
 
 msg_newline:    .ascii "\n"
 
+msg_scratch2:   .ascii "SCRATCH_GROUP_2[0] re-read = 0x"
+msg_s2_len    = . - msg_scratch2
+
+msg_fsp_alive:  .ascii "  -> FSP ALIVE (scratch changed between reads)\n"
+msg_alive_len = . - msg_fsp_alive
+
+msg_fsp_stall:  .ascii "  WARNING: FSP may be STALLED (scratch static, all queues idle)\n"
+msg_stall_len = . - msg_fsp_stall
+
+msg_fsp_qact:   .ascii "  -> Queue activity detected (head != tail on some channel)\n"
+msg_qact_len  = . - msg_fsp_qact
+
 msg_open_fail:  .ascii "probe_fsp: failed to open resource0\n"
 msg_opf_len   = . - msg_open_fail
 
 msg_mmap_fail:  .ascii "probe_fsp: mmap failed\n"
 msg_mmf_len   = . - msg_mmap_fail
 
+// timespec for nanosleep: 0 seconds, 100000000 nanoseconds (100ms)
+.align 3
+sleep_req:
+    .quad   0                   // tv_sec  = 0
+    .quad   100000000           // tv_nsec = 100ms
+sleep_rem:
+    .quad   0                   // tv_sec  (remainder)
+    .quad   0                   // tv_nsec (remainder)
+
 .text
 .align 4
 
 .global _start
 _start:
-    stp     x29, x30, [sp, #-64]!
+    stp     x29, x30, [sp, #-80]!
     mov     x29, sp
     stp     x19, x20, [sp, #16]
     stp     x21, x22, [sp, #32]
     stp     x23, x24, [sp, #48]
+    stp     x25, x26, [sp, #64]
 
     // Print header
     mov     x0, #1
@@ -133,7 +156,7 @@ _start:
     mov     x8, #SYS_CLOSE
     svc     #0
 
-    // ---- THERM_I2CS_SCRATCH ----
+    // ---- THERM_I2CS_SCRATCH (first read) ----
     movz    x1, #0x00BC
     movk    x1, #0x0002, lsl #16
     ldr     w21, [x20, x1]
@@ -150,6 +173,95 @@ _start:
     and     w0, w21, #0xFF
     cmp     w0, #0xFF
     b.ne    .fsp_not_ok
+
+    // Low byte is 0xFF -- but could be stale.  Double-read with delay.
+
+    // Also read SCRATCH_GROUP_2[0] before the sleep
+    movz    x1, #0x0320
+    movk    x1, #0x008F, lsl #16   // 0x8F0320
+    ldr     w25, [x20, x1]         // w25 = scratch_group_2[0] first read
+
+    // Sleep ~100ms via nanosleep syscall
+    adrp    x0, sleep_req
+    add     x0, x0, :lo12:sleep_req
+    adrp    x1, sleep_rem
+    add     x1, x1, :lo12:sleep_rem
+    mov     x8, #SYS_NANOSLEEP
+    svc     #0
+
+    // Re-read SCRATCH_GROUP_2[0] after sleep
+    movz    x1, #0x0320
+    movk    x1, #0x008F, lsl #16
+    ldr     w26, [x20, x1]         // w26 = scratch_group_2[0] second read
+
+    // Print second scratch value
+    mov     x0, #1
+    adrp    x1, msg_scratch2
+    add     x1, x1, :lo12:msg_scratch2
+    mov     x2, #msg_s2_len
+    mov     x8, #SYS_WRITE
+    svc     #0
+    mov     w0, w26
+    bl      .print_hex32_nl
+
+    // Check if scratch changed between reads
+    cmp     w25, w26
+    b.ne    .fsp_confirmed_alive
+
+    // Scratch is static.  Check all queue head/tail pairs for activity.
+    // w27 = activity flag (0 = all idle, 1 = some channel has head != tail)
+    mov     w27, #0
+
+    // Check EMEM queues (4 channels)
+    mov     w23, #0
+.dbl_q_loop:
+    cmp     w23, #4
+    b.ge    .dbl_q_done
+    movz    x22, #0x2C00
+    movk    x22, #0x008F, lsl #16
+    lsl     w24, w23, #3
+    add     x22, x22, x24, uxtw
+    ldr     w0, [x20, x22]         // HEAD
+    add     x22, x22, #4
+    ldr     w1, [x20, x22]         // TAIL
+    cmp     w0, w1
+    b.eq    .dbl_q_next
+    mov     w27, #1                 // activity detected
+.dbl_q_next:
+    add     w23, w23, #1
+    b       .dbl_q_loop
+.dbl_q_done:
+
+    // Check MSGQ queues (4 channels)
+    mov     w23, #0
+.dbl_mq_loop:
+    cmp     w23, #4
+    b.ge    .dbl_mq_done
+    movz    x22, #0x2C80
+    movk    x22, #0x008F, lsl #16
+    lsl     w24, w23, #3
+    add     x22, x22, x24, uxtw
+    ldr     w0, [x20, x22]         // HEAD
+    add     x22, x22, #4
+    ldr     w1, [x20, x22]         // TAIL
+    cmp     w0, w1
+    b.eq    .dbl_mq_next
+    mov     w27, #1                 // activity detected
+.dbl_mq_next:
+    add     w23, w23, #1
+    b       .dbl_mq_loop
+.dbl_mq_done:
+
+    // Evaluate: scratch static + all queues idle => likely stalled
+    cbz     w27, .fsp_likely_stalled
+
+    // Scratch static but queues have pending work -- some life
+    mov     x0, #1
+    adrp    x1, msg_fsp_qact
+    add     x1, x1, :lo12:msg_fsp_qact
+    mov     x2, #msg_qact_len
+    mov     x8, #SYS_WRITE
+    svc     #0
     mov     x0, #1
     adrp    x1, msg_fsp_ok
     add     x1, x1, :lo12:msg_fsp_ok
@@ -157,6 +269,33 @@ _start:
     mov     x8, #SYS_WRITE
     svc     #0
     b       .fsp_chk_done
+
+.fsp_confirmed_alive:
+    mov     x0, #1
+    adrp    x1, msg_fsp_alive
+    add     x1, x1, :lo12:msg_fsp_alive
+    mov     x2, #msg_alive_len
+    mov     x8, #SYS_WRITE
+    svc     #0
+    mov     x0, #1
+    adrp    x1, msg_fsp_ok
+    add     x1, x1, :lo12:msg_fsp_ok
+    mov     x2, #msg_fsp_ok_len
+    mov     x8, #SYS_WRITE
+    svc     #0
+    b       .fsp_chk_done
+
+.fsp_likely_stalled:
+    // scratch 0xFF but static, all queues idle => dead-after-boot
+    mov     x0, #1
+    adrp    x1, msg_fsp_stall
+    add     x1, x1, :lo12:msg_fsp_stall
+    mov     x2, #msg_stall_len
+    mov     x8, #SYS_WRITE
+    svc     #0
+    mov     w28, #1
+    b       .fsp_chk_done_noset
+
 .fsp_not_ok:
     mov     x0, #1
     adrp    x1, msg_fsp_no
@@ -274,10 +413,11 @@ _start:
 .mq_done:
 
     // ---- Exit with status based on FSP boot check ----
+    ldp     x25, x26, [sp, #64]
     ldp     x23, x24, [sp, #48]
     ldp     x21, x22, [sp, #32]
     ldp     x19, x20, [sp, #16]
-    ldp     x29, x30, [sp], #64
+    ldp     x29, x30, [sp], #80
     mov     x0, x28              // 0 if FSP OK, 1 if not booted
     mov     x8, #SYS_EXIT
     svc     #0

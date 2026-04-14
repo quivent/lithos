@@ -66,18 +66,45 @@ TEST_PROBE_SRCS := test_probe.s bar_map.s pmc_check.s gsp_common.s
 TEST_PROBE_OBJS := $(TEST_PROBE_SRCS:.s=.o)
 TEST_PROBE_BIN  := gsp_probe
 
-.PHONY: all clean check test
+# Test alloc binary — exercises hbm_alloc arithmetic (no hardware needed).
+TEST_ALLOC_SRCS := test_alloc.s hbm_alloc.s gsp_common.s
+TEST_ALLOC_OBJS := $(TEST_ALLOC_SRCS:.s=.o)
+TEST_ALLOC_BIN  := test_alloc
+
+# Test falcon binary — read-only Falcon register probe.
+TEST_FALCON_SRCS := test_falcon_read.s bar_map.s gsp_common.s
+TEST_FALCON_OBJS := $(TEST_FALCON_SRCS:.s=.o)
+TEST_FALCON_BIN  := test_falcon
+
+# Emergency reset binary — standalone falcon recovery tool.
+RESET_SRCS := reset_main.s bar_map.s gsp_common.s falcon_reset.s
+RESET_OBJS := $(RESET_SRCS:.s=.o)
+RESET_BIN  := gsp_reset
+
+.PHONY: all clean check test reset
 all: $(BIN)
 
 # Link all .o into the final executable. No libc.
 $(BIN): $(OBJS)
 	$(LD) -o $@ $(OBJS)
 
-# Test probe binary (read-only, safe to run).
-test: $(TEST_PROBE_BIN)
+# Test binaries (probe and falcon require root + GPU; alloc is pure arithmetic).
+test: $(TEST_PROBE_BIN) $(TEST_ALLOC_BIN) $(TEST_FALCON_BIN)
 
 $(TEST_PROBE_BIN): $(TEST_PROBE_OBJS)
 	$(LD) -o $@ $(TEST_PROBE_OBJS)
+
+$(TEST_ALLOC_BIN): $(TEST_ALLOC_OBJS)
+	$(LD) -o $@ $(TEST_ALLOC_OBJS)
+
+$(TEST_FALCON_BIN): $(TEST_FALCON_OBJS)
+	$(LD) -o $@ $(TEST_FALCON_OBJS)
+
+# Emergency reset binary (standalone falcon recovery).
+reset: $(RESET_BIN)
+
+$(RESET_BIN): $(RESET_OBJS)
+	$(LD) -o $@ $(RESET_OBJS)
 
 # Assemble each .s into .o. Rebuilds if the .s changes.
 # Every .o depends on gsp_common.s because constant definitions
@@ -87,7 +114,7 @@ $(TEST_PROBE_BIN): $(TEST_PROBE_OBJS)
 
 # Syntax check: assemble every source (including test) to /dev/null.
 # sort -u deduplicates files shared between SRCS and TEST_PROBE_SRCS.
-ALL_SRCS := $(sort $(SRCS) $(TEST_PROBE_SRCS))
+ALL_SRCS := $(sort $(SRCS) $(TEST_PROBE_SRCS) $(TEST_ALLOC_SRCS) $(TEST_FALCON_SRCS) $(RESET_SRCS))
 check:
 	@set -e; for f in $(ALL_SRCS); do \
 		echo "check $$f"; \
@@ -96,4 +123,4 @@ check:
 	@echo "All $(words $(ALL_SRCS)) sources pass syntax check."
 
 clean:
-	rm -f $(OBJS) $(TEST_PROBE_OBJS) $(BIN) $(TEST_PROBE_BIN)
+	rm -f $(OBJS) $(TEST_PROBE_OBJS) $(TEST_ALLOC_OBJS) $(TEST_FALCON_OBJS) $(RESET_OBJS) $(BIN) $(TEST_PROBE_BIN) $(TEST_ALLOC_BIN) $(TEST_FALCON_BIN) $(RESET_BIN)

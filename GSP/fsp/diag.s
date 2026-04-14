@@ -16,8 +16,8 @@
 // Style: AAPCS64, raw SYS_WRITE syscalls, no libc. Hex printing pattern
 // adapted from GSP/pmc_check.s (pmc_print_hex32).
 
-// ---- Syscall numbers ----
-.equ SYS_WRITE,     64
+// Shared constants (syscalls, etc.)
+.include "gsp_common.s"
 
 // ---- FSP register offsets (from fsp_plan.md table) ----
 // NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(i) = 0x8F0320 + i*4  (4 dwords)

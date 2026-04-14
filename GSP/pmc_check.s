@@ -18,14 +18,8 @@
 //                0x6 = Pascal, 0x7 = Volta, 0x8 = Turing,
 //                0x9 = Ampere, 0xA = Hopper, 0xB = Blackwell
 
-// ---- Syscall numbers ----
-.equ SYS_WRITE,     64
-
-// ---- PMC register offset ----
-.equ PMC_BOOT_0,    0x000000
-
-// ---- Expected architecture field ----
-.equ ARCH_HOPPER,   0xA
+// Shared constants (syscalls, PMC offsets, etc.)
+.include "gsp_common.s"
 
 // ============================================================
 // Data section
