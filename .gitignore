@@ -16,6 +16,9 @@ cli/target/
 .DS_Store
 *.swp
 
+# Hive forage identity pointer (system-dependent absolute paths — do not track)
+.hive/
+
 # Vercel
 .vercel/
 
