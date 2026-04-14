@@ -654,9 +654,19 @@ link_forward_megakernel data_region w_embed w_final_ln w_lm_head :
     append_to_forward
 
     \\ Step 8: Wrap in cooperative ELF via lithos-elf.ls
+    \\ Set globals for elf_build: cooperative, gridsync, exit offsets
+    cooperative 1
+    gridsync_count forward_sync_count
+    \\ Copy forward_sync_offsets → gridsync_offsets
+    for si 0 forward_sync_count 1
+        v → 32 (forward_sync_offsets + si * 4)
+        ← 32 gridsync_offsets + si * 4 v
+    endfor
+    exit_count 1
+    ← 32 exit_offsets forward_pos - 16
     \\ Kernel name: "lithos_forward"
     \\ 4 kernel params: sync_counter, done_flag, activation_buf, position
-    elf_build "lithos_forward" 15 forward_buf forward_pos 4 forward_max_reg forward_max_smem 1 forward_sync_offsets forward_sync_count
+    elf_build "lithos_forward" 15 forward_buf forward_pos 4 forward_max_reg forward_max_smem
 
 
 \\ ============================================================
@@ -714,8 +724,18 @@ link_recurrence_megakernel data_region :
     emit_exit
     append_to_recur
 
+    \\ Set globals for elf_build
+    cooperative 1
+    gridsync_count recur_sync_count
+    for si 0 recur_sync_count 1
+        v → 32 (recur_sync_offsets + si * 4)
+        ← 32 gridsync_offsets + si * 4 v
+    endfor
+    exit_count 1
+    ← 32 exit_offsets recur_pos - 16
+
     \\ Wrap in cooperative ELF
-    elf_build "lithos_recurrence" 18 recur_buf recur_pos 3 recur_max_reg recur_max_smem 1 recur_sync_offsets recur_sync_count
+    elf_build "lithos_recurrence" 18 recur_buf recur_pos 3 recur_max_reg recur_max_smem
 
 
 \\ ============================================================

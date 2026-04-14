@@ -993,10 +993,20 @@ record_gridsync :
     ← 32 gridsync_offsets + gridsync_count * 4 gpu_pos
     gridsync_count + 1
 
+buf exit_offsets 1024
+var exit_count 0
+
+record_exit :
+    if>= exit_count 256
+        \\ silently clamp at 256 sites
+    ← 32 exit_offsets + exit_count * 4 gpu_pos
+    exit_count + 1
+
 gpu_reset :
     gpu_pos 0
     max_reg 0
     gridsync_count 0
+    exit_count 0
     gpu_cooperative 0
 
 \\ ============================================================
@@ -1562,6 +1572,7 @@ emit_bra_pred byte_offset pred :
     sinst iword_masked ctrl_bra
 
 emit_exit :
+    record_exit
     sinst 0x000000000000794D ctrl_exit
 
 \\ ============================================================
@@ -4472,12 +4483,14 @@ elf_write_header :
 \\ SECTION HEADER EMIT
 \\ ============================================================
 
-shdr64_emit sh_name sh_type sh_flags sh_addr sh_offset sh_size sh_link sh_info sh_addralign sh_entsize :
+shdr64_a sh_name sh_type sh_flags sh_addr sh_offset :
     cd_emit sh_name
     cd_emit sh_type
     cq_emit sh_flags
     cq_emit sh_addr
     cq_emit sh_offset
+
+shdr64_b sh_size sh_link sh_info sh_addralign sh_entsize :
     cq_emit sh_size
     cd_emit sh_link
     cd_emit sh_info
@@ -4517,7 +4530,7 @@ nvi_sval_emit val sym_idx attr fmt :
 \\ elf_build — Build complete 9-section GPU ELF
 \\ ============================================================
 
-elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt :
+elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size :
 
     elf_init
     elf_write_header
@@ -4659,7 +4672,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     \\ .nv.info (section 4)
     calign 4
     nvinfo_off cubin_pos
-    reg_val reg_count
+    reg_val reg_count + 1
     if< reg_val 8
         reg_val 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
@@ -4694,7 +4707,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 255
     cb_emit 0
 
-    if== elf_cooperative 1
+    if== gpu_cooperative 1
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_MASK_REGIDS
         cw_emit 16
@@ -4705,16 +4718,23 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
 
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_INSTR_OFFSETS
-        cw_emit (gridsync_cnt * 4)
-        for gi 0 gridsync_cnt 1
-            gs_off → 32 (gridsync_off_ptr + gi * 4)
+        cw_emit (gridsync_count * 4)
+        for gi 0 gridsync_count 1
+            gs_off → 32 (gridsync_offsets + gi * 4)
             cd_emit gs_off
         endfor
 
     cb_emit 4
     cb_emit EIATTR_EXIT_INSTR_OFFSETS
-    cw_emit 4
-    cd_emit 256
+    if> exit_count 0
+        cw_emit (exit_count * 4)
+        for ei 0 exit_count 1
+            ex_off → 32 (exit_offsets + ei * 4)
+            cd_emit ex_off
+        endfor
+    if== exit_count 0
+        cw_emit 4
+        cd_emit code_size - 16
 
     param_bytes n_kparams * 8
     cb_emit 3
@@ -4771,15 +4791,24 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     calign 64
     shdrs_off cubin_pos
 
-    shdr64_emit 0 0 0 0 0 0 0 0 0 0
-    shdr64_emit SN_shstrtab SHT_STRTAB 0 0 shstrtab_off shstrtab_size 0 0 1 0
-    shdr64_emit SN_strtab SHT_STRTAB 0 0 strtab_off strtab_size 0 0 1 0
-    shdr64_emit SN_symtab SHT_SYMTAB 0 0 symtab_off symtab_size 2 3 8 24
-    shdr64_emit SN_nvinfo SHT_LOPROC 0 0 nvinfo_off nvinfo_size 3 0 4 0
-    shdr64_emit SN_text SHT_PROGBITS 6 0 text_off text_size 3 3 128 0
-    shdr64_emit SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off nvinfo_k_size 3 5 4 0
-    shdr64_emit SN_shared SHT_NOBITS 3 0 const0_off smem_size 0 0 16 0
-    shdr64_emit SN_const0 SHT_PROGBITS 66 0 const0_off const0_size 0 5 4 0
+    shdr64_a 0 0 0 0 0
+    shdr64_b 0 0 0 0 0
+    shdr64_a SN_shstrtab SHT_STRTAB 0 0 shstrtab_off
+    shdr64_b shstrtab_size 0 0 1 0
+    shdr64_a SN_strtab SHT_STRTAB 0 0 strtab_off
+    shdr64_b strtab_size 0 0 1 0
+    shdr64_a SN_symtab SHT_SYMTAB 0 0 symtab_off
+    shdr64_b symtab_size 2 3 8 24
+    shdr64_a SN_nvinfo SHT_LOPROC 0 0 nvinfo_off
+    shdr64_b nvinfo_size 3 0 4 0
+    shdr64_a SN_text SHT_PROGBITS 6 0 text_off
+    shdr64_b text_size 3 3 128 0
+    shdr64_a SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off
+    shdr64_b nvinfo_k_size 3 5 4 0
+    shdr64_a SN_shared SHT_NOBITS 3 0 const0_off
+    shdr64_b smem_size 0 0 16 0
+    shdr64_a SN_const0 SHT_PROGBITS 66 0 const0_off
+    shdr64_b const0_size 0 5 4 0
 
     \\ Patch ELF header
     elf_put_u64 0 32
@@ -4816,16 +4845,19 @@ elf_save path :
 \\ elf_write_cubin — Convenience: build ELF and write to file
 \\ ============================================================
 
-elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt
+elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path
 
 \\ ============================================================
-\\ elf_write_simple — Non-cooperative kernel
+\\ elf_write_simple — Non-cooperative kernel (clears cooperative/gridsync state)
 \\ ============================================================
 
 elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size 0 0 0
+    gpu_cooperative 0
+    gridsync_count 0
+    exit_count 0
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path
 
 

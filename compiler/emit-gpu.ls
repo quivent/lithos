@@ -46,11 +46,22 @@ record_gridsync :
     ← 32 gridsync_offsets + gridsync_count * 4 gpu_pos
     gridsync_count + 1
 
+\\ Array of u32 byte offsets for EXIT instruction sites (up to 256).
+buf exit_offsets 1024
+var exit_count 0
+
+record_exit :
+    if>= exit_count 256
+        \\ silently clamp at 256 sites
+    ← 32 exit_offsets + exit_count * 4 gpu_pos
+    exit_count + 1
+
 \\ Reset all emitter state for a new kernel.
 gpu_reset :
     gpu_pos 0
     max_reg 0
     gridsync_count 0
+    exit_count 0
     cooperative 0
 
 \\ ============================================================
@@ -713,6 +724,7 @@ emit_bra_pred byte_offset pred :
 
 \\ EXIT — terminate thread
 emit_exit :
+    record_exit
     sinst 0x000000000000794D ctrl_exit
 
 \\ ============================================================
