@@ -145,8 +145,9 @@
 \\ ============================================================================
 \\ Linux ARM64: argc at [SP], argv at SP+8
 main :
-    argc → 64 $31 0
-    argv $31 + 8
+    sp_save $31 + 16
+    argc → 64 sp_save
+    argv sp_save + 8
     lithos_main argc argv
     ↓ $8 93
     ↓ $0 0

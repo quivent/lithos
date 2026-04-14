@@ -933,7 +933,7 @@ parse_dollar_reg:
     add     w4, w4, #1
     b       .Ldollar_lp
 .Ldollar_end:
-    cmp     w0, #30
+    cmp     w0, #31
     b.hi    parse_error
     add     x19, x19, #TOK_STRIDE_SZ
     ldp     x29, x30, [sp], #16
@@ -2979,6 +2979,8 @@ parse_atom:
     b.eq    .La_unary_math
     cmp     w0, #TOK_INDEX
     b.eq    .La_unary_math
+    cmp     w0, #TOK_DOLLAR
+    b.eq    .La_dollar
 
     // Keyword token used as variable name? Try sym_lookup.
     ldr     w1, [x19, #8]
@@ -3029,6 +3031,16 @@ parse_atom:
     ret
 
 .La_ident_lookup:
+    // Check for $N register reference (lexed as TOK_IDENT starting with '$')
+    ldr     w2, [x19, #4]           // source offset
+    ldrb    w3, [x28, x2]           // first character
+    cmp     w3, #'$'
+    b.ne    .La_ident_sym
+    // $N — call parse_dollar_reg (expects x19 on current token)
+    bl      parse_dollar_reg        // w0 = register number
+    ldp     x29, x30, [sp], #16
+    ret
+.La_ident_sym:
     bl      sym_lookup
     cbz     x0, .La_ident_unknown
     // Check if it's a composition — needs call dispatch, not register return
@@ -3224,6 +3236,12 @@ parse_atom:
     mov     w2, w4
     bl      emit_sub_reg
     mov     w0, w5
+    ldp     x29, x30, [sp], #16
+    ret
+
+.La_dollar:
+    // $N — raw register reference. Returns register N as the atom value.
+    bl      parse_dollar_reg        // w0 = register number, x19 advanced
     ldp     x29, x30, [sp], #16
     ret
 
