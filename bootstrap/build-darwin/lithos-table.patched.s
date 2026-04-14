@@ -165,7 +165,7 @@
 .equ MAX_LOOP,      16
 .equ ARM64_NOP,     0xD503201F
 .equ ARM64_RET,     0xD65F03C0
-.equ ARM64_SVC_0,   0xD4001001
+.equ ARM64_SVC_0,   (0xD400 << 16) | 0x0001
 .equ REG_FIRST,     9
 .equ REG_LAST,      28
 .equ CC_EQ, 0
@@ -212,6 +212,8 @@
 
 
 // ARM64 instruction constants
+// TARGET program SVC — must stay Linux encoding even on macOS builds.
+// Split into hi/lo to prevent darwin transform from matching "svc #0x80".
 
 // Register allocator range for TARGET program (NOT the parser's own registers).
 // The target program uses X9-X28 freely. The parser's own X19-X28 are separate.
@@ -3398,37 +3400,37 @@ parse_atom:
 // Error handlers
 // ============================================================
 parse_error:
-    // RECOVERY: skip to next NEWLINE, emit NOP, return to parse_body.
-    //
-    // The tricky part: "b parse_error" is a tail-branch from various
-    // functions (handle_for, handle_if, etc.) that have their own
-    // stack frames. We can't "ret" because x30 belongs to the caller.
-    //
-    // Strategy: skip tokens to NEWLINE, then branch BACK to the body
-    // loop's statement dispatcher. The body loop re-reads the token
-    // and continues. We need to unwind any stack frames left by the
-    // calling function. Using x29 (frame pointer) chain to find
-    // parse_body's frame is complex. Instead: just skip the line
-    // and do a simple ret — the caller's ret will return to parse_body.
-    //
-    // Skip to end of current line
-.Lpe_skip:
-    cmp     x19, x27
-    b.hs    .Lpe_done
+    adrp x1, err_parse@PAGE
+    add     x1, x1, err_parse@PAGEOFF
+    mov     x2, #13
+    mov     x0, #2
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
+    adrp x1, err_at_tok@PAGE
+    add     x1, x1, err_at_tok@PAGEOFF
+    mov     x2, #10
+    mov     x0, #2
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
     ldr     w0, [x19]
-    cmp     w0, #TOK_NEWLINE
-    b.eq    .Lpe_done
-    cmp     w0, #TOK_EOF
-    b.eq    .Lpe_done
-    add     x19, x19, #TOK_STRIDE_SZ
-    b       .Lpe_skip
-.Lpe_done:
-    // Now x19 is at NEWLINE or EOF. Return 0 to the caller.
-    // The caller (handle_for, handle_if, etc.) will return to
-    // parse_statement, which returns to parse_body, which continues.
-    mov     w0, #0
-    ldp     x29, x30, [sp], #16    // pop caller's frame
-    ret
+    bl      print_dec
+    adrp x1, err_at_tok@PAGE
+    add     x1, x1, err_at_tok@PAGEOFF
+    mov     x2, #10
+    mov     x0, #2
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
+    ldr     w0, [x19, #4]
+    bl      print_dec
+    adrp x1, err_nl@PAGE
+    add     x1, x1, err_nl@PAGEOFF
+    mov     x2, #1
+    mov     x0, #2
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
+    mov     x0, #1
+    mov x16, #1             // SYS_EXIT
+    svc #0x80
 
 parse_error_regspill:
     adrp x1, err_regspill@PAGE

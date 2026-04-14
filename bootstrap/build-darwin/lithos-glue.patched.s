@@ -8,6 +8,7 @@
 .global emit_strh_zero
 .global parse_data_decl
 
+
 // lithos-glue.s — Safety-net stubs for symbols still undefined after
 //                  other workers export existing ones.
 //
