@@ -57,12 +57,22 @@
 .equ TOK_STAR,      52
 .equ TOK_SLASH,     53
 .equ TOK_EQ,        54
-// Type keywords (also used as variable names in compiler.ls)
+// All keyword tokens that compiler.ls may use as identifiers
+.equ TOK_PARAM,     12
+.equ TOK_WEIGHT,    25
+.equ TOK_LAYER,     26
+.equ TOK_BIND,      27
+.equ TOK_RUNTIME,   28
+.equ TOK_TEMPLATE,  29
+.equ TOK_PROJECT,   30
+.equ TOK_SHARED,    31
+.equ TOK_BARRIER,   32
 .equ TOK_F32,       40
 .equ TOK_U32,       41
 .equ TOK_S32,       42
 .equ TOK_F16,       43
 .equ TOK_PTR,       44
+.equ TOK_VOID,      45
 
 .equ TOK_EQEQ,     55
 .equ TOK_NEQ,       56
@@ -1261,20 +1271,13 @@ handle_composition:
     ldr     w0, [x19]
     cmp     w0, #TOK_COLON
     b.eq    .Lcomp_args_done
-    // Accept IDENT or type keywords as parameter names
+    // Accept IDENT or any keyword-as-name (tokens 11-45) as parameter names
     cmp     w0, #TOK_IDENT
     b.eq    .Lcomp_arg_ok
-    cmp     w0, #TOK_PTR
-    b.eq    .Lcomp_arg_ok
-    cmp     w0, #TOK_F32
-    b.eq    .Lcomp_arg_ok
-    cmp     w0, #TOK_U32
-    b.eq    .Lcomp_arg_ok
-    cmp     w0, #TOK_F16
-    b.eq    .Lcomp_arg_ok
-    cmp     w0, #TOK_S32
-    b.eq    .Lcomp_arg_ok
-    b       parse_error
+    cmp     w0, #11
+    b.lt    parse_error
+    cmp     w0, #45
+    b.gt    parse_error
 .Lcomp_arg_ok:
 
     // Register arg as param with register = arg index (X0-X7)
@@ -1431,17 +1434,12 @@ parse_statement:
     b.eq    .Ls_label
     cmp     w0, #TOK_IDENT
     b.eq    .Ls_ident
-    // Type keywords used as variable names
-    cmp     w0, #TOK_PTR
-    b.eq    .Ls_ident
-    cmp     w0, #TOK_F32
-    b.eq    .Ls_ident
-    cmp     w0, #TOK_U32
-    b.eq    .Ls_ident
-    cmp     w0, #TOK_F16
-    b.eq    .Ls_ident
-    cmp     w0, #TOK_S32
-    b.eq    .Ls_ident
+    // Any keyword 11-45 not already dispatched → treat as identifier
+    cmp     w0, #11
+    b.lt    .Ls_check_trap
+    cmp     w0, #45
+    b.le    .Ls_ident
+.Ls_check_trap:
     cmp     w0, #TOK_TRAP
     b.eq    .Ls_trap
 
@@ -1576,7 +1574,7 @@ handle_ident_stmt:
     ret
 
 .Lhi_not_goto:
-    // Check for "continue" keyword
+    // Check for "continue" keyword (full string compare)
     ldr     w0, [x19, #8]
     cmp     w0, #8
     b.ne    .Lhi_not_continue
@@ -1585,8 +1583,27 @@ handle_ident_stmt:
     ldrb    w2, [x1]
     cmp     w2, #'c'
     b.ne    .Lhi_not_continue
-    // Skip full check — accept any 8-char token starting with 'c' as continue
-    // (in practice this is always "continue")
+    ldrb    w2, [x1, #1]
+    cmp     w2, #'o'
+    b.ne    .Lhi_not_continue
+    ldrb    w2, [x1, #2]
+    cmp     w2, #'n'
+    b.ne    .Lhi_not_continue
+    ldrb    w2, [x1, #3]
+    cmp     w2, #'t'
+    b.ne    .Lhi_not_continue
+    ldrb    w2, [x1, #4]
+    cmp     w2, #'i'
+    b.ne    .Lhi_not_continue
+    ldrb    w2, [x1, #5]
+    cmp     w2, #'n'
+    b.ne    .Lhi_not_continue
+    ldrb    w2, [x1, #6]
+    cmp     w2, #'u'
+    b.ne    .Lhi_not_continue
+    ldrb    w2, [x1, #7]
+    cmp     w2, #'e'
+    b.ne    .Lhi_not_continue
     add     x19, x19, #TOK_STRIDE_SZ
     // Emit B to loop_top (from loop stack)
     // For simplicity: emit NOP (continue support is a stub)
@@ -1639,11 +1656,41 @@ handle_ident_stmt:
     ret
 
 .Lhi_reassign:
-    // Known variable: name expr → evaluate expr, MOV into variable's register
-    // DON'T skip name — the expression includes it: "count + 1" means count=count+1
+    // Known variable reassignment. Two patterns:
+    //   "cmp_type 2"     → name followed by value → skip name, parse "2"
+    //   "count + 1"      → name followed by operator → DON'T skip, parse "count + 1"
     ldr     w5, [x0, #SYM_REG]     // existing register
+    // Peek at token AFTER the name to decide
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lhi_reassign_skip
+    ldr     w0, [x4]
+    // Operators: parse full expression including name
+    cmp     w0, #TOK_PLUS
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_MINUS
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_STAR
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_SLASH
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_AMP
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_PIPE
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_CARET
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_SHL
+    b.eq    .Lhi_reassign_full
+    cmp     w0, #TOK_SHR
+    b.eq    .Lhi_reassign_full
+.Lhi_reassign_skip:
+    // Value follows name: skip name, parse value
+    add     x19, x19, #TOK_STRIDE_SZ
+.Lhi_reassign_full:
+    // Operator follows name: parse full expression (includes name)
     stp     w5, wzr, [sp, #-16]!
-    bl      parse_expr              // parses "count + 1" as expression
+    bl      parse_expr
     ldp     w5, wzr, [sp], #16
     cmp     w0, w5
     b.eq    .Lhi_reassign_done      // same register, no MOV needed
@@ -2024,12 +2071,15 @@ handle_if:
 
 .Lif_compound:
     // Compound conditional: if>= a b → CMP a,b + B.!cond
-    mov     w5, w0                  // save comparison token
     add     x19, x19, #TOK_STRIDE_SZ   // skip comparison operator
+    // Save comparison token on stack (parse_expr clobbers caller-saved regs)
+    stp     x0, xzr, [sp, #-16]!   // push comparison token
     bl      parse_expr              // left operand
-    mov     w4, w0
+    str     w0, [sp, #8]           // save left result in second slot
     bl      parse_expr              // right operand
-    mov     w6, w0
+    mov     w6, w0                  // right operand register
+    ldr     w4, [sp, #8]           // restore left operand
+    ldp     x5, xzr, [sp], #16    // restore comparison token into w5
     // Emit CMP
     mov     w0, w4
     mov     w1, w6
@@ -2694,7 +2744,8 @@ parse_atom:
     b.eq    .La_int             // treat float as int for bootstrap
     cmp     w0, #TOK_IDENT
     b.eq    .La_ident
-    // Type keywords used as variable names in compiler.ls
+    // Keywords that may be used as variable/param names in compiler.ls.
+    // Treat all non-control keywords as identifiers in expression context.
     cmp     w0, #TOK_PTR
     b.eq    .La_ident
     cmp     w0, #TOK_F32
@@ -2704,6 +2755,30 @@ parse_atom:
     cmp     w0, #TOK_F16
     b.eq    .La_ident
     cmp     w0, #TOK_S32
+    b.eq    .La_ident
+    cmp     w0, #TOK_VOID
+    b.eq    .La_ident
+    cmp     w0, #TOK_KERNEL
+    b.eq    .La_ident
+    cmp     w0, #TOK_PARAM
+    b.eq    .La_ident
+    cmp     w0, #TOK_WEIGHT
+    b.eq    .La_ident
+    cmp     w0, #TOK_SHARED
+    b.eq    .La_ident
+    cmp     w0, #TOK_HOST
+    b.eq    .La_ident
+    cmp     w0, #TOK_TEMPLATE
+    b.eq    .La_ident
+    cmp     w0, #TOK_BARRIER
+    b.eq    .La_ident
+    cmp     w0, #TOK_LAYER
+    b.eq    .La_ident
+    cmp     w0, #TOK_PROJECT
+    b.eq    .La_ident
+    cmp     w0, #TOK_BIND
+    b.eq    .La_ident
+    cmp     w0, #TOK_RUNTIME
     b.eq    .La_ident
     cmp     w0, #TOK_LPAREN
     b.eq    .La_paren
