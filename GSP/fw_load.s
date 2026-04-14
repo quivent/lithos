@@ -78,6 +78,16 @@ msg_fw_mmap_err:  .asciz "gsp: mmap of firmware file failed (MAP_FAILED)\n"
 msg_fw_mmap_err_len = . - msg_fw_mmap_err - 1
 msg_fw_too_small: .asciz "gsp: firmware file smaller than ELF64 header (64 bytes)\n"
 msg_fw_too_small_len = . - msg_fw_too_small - 1
+msg_bad_elf_class: .asciz "gsp_fw_load: not ELF64 little-endian\n"
+msg_bad_elf_class_len = . - msg_bad_elf_class - 1
+msg_fw_shdr_oob:  .asciz "gsp: section header table out of bounds\n"
+msg_fw_shdr_oob_len = . - msg_fw_shdr_oob - 1
+msg_fw_shstrndx:  .asciz "gsp: e_shstrndx >= e_shnum\n"
+msg_fw_shstrndx_len = . - msg_fw_shstrndx - 1
+msg_fw_fwimg_oob: .asciz "gsp: .fwimage section out of file bounds\n"
+msg_fw_fwimg_oob_len = . - msg_fw_fwimg_oob - 1
+msg_fw_seg_oob:   .asciz "gsp: code/data/manifest offset out of .fwimage bounds\n"
+msg_fw_seg_oob_len = . - msg_fw_seg_oob - 1
 msg_fw_ok:        .asciz "gsp: firmware loaded to BAR4\n"
 msg_fw_ok_len = . - msg_fw_ok - 1
 
@@ -170,11 +180,31 @@ gsp_fw_load:
     cmp     w0, w1                  // compare against 0x464C457F
     b.ne    .fw_elf_bad
 
+    // ---- 4b. Validate ELF64 class and little-endian ----
+    ldrb    w0, [x21, #4]           // e_ident[4] = EI_CLASS
+    cmp     w0, #2                  // ELFCLASS64 = 2
+    b.ne    .fw_bad_elf_class
+    ldrb    w0, [x21, #5]           // e_ident[5] = EI_DATA
+    cmp     w0, #1                  // ELFDATA2LSB = 1 (little-endian)
+    b.ne    .fw_bad_elf_class
+
     // ---- 5. Read ELF header fields ----
     ldr     x22, [x21, #E_SHOFF]       // x22 = e_shoff (section hdr table offset)
     ldrh    w23, [x21, #E_SHENTSIZE]   // x23 = e_shentsize (size of each shdr)
     ldrh    w24, [x21, #E_SHNUM]       // x24 = e_shnum (number of sections)
     ldrh    w25, [x21, #E_SHSTRNDX]    // x25 = e_shstrndx (index of shstrtab section)
+
+    // ---- 5b. Validate section header table is within file ----
+    // Check: e_shoff + (e_shnum * e_shentsize) <= file_size
+    mov     x0, x24                     // e_shnum (zero-extended from w24)
+    mul     x0, x0, x23                 // e_shnum * e_shentsize
+    add     x0, x0, x22                 // + e_shoff
+    cmp     x0, x20                     // compare against file_size
+    b.hi    .fw_shdr_oob
+
+    // ---- 5c. Validate e_shstrndx < e_shnum ----
+    cmp     w25, w24
+    b.hs    .fw_shstrndx_bad
 
     // ---- 6. Locate shstrtab ----
     // shstrtab_shdr = file_base + e_shoff + (e_shstrndx * e_shentsize)
@@ -213,6 +243,17 @@ gsp_fw_load:
     // x28 points to the matching section header
     ldr     x22, [x28, #SH_OFFSET]     // fwimage file offset
     ldr     x23, [x28, #SH_SIZE]       // fwimage size
+
+    // ---- Validate .fwimage fits in file (overflow-safe) ----
+    // Check each operand individually before adding to prevent
+    // 64-bit unsigned wraparound from bypassing the bounds check.
+    cmp     x22, x20                    // fwimage_offset > file_size?
+    b.hi    .fw_fwimg_oob
+    cmp     x23, x20                    // fwimage_size > file_size?
+    b.hi    .fw_fwimg_oob
+    add     x0, x22, x23               // safe: both <= file_size, no wrap
+    cmp     x0, x20                     // sum > file_size?
+    b.hi    .fw_fwimg_oob
 
     // Store image size
     adrp    x0, fw_image_size
@@ -282,6 +323,36 @@ gsp_fw_load:
     adrp    x2, fw_data_size
     add     x2, x2, :lo12:fw_data_size
     str     x1, [x2]
+
+    // ---- 10b. Validate code/data/manifest offsets within .fwimage ----
+    // x0 still points to .fwimage header in mmap'd file, x23 = fwimage_size
+
+    // code_offset + code_size <= fwimage_size (overflow-safe)
+    ldr     x1, [x0, #0x10]            // code_offset
+    ldr     x2, [x0, #0x18]            // code_size
+    cmp     x1, x23                    // code_offset > fwimage_size?
+    b.hi    .fw_seg_oob
+    cmp     x2, x23                    // code_size > fwimage_size?
+    b.hi    .fw_seg_oob
+    add     x1, x1, x2                // safe: both <= fwimage_size, no wrap
+    cmp     x1, x23
+    b.hi    .fw_seg_oob
+
+    // data_offset + data_size <= fwimage_size (overflow-safe)
+    ldr     x1, [x0, #0x20]            // data_offset
+    ldr     x2, [x0, #0x28]            // data_size
+    cmp     x1, x23                    // data_offset > fwimage_size?
+    b.hi    .fw_seg_oob
+    cmp     x2, x23                    // data_size > fwimage_size?
+    b.hi    .fw_seg_oob
+    add     x1, x1, x2                // safe: both <= fwimage_size, no wrap
+    cmp     x1, x23
+    b.hi    .fw_seg_oob
+
+    // manifest_offset < fwimage_size
+    ldr     x1, [x0, #0x00]            // manifest_offset
+    cmp     x1, x23
+    b.hs    .fw_seg_oob
 
     // ---- 11. Close firmware fd ----
     mov     x8, SYS_CLOSE
@@ -397,6 +468,81 @@ gsp_fw_load:
     mov     x0, x19
     svc     #0
     mov     x0, #5
+    mov     x8, SYS_EXIT
+    svc     #0
+
+.fw_bad_elf_class:
+    // Print error, close fd, exit.  fd is in x19.
+    mov     x8, #64                     // SYS_WRITE
+    mov     x0, #2                      // stderr
+    adrp    x1, msg_bad_elf_class
+    add     x1, x1, :lo12:msg_bad_elf_class
+    mov     x2, msg_bad_elf_class_len
+    svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #7
+    mov     x8, SYS_EXIT
+    svc     #0
+
+.fw_shdr_oob:
+    // Print error, close fd, exit.  fd is in x19.
+    mov     x8, #64                     // SYS_WRITE
+    mov     x0, #2                      // stderr
+    adrp    x1, msg_fw_shdr_oob
+    add     x1, x1, :lo12:msg_fw_shdr_oob
+    mov     x2, msg_fw_shdr_oob_len
+    svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #8
+    mov     x8, SYS_EXIT
+    svc     #0
+
+.fw_shstrndx_bad:
+    // Print error, close fd, exit.  fd is in x19.
+    mov     x8, #64                     // SYS_WRITE
+    mov     x0, #2                      // stderr
+    adrp    x1, msg_fw_shstrndx
+    add     x1, x1, :lo12:msg_fw_shstrndx
+    mov     x2, msg_fw_shstrndx_len
+    svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #9
+    mov     x8, SYS_EXIT
+    svc     #0
+
+.fw_fwimg_oob:
+    // Print error, close fd, exit.  fd is in x19.
+    mov     x8, #64                     // SYS_WRITE
+    mov     x0, #2                      // stderr
+    adrp    x1, msg_fw_fwimg_oob
+    add     x1, x1, :lo12:msg_fw_fwimg_oob
+    mov     x2, msg_fw_fwimg_oob_len
+    svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #10
+    mov     x8, SYS_EXIT
+    svc     #0
+
+.fw_seg_oob:
+    // Print error, close fd, exit.  fd is in x19.
+    mov     x8, #64                     // SYS_WRITE
+    mov     x0, #2                      // stderr
+    adrp    x1, msg_fw_seg_oob
+    add     x1, x1, :lo12:msg_fw_seg_oob
+    mov     x2, msg_fw_seg_oob_len
+    svc     #0
+    mov     x8, SYS_CLOSE
+    mov     x0, x19
+    svc     #0
+    mov     x0, #11
     mov     x8, SYS_EXIT
     svc     #0
 

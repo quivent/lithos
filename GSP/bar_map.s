@@ -34,6 +34,11 @@
 .equ SYS_READ,      63
 .equ SYS_WRITE,     64
 .equ SYS_EXIT,      93
+.equ SYS_FLOCK,     32
+
+// ---- flock constants ----
+.equ LOCK_EX,       2
+.equ LOCK_NB,       4
 
 // ---- Constants ----
 .equ AT_FDCWD,      -100
@@ -100,6 +105,8 @@ msg_bar0_fail:  .asciz "gsp: ERROR: failed to open/mmap BAR0\n"
 msg_bar0_fail_len = . - msg_bar0_fail - 1
 msg_bar4_fail:  .asciz "gsp: ERROR: failed to open/mmap BAR4\n"
 msg_bar4_fail_len = . - msg_bar4_fail - 1
+msg_bar0_locked: .asciz "bar_map: GPU locked by another process\n"
+msg_bar0_locked_len = . - msg_bar0_locked - 1
 
 // Scratch buffer for reading /resource file (to parse BAR4 phys)
 .align 3
@@ -146,6 +153,14 @@ bar_map_init:
     cmp     x0, #0
     b.lt    .bar0_open_fail
     mov     x19, x0                   // x19 = bar0_fd
+
+    // Exclusive lock on BAR0 resource file -- prevents concurrent gsp_boot
+    mov     x0, x19                   // fd
+    mov     x1, #(LOCK_EX | LOCK_NB)  // non-blocking exclusive lock
+    mov     x8, #SYS_FLOCK
+    svc     #0
+    cmp     x0, #0
+    b.lt    .bar0_flock_fail          // another process holds the lock
 
     // ---- mmap BAR0: 16 MB, PROT_READ|PROT_WRITE, MAP_SHARED ----
     mov     x0, #0                    // addr = NULL (kernel chooses)
@@ -218,6 +233,18 @@ bar_map_init:
 
     // ---- Success ----
     mov     x0, #0
+    b       .bar_map_return
+
+.bar0_flock_fail:
+    // flock failed -- close the fd and return error
+    mov     x0, x19
+    mov     x8, #SYS_CLOSE
+    svc     #0
+    adrp    x1, msg_bar0_locked
+    add     x1, x1, :lo12:msg_bar0_locked
+    mov     x2, #msg_bar0_locked_len
+    bl      bar_print_msg
+    mov     x0, #-2                   // -2 = GPU locked by another process
     b       .bar_map_return
 
 .bar0_mmap_fail:

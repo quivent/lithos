@@ -24,27 +24,37 @@
 //   3. Store BAR0+0x1103C0 <- 0x00000000    (deassert reset, bit 0 = 0)
 //   4. Poll  BAR0+0x1103C0 bits[10:8] == 2  (wait for DEASSERTED)
 //
-// The polling loops include a timeout counter to avoid infinite hangs
-// if the hardware is unresponsive.  Timeout is ~100M iterations
-// (~1-2 seconds on Grace at ~3GHz).
+// The polling loops use clock_gettime(CLOCK_MONOTONIC) for wall-clock
+// timeout to avoid dependence on CPU frequency or pipeline stalls.
+// Timeout is 5 seconds for falcon reset.
 //
 // Calling convention: ARM64 AAPCS.
-// Returns: x0 = 0 success, -1 timeout or BAR0 not mapped.
+// Returns: x0 = 0 success, -1 assert timeout, -2 deassert timeout,
+//          -3 BAR0 not mapped.
 
 // ---- Syscall numbers ----
-.equ SYS_WRITE,     64
+.equ SYS_WRITE,          64
+.equ SYS_CLOCK_GETTIME,  113
+.equ SYS_RT_SIGPROCMASK, 135
+
+// ---- Signal masking constants ----
+.equ SIG_BLOCK,          0
+.equ SIG_UNBLOCK,        1
+
+// ---- Clock IDs ----
+.equ CLOCK_MONOTONIC,    1
 
 // ---- Falcon register offset ----
-.equ FALCON_ENGINE,     0x1103C0
+.equ FALCON_ENGINE,      0x1103C0
 
 // ---- Reset status field ----
 // bits[10:8] of FALCON_ENGINE register
-.equ STATUS_MASK,       0x700         // bits[10:8]
-.equ STATUS_ASSERTED,   0x000         // 0b000 << 8
-.equ STATUS_DEASSERTED, 0x200         // 0b010 << 8
+.equ STATUS_MASK,        0x700         // bits[10:8]
+.equ STATUS_ASSERTED,    0x000         // 0b000 << 8
+.equ STATUS_DEASSERTED,  0x200         // 0b010 << 8
 
-// ---- Timeout: ~100M iterations ----
-.equ POLL_TIMEOUT,      100000000
+// ---- Timeout: wall-clock seconds ----
+.equ FALCON_TIMEOUT_SECS, 5
 
 // ============================================================
 // Data section
@@ -58,10 +68,16 @@ msg_reset_asserted: .asciz "gsp: falcon reset -- asserted, deasserting...\n"
 msg_reset_asserted_len = . - msg_reset_asserted - 1
 msg_reset_done:     .asciz "gsp: falcon reset -- deasserted, reset complete\n"
 msg_reset_done_len = . - msg_reset_done - 1
-msg_reset_timeout:  .asciz "gsp: ERROR: falcon reset timeout\n"
-msg_reset_timeout_len = . - msg_reset_timeout - 1
+msg_assert_timeout: .asciz "gsp: ERROR: falcon reset assert timeout\n"
+msg_assert_timeout_len = . - msg_assert_timeout - 1
+msg_deassert_timeout: .asciz "gsp: ERROR: falcon reset deassert timeout, re-asserting\n"
+msg_deassert_timeout_len = . - msg_deassert_timeout - 1
 falcon_msg_bar0_null:      .asciz "gsp: ERROR: BAR0 not mapped for falcon reset\n"
 falcon_msg_bar0_null_len = . - falcon_msg_bar0_null - 1
+
+.align 3
+.Lsigmask:
+    .quad   0x8006               // bits for SIGHUP(1), SIGINT(2), SIGTERM(15)
 
 // ============================================================
 // Text section
@@ -77,9 +93,24 @@ falcon_msg_bar0_null_len = . - falcon_msg_bar0_null - 1
 // ------------------------------------------------------------
 .global falcon_reset
 falcon_reset:
-    stp     x29, x30, [sp, #-32]!
+    // Prologue: save callee-saved regs and allocate timespec on stack.
+    // Stack layout:
+    //   sp+0..15:  saved x29, x30
+    //   sp+16..31: saved x19, x20
+    //   sp+32..47: saved x21, x22
+    //   sp+48..63: struct timespec { tv_sec(8), tv_nsec(8) }
+    stp     x29, x30, [sp, #-64]!
     mov     x29, sp
     stp     x19, x20, [sp, #16]
+    stp     x21, x22, [sp, #32]
+
+    // Block SIGTERM/SIGINT/SIGHUP during critical MMIO
+    mov     x0, #SIG_BLOCK
+    adr     x1, .Lsigmask        // pointer to signal set
+    mov     x2, #0               // don't save old set
+    mov     x3, #8               // sigsetsize
+    mov     x8, #SYS_RT_SIGPROCMASK
+    svc     #0
 
     // Load BAR0 base
     adrp    x19, bar0_base
@@ -102,18 +133,45 @@ falcon_reset:
 
     mov     w0, #1
     str     w0, [x20]                 // BAR0+0x1103C0 <- 1
+    dsb     st                        // ensure MMIO write reaches device
 
     // ---- Step 2: Poll bits[10:8] == 0 (ASSERTED) ----
-    movz    x1, #0xE100              // POLL_TIMEOUT = 100000000 = 0x05F5E100
-    movk    x1, #0x05F5, lsl #16
+    // Capture start time for wall-clock timeout
+    mov     x0, #CLOCK_MONOTONIC
+    add     x1, sp, #48              // timespec at sp+48
+    mov     x8, #SYS_CLOCK_GETTIME
+    svc     #0
+    cmp     x0, #0
+    b.lt    .falcon_assert_timeout    // clock_gettime failed -- treat as timeout
+    ldr     x21, [sp, #48]           // x21 = start_seconds
+
+    isb                               // serialize before first MMIO read
 .poll_asserted:
     ldr     w0, [x20]                 // read FALCON_ENGINE
     and     w0, w0, #STATUS_MASK      // isolate bits[10:8]
     cmp     w0, #STATUS_ASSERTED      // == 0?
     b.eq    .asserted_ok
-    subs    x1, x1, #1
-    b.ne    .poll_asserted
-    b       .falcon_timeout           // exhausted counter
+
+    // Check wall-clock timeout
+    mov     x0, #CLOCK_MONOTONIC
+    add     x1, sp, #48
+    mov     x8, #SYS_CLOCK_GETTIME
+    svc     #0
+    cmp     x0, #0
+    b.lt    .falcon_assert_timeout    // clock_gettime failed -- treat as timeout
+    ldr     x0, [sp, #48]            // current_seconds
+    sub     x0, x0, x21              // elapsed seconds
+    cmp     x0, #FALCON_TIMEOUT_SECS
+    b.ge    .falcon_assert_timeout
+
+    isb
+    mov     w0, #100
+.assert_delay:
+    nop
+    subs    w0, w0, #1
+    b.ne    .assert_delay
+
+    b       .poll_asserted
 
 .asserted_ok:
     adrp    x1, msg_reset_asserted
@@ -124,18 +182,45 @@ falcon_reset:
     // ---- Step 3: Deassert reset (bit 0 = 0) ----
     mov     w0, #0
     str     w0, [x20]                 // BAR0+0x1103C0 <- 0
+    dsb     st                        // ensure MMIO write reaches device
 
     // ---- Step 4: Poll bits[10:8] == 2 (DEASSERTED) ----
-    movz    x1, #0xE100              // POLL_TIMEOUT = 100000000 = 0x05F5E100
-    movk    x1, #0x05F5, lsl #16
+    // Capture start time for wall-clock timeout
+    mov     x0, #CLOCK_MONOTONIC
+    add     x1, sp, #48              // timespec at sp+48
+    mov     x8, #SYS_CLOCK_GETTIME
+    svc     #0
+    cmp     x0, #0
+    b.lt    .falcon_deassert_timeout  // clock_gettime failed -- treat as timeout
+    ldr     x21, [sp, #48]           // x21 = start_seconds
+
+    isb                               // serialize before first MMIO read
 .poll_deasserted:
     ldr     w0, [x20]                 // read FALCON_ENGINE
     and     w0, w0, #STATUS_MASK      // isolate bits[10:8]
     cmp     w0, #STATUS_DEASSERTED    // == 0x200?
     b.eq    .deasserted_ok
-    subs    x1, x1, #1
-    b.ne    .poll_deasserted
-    b       .falcon_timeout
+
+    // Check wall-clock timeout
+    mov     x0, #CLOCK_MONOTONIC
+    add     x1, sp, #48
+    mov     x8, #SYS_CLOCK_GETTIME
+    svc     #0
+    cmp     x0, #0
+    b.lt    .falcon_deassert_timeout  // clock_gettime failed -- treat as timeout
+    ldr     x0, [sp, #48]            // current_seconds
+    sub     x0, x0, x21              // elapsed seconds
+    cmp     x0, #FALCON_TIMEOUT_SECS
+    b.ge    .falcon_deassert_timeout
+
+    isb
+    mov     w0, #100
+.deassert_delay:
+    nop
+    subs    w0, w0, #1
+    b.ne    .deassert_delay
+
+    b       .poll_deasserted
 
 .deasserted_ok:
     adrp    x1, msg_reset_done
@@ -147,12 +232,25 @@ falcon_reset:
     mov     x0, #0
     b       .falcon_return
 
-.falcon_timeout:
-    adrp    x1, msg_reset_timeout
-    add     x1, x1, :lo12:msg_reset_timeout
-    mov     x2, #msg_reset_timeout_len
+.falcon_assert_timeout:
+    adrp    x1, msg_assert_timeout
+    add     x1, x1, :lo12:msg_assert_timeout
+    mov     x2, #msg_assert_timeout_len
     bl      falcon_print_msg
-    mov     x0, #-1
+    mov     x0, #-1                   // -1 = assert timeout
+    b       .falcon_return
+
+.falcon_deassert_timeout:
+    // Re-assert reset to leave Falcon in known state
+    mov     w22, #1
+    str     w22, [x20]               // BAR0+0x1103C0 <- 1 (re-assert)
+    dsb     st                        // ensure re-assert write reaches device
+
+    adrp    x1, msg_deassert_timeout
+    add     x1, x1, :lo12:msg_deassert_timeout
+    mov     x2, #msg_deassert_timeout_len
+    bl      falcon_print_msg
+    mov     x0, #-2                   // -2 = deassert timeout
     b       .falcon_return
 
 .falcon_bar0_null:
@@ -160,11 +258,26 @@ falcon_reset:
     add     x1, x1, :lo12:falcon_msg_bar0_null
     mov     x2, #falcon_msg_bar0_null_len
     bl      falcon_print_msg
-    mov     x0, #-1
+    mov     x0, #-3                   // -3 = BAR0 not mapped
 
 .falcon_return:
+    // Save return value across sigprocmask call
+    mov     x19, x0
+
+    // Unblock signals
+    mov     x0, #SIG_UNBLOCK
+    adr     x1, .Lsigmask
+    mov     x2, #0
+    mov     x3, #8
+    mov     x8, #SYS_RT_SIGPROCMASK
+    svc     #0
+
+    // Restore return value
+    mov     x0, x19
+
+    ldp     x21, x22, [sp, #32]
     ldp     x19, x20, [sp, #16]
-    ldp     x29, x30, [sp], #32
+    ldp     x29, x30, [sp], #64
     ret
 
 // ------------------------------------------------------------

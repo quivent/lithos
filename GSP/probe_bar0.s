@@ -331,8 +331,9 @@ _start:
 //   w0 = value, x1 = prefix addr, w2 = prefix len
 // ============================================================
 .print_reg:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x22, [sp, #16]
     // Save value
     mov     w22, w0
     // Print prefix
@@ -349,22 +350,25 @@ _start:
     mov     x2, #1
     mov     x8, #SYS_WRITE
     svc     #0
-    ldp     x29, x30, [sp], #16
+    ldr     x22, [sp, #16]
+    ldp     x29, x30, [sp], #32
     ret
 
 // ============================================================
 // .print_reg_no_nl -- same but no trailing newline
 // ============================================================
 .print_reg_no_nl:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x22, [sp, #16]
     mov     w22, w0
     mov     x0, #1
     mov     x8, #SYS_WRITE
     svc     #0
     mov     w0, w22
     bl      .print_hex32
-    ldp     x29, x30, [sp], #16
+    ldr     x22, [sp, #16]
+    ldp     x29, x30, [sp], #32
     ret
 
 // ============================================================

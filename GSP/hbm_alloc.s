@@ -22,6 +22,7 @@
 hbm_base:   .quad 0     // BAR4 mmap virtual address (set by caller)
 hbm_phys:   .quad 0     // BAR4 physical base, e.g. 0x42000000000
 hbm_bump:   .quad 0     // current offset from base (starts at 0)
+hbm_limit:  .quad 0     // BAR4 upper bound (base + 256MB)
 
 // ============================================================
 // Text section
@@ -52,6 +53,14 @@ hbm_alloc_init:
     add     x3, x3, :lo12:hbm_bump
     str     x2, [x3]               // hbm_bump = initial offset
 
+    // Compute and store BAR4 limit = bar4_base + 256MB
+    mov     x4, #0x10000000
+    add     x4, x0, x4
+    adrp    x3, hbm_limit
+    add     x3, x3, :lo12:hbm_limit
+    str     x4, [x3]               // hbm_limit = bar4_base + 256MB
+
+    mov     x0, #0                  // return 0 = success
     ret
 
 // ---------------------------------------------------------------
@@ -68,15 +77,20 @@ hbm_alloc_init:
 // used for WPR regions, page tables, and DMA structures that
 // require large-page alignment.
 //
-// Clobbers: x2, x3, x4, x5
+// Clobbers: x2, x3, x4, x5, x6, x7, x8, x9
 // ---------------------------------------------------------------
 .globl hbm_alloc
 hbm_alloc:
     // Align size up to 2MB: size = (size + 0x1FFFFF) & ~0x1FFFFF
+    mov     x9, x0                  // x9 = original requested size (for overflow check)
     mov     x2, ALIGN_2MB_MASK
     add     x0, x0, x2              // size + 0x1FFFFF
     bic     x0, x0, x2              // clear low 21 bits => aligned size
     // x0 = aligned_size
+
+    // Guard: reject zero-size requests (aliased pointers) and wraparound
+    cbz     x9, .alloc_oom          // zero-size request => return -1
+    cbz     x0, .alloc_oom          // aligned wrapped to zero => overflow
 
     // Load current bump offset
     adrp    x3, hbm_bump
@@ -89,7 +103,21 @@ hbm_alloc:
 
     // Compute new bump = aligned old bump + aligned size
     add     x5, x4, x0
+
+    // bounds check: new_bump (cpu_va) must not exceed limit
+    adrp    x6, hbm_limit
+    add     x6, x6, :lo12:hbm_limit
+    ldr     x6, [x6]
+    // compute absolute address
+    adrp    x7, hbm_base
+    add     x7, x7, :lo12:hbm_base
+    ldr     x7, [x7]
+    add     x8, x7, x5             // absolute new_bump = base + offset
+    cmp     x8, x6
+    b.hi    .alloc_oom
+
     str     x5, [x3]               // store new bump offset
+    dsb     st                      // ensure store visible before caller writes to BAR4
 
     // cpu_addr = hbm_base + aligned old bump
     adrp    x3, hbm_base
@@ -103,6 +131,11 @@ hbm_alloc:
     ldr     x3, [x3]
     add     x1, x3, x4             // x1 = gpu_va (== physical addr)
 
+    ret
+
+.alloc_oom:
+    mov     x0, #-1                // x0 = -1 indicates OOM
+    mov     x1, #0                  // x1 = 0 (no valid gpu_va)
     ret
 
 // ---------------------------------------------------------------

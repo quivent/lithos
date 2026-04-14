@@ -90,6 +90,7 @@ fsp_emem_write:
 
     // Program EMEMC: set byte offset and arm auto-increment on write.
     str     w6, [x7]
+    dsb     st                              // commit EMEMC cursor before data writes
 
     // Convert len_bytes -> len_dwords, rounding up: (len + 3) >> 2
     add     w5, w4, #3
@@ -105,6 +106,7 @@ fsp_emem_write:
     cbnz    w5, .Lwrite_loop
 
 .Lwrite_done:
+    dsb     st                              // fence all EMEMD writes before return
     mov     x0, #0
     ret
 
@@ -139,6 +141,8 @@ fsp_emem_read:
 
     // Program EMEMC: set byte offset and arm auto-increment on read.
     str     w6, [x7]
+    dsb     st                              // commit EMEMC cursor before data reads
+    isb                                     // serialize before EMEMD load sequence
 
     // Convert len_bytes -> len_dwords, rounding up.
     add     w5, w4, #3

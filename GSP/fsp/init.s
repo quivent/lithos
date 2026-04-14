@@ -150,6 +150,7 @@ fsp_init:
     ldr     w0, [x20]                   // read SCRATCH_GROUP_2(0)
     cbnz    w0, .fsp_sg2_ready
     subs    x1, x1, #1
+    isb                                     // serialize between MMIO poll iterations
     b.ne    .fsp_poll_sg2
     // Timeout: SCRATCH_GROUP_2 stayed zero
     adrp    x1, fsp_msg_not_ready

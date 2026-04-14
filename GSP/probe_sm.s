@@ -521,15 +521,19 @@ _start:
     bl   print_dec_nl
 
     // Active SMs = TPCs * 2 (Hopper: 2 SMs per TPC)
-    lsl  w29, w27, #1
+    lsl  w9, w27, #1
+    stp  x9, xzr, [sp, #-16]!    // save SM count across calls
     adrp x0, s_act_sms
     add  x0, x0, :lo12:s_act_sms
     bl   print_str
-    mov  w0, w29
+    ldp  x9, xzr, [sp], #16
+    mov  w0, w9
+    stp  x9, xzr, [sp, #-16]!    // save SM count for CUDA cores calc
     bl   print_dec_nl
 
     // Est. CUDA cores = SMs * 128
-    lsl  w3, w29, #7
+    ldp  x9, xzr, [sp], #16
+    lsl  w3, w9, #7
     stp  x3, xzr, [sp, #-16]!
     adrp x0, s_cuda_cores
     add  x0, x0, :lo12:s_cuda_cores

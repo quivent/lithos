@@ -13,7 +13,7 @@
 //   x4 = data_offset   (RM_RISCV_UCODE_DESC.monitorDataOffset)
 //   x5 = manifest_offset (RM_RISCV_UCODE_DESC.manifestOffset)
 //
-// Returns: void (no error path -- registers are fire-and-forget)
+// Returns: x0 = 0 on success, -1 null params, -2 lock verify fail
 //
 // Register allocation:
 //   x0  = bar0 base (preserved)
@@ -27,18 +27,39 @@
 // FMC addresses are >> 3 (8-byte alignment) before writing to BCR regs
 .equ RISCV_BR_ADDR_SHIFT,   3
 
+// ---- Syscall numbers ----
+.equ SYS_RT_SIGPROCMASK, 135
+
+// ---- Signal masking constants ----
+.equ SIG_BLOCK,          0
+.equ SIG_UNBLOCK,        1
+
 .text
 .globl gsp_bcr_start
 .type  gsp_bcr_start, %function
 .balign 4
 
 gsp_bcr_start:
-    // No stack frame needed -- leaf function, no callee-saved regs used.
-    // All work done in x0-x8.
-    //
     // BAR0 offsets exceed the 12-bit unsigned immediate range for str
     // (max 16380 for 32-bit str), so we load each offset into x8 and
     // use str w_, [x0, x8].
+
+    // ----------------------------------------------------------------
+    // 0. Null-check fmc_params_pa (before signal mask -- no MMIO yet)
+    // ----------------------------------------------------------------
+    cbz     x1, .bcr_bad_params
+
+    // Block SIGTERM/SIGINT/SIGHUP during critical MMIO
+    // Save bar0 base (x0) across syscall -- kernel preserves x1-x7
+    mov     x9, x0
+    mov     x0, #SIG_BLOCK
+    adr     x1, .Lbcr_sigmask    // pointer to signal set
+    mov     x2, #0               // don't save old set
+    mov     x3, #8               // sigsetsize
+    mov     x8, #SYS_RT_SIGPROCMASK
+    svc     #0
+    mov     x0, x9               // restore bar0 base
+    // Note: x1-x5 preserved by kernel across syscall
 
     // ----------------------------------------------------------------
     // 1. Write fmc_params_pa to MAILBOX0/1
@@ -92,6 +113,9 @@ gsp_bcr_start:
     add x8, x8, #4                      // x8 = 0x111674 (BCR_PKCPARAM_HI)
     str w7, [x0, x8]                    // BAR0+0x111674 <- manifest[63:32]
 
+    // Barrier: ensure all 6 BCR address writes are committed before lock
+    dsb     st
+
     // ----------------------------------------------------------------
     // 5. Lock BCR and set DMA target = coherent sysmem
     //    bit 31 = LOCK (prevent further BCR modification)
@@ -103,6 +127,13 @@ gsp_bcr_start:
     mov x8, #0x166C
     movk x8, #0x0011, lsl #16           // x8 = 0x11166C (BCR_DMACFG)
     str w7, [x0, x8]                    // BAR0+0x11166C <- LOCK|COHERENT
+    dsb     st                           // drain stores before readback
+    ldr w9, [x0, x8]                    // read back DMACFG
+    tbnz    w9, #31, .bcr_locked        // bit 31 set = locked, good
+    // lock failed
+    mov x0, #-2
+    b       .bcr_unblock_return
+.bcr_locked:
 
     // ----------------------------------------------------------------
     // 6. Start RISC-V CPU
@@ -118,6 +149,32 @@ gsp_bcr_start:
     // ordered and visible to the GPU before we return.
     dsb sy
 
+    mov x0, #0                          // success
+    b       .bcr_unblock_return
+
+.bcr_bad_params:
+    // No MMIO performed, no signals blocked -- return directly
+    mov x0, #-1                         // null fmc_params_pa
     ret
+
+.bcr_unblock_return:
+    // Save return value across sigprocmask call
+    mov     x9, x0
+
+    // Unblock signals
+    mov     x0, #SIG_UNBLOCK
+    adr     x1, .Lbcr_sigmask
+    mov     x2, #0
+    mov     x3, #8
+    mov     x8, #SYS_RT_SIGPROCMASK
+    svc     #0
+
+    // Restore return value
+    mov     x0, x9
+    ret
+
+.align 3
+.Lbcr_sigmask:
+    .quad   0x8006               // bits for SIGHUP(1), SIGINT(2), SIGTERM(15)
 
 .size gsp_bcr_start, . - gsp_bcr_start
