@@ -1268,8 +1268,9 @@ handle_composition:
     bl      skip_newlines
     ldr     w0, [x19]
     cmp     w0, #TOK_INDENT
-    b.ne    .Lcomp_no_body          // no indent → empty body
-    ldr     w9, [x19, #8]           // w9 = body indent level
+    b.ne    .Lcomp_no_body          // no indent token → empty body
+    ldr     w9, [x19, #8]           // w9 = indent count (0 = column 0)
+    cbz     w9, .Lcomp_no_body      // indent 0 = not indented → empty body
     bl      parse_body
 .Lcomp_no_body:
 
@@ -1316,7 +1317,6 @@ parse_body:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
     str     w9, [sp, #-16]!
-
 .Lbody_loop:
     cmp     x19, x27
     b.hs    .Lbody_done
@@ -1937,6 +1937,7 @@ handle_if:
     cmp     w0, #TOK_INDENT
     b.ne    1f
     ldr     w9, [x19, #8]
+    cbz     w9, 1f              // indent 0 = column 0 = no body
 1:  bl      parse_body
 
     // Emit B past else (placeholder)
@@ -1974,6 +1975,7 @@ handle_if:
     cmp     w0, #TOK_INDENT
     b.ne    2f
     ldr     w9, [x19, #8]
+    cbz     w9, 2f              // indent 0 = column 0 = no body
 2:  bl      parse_body
 
 .Lif_end:
@@ -2015,6 +2017,7 @@ handle_while:
     cmp     w0, #TOK_INDENT
     b.ne    1f
     ldr     w9, [x19, #8]
+    cbz     w9, 1f              // indent 0 = column 0 = no body
 1:  stp     x5, x6, [sp, #-16]!
     bl      parse_body
     ldp     x5, x6, [sp], #16
@@ -2121,6 +2124,7 @@ handle_for:
     cmp     w0, #TOK_INDENT
     b.ne    1f
     ldr     w9, [x19, #8]
+    cbz     w9, 1f              // indent 0 = column 0 = no body
 1:  bl      parse_body
 
     // ADD Xi, Xi, Xstep
@@ -2181,6 +2185,7 @@ handle_each:
     cmp     w0, #TOK_INDENT
     b.ne    1f
     ldr     w9, [x19, #8]
+    cbz     w9, 1f              // indent 0 = column 0 = no body
 1:  bl      parse_body
 
     ldp     x29, x30, [sp], #16
@@ -2746,7 +2751,16 @@ parse_error:
     mov     x0, #2
     mov     x8, #64             // SYS_WRITE
     svc     #0
-    // Print token offset as rough position indicator
+    // Print token type
+    ldr     w0, [x19]
+    bl      print_dec
+    adrp    x1, err_at_tok
+    add     x1, x1, :lo12:err_at_tok
+    mov     x2, #10
+    mov     x0, #2
+    mov     x8, #64             // SYS_WRITE
+    svc     #0
+    // Print token offset
     ldr     w0, [x19, #4]
     bl      print_dec
     adrp    x1, err_nl
@@ -2862,6 +2876,8 @@ parse_const_decl:
 err_parse:
     .ascii "parse error\n"
     .byte 0
+dbg_body:
+    .ascii "BODY\n"
 
 err_regspill:
     .ascii "register spill error\n"
