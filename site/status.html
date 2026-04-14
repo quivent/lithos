@@ -24,13 +24,12 @@ nav a { color: var(--text-dim); }
 nav a:hover { color: var(--accent); text-decoration: none; }
 nav .brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
 nav a.active { color: var(--accent); }
-nav .nav-docs { color: var(--bg); background: var(--accent); padding: 0.25rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
-nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
 
 .hero { padding: 4rem 0 2.5rem; border-bottom: 1px solid var(--border); }
 .hero h1 { font-size: 2.6rem; font-weight: 200; letter-spacing: 0.1em; text-transform: uppercase; }
 .hero .sub { color: var(--text-dim); font-size: 1.15rem; margin-top: 0.5rem; letter-spacing: 0.04em; }
 .hero .target { color: var(--accent); font-weight: 500; }
+.hero .milestone { color: var(--green); font-size: 1.4rem; font-weight: 300; margin-top: 1.2rem; letter-spacing: 0.05em; }
 
 .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.2rem; padding: 2.5rem 0; }
 .ov-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem 1.8rem; }
@@ -40,29 +39,11 @@ nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
 .ov-card .bar .fill.green { background: var(--green); }
 .ov-card .bar .fill.partial { background: linear-gradient(90deg, var(--green) 0%, var(--accent) 100%); }
 .ov-card .bar .fill.red { background: var(--red); width: 0%; }
-.ov-card .bar .fill.yellow { background: var(--yellow); }
 .ov-card .pct { font-size: 1.8rem; font-weight: 200; letter-spacing: 0.05em; }
 .ov-card .pct.done { color: var(--green); }
 .ov-card .pct.partial { color: var(--accent); }
 .ov-card .pct.blocked { color: var(--red); }
 .ov-card .note { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.3rem; }
-
-.blocker-banner { background: #1a0808; border: 1px solid #3a1515; border-radius: 10px; padding: 1.5rem 2rem; margin: 2rem 0; }
-.blocker-banner h2 { color: var(--red); font-size: 1rem; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 0.8rem; font-weight: 600; }
-.blocker-banner ol { margin-left: 1.5rem; }
-.blocker-banner li { margin-bottom: 0.6rem; font-size: 1rem; }
-.blocker-banner strong { color: #ff8888; }
-.blocker-banner .dim { color: var(--text-dim); font-size: 0.88rem; }
-.blocker-banner .done-item { color: var(--green); }
-
-.tbd-banner { background: #1a1400; border: 1px solid #3a3000; border-radius: 10px; padding: 1.5rem 2rem; margin: 2rem 0; }
-.tbd-banner h2 { color: var(--yellow); font-size: 1rem; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 0.8rem; font-weight: 600; }
-.tbd-item { margin-bottom: 1.2rem; padding-bottom: 1.2rem; border-bottom: 1px solid #2a2200; }
-.tbd-item:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
-.tbd-item .tbd-title { color: var(--yellow); font-weight: 600; font-size: 0.95rem; margin-bottom: 0.4rem; }
-.tbd-item .option { font-size: 0.88rem; color: var(--text-dim); margin: 0.2rem 0 0.2rem 1rem; }
-.tbd-item .action { font-size: 0.82rem; color: var(--text-faint); margin-top: 0.4rem; font-style: italic; }
-.tbd-resolved { color: var(--green); font-size: 0.88rem; margin-top: 0.2rem; }
 
 section { padding: 2.5rem 0; }
 h2.sec { font-size: 1.15rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.2rem; display: flex; align-items: center; gap: 0.8rem; }
@@ -70,7 +51,6 @@ h2.sec .badge { font-size: 0.7rem; padding: 0.2rem 0.7rem; border-radius: 12px; 
 h2.sec .badge.done { background: #0a2a0a; color: var(--green); border: 1px solid #1a4a1a; }
 h2.sec .badge.wip { background: #2a1a00; color: var(--accent); border: 1px solid #4a3000; }
 h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px solid #4a1a1a; }
-h2.sec .badge.tbd { background: #2a2200; color: var(--yellow); border: 1px solid #4a4000; }
 
 .items { display: grid; gap: 0.5rem; margin-top: 0.8rem; }
 .item { display: grid; grid-template-columns: 2rem 1fr; gap: 0.6rem; align-items: start; padding: 0.5rem 0; font-size: 0.95rem; border-bottom: 1px solid #111120; }
@@ -79,14 +59,23 @@ h2.sec .badge.tbd { background: #2a2200; color: var(--yellow); border: 1px solid
 .item .icon.done { color: var(--green); }
 .item .icon.todo { color: var(--red); }
 .item .icon.wip { color: var(--accent); }
-.item .icon.tbd { color: var(--yellow); }
 .item .desc code { background: #0e0e1a; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.88em; font-family: 'SF Mono', 'Fira Code', monospace; }
 .item .desc .detail { color: var(--text-dim); font-size: 0.85rem; }
 .item .desc .blocking { color: var(--red); font-weight: 600; font-size: 0.82rem; }
-.item .desc .tbdlabel { color: var(--yellow); font-weight: 600; font-size: 0.82rem; }
 
 .arch-note { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.6rem; margin: 1rem 0 1.8rem; font-size: 0.92rem; color: var(--text-dim); }
 .arch-note strong { color: var(--text); }
+
+.next-steps { background: #0a1a0a; border: 1px solid #1a3a1a; border-radius: 10px; padding: 1.5rem 2rem; margin: 2rem 0; }
+.next-steps h2 { color: var(--green); font-size: 1rem; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 1rem; font-weight: 600; }
+.next-steps h3 { color: var(--accent); font-size: 0.9rem; margin: 1rem 0 0.5rem; font-weight: 600; }
+.next-steps ol { margin-left: 1.5rem; }
+.next-steps li { margin-bottom: 0.5rem; font-size: 0.95rem; }
+
+.platform-table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+.platform-table th, .platform-table td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+.platform-table th { color: var(--accent); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.platform-table td:first-child { color: var(--text-dim); font-weight: 500; }
 
 .timestamp { color: var(--text-faint); font-size: 0.78rem; text-align: center; padding: 3rem 0 2rem; letter-spacing: 0.06em; }
 </style>
@@ -96,16 +85,7 @@ h2.sec .badge.tbd { background: #2a2200; color: var(--yellow); border: 1px solid
 <nav>
 <div class="wrap">
   <a href="/" class="brand">Lithos</a>
-  <a href="/">Home</a>
-  <a href="/architecture">Architecture</a>
-  <a href="/compiler">Compiler</a>
-  <a href="/pipeline">Inference Stack</a>
-  <a href="/roadmap">Roadmap</a>
   <a href="/status" class="active">Status</a>
-  <a href="/language">Language</a>
-  <a href="/performance">Performance</a>
-  <a href="/glossary">Glossary</a>
-  <a href="/docs" class="nav-docs">Docs</a>
 </div>
 </nav>
 
@@ -114,212 +94,142 @@ h2.sec .badge.tbd { background: #2a2200; color: var(--yellow); border: 1px solid
 <div class="hero">
   <h1>Where We Stand</h1>
   <p class="sub">Target: <span class="target">Qwen 3.5 27B</span> &mdash; 64 hybrid layers, GPTQ W4A16, GH200</p>
-  <p class="sub" style="margin-top:0.3rem;">Zero Forth. Zero Python. Zero CUDA runtime. All <code>.ls</code> source.</p>
-</div>
-
-<!-- ==================== ARCHITECTURE NOTE ==================== -->
-<div class="arch-note" style="margin-top:2rem;">
-  <strong>Architecture (confirmed):</strong> Two cooperative megakernels &mdash; one cubin per layer type. 48 DeltaNet layers in one cubin, 16 full-attention layers in another. Within each megakernel, layers loop at <strong>runtime</strong> with a cooperative grid-sync barrier (<code>bar.sync</code> / <code>membar.gl</code>) between iterations. Not compile-time unrolling &mdash; that would copy the layer body 48&times; or 16&times;, producing enormous inflexible code. Both cubins emitted as <strong>raw Hopper binary</strong> (direct instruction encoding). No SASS assembler, no ptxas, no PTX, no CUDA runtime.
+  <p class="milestone">compiler.ls compiles cleanly &rarr; 47KB ARM64 ELF</p>
 </div>
 
 <!-- ==================== OVERVIEW CARDS ==================== -->
 <div class="overview">
   <div class="ov-card">
-    <h3>Foundations</h3>
+    <h3>Bootstrap</h3>
     <div class="bar"><div class="fill green" style="width:100%"></div></div>
-    <div class="pct done">Complete</div>
-    <div class="note">Language, kernels, grammar, arch dicts, docs</div>
+    <div class="pct done">Done</div>
+    <div class="note">5044 lines &rarr; 47,264 bytes. Clean compile. Both platforms.</div>
   </div>
   <div class="ov-card">
-    <h3>Compiler</h3>
+    <h3>Compiler Source</h3>
     <div class="bar"><div class="fill green" style="width:100%"></div></div>
     <div class="pct done">Written</div>
-    <div class="note">Pure Lithos syntax. Zero =, fn, ->, load_u*, syscall.</div>
+    <div class="note">Pure Lithos. Lexer + parser + ARM64 + SM90 + ELF writer.</div>
   </div>
   <div class="ov-card">
-    <h3>Bootstrap</h3>
-    <div class="bar"><div class="fill partial" style="width:80%"></div></div>
-    <div class="pct partial">~80%</div>
-    <div class="note">Interpreter landed. Parses to ~505. Build broken (Apple ld flags). Composition calls TBD.</div>
+    <h3>Self-Host</h3>
+    <div class="bar"><div class="fill red"></div></div>
+    <div class="pct blocked">Next</div>
+    <div class="note">lithos-stage1 exists. Needs testing on GH200.</div>
+  </div>
+  <div class="ov-card">
+    <h3>GPU Backend</h3>
+    <div class="bar"><div class="fill green" style="width:100%"></div></div>
+    <div class="pct done">Written</div>
+    <div class="note">35+ raw SM90 opcodes. No ptxas. Direct binary emission.</div>
   </div>
   <div class="ov-card">
     <h3>Runtime</h3>
     <div class="bar"><div class="fill green" style="width:100%"></div></div>
     <div class="pct done">Written</div>
-    <div class="note">All .ls written. register_count found (SPD 0x094). Pushbuffer needs 5-part update.</div>
-  </div>
-  <div class="ov-card">
-    <h3>Hardware</h3>
-    <div class="bar"><div class="fill partial" style="width:65%"></div></div>
-    <div class="pct partial">65%</div>
-    <div class="note">GSP+FSP wired. cbuf0 probe DONE. Launch = 5 inline loads (QMD+fence+ctx+SPD+patch).</div>
+    <div class="note">11 .ls files replacing 42 libcuda calls. Untested.</div>
   </div>
   <div class="ov-card">
     <h3>First Token</h3>
     <div class="bar"><div class="fill red"></div></div>
     <div class="pct blocked">Blocked</div>
-    <div class="note">Waiting on bootstrap → first compile → pushbuffer 5-part → kernel exec.</div>
+    <div class="note">Needs self-host &rarr; kernel compile &rarr; GPU execution.</div>
   </div>
 </div>
 
-<!-- ==================== BLOCKER BANNER ==================== -->
-<div class="blocker-banner">
-  <h2>Critical Path &mdash; in order</h2>
+<!-- ==================== NEXT STEPS ==================== -->
+<div class="next-steps">
+  <h2>Next Steps</h2>
+  <h3>On GH200 (Linux ARM64)</h3>
   <ol>
-    <li><strong>Bootstrap parser stabilization</strong> &mdash; compositions + bindings <span class="dim">(see TBD §1, §3 below)</span></li>
-    <li><strong>Bootstrap build fix</strong> &mdash; GNU ld flags rejected by Apple ld; revert parser to <code>.bak</code> for a linking build on Linux</li>
-    <li><span class="done-item"><del>compiler.ls rewrite</del> DONE</span> &mdash; pure Lithos, zero old syntax</li>
-    <li><span class="done-item"><del>FSP boot wiring</del> DONE</span></li>
-    <li><span class="done-item"><del>register_count probe</del> DONE</span> &mdash; in 384-byte Shader Program Descriptor at offset 0x094 (bits 23:16)</li>
-    <li><strong>Pushbuffer 5-part update</strong> &mdash; QMD + fence + context + SPD (with register_count) + patch. Currently only QMD load is implemented.</li>
-    <li><strong>First compile</strong> &mdash; bootstrap parses compiler.ls &rarr; lithos-stage1</li>
-    <li><strong>Self-compile</strong> &mdash; lithos-stage1 compiles itself (fixed point test)</li>
-    <li><strong>First kernel execution</strong> &mdash; GSP + GPFIFO + QMD &rarr; GPU result</li>
-    <li><strong>One token through one layer</strong> &mdash; all 71 DeltaNet steps verified vs reference</li>
-    <li><strong>Full 64-layer inference</strong> &mdash; Qwen 3.5 27B produces coherent text</li>
+    <li>Build bootstrap: <code>cd bootstrap && ./build.sh</code></li>
+    <li>Compile compiler.ls &rarr; lithos-stage1</li>
+    <li>Test lithos-stage1 on a simple .ls file</li>
+    <li>Self-host: lithos-stage1 compiles compiler.ls &rarr; lithos-stage2</li>
+    <li>Fixed point: lithos-stage2 compiles compiler.ls &rarr; lithos-verify; diff must match</li>
+    <li>Compile safetensors.ls as separate unit</li>
+    <li>Compile inference kernels &rarr; SM90 cubins</li>
+    <li>First kernel execution on Hopper</li>
+    <li>First token through Qwen 3.5 27B</li>
+  </ol>
+  <h3>On macOS (Apple Silicon)</h3>
+  <ol>
+    <li>Verify lithos-stage1 correctness via compile-darwin.sh wrapper</li>
+    <li>Self-host test (stage1 compiles compiler.ls &rarr; stage2)</li>
+    <li>Metal GPU backend (when ready)</li>
   </ol>
 </div>
 
-<!-- ==================== TBD BANNER ==================== -->
-<div class="tbd-banner">
-  <h2>&#9888; TBD &mdash; Contradictory Evidence / Requires Investigation</h2>
-
-  <div class="tbd-item">
-    <div class="tbd-title">§1 &mdash; Composition parsing status</div>
-    <div class="option">Option A (legacy/PLAN.md): <code>name args :</code> &rarr; parse error at line 1196, crashes &mdash; BLOCKING</div>
-    <div class="option">Option B (bootstrap/STATUS.md): Compositions &mdash; <em>Works</em>, emits STP/LDP prologue/epilogue, params in X0-X7</div>
-    <div class="action">Action: run <code>./lithos-bootstrap simple_composition.ls</code>. Check if STATUS.md reflects a version since broken by in-progress width-specific memory op work.</div>
-  </div>
-
-  <div class="tbd-item">
-    <div class="tbd-title">§2 &mdash; Computed-offset indexing + Conv1D</div>
-    <div class="option">Option A (legacy/PLAN.md): Both <code>[&checkmark;]</code> resolved &mdash; &ldquo;Conv1D 4-tap fully implemented in recur.ls, computed-offset <code>x[var]</code> works&rdquo;</div>
-    <div class="option">Option B (legacy/GAPS.md): Both blocking &mdash; stub comment: &ldquo;Hand-unrolled in PTX below; Lithos lacks computed-offset indexing&rdquo;</div>
-    <div class="action">Action: <code>grep -n "Hand-unrolled\|x\[var\]" inference/recur.ls</code></div>
-  </div>
-
-  <div class="tbd-item">
-    <div class="tbd-title">§3 &mdash; <code>=</code> assignment in the language</div>
-    <div class="option">Option A (legacy/PLAN.md): Language has NO <code>=</code>. Bindings: <code>name expr</code> (no equals). Bootstrap treating first token as name is a BLOCKING gap.</div>
-    <div class="option">Option B (bootstrap/STATUS.md): <code>x = expr</code> assignment &mdash; <em>Works</em>, allocates register, adds to symbol table.</div>
-    <div class="action">Action: <code>grep -n " = " compiler/compiler.ls | head -20</code> &mdash; if compiler.ls uses <code>=</code>, bootstrap must keep it; if not, bootstrap <code>=</code> support is legacy-only.</div>
-  </div>
-
-  <div class="tbd-item">
-    <div class="tbd-title">§4 &mdash; <code>sample_argmax</code> in reduce.ls</div>
-    <div class="option">Option A (legacy/PLAN.md): Fully implemented, not a stub</div>
-    <div class="option">Option B (legacy/GAPS.md §3c): Stub at <code>reduce.ls:209&ndash;217</code></div>
-    <div class="action">Action: <code>sed -n '205,220p' inference/reduce.ls</code></div>
-  </div>
-
-  <div class="tbd-item">
-    <div class="tbd-title">§5 &mdash; Forth files</div>
-    <div class="tbd-resolved">&#10003; RESOLVED &mdash; No Forth. legacy/PLAN.md is correct. 21 .fs files deleted. legacy/GAPS.md references were stale (written against pre-deletion state).</div>
-  </div>
-</div>
+<!-- ==================== PLATFORMS ==================== -->
+<section>
+<h2 class="sec">Platforms</h2>
+<table class="platform-table">
+  <tr><th></th><th>Linux / GH200</th><th>macOS / Apple Silicon</th></tr>
+  <tr><td>Host ISA</td><td>ARM64</td><td>ARM64</td></tr>
+  <tr><td>Host ABI</td><td>Linux syscalls (X8, SVC #0)</td><td>Darwin syscalls (X16, SVC #0x80)</td></tr>
+  <tr><td>Binary format</td><td>ELF64</td><td>Mach-O</td></tr>
+  <tr><td>GPU</td><td>Hopper SM90a</td><td>Apple GPU (M-series)</td></tr>
+  <tr><td>GPU backend</td><td>Raw SM90 binary</td><td>Metal (floor)</td></tr>
+  <tr><td>GPU access</td><td>vfio-pci + MMIO</td><td>Metal API</td></tr>
+  <tr><td>Bootstrap</td><td>build.sh</td><td>build-darwin.sh (11 transforms)</td></tr>
+</table>
+</section>
 
 <!-- ==================== BOOTSTRAP ==================== -->
 <section>
-<h2 class="sec">Bootstrap <span class="badge blocked">BUILD BROKEN</span></h2>
-<div class="arch-note">Pure ARM64 assembly in <code>bootstrap/*.s</code> (9 files, ~17,000+ lines total). Compiles <code>compiler.ls</code> into a native ARM64 binary. Build broken: GNU ld flags rejected by Apple ld. Revert <code>lithos-parser.s</code> to <code>.bak</code> for a linking build on Linux.</div>
+<h2 class="sec">Bootstrap Compiler <span class="badge done">COMPILES FULL compiler.ls</span></h2>
+<div class="arch-note"><code>bootstrap/lithos-table.s</code> &mdash; 3502 lines of ARM64 assembly. Table-driven single-pass compiler. Shared between Linux and macOS. Compiles <code>compiler.ls</code> (5044 lines) to 47KB ARM64 ELF.</div>
 <div class="items">
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Binary builds, 35KB (was 528MB)</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">DTC runtime wired (<code>driver.s</code>, macros prelude)</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">7 stack-alignment SIGBUS bugs fixed</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Smoke test: <code>var x 42</code> &rarr; valid ARM64 ELF</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">24 ARM64 emission helpers, verified against objdump</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Expression parsing: <code>var y x + 1</code> &rarr; valid ELF</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">3 parser modules landed: expr-eval.s, compose.s, control.s</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Interpreter landed: <code>lithos-interp.s</code> &mdash; parses compiler.ls cleanly (exits 0)</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">compiler.ls parses through ~line 505 (links, compositions)</div></div>
-  <div class="item"><div class="icon tbd">?</div><div class="desc">Composition calls: interpreter exits 0 but calls still buggy &mdash; <span class="tbdlabel">TBD §1</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>compiler.ls</code> parses cleanly end-to-end <span class="blocking">BLOCKING</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Build fix: replace GNU ld flags with Apple ld-compatible equivalents <span class="blocking">BLOCKING on macOS</span></div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Register allocator: X9-X28 (20 regs) + spill/fill mechanism</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Compositions, bindings, reassignment, compound conditionals (if>=, if<, if==, if!=)</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Multi-line expression continuation (| on next line)</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Array subscript <code>name[expr]</code>, indexed load <code>&rarr; 8 base offset</code></div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Expression-level composition calls inside parens</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Label definitions (<code>name:</code> inside body)</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Bare expression statements (return values)</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Body indent detection with blank-line handling</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">macOS: 11-transform build script (syscalls, ADRP, argc/argv, linker)</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Full compile: 5044 lines &rarr; 47,264 bytes ARM64 ELF. No hacks.</div></div>
 </div>
-<p style="color:var(--text-faint); font-size:0.82rem; margin-top:1rem;">Known bugs: width-specific memory ops emit 64-bit regardless of width &bull; TOK_TRAP lexer mismatch &bull; float literals treated as integers &bull; unary math and reductions are stubs &bull; register allocator limited to X9&ndash;X15 (7 regs, no spill) &bull; composition call always returns X0</p>
 </section>
 
 <!-- ==================== COMPILER ==================== -->
 <section>
-<h2 class="sec">Self-Hosting Compiler <span class="badge wip">WRITTEN &mdash; AWAITING BOOTSTRAP</span></h2>
-<div class="arch-note"><code>compiler/compiler.ls</code> &mdash; Reads .ls + safetensors, emits ARM64 host code or raw Hopper binary. Cannot run until bootstrap compiles it.</div>
+<h2 class="sec">Self-Hosting Compiler <span class="badge wip">COMPILED &mdash; AWAITING TEST</span></h2>
+<div class="arch-note"><code>compiler/compiler.ls</code> (5044 lines) &mdash; single-pass recursive descent, direct emission. No AST, no IR. Two backends: ARM64 (host) + SM90 (GPU). <code>compiler/safetensors.ls</code> (423 lines) split out as separate compilation unit.</div>
 <div class="items">
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Lexer: UTF-8 multi-byte for all unicode symbols (&rarr; &larr; &uarr; &darr; &Sigma; &radic; &cong; &equiv;)</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">ARM64 backend: 90+ emitters, syscalls, branch patching</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">GPU backend: 35+ probe-verified raw Hopper opcodes, ctrl words, grid-sync</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Safetensors reader + <code>config-reader.ls</code> (17 Qwen fields)</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">ELF writer: 9-section cubin ELF64, cooperative attributes</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Parser: recursive descent, dual backend</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>megakernel-link.ls</code> <code>megakernel-link.ls</code> &mdash; 833 lines: forwardmdash; forward pass + recurrence, grid-sync between layers</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Rewritten to pure Lithos: 1,174 bindings, 75 memory ops, 38 trap. Zero old syntax.</div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>cubin_buf</code> is 512KB; 64-layer megakernel needs ~300MB <span class="blocking">BLOCKING</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Register allocator: linear-only, no liveness. DeltaNet will exhaust 255-reg budget. <span class="blocking">BLOCKING AT SCALE</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Cooperative grid-sync primitives in GPU emitter (needed for megakernel architecture)</div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">FP16 opcodes (HADD, HMUL, HFMA): zero FP16 in emit-gpu.ls &mdash; performance gap, not correctness</div></div>
-</div>
-</section>
-
-<!-- ==================== KERNELS ==================== -->
-<section>
-<h2 class="sec">Inference Kernels <span class="badge done">WRITTEN</span></h2>
-<div class="arch-note">10 files in <code>inference/*.ls</code>. Full Qwen 3.5 27B hybrid forward pass. Uncompiled until bootstrap works.</div>
-<div class="items">
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>attend.ls</code> &mdash; DeltaNet + mRoPE (theta 10M, partial rotary 0.25)</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>attend_full.ls</code> &mdash; softmax attention (GQA 24/4, output gate)</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>gemv.ls</code> &mdash; W4A16 GPTQ GEMV, dequant correct</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>deltanet_fused.ls</code> + <code>reduce.ls</code> + <code>elementwise.ls</code> + 4 more</div></div>
-  <div class="item"><div class="icon tbd">?</div><div class="desc"><code>sample_argmax</code> in reduce.ls &mdash; implemented or stub? <span class="tbdlabel">TBD §4</span></div></div>
-  <div class="item"><div class="icon tbd">?</div><div class="desc">Computed-offset indexing + Conv1D &mdash; resolved or still stub? <span class="tbdlabel">TBD §2</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">No fused MLP kernel. No autoregressive loop. No tokenizer.</div></div>
-</div>
-</section>
-
-<!-- ==================== RUNTIME ==================== -->
-<section>
-<h2 class="sec">Runtime &mdash; libcuda Replacement <span class="badge wip">WRITTEN, UNTESTED</span></h2>
-<div class="arch-note">11 files in <code>runtime/*.ls</code> replacing 42 libcuda calls. None have executed &mdash; the compiler must work first.</div>
-<div class="items">
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>init.ls</code> + <code>mem.ls</code> + <code>elf_load.ls</code></div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>qmd.ls</code> + <code>doorbell.ls</code> + <code>sync.ls</code> + <code>teardown.ls</code></div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>launch.ls</code> + <code>dispatch.ls</code> &mdash; competing implementations (structural divergence, both missing 5-part update)</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>src/launcher.ls</code> &mdash; 162-line orchestrator, zero libcuda</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>register_count</code>: in Shader Program Descriptor (SPD) at offset 0x094, bits 23:16. 3-point verified. Formula: <code>(0x08 &lt;&lt; 24) | (reg_count &lt;&lt; 16) | 0x0001</code></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>pushbuffer.ls</code>: only QMD load (#0) implemented. Missing 4 of 5: fence (8B) + context descriptor (384B) + SPD (384B) + patch (4B). <span class="blocking">BLOCKS KERNEL LAUNCH</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">No SPD builder or SPD memory allocation. register_count must go in SPD &mdash; no code writes it anywhere yet. <span class="blocking">BLOCKS KERNEL LAUNCH</span></div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>sync_wait_flag_timeout</code> exists in sync.ls but unwired &mdash; infinite hang on any GPU fault</div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc"><code>$BAR0_SYSFS_PATH</code> / <code>$BAR4_SYSFS_PATH</code> macros undefined &mdash; build-time gap</div></div>
-</div>
-</section>
-
-<!-- ==================== HARDWARE ==================== -->
-<section>
-<h2 class="sec">Hardware Path <span class="badge wip">IN PROGRESS</span></h2>
-<div class="arch-note">ARM64 assembly in <code>GSP/*.s</code>. Boots GPU, creates channels, dispatches work via direct register writes.</div>
-<div class="items">
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">BAR mapping + PMC check + Falcon reset + HBM alloc + FW load</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">BCR start + PRIV_LOCKDOWN polling + RPC channel</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc">FSP subsystem wired into boot.s at step 6. BCR/FSP ordering fixed.</div></div>
-  <div class="item"><div class="icon done">&#10003;</div><div class="desc"><code>register_count</code> location resolved: SPD offset 0x094. cbuf0 is NOT the location (prior docs were wrong).</div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">vfio-pci: not implemented (sysfs mmap only)</div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">QMD builder untested &mdash; no kernel has executed</div></div>
-  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">FSP communication step 7 of 9: placeholder stub in boot.s</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Lexer: UTF-8 multi-byte (&rarr; &larr; &uarr; &darr; &Sigma; &radic;)</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">ARM64 backend: 90+ emitters, branch patching</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">GPU backend: 35+ raw Hopper opcodes, ctrl words, grid-sync</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Parser: recursive descent, dual backend routing</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">ELF writer: ARM64 ELF + 9-section cubin</div></div>
+  <div class="item"><div class="icon done">&#10003;</div><div class="desc">Safetensors reader: split to <code>safetensors.ls</code> (423 lines, separate unit)</div></div>
+  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Self-host verification (stage1 &rarr; stage2 &rarr; fixed point)</div></div>
+  <div class="item"><div class="icon todo">&#9675;</div><div class="desc">Kernel compilation (inference/*.ls &rarr; SM90 cubins)</div></div>
 </div>
 </section>
 
 <!-- ==================== CRITICAL PATH ==================== -->
 <section>
-<h2 class="sec">Critical Path to First Token</h2>
+<h2 class="sec">Critical Path</h2>
 <pre style="background:#0e0e1a; border:1px solid var(--border); border-radius:8px; padding:1.5rem 2rem; font-family:'SF Mono','Fira Code',monospace; font-size:0.9rem; overflow-x:auto; line-height:2;">
-<span style="color:var(--red)">BOOTSTRAP PARSER</span> ──→ <span style="color:var(--red)">BUILD FIX</span> ──→ <span style="color:var(--accent)">stage1</span> ──→ <span style="color:var(--green)">self-compile</span>
-                                              ├──→ <span style="color:var(--cyan)">GSP boot</span> ──┐
-                       5-part pushbuffer ─────┤                 ├→ <span style="color:var(--green)">first exec</span> ──→ <span style="color:var(--accent)">one token</span> ──→ <span style="color:var(--green)">full model</span>
-                              SPD builder ────┤                 │
-                                              ├──→ <span style="color:var(--cyan)">GPFIFO</span> ─────┘
-                            kernels ──────────┴──→ <span style="color:var(--blue)">megakernel</span> ──┘
+<span style="color:var(--green)">BOOTSTRAP</span> ──→ <span style="color:var(--green)">compiler.ls compiled</span> ──→ <span style="color:var(--accent)">test stage1</span> ──→ <span style="color:var(--accent)">self-host</span> ──→ <span style="color:var(--cyan)">fixed point</span>
+                                                                        │
+                                          <span style="color:var(--cyan)">compile kernels</span> ───────────────┤
+                                          <span style="color:var(--cyan)">compile safetensors.ls</span> ────────┤
+                                                                        │
+                                          <span style="color:var(--blue)">GSP boot + GPFIFO</span> ─────────────┤
+                                          <span style="color:var(--blue)">5-part pushbuffer + SPD</span> ────────┤
+                                                                        ▼
+                                                              <span style="color:var(--accent)">first kernel exec</span>
+                                                                        │
+                                                              <span style="color:var(--accent)">first token</span>
+                                                                        │
+                                                              <span style="color:var(--green)">full inference</span>
 </pre>
 </section>
 
-<p class="timestamp">Last updated: 2026-04-14 &mdash; synced with STATUS.md</p>
+<p class="timestamp">Last updated: 2026-04-14</p>
 
 </div>
 </body>
