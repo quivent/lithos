@@ -1556,6 +1556,18 @@ handle_ident_stmt:
     b.eq    .Lhi_comp_call
 
 .Lhi_not_known:
+    // Check if it's a known VARIABLE — then "name expr" is reassignment
+    bl      sym_lookup
+    cbz     x0, .Lhi_truly_unknown
+    ldr     w1, [x0, #SYM_KIND]
+    cmp     w1, #KIND_VAR
+    b.eq    .Lhi_reassign
+    cmp     w1, #KIND_LOCAL_REG
+    b.eq    .Lhi_reassign
+    cmp     w1, #KIND_PARAM
+    b.eq    .Lhi_reassign
+
+.Lhi_truly_unknown:
     // Peek at next token
     mov     x4, x19
     add     x4, x4, #TOK_STRIDE_SZ
@@ -1576,6 +1588,22 @@ handle_ident_stmt:
 
     // Unknown name followed by tokens → binding (name expr)
     bl      handle_binding
+    ldp     x29, x30, [sp], #16
+    ret
+
+.Lhi_reassign:
+    // Known variable: name expr → evaluate expr, MOV into variable's register
+    ldr     w5, [x0, #SYM_REG]     // existing register
+    add     x19, x19, #TOK_STRIDE_SZ   // skip name
+    stp     w5, wzr, [sp, #-16]!
+    bl      parse_expr              // new value in w0
+    ldp     w5, wzr, [sp], #16
+    cmp     w0, w5
+    b.eq    .Lhi_reassign_done      // same register, no MOV needed
+    mov     w1, w0
+    mov     w0, w5
+    bl      emit_mov_reg
+.Lhi_reassign_done:
     ldp     x29, x30, [sp], #16
     ret
 
