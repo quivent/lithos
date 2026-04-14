@@ -1,30 +1,78 @@
-// lithos-table.s — Table-driven compiler for Lithos .ls source files
-//
-// Replaces lithos-parser.s, lithos-expr-eval.s, lithos-compose.s,
-// and lithos-control.s with a single flat lookup-table approach.
-//
-// The insight: every Lithos construct maps to 1-3 ARM64 instructions.
-// No AST, no precedence climbing, no expression trees. Just:
-//   read token → look up handler → emit bytes.
-//
-// For expressions: left-to-right with explicit parens for grouping.
-// Each operator emits one instruction. Bump register allocator,
-// reset between statements.
-//
-// Register conventions (inherited from lithos-bootstrap.s):
-//   X19 = TOKP   — pointer to current token triple
-//   X27 = TOKEND — pointer past last token
-//   X28 = SRC    — pointer to source buffer
-//
-// Token triple layout: [+0] u32 type, [+4] u32 offset, [+8] u32 length
-//   Stride = 12 bytes per token.
-//
-// Build: replaces lithos-parser.s + lithos-expr-eval.s + lithos-compose.s
-//        + lithos-control.s in build.sh
+.global alloc_reg
+.global code_PARSE_TOKENS
+.global emit_add_reg
+.global emit_and_reg
+.global emit_b
+.global emit_b_cond
+.global emit_bl
+.global emit_cbnz
+.global emit_cbz
+.global emit_cmp_reg
+.global emit_cset
+.global emit_cur
+.global emit_eor_reg
+.global emit_ldr_imm
+.global emit_ldr_reg
+.global emit_ldrb_reg
+.global emit_ldrh_reg
+.global emit_lsl_reg
+.global emit_lsr_reg
+.global emit_mov_imm16
+.global emit_mov_imm64
+.global emit_mov_reg
+.global emit_movk_imm16
+.global emit_mul_reg
+.global emit_nop
+.global emit_orr_reg
+.global emit_ptr
+.global emit_ret_inst
+.global emit_sdiv_reg
+.global emit_str_imm
+.global emit_str_reg
+.global emit_strb_reg
+.global emit_strh_reg
+.global emit_sub_reg
+.global emit_svc
+.global emit32
+.global entry_p_parse_tokens
+.global free_reg
+.global next_reg
+.global parse_additive
+.global parse_atom
+.global parse_binding_compose
+.global parse_bitwise
+.global parse_body
+.global parse_body_compose
+.global parse_buf_decl
+.global parse_const_decl
+.global parse_dollar_reg
+.global parse_error
+.global parse_error_regspill
+.global parse_expr
+.global parse_ident_compose
+.global parse_int_literal
+.global parse_mem_load
+.global parse_mem_store
+.global parse_multiplicative
+.global parse_reg_read
+.global parse_reg_write
+.global parse_return_compose
+.global parse_shift
+.global parse_statement
+.global parse_stmt_compose
+.global parse_tokens
+.global parse_toplevel
+.global parse_var_decl
+.global patch_b
+.global patch_b_cond
+.global reg_floor
+.global reset_regs
+.global scope_depth
+.global skip_newlines
+.global sym_add
+.global sym_lookup
+.global sym_pop_scope
 
-// ============================================================
-// Token type constants
-// ============================================================
 .equ TOK_EOF,       0
 .equ TOK_NEWLINE,   1
 .equ TOK_INDENT,    2
@@ -84,50 +132,77 @@
 .equ TOK_COS,       81
 .equ TOK_TRAP,      89
 .equ TOK_DOLLAR,    97
-
 .equ TOK_STRIDE_SZ, 12
-
-// Symbol table entry layout
 .equ SYM_SIZE,      24
 .equ SYM_NAME_OFF,  0
 .equ SYM_NAME_LEN,  4
 .equ SYM_KIND,      8
 .equ SYM_REG,       12
 .equ SYM_DEPTH,     16
-
-// Symbol kinds
 .equ KIND_LOCAL_REG, 0
 .equ KIND_PARAM,     1
 .equ KIND_VAR,       2
 .equ KIND_BUF,       3
 .equ KIND_COMP,      4
 .equ KIND_CONST,     6
-
 .equ MAX_SYMS,      512
 .equ MAX_PATCH,     64
 .equ MAX_LOOP,      16
-
-// ARM64 instruction constants
 .equ ARM64_NOP,     0xD503201F
 .equ ARM64_RET,     0xD65F03C0
-.equ ARM64_SVC_0,   0xD4000001
-
-// Register allocator range
-// X9-X17 = 9 scratch registers. X18 is macOS platform register.
-// X19-X28 are callee-saved and used by the parser/DTC — DO NOT ALLOCATE.
+.equ ARM64_SVC_0,   0xD4001001
 .equ REG_FIRST,     9
 .equ REG_LAST,      17
-
-// Condition codes
 .equ CC_EQ, 0
 .equ CC_NE, 1
 .equ CC_LT, 11
 .equ CC_GE, 10
 .equ CC_GT, 12
 .equ CC_LE, 13
+.equ CODE_BUF_SIZE, 1048576
+// lithos-table.s — Table-driven compiler for Lithos .ls source files
+//
+// Replaces lithos-parser.s, lithos-expr-eval.s, lithos-compose.s,
+// and lithos-control.s with a single flat lookup-table approach.
+//
+// The insight: every Lithos construct maps to 1-3 ARM64 instructions.
+// No AST, no precedence climbing, no expression trees. Just:
+//   read token → look up handler → emit bytes.
+//
+// For expressions: left-to-right with explicit parens for grouping.
+// Each operator emits one instruction. Bump register allocator,
+// reset between statements.
+//
+// Register conventions (inherited from lithos-bootstrap.s):
+//   X19 = TOKP   — pointer to current token triple
+//   X27 = TOKEND — pointer past last token
+//   X28 = SRC    — pointer to source buffer
+//
+// Token triple layout: [+0] u32 type, [+4] u32 offset, [+8] u32 length
+//   Stride = 12 bytes per token.
+//
+// Build: replaces lithos-parser.s + lithos-expr-eval.s + lithos-compose.s
+//        + lithos-control.s in build.sh
+
+// ============================================================
+// Token type constants
+// ============================================================
+
+
+// Symbol table entry layout
+
+// Symbol kinds
+
+
+// ARM64 instruction constants
+
+// Register allocator range
+// X9-X17 = 9 scratch registers. X18 is macOS platform register.
+// X19-X28 are callee-saved and used by the parser/DTC — DO NOT ALLOCATE.
+
+// Condition codes
 
 // Code buffer size
-.equ CODE_BUF_SIZE, 1048576
 
 // ============================================================
 // Macros
@@ -220,12 +295,12 @@ sym_lookup:
     stp     x6, x7, [sp, #-16]!
     ldr     w0, [x19, #4]          // token offset
     ldr     w1, [x19, #8]          // token length
-    adrp    x2, ls_sym_count
-    add     x2, x2, :lo12:ls_sym_count
+    adrp x2, ls_sym_count@PAGE
+    add     x2, x2, ls_sym_count@PAGEOFF
     ldr     w3, [x2]
     cbz     w3, .Lsym_notfound
-    adrp    x4, ls_sym_table
-    add     x4, x4, :lo12:ls_sym_table
+    adrp x4, ls_sym_table@PAGE
+    add     x4, x4, ls_sym_table@PAGEOFF
     sub     w3, w3, #1
     mov     w5, #SYM_SIZE
     madd    x6, x3, x5, x4
@@ -250,8 +325,8 @@ sym_lookup:
     mov     x0, x6
     b       .Lsym_done
 .Lsym_next:
-    adrp    x4, ls_sym_table
-    add     x4, x4, :lo12:ls_sym_table
+    adrp x4, ls_sym_table@PAGE
+    add     x4, x4, ls_sym_table@PAGEOFF
     cmp     x6, x4
     b.ls    .Lsym_notfound
     sub     x6, x6, #SYM_SIZE
@@ -268,11 +343,11 @@ sym_lookup:
 sym_add:
     stp     x30, x19, [sp, #-16]!
     stp     x4, x5, [sp, #-16]!
-    adrp    x4, ls_sym_count
-    add     x4, x4, :lo12:ls_sym_count
+    adrp x4, ls_sym_count@PAGE
+    add     x4, x4, ls_sym_count@PAGEOFF
     ldr     w5, [x4]
-    adrp    x0, ls_sym_table
-    add     x0, x0, :lo12:ls_sym_table
+    adrp x0, ls_sym_table@PAGE
+    add     x0, x0, ls_sym_table@PAGEOFF
     mov     w6, #SYM_SIZE
     madd    x0, x5, x6, x0
     ldr     w6, [x19, #4]
@@ -292,10 +367,10 @@ sym_pop_scope:
     stp     x30, xzr, [sp, #-16]!
     stp     x2, x3, [sp, #-16]!
     mov     w2, w0
-    adrp    x3, ls_sym_count
-    add     x3, x3, :lo12:ls_sym_count
-    adrp    x4, ls_sym_table
-    add     x4, x4, :lo12:ls_sym_table
+    adrp x3, ls_sym_count@PAGE
+    add     x3, x3, ls_sym_count@PAGEOFF
+    adrp x4, ls_sym_table@PAGE
+    add     x4, x4, ls_sym_table@PAGEOFF
 .Lpop_loop:
     ldr     w0, [x3]
     cbz     w0, .Lpop_done
@@ -317,8 +392,8 @@ sym_pop_scope:
 // ============================================================
 
 alloc_reg:
-    adrp    x0, next_reg
-    add     x0, x0, :lo12:next_reg
+    adrp x0, next_reg@PAGE
+    add     x0, x0, next_reg@PAGEOFF
     ldr     w1, [x0]
     cmp     w1, #REG_LAST
     b.gt    .Lalloc_spill
@@ -338,8 +413,8 @@ alloc_reg:
     add     w0, w0, #REG_FIRST
     bl      emit32
     // Increment spill count
-    adrp    x0, spill_count
-    add     x0, x0, :lo12:spill_count
+    adrp x0, spill_count@PAGE
+    add     x0, x0, spill_count@PAGEOFF
     ldr     w1, [x0]
     add     w1, w1, #1
     str     w1, [x0]
@@ -353,13 +428,13 @@ free_reg:
     // Reclaim: set next_reg = w0 (frees everything above)
     // If spilled registers exist and we're freeing below the spill point,
     // emit fills to restore them.
-    adrp    x1, next_reg
-    add     x1, x1, :lo12:next_reg
+    adrp x1, next_reg@PAGE
+    add     x1, x1, next_reg@PAGEOFF
     str     w0, [x1]
     // Check if we need to restore spilled registers
     stp     x29, x30, [sp, #-16]!
-    adrp    x2, spill_count
-    add     x2, x2, :lo12:spill_count
+    adrp x2, spill_count@PAGE
+    add     x2, x2, spill_count@PAGEOFF
     ldr     w3, [x2]
     cbz     w3, .Lfree_done
     // Emit LDR X<REG_FIRST>, [SP], #16 for each spilled register (LIFO)
@@ -384,15 +459,15 @@ free_reg:
 
 reset_regs:
     stp     x29, x30, [sp, #-16]!
-    adrp    x0, next_reg
-    add     x0, x0, :lo12:next_reg
-    adrp    x1, reg_floor
-    add     x1, x1, :lo12:reg_floor
+    adrp x0, next_reg@PAGE
+    add     x0, x0, next_reg@PAGEOFF
+    adrp x1, reg_floor@PAGE
+    add     x1, x1, reg_floor@PAGEOFF
     ldr     w2, [x1]
     str     w2, [x0]
     // Emit fills for any outstanding spills (balance target stack)
-    adrp    x0, spill_count
-    add     x0, x0, :lo12:spill_count
+    adrp x0, spill_count@PAGE
+    add     x0, x0, spill_count@PAGEOFF
     ldr     w3, [x0]
     cbz     w3, .Lreset_no_spills
 .Lreset_fill:
@@ -417,16 +492,16 @@ reset_regs:
 // ============================================================
 
 emit32:
-    adrp    x1, emit_ptr
-    add     x1, x1, :lo12:emit_ptr
+    adrp x1, emit_ptr@PAGE
+    add     x1, x1, emit_ptr@PAGEOFF
     ldr     x2, [x1]
     str     w0, [x2], #4
     str     x2, [x1]
     ret
 
 emit_cur:
-    adrp    x0, emit_ptr
-    add     x0, x0, :lo12:emit_ptr
+    adrp x0, emit_ptr@PAGE
+    add     x0, x0, emit_ptr@PAGEOFF
     ldr     x0, [x0]
     ret
 
@@ -701,8 +776,8 @@ emit_strh_reg:
 // Branch emitters
 emit_b:
     stp     x30, xzr, [sp, #-16]!
-    adrp    x1, emit_ptr
-    add     x1, x1, :lo12:emit_ptr
+    adrp x1, emit_ptr@PAGE
+    add     x1, x1, emit_ptr@PAGEOFF
     ldr     x2, [x1]
     sub     x3, x0, x2
     asr     x3, x3, #2
@@ -714,8 +789,8 @@ emit_b:
 
 emit_b_cond:
     stp     x30, x0, [sp, #-16]!
-    adrp    x2, emit_ptr
-    add     x2, x2, :lo12:emit_ptr
+    adrp x2, emit_ptr@PAGE
+    add     x2, x2, emit_ptr@PAGEOFF
     ldr     x3, [x2]
     sub     x4, x1, x3
     asr     x4, x4, #2
@@ -730,8 +805,8 @@ emit_b_cond:
 emit_cbz:
     stp     x30, xzr, [sp, #-16]!
     mov     w5, w0
-    adrp    x2, emit_ptr
-    add     x2, x2, :lo12:emit_ptr
+    adrp x2, emit_ptr@PAGE
+    add     x2, x2, emit_ptr@PAGEOFF
     ldr     x3, [x2]
     sub     x4, x1, x3
     asr     x4, x4, #2
@@ -746,8 +821,8 @@ emit_cbz:
 emit_cbnz:
     stp     x30, xzr, [sp, #-16]!
     mov     w5, w0
-    adrp    x2, emit_ptr
-    add     x2, x2, :lo12:emit_ptr
+    adrp x2, emit_ptr@PAGE
+    add     x2, x2, emit_ptr@PAGEOFF
     ldr     x3, [x2]
     sub     x4, x1, x3
     asr     x4, x4, #2
@@ -762,8 +837,8 @@ emit_cbnz:
 emit_bl:
     // x0 = target address
     stp     x30, xzr, [sp, #-16]!
-    adrp    x1, emit_ptr
-    add     x1, x1, :lo12:emit_ptr
+    adrp x1, emit_ptr@PAGE
+    add     x1, x1, emit_ptr@PAGEOFF
     ldr     x2, [x1]
     sub     x3, x0, x2
     asr     x3, x3, #2
@@ -889,15 +964,21 @@ parse_dollar_reg:
     mov     x29, sp
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq .Lbskip_1
+    b parse_error
+.Lbskip_1:
     ldr     w1, [x19, #8]
     cmp     w1, #2
-    b.lt    parse_error
+    b.ge .Lbskip_2
+    b parse_error
+.Lbskip_2:
     ldr     w2, [x19, #4]
     add     x2, x28, x2
     ldrb    w3, [x2]
     cmp     w3, #'$'
-    b.ne    parse_error
+    b.eq .Lbskip_3
+    b parse_error
+.Lbskip_3:
     mov     w0, #0
     mov     w4, #1
 .Ldollar_lp:
@@ -906,7 +987,9 @@ parse_dollar_reg:
     ldrb    w5, [x2, x4]
     sub     w6, w5, #'0'
     cmp     w6, #9
-    b.hi    parse_error
+    b.ls .Lbskip_4
+    b parse_error
+.Lbskip_4:
     mov     w7, #10
     mul     w0, w0, w7
     add     w0, w0, w6
@@ -914,7 +997,9 @@ parse_dollar_reg:
     b       .Ldollar_lp
 .Ldollar_end:
     cmp     w0, #30
-    b.hi    parse_error
+    b.ls .Lbskip_5
+    b parse_error
+.Lbskip_5:
     add     x19, x19, #TOK_STRIDE_SZ
     ldp     x29, x30, [sp], #16
     ret
@@ -941,25 +1026,25 @@ parse_tokens:
     mov     x28, x2
 
     // Initialize emit pointer
-    adrp    x0, ls_code_buf
-    add     x0, x0, :lo12:ls_code_buf
-    adrp    x1, emit_ptr
-    add     x1, x1, :lo12:emit_ptr
+    adrp x0, ls_code_buf@PAGE
+    add     x0, x0, ls_code_buf@PAGEOFF
+    adrp x1, emit_ptr@PAGE
+    add     x1, x1, emit_ptr@PAGEOFF
     str     x0, [x1]
 
     // Clear symbol table
-    adrp    x0, ls_sym_count
-    add     x0, x0, :lo12:ls_sym_count
+    adrp x0, ls_sym_count@PAGE
+    add     x0, x0, ls_sym_count@PAGEOFF
     str     wzr, [x0]
 
     // Clear scope
-    adrp    x0, scope_depth
-    add     x0, x0, :lo12:scope_depth
+    adrp x0, scope_depth@PAGE
+    add     x0, x0, scope_depth@PAGEOFF
     str     wzr, [x0]
 
     // Initialize register allocator
-    adrp    x0, reg_floor
-    add     x0, x0, :lo12:reg_floor
+    adrp x0, reg_floor@PAGE
+    add     x0, x0, reg_floor@PAGEOFF
     mov     w1, #REG_FIRST
     str     w1, [x0]
     bl      reset_regs
@@ -968,14 +1053,14 @@ parse_tokens:
     bl      parse_toplevel
 
     // Sync ls_code_pos
-    adrp    x0, ls_code_buf
-    add     x0, x0, :lo12:ls_code_buf
-    adrp    x1, emit_ptr
-    add     x1, x1, :lo12:emit_ptr
+    adrp x0, ls_code_buf@PAGE
+    add     x0, x0, ls_code_buf@PAGEOFF
+    adrp x1, emit_ptr@PAGE
+    add     x1, x1, emit_ptr@PAGEOFF
     ldr     x1, [x1]
     sub     x1, x1, x0
-    adrp    x2, ls_code_pos
-    add     x2, x2, :lo12:ls_code_pos
+    adrp x2, ls_code_pos@PAGE
+    add     x2, x2, ls_code_pos@PAGEOFF
     str     x1, [x2]
 
     ldp     x28, x20, [sp], #16
@@ -1040,7 +1125,9 @@ handle_const:
     add     x19, x19, #TOK_STRIDE_SZ   // skip 'const'
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq .Lbskip_6
+    b parse_error
+.Lbskip_6:
     mov     x4, x19                      // save name position
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
     // Optional '='
@@ -1085,8 +1172,8 @@ handle_var:
 
     mov     w1, #KIND_VAR
     mov     w2, w4
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
@@ -1133,11 +1220,13 @@ parse_buf_decl:
     add     x19, x19, #TOK_STRIDE_SZ   // skip 'buf'
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq .Lbskip_7
+    b parse_error
+.Lbskip_7:
     mov     w1, #KIND_BUF
     mov     w2, #0
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
@@ -1198,25 +1287,25 @@ handle_composition:
     sub     sp, sp, #48             // local storage
 
     // Save sym_count for scope cleanup
-    adrp    x0, ls_sym_count
-    add     x0, x0, :lo12:ls_sym_count
+    adrp x0, ls_sym_count@PAGE
+    add     x0, x0, ls_sym_count@PAGEOFF
     ldr     w4, [x0]
     str     w4, [sp, #0]           // [sp+0] = old sym_count
 
     // Save reg_floor and next_reg
-    adrp    x0, reg_floor
-    add     x0, x0, :lo12:reg_floor
+    adrp x0, reg_floor@PAGE
+    add     x0, x0, reg_floor@PAGEOFF
     ldr     w4, [x0]
     str     w4, [sp, #4]           // [sp+4] = old reg_floor
-    adrp    x1, next_reg
-    add     x1, x1, :lo12:next_reg
+    adrp x1, next_reg@PAGE
+    add     x1, x1, next_reg@PAGEOFF
     ldr     w5, [x1]
     str     w5, [sp, #8]           // [sp+8] = old next_reg
     str     w5, [x0]               // reg_floor = next_reg
 
     // Increment scope
-    adrp    x0, scope_depth
-    add     x0, x0, :lo12:scope_depth
+    adrp x0, scope_depth@PAGE
+    add     x0, x0, scope_depth@PAGEOFF
     ldr     w5, [x0]
     add     w6, w5, #1
     str     w6, [x0]
@@ -1226,8 +1315,8 @@ handle_composition:
     mov     w2, w0                  // code address
     str     x0, [sp, #16]          // save comp start address
     mov     w1, #KIND_COMP
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     sub     w3, w3, #1             // comp itself at outer scope
     bl      sym_add
@@ -1247,13 +1336,15 @@ handle_composition:
     cmp     w0, #TOK_COLON
     b.eq    .Lcomp_args_done
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq .Lbskip_8
+    b parse_error
+.Lbskip_8:
 
     // Register arg as param with register = arg index (X0-X7)
     mov     w1, #KIND_PARAM
     mov     w2, w8
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ
@@ -1278,16 +1369,16 @@ handle_composition:
     bl      emit_ret_inst
 
     // Pop scope
-    adrp    x0, scope_depth
-    add     x0, x0, :lo12:scope_depth
+    adrp x0, scope_depth@PAGE
+    add     x0, x0, scope_depth@PAGEOFF
     ldr     w1, [x0]
     sub     w1, w1, #1
     str     w1, [x0]
 
     // Pop symbols
     ldr     w0, [sp, #0]
-    adrp    x1, ls_sym_count
-    add     x1, x1, :lo12:ls_sym_count
+    adrp x1, ls_sym_count@PAGE
+    add     x1, x1, ls_sym_count@PAGEOFF
     // Keep composition name, pop everything else after it
     // Actually: restore count to old+1 (composition entry stays)
     add     w0, w0, #1
@@ -1295,12 +1386,12 @@ handle_composition:
 
     // Restore reg_floor and next_reg
     ldr     w4, [sp, #4]
-    adrp    x0, reg_floor
-    add     x0, x0, :lo12:reg_floor
+    adrp x0, reg_floor@PAGE
+    add     x0, x0, reg_floor@PAGEOFF
     str     w4, [x0]
     ldr     w5, [sp, #8]
-    adrp    x0, next_reg
-    add     x0, x0, :lo12:next_reg
+    adrp x0, next_reg@PAGE
+    add     x0, x0, next_reg@PAGEOFF
     str     w5, [x0]
 
     add     sp, sp, #48
@@ -1616,8 +1707,8 @@ parse_binding_compose:
 
     mov     w1, #KIND_LOCAL_REG
     mov     w2, w4
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
 
@@ -1649,8 +1740,8 @@ handle_assign:
     mov     x19, x6
     mov     w1, #KIND_LOCAL_REG
     mov     w2, w8
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
     mov     x19, x7
@@ -1853,13 +1944,15 @@ handle_label:
 
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq .Lbskip_9
+    b parse_error
+.Lbskip_9:
 
     bl      emit_cur
     mov     w2, w0
     mov     w1, #KIND_LOCAL_REG
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ
@@ -2044,7 +2137,9 @@ handle_for:
     // Parse loop var name
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq .Lbskip_10
+    b parse_error
+.Lbskip_10:
 
     bl      alloc_reg
     mov     w10, w0
@@ -2052,8 +2147,8 @@ handle_for:
 
     mov     w1, #KIND_LOCAL_REG
     mov     w2, w10
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ
@@ -2156,15 +2251,17 @@ handle_each:
 
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.ne    parse_error
+    b.eq .Lbskip_11
+    b parse_error
+.Lbskip_11:
 
     bl      alloc_reg
     mov     w4, w0
 
     mov     w1, #KIND_LOCAL_REG
     mov     w2, w4
-    adrp    x3, scope_depth
-    add     x3, x3, :lo12:scope_depth
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ
@@ -2732,42 +2829,42 @@ parse_atom:
 // Error handlers
 // ============================================================
 parse_error:
-    adrp    x1, err_parse
-    add     x1, x1, :lo12:err_parse
+    adrp x1, err_parse@PAGE
+    add     x1, x1, err_parse@PAGEOFF
     mov     x2, #13
     mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
     // Print token position info
-    adrp    x1, err_at_tok
-    add     x1, x1, :lo12:err_at_tok
+    adrp x1, err_at_tok@PAGE
+    add     x1, x1, err_at_tok@PAGEOFF
     mov     x2, #10
     mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
     // Print token offset as rough position indicator
     ldr     w0, [x19, #4]
     bl      print_dec
-    adrp    x1, err_nl
-    add     x1, x1, :lo12:err_nl
+    adrp x1, err_nl@PAGE
+    add     x1, x1, err_nl@PAGEOFF
     mov     x2, #1
     mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
     mov     x0, #1
-    mov     x8, #93             // SYS_EXIT
-    svc     #0
+    mov x16, #1             // SYS_EXIT
+    svc #0x80
 
 parse_error_regspill:
-    adrp    x1, err_regspill
-    add     x1, x1, :lo12:err_regspill
+    adrp x1, err_regspill@PAGE
+    add     x1, x1, err_regspill@PAGEOFF
     mov     x2, #22
     mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
     mov     x0, #1
-    mov     x8, #93             // SYS_EXIT
-    svc     #0
+    mov x16, #1             // SYS_EXIT
+    svc #0x80
 
 // print_dec — print w0 as decimal to stderr
 print_dec:
@@ -2790,8 +2887,8 @@ print_dec:
     add     x1, x2, #1
     mov     x2, x3
     mov     x0, #2
-    mov     x8, #64             // SYS_WRITE
-    svc     #0
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
     add     sp, sp, #32
     ldp     x29, x30, [sp], #16
     ret

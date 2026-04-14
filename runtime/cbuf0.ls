@@ -6,14 +6,13 @@
 \\   - driver-populated metadata including the register count
 \\   - other launch-time scalars (grid dims, block dims, nctaid, etc.)
 \\
-\\ CRITICAL UNKNOWN:
-\\   register_count offset inside cbuf0 is NOT YET PROBED.
-\\   The QMD probe (tools/qmd_probe_driver.c) confirmed register_count is NOT
-\\   in the QMD body — but we did not diff cbuf0 contents between kernels with
-\\   different register counts. TODO(probe): launch two kernels — one with
-\\   .reg .b32 r<8> and one with .reg .b32 r<64> — dump cbuf0 for each, diff.
-\\   The differing dword is the register_count offset. Until then, this field
-\\   is left unwritten and the GPU will fault or use a stale value.
+\\ PROBE COMPLETE (April 2026):
+\\   register_count is NOT in cbuf0. The cbuf0 section (.nv.constant0) is all
+\\   zeros except for kernel parameters at offset 0x210, and cbuf0 is not
+\\   reloaded per-launch. register_count belongs in the Shader Program Descriptor
+\\   (SPD), which is the 4th of 5 inline CB loads the driver issues per launch.
+\\   SPD offset 0x094, bits 23:16. See docs/cbuf0_fields.md for the full
+\\   5-part pushbuffer sequence and 3-point probe verification.
 
 \\ Bump allocator state lives at cbuf0_alloc_state (a 64-bit GPU VA cursor into
 \\ our BAR4 HBM pool, set up at runtime init). Caller passes an output slot.
@@ -26,12 +25,10 @@ cbuf0_alloc size out_gpu_va_ptr :
     mask next / 256 * 256
     ← 64 cbuf0_alloc_state mask
 
-\\ TODO(probe): replace REGISTER_COUNT_OFFSET with the real value once diffed.
-\\ Writing to cbuf0_ptr + 0 until known — this is INTENTIONALLY a sentinel so a
-\\ grep on "TODO(probe): register_count" finds every consumer that needs updating.
+\\ OBSOLETE: register_count belongs in SPD offset 0x094, not cbuf0. See pushbuffer.ls pb_emit_spd.
+\\ Formula: (0x08 << 24) | (reg_count << 16) | 0x0001. Ref: docs/cbuf0_fields.md.
 cbuf0_set_register_count cbuf0_ptr count :
-    \\ TODO(probe): register_count offset — see cbuf0.ls header comment.
-    \\ DO NOT USE this composition until probe completes.
+    \\ OBSOLETE: register_count belongs in SPD offset 0x094, not cbuf0. See pushbuffer.ls pb_emit_spd.
     ← 32 cbuf0_ptr + 0 count
 
 \\ Param block copy. NVIDIA convention: user params start at cbuf0 offset 0x210.

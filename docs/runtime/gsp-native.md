@@ -351,7 +351,7 @@ delivery + context switch).
 ### 6.1 Architecture
 
 The Lithos bootstrap Forth interpreter runs on Grace (ARM64).  It already
-emits ARM64 machine code and SASS GPU binaries.  The GPU driver becomes
+emits ARM64 machine code and raw Hopper GPU binaries.  The GPU driver becomes
 a Forth vocabulary:
 
 ```

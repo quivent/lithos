@@ -34,7 +34,8 @@ launch_kernel elf_entry_gpu_va grid_x grid_y grid_z block_x block_y block_z shme
     mem_alloc cbuf0_size 256 cbuf0_gpu_va_slot
     cbuf0_gpu_va → 64 cbuf0_gpu_va_slot
     cbuf0_set_param_block cbuf0_gpu_va 0x210 params_ptr params_size
-    \\ TODO(probe): cbuf0_set_register_count cbuf0_gpu_va <regs> once offset known.
+    \\ SPD carries register_count at offset 0x094 — handled in pb_emit_spd (pushbuffer.ls). cbuf0 is not the location.
+    \\ Ref: docs/cbuf0_fields.md (authoritative ref for the 5-part CB load sequence).
     cbuf0_finalize cbuf0_gpu_va
 
     \\ --- 4. Load current pushbuffer + GPPut ---

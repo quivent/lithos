@@ -75,7 +75,7 @@ endfor
 This loop runs **inside the compiler**, on ARM64. Its output is 64 fully
 expanded instruction sequences concatenated into the forward megakernel's
 `.text` section. At GPU runtime there is no layer dispatch — the program
-counter simply walks through 64 layers of already-flattened SASS.
+counter simply walks through 64 layers of already-flattened Hopper binary.
 
 ### 2.3 Template selection
 

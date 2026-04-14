@@ -271,7 +271,7 @@ The following are NEVER written in source. The compiler derives them:
 
 ### 4.3 Self-Hosting
 
-The compiler (`compiler/compiler.ls`, 4739 lines) is written in Lithos with
+The compiler (`compiler/compiler.ls`, 5,467 lines) is written in Lithos with
 7 sections: ARM64 backend, GPU backend, Lexer, Parser, Safetensors reader,
 ELF writer, Main entry. Bootstrapped from pure ARM64 assembly (`bootstrap/*.s`).
 
@@ -493,5 +493,5 @@ memory, barriers, and GPU launch configuration.
 | Conv kernel size | 4 |
 | Total layers | 64 (48 DeltaNet + 16 full attention) |
 | State matrix per head | [128, 128] FP32 |
-| Vocabulary size | 152064 |
+| Vocabulary size | 248,320 |
 | Quantization | W4A16 GPTQ |

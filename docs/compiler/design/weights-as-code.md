@@ -20,7 +20,7 @@ activations. The GPU's instruction delivery system becomes the weight delivery s
 ### Current pipeline (memory-bound GEMV)
 
 ```
-.ls template  -->  parser.fs  -->  emit-gemv.fs  -->  SASS binary
+.ls template  -->  parser.fs  -->  emit-gemv.fs  -->  Hopper binary
                                        |
                                   emits LDG loop:
                                   load packed u32 from DRAM

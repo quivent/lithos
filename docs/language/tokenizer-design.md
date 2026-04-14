@@ -19,7 +19,7 @@ lowest-rank adjacent pair and merges. Done.
 
 ## What belongs in Lithos and what doesn't
 
-Lithos is a GPU compute language. The compiler emits SASS (when the
+Lithos is a GPU compute language. The compiler emits raw Hopper binary (when the
 bootstrap parses compositions). The runtime loads weights and runs
 kernels. The tokenizer is string processing on small inputs on the
 CPU. It is orthogonal to everything Lithos is built for.

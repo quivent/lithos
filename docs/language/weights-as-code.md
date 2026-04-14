@@ -5,14 +5,14 @@
 With Q4 quantized models, every learned weight is a 4-bit integer. After
 dequantization (subtract zero point, multiply by scale), each weight becomes an
 FP32 constant known at compile time. The compiler reads safetensors once, performs
-dequantization, and emits SASS instructions with the resulting FP32 values encoded
+dequantization, and emits raw Hopper binary instructions with the resulting FP32 values encoded
 as 32-bit immediates in the instruction word itself.
 
 There is no weight memory. There are no weight pointers. There are no runtime
 dequantization instructions. The model IS the program.
 
 A 7B-parameter Q4 model produces roughly 3.5 billion FMUL-IMM instructions. Each
-instruction is 16 bytes of SASS. The "model binary" is the executable.
+instruction is 16 bytes of Hopper native encoding. The "model binary" is the executable.
 
 ## What Changes, What Stays
 
@@ -57,7 +57,7 @@ A .ls file no longer describes a complete, standalone kernel. It describes a
 once per layer by binding concrete weight tensors to the template's weight
 declarations.
 
-The same template produces 64 different SASS streams (one per layer in a 64-layer
+The same template produces 64 different Hopper binary streams (one per layer in a 64-layer
 model), because each layer has different weight values. The instruction structure
 is identical; only the immediates differ.
 
@@ -70,7 +70,7 @@ is identical; only the immediates differ.
   lithos compiler  <---  model.safetensors
        |
        v
-  per-layer SASS   (layer_00.bin, layer_01.bin, ..., layer_47.bin)
+  per-layer binary  (layer_00.bin, layer_01.bin, ..., layer_47.bin)
        |
        v
   megakernel linker  (concatenates into 2 cooperative grid-sync megakernels)
@@ -270,7 +270,7 @@ formats, nibbles, scales, or zero points.
 
 The `for k_p ... endfor` loop in `gptq_gemv` that iterated over packed weight
 words is gone. The compiler generates the linear instruction stream directly.
-There is no loop in the emitted SASS -- just a straight-line sequence of
+There is no loop in the emitted binary — just a straight-line sequence of
 FMUL-IMM instructions (possibly millions per projection).
 
 ---
@@ -612,21 +612,21 @@ fn deltanet_layer x X state -> X state
 
 | Step | Primitive      | Category      | Compiler action                                             |
 |------|---------------|---------------|-------------------------------------------------------------|
-| 1-5  | ** Sigma / 1/sqrt // | activation | Emit standard SASS: FMUL, shuffle reduce, FMUL RSQRT, FMUL |
+| 1-5  | ** Sigma / 1/sqrt // | activation | Emit standard Hopper binary: FMUL, shuffle reduce, FMUL RSQRT, FMUL |
 | 6    | ** w_pre       | WEIGHT-IMM    | 5120 FMUL-IMM instructions (one per hidden dim element)     |
 | 7    | project W_q    | WEIGHT-IMM    | ~26M FMUL-IMM instructions (5120 x 5120 / thread partition) |
 | 8    | project W_k    | WEIGHT-IMM    | ~10M FMUL-IMM (2048 x 5120 / thread partition)              |
 | 9    | project W_v    | WEIGHT-IMM    | ~31M FMUL-IMM (6144 x 5120 / thread partition)              |
 |      | project W_z    | WEIGHT-IMM    | ~31M FMUL-IMM (6144 x 5120)                                |
 |      | project W_a    | WEIGHT-IMM    | ~245K FMUL-IMM (48 x 5120)                                 |
-| 10-13| ** Sigma sqrt //    | activation | Standard SASS for L2-norm                                  |
-| 14-18| silu           | activation    | Standard SASS for SiLU                                     |
-| 19-22| l2norm         | activation    | Standard SASS for L2-norm                                  |
+| 10-13| ** Sigma sqrt //    | activation | Standard Hopper binary for L2-norm                         |
+| 14-18| silu           | activation    | Standard Hopper binary for SiLU                            |
+| 19-22| l2norm         | activation    | Standard Hopper binary for L2-norm                         |
 | 23-26| sigmoid(beta)  | ELIDED        | Pre-computed at compile time. Zero runtime instructions.    |
 | 27   | ++ dt_bias     | WEIGHT-IMM    | 48 FADD-IMM instructions                                   |
-| 28-30| softplus       | activation    | Standard SASS                                               |
+| 28-30| softplus       | activation    | Standard Hopper binary                                      |
 | 31-33| * neg_exp_A    | WEIGHT-IMM    | 48 FMUL-IMM instructions (pre-computed constant)            |
-| 34   | exp            | activation    | Standard SASS                                               |
+| 34   | exp            | activation    | Standard Hopper binary                                      |
 | 35   | matvec S K     | activation    | LDG from state HBM, FMA, shuffle reduce                    |
 | 36   | -- V recall    | activation    | FSUB                                                        |
 | 37   | ** beta_sig    | WEIGHT-IMM    | 48 FMUL-IMM (pre-computed sigmoid(beta))                    |
@@ -634,16 +634,16 @@ fn deltanet_layer x X state -> X state
 | 39   | ** decay S     | activation    | FMUL elementwise on state                                  |
 | 40   | +++ mat add    | activation    | FADD matrix add                                             |
 | 41   | matvec S Q     | activation    | LDG from state, FMA, shuffle reduce                        |
-| 42-47| sigmoid, gate  | activation    | Standard SASS for silu + elementwise mul                    |
-| 48-52| rmsnorm reduce | activation    | Standard SASS                                               |
+| 42-47| sigmoid, gate  | activation    | Standard Hopper binary for silu + elementwise mul           |
+| 48-52| rmsnorm reduce | activation    | Standard Hopper binary                                      |
 | 53   | ** w_post      | WEIGHT-IMM    | 5120 FMUL-IMM                                              |
 | 54   | project W_o    | WEIGHT-IMM    | ~26M FMUL-IMM (5120 x 6144 / thread partition)             |
 | 55   | ++ residual    | activation    | FADD                                                        |
-| 56-60| rmsnorm reduce | activation    | Standard SASS                                               |
+| 56-60| rmsnorm reduce | activation    | Standard Hopper binary                                      |
 | 61   | ** w_mlp       | WEIGHT-IMM    | 5120 FMUL-IMM                                              |
 | 62   | project W_g    | WEIGHT-IMM    | ~71M FMUL-IMM (13824 x 5120)                               |
 | 63   | project W_u    | WEIGHT-IMM    | ~71M FMUL-IMM (13824 x 5120)                               |
-| 64-68| silu           | activation    | Standard SASS                                               |
+| 64-68| silu           | activation    | Standard Hopper binary                                      |
 | 69   | ** gate up     | activation    | FMUL elementwise                                            |
 | 70   | project W_d    | WEIGHT-IMM    | ~71M FMUL-IMM (5120 x 13824)                               |
 | 71   | ++ residual    | activation    | FADD                                                        |
@@ -655,7 +655,7 @@ fn deltanet_layer x X state -> X state
 ### 1. Templates, not kernels
 
 The .ls file specifies the computation graph. The compiler instantiates it per
-layer. The same template with different weight bindings produces different SASS
+layer. The same template with different weight bindings produces different Hopper binary
 but identical structure.
 
 ### 2. Weights are instruction selection, not data
@@ -669,7 +669,7 @@ are the same artifact.
 
 All quantization formats (Q4, Q8, etc.) are resolved at compile time. The
 compiler reads packed tensors, unpacks them, applies scales and zero points, and
-produces FP32 constants. The generated SASS has no knowledge of quantization.
+produces FP32 constants. The generated binary has no knowledge of quantization.
 
 ### 4. Pre-computation of constant expressions
 
@@ -702,7 +702,7 @@ norm scale vector).
 
 For a single layer with the dimensions above, the weight-immediate projections
 produce on the order of hundreds of millions of FMUL-IMM instructions. At 16
-bytes per SASS instruction, a single layer's projections occupy several
+bytes per Hopper binary instruction, a single layer's projections occupy several
 gigabytes of instruction memory.
 
 For a 64-layer model, the total binary size is roughly equivalent to the model
@@ -716,10 +716,10 @@ This works because:
 - The instruction fetch unit has dedicated bandwidth separate from the memory subsystem
 - Each SM executes its partition of rows independently (same as old tiled GEMV)
 
-The "model binary" for a 7B Q4 model is approximately 14 GB of SASS (3.5B
-parameters x 4 bytes FP32 immediate per instruction, encoded in 16-byte SASS
+The "model binary" for a 7B Q4 model is approximately 14 GB of Hopper native instruction encoding (3.5B
+parameters x 4 bytes FP32 immediate per instruction, encoded in 16-byte Hopper binary
 instructions, but the immediate replaces what would have been a memory operand,
-so the instruction count is the same -- only the encoding changes).
+so the instruction count is the same — only the encoding changes).
 
 ---
 

@@ -29,8 +29,8 @@ dispatch_kernel elf_gpu_va grid_x grid_y grid_z block_x block_y block_z smem_siz
     cbuf0_alloc cbuf0_size cbuf0_ptr_slot
     cbuf0_ptr → 64 cbuf0_ptr_slot
     cbuf0_set_param_block cbuf0_ptr 0x210 params params_size
-    \\ TODO(probe): cbuf0_set_register_count cbuf0_ptr <kernel_regcount>
-    \\ — offset unknown; see cbuf0.ls. Launch will fail or mis-schedule until probed.
+    \\ SPD carries register_count at offset 0x094 — handled in pb_emit_spd (pushbuffer.ls). cbuf0 is not the location.
+    \\ Ref: docs/cbuf0_fields.md (authoritative ref for the 5-part CB load sequence).
     cbuf0_finalize cbuf0_ptr
 
     \\ --- pushbuffer ---

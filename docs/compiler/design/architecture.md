@@ -966,7 +966,7 @@ host fn submit_kernel channel cubin_gpu_va grid_dim block_dim params_ptr
 | `emit-gemv.fs` | 493 | GEMV kernel patterns |
 | `opcodes-sm90.fs` | 355 | Opcode constants |
 | `elf-wrap.fs` | 89 | ELF file I/O wrapper |
-| `emit-sass.fs` | 13 | SASS file writer |
+| `emit-sass.fs` | 13 | raw binary file writer |
 | `lexer.fs` | 58 | Tokenizer |
 | `emit-arm64.fs` | 41 | ARM64 emitter (stub) |
 | `arm64-wrap.fs` | 66 | ARM64 ELF wrapper |

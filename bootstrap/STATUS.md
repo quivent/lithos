@@ -1,3 +1,5 @@
+> **DEPRECATED** — superseded by /STATUS.md
+
 # Lithos Bootstrap Status
 
 Date: 2026-04-13

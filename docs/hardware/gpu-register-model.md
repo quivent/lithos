@@ -26,7 +26,7 @@ Named values in compositions resolve to `$N` during flattening.
 The compiler tracks `max-reg-used` (high-water mark) for the ELF `.nv.info` section.
 
 **Programmer controls:**
-- Explicit `$N` when writing low-level SASS-adjacent code
+- Explicit `$N` when writing low-level binary-adjacent code
 - Named values (preferred) when writing compositions -- compiler assigns registers
 - The `regcap` directive to set a hard ceiling (see section 9)
 

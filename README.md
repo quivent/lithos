@@ -7,7 +7,7 @@ Writing on silicon -- a self-hosting GPU compute language for the GH200.
 
 ## What Lithos Is
 
-Lithos is a language that compiles .ls source files directly to SASS (GPU machine code) and ARM64 (host machine code). One source language, two backends. No Python. No C. No CUDA toolkit. No framework.
+Lithos is a language that compiles .ls source files directly to raw Hopper binary (GPU machine code) and ARM64 (host machine code). One source language, two backends. No Python. No C. No CUDA toolkit. No framework.
 
 The compiler is written in Lithos (.ls), bootstrapped from pure ARM64 assembly (bootstrap/*.s). The runtime replaces libcuda.so with direct GPU register writes via vfio-pci. The entire system -- compiler, runtime, and inference kernels -- ships as one ARM64 binary.
 
@@ -16,7 +16,7 @@ Target: **Qwen 3.5 27B** (Huihui-abliterated, GPTQ W4A16) on GH200 480GB.
 
 ## Architecture
 
-The self-hosting compiler (compiler/compiler.ls, 4739 lines) has 7 sections:
+The self-hosting compiler (compiler/compiler.ls, 5,467 lines) has 7 sections:
 ARM64 backend, GPU backend, Lexer, Parser, Safetensors reader, ELF writer, Main entry.
 
 Supporting infrastructure:
@@ -27,7 +27,7 @@ Supporting infrastructure:
 
 ## The Language
 
-Compositions (named sequences), not functions. The compiler flattens them into instruction streams. See docs/language-primitives.md for the full grammar.
+Compositions (named sequences), not functions. The compiler flattens them into instruction streams. See docs/language/primitives.md for the full grammar.
 
 ## Inference Kernels
 
@@ -53,8 +53,8 @@ Bootstrap parser work is blocking first compilation.
 ## Documentation
 
 26 pages at docs-delta-mauve.vercel.app. Key documents:
-- docs/language-primitives.md -- grammar spec
-- docs/model-config.md -- Qwen 3.5 27B configuration
+- docs/language/primitives.md -- grammar spec
+- docs/inference/model-config.md -- Qwen 3.5 27B configuration
 - PLAN.md -- execution plan and progress tracking
 
 ## License

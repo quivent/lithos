@@ -6,7 +6,10 @@
 \\   - entry program counter (40-bit GPU virtual address)
 \\
 \\ Field offsets are from docs/qmd_fields.md (empirically probed via qmd_probe_driver.c).
-\\ register_count is NOT in the QMD body — it lives in cbuf0 (see cbuf0.ls).
+\\ register_count is NOT in the QMD body and NOT in cbuf0. It lives in the Shader Program
+\\ Descriptor (SPD), which is the 4th inline CB load in the 5-part pushbuffer launch sequence.
+\\ SPD offset 0x094, bits 23:16 (byte[2]). Formula: (0x08 << 24) | (reg_count << 16) | 0x0001.
+\\ See pushbuffer.ls pb_emit_spd and docs/cbuf0_fields.md (authoritative ref for the 5-part sequence).
 
 \\ Zero the 528-byte QMD body at qmd_ptr.
 qmd_init qmd_ptr :

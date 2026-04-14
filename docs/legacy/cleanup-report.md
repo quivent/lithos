@@ -70,7 +70,7 @@ Source: Scout 1 report (/tmp/scout1-report.md)
 
 | File | Reason |
 |------|--------|
-| PRIMITIVES.md | Unique content: primitives-to-SASS mapping. Not duplicated elsewhere. |
+| PRIMITIVES.md | Unique content: primitives-to-binary mapping. Not duplicated elsewhere. |
 | VOCABULARY.md | Unique content: DeltaNet layer decomposition into 41 primitive steps. |
 | PLAN.md | Canonical status/plan document. |
 | GAPS.md | Updated to current state (fixed .li, model name, Python refs). |

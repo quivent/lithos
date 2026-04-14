@@ -1,12 +1,14 @@
+> **DEPRECATED** — superseded by STATUS.md
+
 # Gaps to Full Inference
 
 Last updated: 2026-04-13
 
-Target: Qwen 3.5 27B (64 layers, 48 DeltaNet + 16 full-attention, GPTQ W4A16) running per-token decode on GH200 via Lithos-compiled SASS cubins, dispatched by a native (non-Python) launcher.
+Target: Qwen 3.5 27B (64 layers, 48 DeltaNet + 16 full-attention, GPTQ W4A16) running per-token decode on GH200 via Lithos-compiled Hopper binary cubins, dispatched by a native (non-Python) launcher.
 
-Architecture (confirmed): **two cooperative megakernels.** One cubin for all 48 DeltaNet layers, one cubin for all 16 attention layers. Each cubin is a *cooperative grid-sync kernel* — the 48-layer (or 16-layer) iteration lives inside the kernel, with grid-wide sync between layers. Both emitted from `.ls` source by the Lithos compiler straight to Hopper SASS. The launcher calls `cuLaunchKernel` a handful of times per token, not per-layer.
+Architecture (confirmed): **two cooperative megakernels.** One cubin for all 48 DeltaNet layers, one cubin for all 16 attention layers. Each cubin is a *cooperative grid-sync kernel* — the 48-layer (or 16-layer) iteration lives inside the kernel, with grid-wide sync between layers. Both emitted from `.ls` source by the Lithos compiler straight to raw Hopper binary. The launcher calls `cuLaunchKernel` a handful of times per token, not per-layer.
 
-CUDA graphs aren't needed — when dispatch is measured in native code nanoseconds and there are only a handful of launches per token, there's nothing for graphs to amortize. The earlier PTX-based cooperative-megakernel attempts (`forward_pass_*`, `fused_*`) weren't wrong conceptually — they were implemented through PTX + ptxas, which removed the level of control needed to make grid-sync cheap. Direct SASS gives back control over stall counts, barrier slots, control-word reuse flags, and scheduling — the things that actually determine whether cooperative grid-sync is fast or slow.
+CUDA graphs aren't needed — when dispatch is measured in native code nanoseconds and there are only a handful of launches per token, there's nothing for graphs to amortize. The earlier PTX-based cooperative-megakernel attempts (`forward_pass_*`, `fused_*`) weren't wrong conceptually — they were implemented through PTX + ptxas, which removed the level of control needed to make grid-sync cheap. Direct binary emission gives back control over stall counts, barrier slots, control-word reuse flags, and scheduling — the things that actually determine whether cooperative grid-sync is fast or slow.
 
 ---
 
@@ -17,11 +19,11 @@ CUDA graphs aren't needed — when dispatch is measured in native code nanosecon
 - Missing: section header table (`.shstrtab`, `.strtab`, `.symtab`, `.nv.info`, `.nv.info.<kernel>`, `.nv.constant0.<kernel>`, `.text.<kernel>`, `.nv.callgraph`, `.nv.shared.<kernel>` when needed).
 - Missing: `.nv.info` structured attributes (`EIATTR_REGCOUNT`, `EIATTR_FRAME_SIZE`, `EIATTR_PARAM_CBANK`, `EIATTR_KPARAM_INFO`, `EIATTR_MIN/MAX_STACK_SIZE`, `EIATTR_CUDA_API_VERSION`, `EIATTR_MAX_THREADS`).
 - Missing: symbol table entry with `STB_GLOBAL` / `STT_FUNC` / `STO_CUDA_ENTRY` (0x10).
-- Until this lands, `cuModuleLoadData` rejects any Lithos-emitted cubin regardless of SASS correctness. *(Worker dispatched on this.)*
+- Until this lands, `cuModuleLoadData` rejects any Lithos-emitted cubin regardless of binary correctness. *(Worker dispatched on this.)*
 
 ### 1b. Register allocator — **BLOCKING at scale**
 - Current scheme in `parser.fs`: monotone counters (`freg+`, `rreg+`, `rdreg+`, `preg+`) that only hand out fresh register IDs — no liveness, no reuse.
-- Works for PTX because `ptxas` does the real allocation afterward. Works for tiny SASS programs (vector-add fits). Does **not** work for full-layer kernels — DeltaNet has 22+ ops with hundreds of live values and will exhaust Hopper's 255-per-thread budget (and wreck occupancy long before that).
+- Works for PTX because `ptxas` does the real allocation afterward. Works for tiny kernels (vector-add fits). Does **not** work for full-layer kernels — DeltaNet has 22+ ops with hundreds of live values and will exhaust Hopper's 255-per-thread budget (and wreck occupancy long before that).
 - Needed: linear-scan allocator over the existing integer IDs, with a liveness pass. Graph coloring is overkill for the straight-line-plus-short-loops shape of these kernels.
 
 ### 1c. Backend dispatch coverage in parser.fs
@@ -36,21 +38,21 @@ CUDA graphs aren't needed — when dispatch is measured in native code nanosecon
 
 ### 1e. Cooperative grid-sync primitives — **HIGH PRIORITY**
 - Each of the two cubins is a cooperative megakernel: the layer loop runs inside the kernel, with grid-wide sync between layers. That means the SASS emitter needs first-class cooperative-launch support:
-  - Grid-wide barrier (cooperative groups `this_grid().sync()` equivalent at SASS level — on Hopper this is a combination of release/acquire fences and a barrier through a global counter).
+  - Grid-wide barrier (cooperative groups `this_grid().sync()` equivalent at binary encoding level — on Hopper this is a combination of release/acquire fences and a barrier through a global counter).
   - Proper encoding for kernels launched via `cuLaunchCooperativeKernel` (cubin must advertise `EIATTR_COOPERATIVE_GROUP_INSTR_OFFSETS` in `.nv.info.<kernel>`).
   - Block-level `BAR.SYNC` patterns tuned for the grid-sync frequency (48 syncs per DeltaNet cubin invocation).
-- The PTX-based attempts (`forward_pass_carmack`, `_cray`, `_bellard`) hit ~24ms GPU time floor because ptxas was choosing barrier/sync patterns. With direct SASS control (stall counts, write/read barrier slots, reuse flags in control words) there's real headroom — that's the whole reason for the SASS pipeline.
+- The PTX-based attempts (`forward_pass_carmack`, `_cray`, `_bellard`) hit ~24ms GPU time floor because ptxas was choosing barrier/sync patterns. With direct binary control (stall counts, write/read barrier slots, reuse flags in control words) there's real headroom — that's the whole reason for the direct binary emission pipeline.
 - Language-level support: a construct in `.ls` to express "run this body N times with grid sync between iterations" so the layer loop compiles down to inline layer N, `grid_sync`, inline layer N+1, etc. — no function call, one code block, grid sync between them.
 
 ---
 
 ## 1b½. Kernel-building (the factory itself)
 
-The word "factory" has been loose. Today the compiler can turn a hand-written `.ls` file into a SASS cubin. It cannot yet *synthesize* the `.ls` for a specific model from that model's architecture metadata. That synthesis step is what makes this a factory rather than a one-off compiler.
+The word "factory" has been loose. Today the compiler can turn a hand-written `.ls` file into a Hopper binary cubin. It cannot yet *synthesize* the `.ls` for a specific model from that model's architecture metadata. That synthesis step is what makes this a factory rather than a one-off compiler.
 
 ### Missing: compile-time parameterization
 
-The `.ls` language needs compile-time parameters: values known at parse time, substituted into expressions before SASS emission. Something like:
+The `.ls` language needs compile-time parameters: values known at parse time, substituted into expressions before binary emission. Something like:
 
 ```
 param hidden_dim : u32 = compile_time
@@ -62,7 +64,7 @@ fn deltanet_layer ...
     ...
 ```
 
-The compiler reads the safetensors JSON header (plain JSON, sub-ms) to get `hidden_dim=5120`, `n_heads=64`, etc., binds those to the compile-time parameters, then parses the `.ls` template. The SASS emitter sees resolved constants and doesn't know the difference between a literal `5120` and a resolved `hidden_dim`. Frontend change only; backend untouched.
+The compiler reads the safetensors JSON header (plain JSON, sub-ms) to get `hidden_dim=5120`, `n_heads=64`, etc., binds those to the compile-time parameters, then parses the `.ls` template. The binary emitter sees resolved constants and doesn't know the difference between a literal `5120` and a resolved `hidden_dim`. Frontend change only; backend untouched.
 
 ### Missing: template selection
 
@@ -74,7 +76,7 @@ The GEMV template should parameterize over `bits_per_weight`, `group_size`, and 
 
 ### Scope
 
-This is frontend work — parse-time parameter resolution, a small metadata reader, a template-family dispatch. No new SASS emission, no change to the register allocator, no change to cubin wrapping. Bounded in scope but load-bearing: without it, the compiler works for exactly one hand-written model and nothing else.
+This is frontend work — parse-time parameter resolution, a small metadata reader, a template-family dispatch. No new binary emission, no change to the register allocator, no change to cubin wrapping. Bounded in scope but load-bearing: without it, the compiler works for exactly one hand-written model and nothing else.
 
 ---
 
@@ -95,7 +97,7 @@ Covered today: 5 primitives (`+ − × ÷ √`), hardware intrinsics (`exp`, `rc
 
 ### 2d. Intrinsic philosophy
 - VOCABULARY.md describes `exp`/`sigmoid`/etc. as decomposable into primitives via Taylor / Newton iteration. Reality: `.ls` files call `exp`, `rcp`, `rsqrt`, `sin`, `cos`, `fma` as hardware intrinsics and none of them are decomposed.
-- This is fine and intentional — intrinsics map to Hopper `MUFU.EX2 / MUFU.RCP / MUFU.RSQ / MUFU.SIN / MUFU.COS` and `FFMA` which are already opcodes in the SASS emitter. The "5 primitive" story is conceptual; the real primitive set is `+ − × ÷ √ exp rcp rsqrt sin cos fma`. Document this and move on.
+- This is fine and intentional — intrinsics map to Hopper `MUFU.EX2 / MUFU.RCP / MUFU.RSQ / MUFU.SIN / MUFU.COS` and `FFMA` which are already opcodes in the binary emitter. The "5 primitive" story is conceptual; the real primitive set is `+ − × ÷ √ exp rcp rsqrt sin cos fma`. Document this and move on.
 
 ---
 
@@ -157,7 +159,7 @@ Captured via `strace` on a minimal CUDA program on GH200 (driver 580.105.08, CUD
 | Piece | Approach | Size |
 |---|---|---|
 | `cuInit` + `cuCtxCreate` equivalent | ~450 ioctls in right sequence, mostly `RM_ALLOC` / `UVM_REGISTER_GPU` shaped. Mechanical once ABI doc is in hand. | ~few hundred lines of Lithos |
-| `cuModuleLoadData` equivalent | Allocate GPU memory, copy cubin SASS bytes, record kernel metadata (entry PC, reg count, shmem, param layout) that we already know from compile | ~50 lines |
+| `cuModuleLoadData` equivalent | Allocate GPU memory, copy cubin binary bytes, record kernel metadata (entry PC, reg count, shmem, param layout) that we already know from compile | ~50 lines |
 | `cuModuleGetFunction` equivalent | Zero work — we emitted the cubin, we already have every field libcuda would otherwise parse out | (eliminated) |
 | `cuLaunchKernel` equivalent | Pack QMD into mapped USERD page, store doorbell. Pure memory writes, no syscalls. | ~50 lines |
 | `cuCtxSynchronize` equivalent | Poll a 32-bit fence value in mapped GPU-visible memory | ~10 lines |
@@ -181,10 +183,10 @@ main:
   cuInit-equivalent: ~20 ioctls
   cuCtxCreate-equivalent: ~450 ioctls, mmap USERD + GPFIFO + BAR1 + semaphore pool
   mmap safetensors (weights, 18 GB, zero-copy on GH200)
-  lithos-compile deltanet_layer.ls  → SASS bytes + metadata in memory
-  lithos-compile attention_layer.ls → SASS bytes + metadata in memory
+  lithos-compile deltanet_layer.ls  → raw Hopper binary bytes + metadata in memory
+  lithos-compile attention_layer.ls → raw Hopper binary bytes + metadata in memory
   for each kernel:
-    copy SASS into GPU instruction memory (direct write to mapped BAR region)
+    copy binary into GPU instruction memory (direct write to mapped BAR region)
     record kernel metadata for QMD building
 
   per token:
@@ -208,7 +210,7 @@ No libcuda, no driver userspace beyond the open kernel module. Pure Lithos → s
 - The launcher needs: mmap the safetensors, build a weight-pointer table, pass it to each kernel launch.
 
 ### 4c. State management
-- DeltaNet state: 16 heads × 128 × 128 × f32 × 48 layers = ~12.6 MB fixed. Allocate once at startup, reuse every token.
+- DeltaNet state: 48 layers × 16 heads × 128 × 128 × f32 = **48 MB** fixed. Allocate once at startup, reuse every token. (Prior figure of ~12.6 MB was a calculation error.)
 - KV cache for attention layers: grows per token. 16 layers × head_dim × n_kv_heads × 2 (K,V). Pre-allocate max sequence length or grow in chunks.
 - RoPE cos/sin tables: precompute and pin.
 
@@ -239,7 +241,7 @@ Ordered by "blocks the most downstream work":
 
 1. Cubin ELF wrapping *(1a — in flight)*
 2. Register allocator *(1b)*
-3. Cooperative grid-sync primitives *(1e)* — both at SASS encoding level and as a `.ls` language construct
+3. Cooperative grid-sync primitives *(1e)* — both at binary encoding level and as a `.ls` language construct
 4. Backend dispatch closure *(1c)*
 5. Language frontend — computed-offset indexing *(2a)* *(unblocks Conv1D)*
 6. Compile the DeltaNet cubin (48-layer cooperative megakernel) and verify per-layer cosine vs PyTorch

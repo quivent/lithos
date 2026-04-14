@@ -61,7 +61,7 @@ that is:
     27e9 / 2 = 13.5 GB raw weight data
 
 The weight-as-code instruction stream encodes one weight per instruction.
-Each SASS instruction is 16 bytes. At 8 weights unpacked from each 32-bit
+Each Hopper binary instruction is 16 bytes. At 8 weights unpacked from each 32-bit
 packed word in the current GEMV, we need one FMUL-IMM per weight element:
 
     27e9 weights x 16 bytes/instruction = 432 GB
@@ -276,7 +276,7 @@ slower.
 
 ### 7b. Warp-divergent immediates via shuffle (does not exist)
 
-There is no mechanism in SASS to have per-lane immediates. The immediate
+There is no mechanism in the Hopper ISA to have per-lane immediates. The immediate
 field is part of the instruction encoding, shared by all lanes. SHFL can
 distribute a register value across lanes, but the value must come from a
 register in the first place -- defeating the purpose of having weights in

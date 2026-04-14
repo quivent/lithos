@@ -44,7 +44,7 @@ but breaks for values crossing loops, fatally broken for our kernels;
 single-pass, SASS goes two-pass.
 
 **Decision: option 3.** PTX already works -- ptxas is a real allocator, don't
-re-implement it. SASS is where virtual-to-physical is our job. The
+re-implement it. The binary path is where virtual-to-physical is our job. The
 `li-backend @ if ... else ... then` at parser.fs:686 becomes the split: the
 `else` branch emits PTX text as today; the `if` branch appends an IR record
 instead of calling a SASS encoder. After each `fn`, a terminal `ra-finalize
@@ -53,7 +53,7 @@ calling the existing SASS encoders (`fadd,`, `ffma,`, `imad-imm,` ...).
 
 ## IR
 
-Flat array of fixed-size instruction records. One record per SASS instruction.
+Flat array of fixed-size instruction records. One record per Hopper binary instruction.
 Stored in a single contiguous buffer `ir-buf` with `ir-count` entries.
 
 Each record is 8 cells (64 bytes on 64-bit Forth):

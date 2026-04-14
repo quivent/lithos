@@ -145,7 +145,7 @@ Byte    Dword  Status       Field
 To hand-assemble a valid QMD for a Lithos kernel:
 
 1. **grid/block dims** — direct copies at bytes 0x00-0x14 and 0x15c-0x164.
-2. **entry_pc** — write the 40-bit GPU VA of the kernel's first SASS
+2. **entry_pc** — write the 40-bit GPU VA of the kernel's first binary
    instruction to bytes 0x118 (low 32) and 0x11c (high 8 bits in low byte).
    Lithos gets this from `cuModuleGetFunction` + internal GPU VA introspection
    (or by using cuda driver API to load the cubin and hand-assembling the

@@ -13,7 +13,7 @@ k_packed_per_split)`. The architecture has since moved to:
    are distinct ELF sections with distinct hardcoded dimensions. There is
    no "one kernel fits all sizes" any more.
 3. **Two cooperative-grid megakernels.** GEMV is a fragment inside a
-   larger fused stream, not a standalone launch. No PTX, direct SASS.
+   larger fused stream, not a standalone launch. No PTX, direct Hopper binary emission.
 4. **Target = Qwen 3.5 27B** (hidden 5120; MLP 17408; 48 V-heads * 128;
    LM head 5120 -> 248320; 48 DeltaNet + 16 full-attn layers on GH200).
 
