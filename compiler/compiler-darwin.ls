@@ -144,8 +144,11 @@
 \\ ENTRY POINT — must be FIRST composition (ELF entry = start of code buffer)
 \\ ============================================================================
 \\ macOS ARM64: argc in X0, argv in X1 (passed by dyld)
+\\ X0 = argc, X1 = argv — pass directly to lithos_main
 main :
-    lithos_main $0 $1
+    argc ↑ $0
+    argv ↑ $1
+    lithos_main argc argv
     ↓ $16 1
     ↓ $0 0
     trap

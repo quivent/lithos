@@ -1030,8 +1030,23 @@ parse_toplevel:
     b.eq    .Ltop_buf
     cmp     w0, #TOK_IDENT
     b.eq    .Ltop_ident
+    // "host" and "kernel" prefixes on compositions — skip the prefix
+    cmp     w0, #TOK_HOST
+    b.eq    .Ltop_skip_prefix
+    cmp     w0, #TOK_KERNEL
+    b.eq    .Ltop_skip_prefix
 
-    // Skip unknown
+    // Any keyword 11-45 not already dispatched → treat as identifier
+    cmp     w0, #11
+    b.lt    .Ltop_skip_unknown
+    cmp     w0, #45
+    b.le    .Ltop_ident
+.Ltop_skip_unknown:
+    add     x19, x19, #TOK_STRIDE_SZ
+    b       .Ltop_loop
+.Ltop_skip_prefix:
+    // Skip "host" or "kernel" token, then re-enter the loop
+    // to parse the actual composition name
     add     x19, x19, #TOK_STRIDE_SZ
     b       .Ltop_loop
 
@@ -1110,6 +1125,19 @@ handle_var:
     ldr     w3, [x3]
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
+
+    // Raise reg_floor to protect this var's register
+    add     w0, w4, #1
+    adrp    x1, reg_floor
+    add     x1, x1, :lo12:reg_floor
+    ldr     w2, [x1]
+    cmp     w0, w2
+    b.le    .Lvar_floor_ok
+    str     w0, [x1]
+    adrp    x1, next_reg
+    add     x1, x1, :lo12:next_reg
+    str     w0, [x1]
+.Lvar_floor_ok:
 
     // Check for initial value
     cmp     x19, x27
@@ -1835,6 +1863,26 @@ parse_binding_compose:
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
+
+    // Raise reg_floor to protect this variable's register across
+    // statement boundaries. Without this, reset_regs recycles it.
+    cmp     w4, #REG_FIRST
+    b.lt    .Lbind_no_floor        // param registers (X0-X8) don't need floor
+    add     w0, w4, #1
+    adrp    x1, reg_floor
+    add     x1, x1, :lo12:reg_floor
+    ldr     w2, [x1]
+    cmp     w0, w2
+    b.le    .Lbind_no_floor        // don't lower the floor
+    str     w0, [x1]
+    // Also advance next_reg if needed
+    adrp    x1, next_reg
+    add     x1, x1, :lo12:next_reg
+    ldr     w2, [x1]
+    cmp     w0, w2
+    b.le    .Lbind_no_floor
+    str     w0, [x1]
+.Lbind_no_floor:
 
     ldr     x19, [sp], #16         // restore post-expr position
     ldp     x29, x30, [sp], #16
