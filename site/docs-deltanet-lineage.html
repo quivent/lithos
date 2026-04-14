@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos &mdash; DeltaNet Layer Lineage Map</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0f; --bg-raised: #12121e; --bg-card: #14142a;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --green: #5ecc5e; --red: #e05555; --blue: #6e8ed0;
+  --cyan: #6ec8d0; --yellow: #e0c040; --border: #1e1e30;
+}
+html { font-size: 16px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { max-width: 1060px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav .nav-docs { color: var(--bg); background: var(--accent); padding: 0.25rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
+nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
+
+.hero { padding: 4rem 0 2.5rem; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 2.6rem; font-weight: 200; letter-spacing: 0.1em; text-transform: uppercase; }
+.hero .sub { color: var(--text-dim); font-size: 1.15rem; margin-top: 0.5rem; letter-spacing: 0.04em; }
+.hero .target { color: var(--accent); font-weight: 500; }
+
+section { padding: 2.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-of-type { border-bottom: none; }
+
+h2 { font-size: 1.15rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.2rem; }
+h3 { font-size: 1rem; font-weight: 500; color: var(--text); margin: 1.5rem 0 0.8rem; }
+h4 { font-size: 0.9rem; font-weight: 600; color: var(--cyan); margin: 1.2rem 0 0.6rem; }
+
+p { margin-bottom: 0.8rem; font-size: 0.95rem; }
+strong { color: var(--text); }
+em { color: var(--text-dim); }
+code { background: #0e0e1a; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.88em; font-family: 'SF Mono', 'Fira Code', monospace; }
+
+pre { background: #0e0e1a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; overflow-x: auto; line-height: 1.6; margin: 1rem 0 1.5rem; color: var(--text); }
+
+table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem; font-size: 0.88rem; }
+th { background: var(--bg-raised); color: var(--accent); text-align: left; padding: 0.6rem 1rem; border: 1px solid var(--border); font-weight: 600; letter-spacing: 0.04em; font-size: 0.82rem; text-transform: uppercase; }
+td { padding: 0.5rem 1rem; border: 1px solid var(--border); vertical-align: top; }
+td code { font-size: 0.82em; }
+tr:nth-child(even) { background: rgba(18, 18, 30, 0.5); }
+
+.info-box { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.6rem; margin: 1rem 0 1.8rem; font-size: 0.92rem; color: var(--text-dim); }
+.info-box strong { color: var(--text); }
+
+.sass-key { display: inline-block; color: var(--cyan); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85em; }
+.lithos-key { display: inline-block; color: var(--accent); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85em; }
+
+.timestamp { color: var(--text-faint); font-size: 0.78rem; text-align: center; padding: 3rem 0 2rem; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/compiler">Compiler</a>
+  <a href="/pipeline">Inference Stack</a>
+  <a href="/status">Status</a>
+  <a href="/language">Language</a>
+  <a href="/glossary">Glossary</a>
+  <a href="/docs" class="nav-docs">Docs</a>
+</div>
+</nav>
+
+<div class="container">
+
+<div class="hero">
+  <h1>DeltaNet Layer Lineage Map</h1>
+  <p class="sub">Framework to SASS &mdash; complete decomposition of every operation in a <span class="target">Qwen 3.5-27B</span> DeltaNet layer</p>
+</div>
+
+<!-- ==================== DIMENSIONS ==================== -->
+<section>
+<h2>Dimensions (Qwen 3.5-27B)</h2>
+<table>
+  <tr><th>Parameter</th><th>Value</th></tr>
+  <tr><td>hidden_size</td><td>5120</td></tr>
+  <tr><td>K_heads (key heads)</td><td>16</td></tr>
+  <tr><td>V_heads (value heads)</td><td>48</td></tr>
+  <tr><td>GQA ratio</td><td>48 / 16 = 3</td></tr>
+  <tr><td>head_dim</td><td>128</td></tr>
+  <tr><td>conv_kernel_dim</td><td>4</td></tr>
+  <tr><td>MLP intermediate_size</td><td>17408</td></tr>
+  <tr><td>rms_norm_eps</td><td>1e-6</td></tr>
+  <tr><td>quantization</td><td>W4A16 GPTQ, group_size=128, sym=true, zp=8</td></tr>
+</table>
+<p>48 DeltaNet layers per model (of 64 total; every 4th is full attention).</p>
+</section>
+
+<!-- ==================== HOW TO READ ==================== -->
+<section>
+<h2>How to Read the Lineage Trees</h2>
+<p>Each operation is shown as:</p>
+<pre>ML Name (Framework Layer)
+  -&gt; Lithos Composition Name
+    -&gt; primitive symbol (English description)    -&gt; SASS instruction(s)    [loop depth, complexity]</pre>
+<p>Loop depth notation: <code>*</code> = one loop (O(N)), <code>**</code> = nested (O(NxM)), <code>***</code> = triple (O(NxMxK)).<br>
+Scalar = no loop, O(1). Sigma = O(log N) shuffle tree.</p>
+</section>
+
+<!-- ==================== 1. RMSNORM ==================== -->
+<section>
+<h2>1. Normalize (RMSNorm with 1+w variant)</h2>
+<p><strong>PyTorch:</strong> <code>RMSNorm(x, weight, eps=1e-6)</code> with Qwen's <code>(1+w)</code> scaling.</p>
+<p><strong>Lithos:</strong> <code>rmsnorm x w D</code></p>
+<p><strong>Input:</strong> x[5120], w[5120] (learned). <strong>Output:</strong> x_normed[5120].</p>
+<pre>RMSNorm (Framework Layer)
+  -&gt; rmsnorm x w D (Lithos Composition)
+    -&gt; ** (square each element)                   -&gt; FMUL Rd, Ra, Ra                      [depth 1, O(5120)]
+    -&gt; Sigma (sum all squares)                    -&gt; stride FFMA partials                  [depth 1, O(5120)]
+                                                     5x SHFL.BFLY + FADD (intra-warp)     [O(log 32)]
+                                                     STS + BAR.SYNC + LDS (cross-warp)    [O(warps)]
+    -&gt; / D (divide by dimension count)            -&gt; MUFU.RCP Rt, 5120.0                  [scalar, O(1)]
+                                                     FMUL Rd, Ra, Rt
+    -&gt; + eps (add epsilon for stability)          -&gt; FADD Rd, Ra, 1e-6                    [scalar, O(1)]
+    -&gt; 1/sqrt (reciprocal square root)            -&gt; MUFU.RSQ Rd, Ra                      [scalar, O(1)]
+    -&gt; ** (scale x by 1/rms)                      -&gt; FMUL Rd, Ra, Rb                      [depth 1, O(5120)]
+    -&gt; + 1 (Qwen variant: add 1 to weight)        -&gt; FADD Rd, Ra, 1.0                     [depth 1, O(5120)]
+    -&gt; ** (multiply by (1+w))                     -&gt; FMUL Rd, Ra, Rb                      [depth 1, O(5120)]</pre>
+<p><strong>SASS budget:</strong> ~25 instructions dominate (Sigma shuffle tree); 4 elementwise passes over 5120 elements; 3 scalar SFU/FP ops.</p>
+</section>
+
+<!-- ==================== 2. PROJECT QKV ==================== -->
+<section>
+<h2>2. Project-QKV (W4A16 GPTQ GEMV)</h2>
+<p><strong>PyTorch:</strong> <code>F.linear(x, W_qkv)</code> where W is 4-bit quantized GPTQ.</p>
+<p><strong>Lithos:</strong> <code>project W x out</code> (3 separate projections: W_q, W_k, W_v)</p>
+<p><strong>Input:</strong> x[5120]. <strong>Output:</strong> q[2048], k[2048], v[6144] (total 10240).</p>
+<pre>Linear / GEMV (Framework Layer)
+  -&gt; project W x out (Lithos Composition &mdash; W4A16 dequant GEMV)
+    per output row (10240 rows, parallelized across warps/blocks):
+      per group of 8 packed weights (5120/8 = 640 groups per row):
+        -&gt; LDG (load packed u32)                  -&gt; LDG.E.SYS Rd, [addr]                 [memory]
+        -&gt; LDG (load group scale)                 -&gt; LDG.E.SYS Rd, [addr]                 [memory]
+        -&gt; LDG (load input element)               -&gt; LDG.E.SYS Rd, [addr]                 [memory]
+        8x unrolled per nibble:
+          -&gt; extract (shift + mask 4-bit)          -&gt; LOP3.LUT Rd, Ra, 0xF, Rb             [scalar, O(1)]
+          -&gt; int-to-float                          -&gt; I2F.F32.U32 Rd, Ra                    [scalar, O(1)]
+          -&gt; - zp (subtract zero point 8)          -&gt; FADD Rd, Ra, -8.0                     [scalar, O(1)]
+          -&gt; * scale (multiply by group scale)     -&gt; FMUL Rd, Ra, Rb                       [scalar, O(1)]
+          -&gt; FMA (multiply-accumulate with input)  -&gt; FFMA Rd, Ra, Rb, Rc                   [scalar, O(1)]
+      -&gt; Sigma (warp reduction)                    -&gt; 5x SHFL.BFLY + FADD                   [O(log 32)]
+      -&gt; Sigma (cross-warp reduction)              -&gt; STS + BAR.SYNC + LDS + FADD           [O(warps)]</pre>
+<p><strong>SASS budget:</strong> 40 instructions per packed u32 (8 weights x 5 ops), 640 groups per row, 10240 rows. ~26M FMAs total. Memory-bandwidth bound.</p>
+<p><strong>Projection breakdown:</strong></p>
+<table>
+  <tr><th>Projection</th><th>Shape</th><th>Output</th></tr>
+  <tr><td>W_q</td><td>[2048, 5120]</td><td>q[16 heads x 128] = 2048</td></tr>
+  <tr><td>W_k</td><td>[2048, 5120]</td><td>k[16 heads x 128] = 2048</td></tr>
+  <tr><td>W_v</td><td>[6144, 5120]</td><td>v[48 heads x 128] = 6144</td></tr>
+</table>
+</section>
+
+<!-- ==================== 3. PROJECT Z ==================== -->
+<section>
+<h2>3. Project-Z (Gate Projection)</h2>
+<p><strong>PyTorch:</strong> <code>F.linear(x, W_z)</code> (same mechanism as project-qkv).</p>
+<p><strong>Lithos:</strong> <code>project W_z x z</code></p>
+<p><strong>Input:</strong> x_normed[5120]. <strong>Output:</strong> z[6144] (48 heads x 128).</p>
+<pre>Linear / GEMV (Framework Layer)
+  -&gt; project W_z x z (Lithos Composition &mdash; W4A16 dequant GEMV)
+    [identical SASS structure to project-qkv above]
+    -&gt; LDG + LOP3 + I2F + FADD + FMUL + FFMA   per nibble         [depth 3, O(6144 x 640 x 8)]
+    -&gt; 5x SHFL.BFLY + FADD                      per row reduction  [O(log 32)]
+    -&gt; STS + BAR.SYNC + LDS + FADD              cross-warp         [O(warps)]</pre>
+<p><strong>SASS budget:</strong> Same dequant GEMV pattern. 6144 output rows x 640 groups x 8 weights. This projection produces the gating signal used in post-process (step 10b).</p>
+</section>
+
+<!-- ==================== 4. CONV1D ==================== -->
+<section>
+<h2>4. Conv1D (Depthwise Temporal Convolution)</h2>
+<p><strong>PyTorch:</strong> <code>F.conv1d(x, w, groups=C)</code> with kernel_size=4 over a rolling buffer.</p>
+<p><strong>Lithos:</strong> <code>conv_w ** x</code> + <code>Sigma</code> over taps (elementwise FIR filter per channel).</p>
+<p><strong>Input:</strong> qkv[10240], history[10240, 3], conv_w[10240, 4]. <strong>Output:</strong> convolved[10240].</p>
+<pre>Depthwise Conv1d (Framework Layer)
+  -&gt; ** (elementwise multiply: window x kernel weights)
+    per channel (10240 channels, parallelized):
+      per tap (4 taps):
+        -&gt; * (multiply channel value by kernel weight)  -&gt; FMUL Rd, Ra, Rb                [scalar, O(1)]
+  -&gt; Sigma-taps (sum over 4 taps per channel)
+        -&gt; FADD (accumulate 4 products)                 -&gt; 3x FADD Rd, Ra, Rb             [O(4), unrolled]
+  -&gt; shift-buffer (update history)
+        -&gt; &lt;- 32 (store new value to history buffer)    -&gt; STG.E.SYS [addr], Rd           [memory]</pre>
+<p><strong>Note:</strong> With only 4 taps, the "reduction" is 3 additions fully unrolled &mdash; no shuffle tree needed. Each channel is independent (depthwise).</p>
+<p><strong>SASS budget:</strong> 4 FMULs + 3 FADDs per channel = 7 FP ops x 10240 channels. History shift is a memory operation (3 loads + 3 stores per channel to slide the window).</p>
+</section>
+
+<!-- ==================== 5. SILU ==================== -->
+<section>
+<h2>5. Activate (SiLU)</h2>
+<p><strong>PyTorch:</strong> <code>F.silu(x)</code> = <code>x * torch.sigmoid(x)</code>.</p>
+<p><strong>Lithos:</strong> <code>silu x</code> = <code>dup * -1 exp ++ // **</code></p>
+<p><strong>Input:</strong> qkv[10240]. <strong>Output:</strong> activated[10240].</p>
+<pre>SiLU Activation (Framework Layer)
+  -&gt; silu x (Lithos Composition)
+    applied elementwise across 10240 elements (depth 1):
+      -&gt; * -1 (negate x)                          -&gt; FMUL Rd, Ra, -1.0                    [scalar, O(1)]
+                                                     (or FADD Rd, -Ra, 0 with negate mod)
+      -&gt; exp (e^(-x))                             -&gt; FMUL Rt, Ra, 1.442695                [scalar, O(1)]
+                                                     MUFU.EX2 Rd, Rt                      [SFU, O(1)]
+      -&gt; ++ (add 1 elementwise)                   -&gt; FADD Rd, Ra, 1.0                     [scalar, O(1)]
+      -&gt; // (reciprocal elementwise = sigmoid)     -&gt; MUFU.RCP Rd, Ra                      [SFU, O(1)]
+      -&gt; ** (multiply x * sigmoid(x))             -&gt; FMUL Rd, Ra, Rb                      [scalar, O(1)]</pre>
+<p><strong>Decomposition detail:</strong></p>
+<pre>sigmoid(x)  =  1 / (1 + e^(-x))
+            =  * -1  -&gt;  exp  -&gt;  + 1  -&gt;  1/
+SiLU(x)     =  x * sigmoid(x)
+            =  sigmoid  -&gt;  ** (multiply by original x)</pre>
+<p><strong>SASS budget:</strong> 6 instructions per element (FMUL, FMUL, MUFU.EX2, FADD, MUFU.RCP, FMUL). 10240 elements. 2 SFU ops per element.</p>
+</section>
+
+<!-- ==================== 6. L2NORM ==================== -->
+<section>
+<h2>6. Normalize-QK (L2 Norm + Scale)</h2>
+<p><strong>PyTorch:</strong> <code>F.normalize(q, dim=-1) * (head_dim ** -0.5)</code> and <code>F.normalize(k, dim=-1)</code>.</p>
+<p><strong>Lithos:</strong> <code>l2norm q</code> then <code>* 0.08839</code> (= 1/sqrt(128)); <code>l2norm k</code></p>
+<p><strong>Input:</strong> Q[16, 128], K[16, 128]. <strong>Output:</strong> Q_scaled[16, 128], K_normed[16, 128].</p>
+<pre>L2 Normalize + Scale (Framework Layer)
+  -&gt; l2norm x (Lithos Composition), applied per head (16 heads):
+    -&gt; ** (square each element)                   -&gt; FMUL Rd, Ra, Ra                      [depth 1, O(128)]
+    -&gt; Sigma (sum all 128 squares)                -&gt; stride FFMA partials                  [depth 1, O(128)]
+                                                     5x SHFL.BFLY + FADD (intra-warp)     [O(log 32)]
+                                                     STS + BAR.SYNC + LDS (cross-warp)    [O(warps)]
+    -&gt; + eps (add epsilon)                        -&gt; FADD Rd, Ra, 1e-6                    [scalar, O(1)]
+    -&gt; 1/sqrt (reciprocal square root of sum)     -&gt; MUFU.RSQ Rd, Ra                      [scalar, O(1)]
+    -&gt; ** (scale each element to unit length)     -&gt; FMUL Rd, Ra, Rb                      [depth 1, O(128)]
+
+  -&gt; * 0.08839 (scale Q by 1/sqrt(128))          -&gt; FMUL Rd, Ra, 0.08839                 [depth 1, O(128)]
+     (applied to Q only, not K)</pre>
+<p><strong>SASS budget per head:</strong> ~25 instructions (dominated by Sigma shuffle tree) + 2 elementwise passes over 128 elements + 1 RSQ. Applied to 16 K-heads for Q + 16 K-heads for K = 32 passes. Q gets an extra scaling pass.</p>
+</section>
+
+<!-- ==================== 7. GATES ==================== -->
+<section>
+<h2>7. Compute-Gates (Sigmoid for beta, Softplus+Exp for decay)</h2>
+<p><strong>PyTorch:</strong> <code>torch.sigmoid(linear_beta(x))</code> for beta; <code>torch.exp(-softplus(linear_decay(x) + bias) * A.exp())</code> for decay.</p>
+<p><strong>Lithos:</strong> Two sub-compositions.</p>
+<p><strong>Input:</strong> x_normed[5120]. <strong>Output:</strong> beta[16] (broadcast to 48 via GQA), decay[48].</p>
+
+<h3>7a. Beta (sigmoid)</h3>
+<pre>Sigmoid Gate (Framework Layer)
+  -&gt; sigmoid (Lithos Composition)
+    -&gt; project W_beta x raw_beta                  [W4A16 GEMV: 5120 -&gt; 16]
+       (same SASS as project-qkv, 16 output rows)
+    per element (16 values):
+      -&gt; * -1 (negate)                            -&gt; FMUL Rd, Ra, -1.0                    [scalar, O(1)]
+      -&gt; exp (e^(-x))                             -&gt; FMUL Rt, Ra, 1.442695                [scalar, O(1)]
+                                                     MUFU.EX2 Rd, Rt                      [SFU, O(1)]
+      -&gt; + 1 (add one)                            -&gt; FADD Rd, Ra, 1.0                     [scalar, O(1)]
+      -&gt; 1/ (reciprocal = sigmoid output)         -&gt; MUFU.RCP Rd, Ra                      [SFU, O(1)]</pre>
+
+<h3>7b. Decay (softplus + exponential decay)</h3>
+<pre>Exponential Decay Gate (Framework Layer)
+  -&gt; project + bias + softplus + exp chain (Lithos Composition)
+    -&gt; project W_decay x raw_dt                   [W4A16 GEMV: 5120 -&gt; 48]
+    per element (48 values):
+      -&gt; + bias (add learned bias)                -&gt; FADD Rd, Ra, bias_imm                [scalar, O(1)]
+      -&gt; exp (for softplus: e^x)                  -&gt; FMUL Rt, Ra, 1.442695                [scalar, O(1)]
+                                                     MUFU.EX2 Rd, Rt                      [SFU, O(1)]
+      -&gt; + 1 (softplus: 1 + e^x)                 -&gt; FADD Rd, Ra, 1.0                     [scalar, O(1)]
+      -&gt; log (softplus: ln(1 + e^x))              -&gt; MUFU.LG2 Rt, Ra                      [SFU, O(1)]
+                                                     FMUL Rd, Rt, 0.693147                [scalar, O(1)]
+      -&gt; * A_exp (multiply by learned rate)       -&gt; FMUL Rd, Ra, Rb                      [scalar, O(1)]
+      -&gt; * -1 (negate)                            -&gt; FMUL Rd, Ra, -1.0                    [scalar, O(1)]
+      -&gt; exp (final: e^(-A*dt) = decay)           -&gt; FMUL Rt, Ra, 1.442695                [scalar, O(1)]
+                                                     MUFU.EX2 Rd, Rt                      [SFU, O(1)]</pre>
+<p><strong>Decomposition detail:</strong></p>
+<pre>softplus(x)  =  ln(1 + e^x)  =  exp -&gt; + 1 -&gt; log     (3 primitives, 5 SASS)
+decay        =  e^(-A * softplus(x + bias))
+             =  softplus -&gt; * A_exp -&gt; * -1 -&gt; exp      (4 more primitives)</pre>
+<p><strong>SASS budget:</strong></p>
+<ul>
+  <li>Beta: GEMV(5120-&gt;16) + 5 FP ops x 16 = 80 scalar ops.</li>
+  <li>Decay: GEMV(5120-&gt;48) + 10 FP ops x 48 = 480 scalar ops. 4 SFU ops per element.</li>
+</ul>
+</section>
+
+<!-- ==================== 8. RECURRENCE ==================== -->
+<section>
+<h2>8. Recurrence (Delta Rule &mdash; State Update + Query)</h2>
+<p><strong>PyTorch:</strong> Custom DeltaNet recurrence (no standard PyTorch equivalent).</p>
+<p><strong>Lithos:</strong> <code>deltanet_fused q k v z decay beta state out</code></p>
+<p><strong>Input:</strong> S[128,128] (persistent state per head), Q[128], K[128], V[128], beta (scalar), decay (scalar). <strong>Output:</strong> out[128] per head. S updated in place. Applied per head (48 V-heads, grouped by 16 K-heads).</p>
+<pre>DeltaNet Recurrence (Framework Layer)
+  -&gt; deltanet_fused (Lithos Composition), per head (48 heads):
+
+    Step 1: Decay old state &mdash; S = S * decay
+      -&gt; ** S decay (elementwise matrix scale)    -&gt; FMUL Rd, Ra, Rb                      [depth 2, O(128x128)]
+         for each row i (128):
+           for each col j (128):
+             S[i,j] *= decay
+
+    Step 2: Read from state &mdash; recall = S @ K (matvec)
+      -&gt; ** S K (element products per row)        -&gt; FMUL Rd, Ra, Rb                      [depth 2, O(128x128)]
+      -&gt; Sigma (reduce each row)                  -&gt; stride FFMA partials                  [per row, O(128)]
+                                                     5x SHFL.BFLY + FADD                  [O(log 32)]
+                                                     STS + BAR.SYNC + LDS                 [O(warps)]
+         produces recall[128]
+
+    Step 3: Compute delta &mdash; delta = beta * (V - recall)
+      -&gt; -- (subtract: V - recall)                -&gt; FADD Rd, Ra, -Rb                     [depth 1, O(128)]
+      -&gt; ** beta (scale by beta)                  -&gt; FMUL Rd, Ra, Rb                      [depth 1, O(128)]
+
+    Step 4: Update state &mdash; S += outer(delta, K)
+      -&gt; *** delta K (outer product)              -&gt; FMUL Rd, Ra, Rb                      [depth 2, O(128x128)]
+         for each i (128):
+           for each j (128):
+             update[i,j] = delta[i] * K[j]
+      -&gt; +++ S update (matrix add)                -&gt; FADD Rd, Ra, Rb                      [depth 2, O(128x128)]
+         S[i,j] += update[i,j]
+
+    Step 5: Query state &mdash; output = S_new @ Q (matvec)
+      -&gt; ** S Q (element products per row)        -&gt; FMUL Rd, Ra, Rb                      [depth 2, O(128x128)]
+      -&gt; Sigma (reduce each row)                  -&gt; stride FFMA partials                  [per row, O(128)]
+                                                     5x SHFL.BFLY + FADD                  [O(log 32)]
+                                                     STS + BAR.SYNC + LDS                 [O(warps)]
+         produces output[128]</pre>
+<p><strong>Decomposition detail:</strong></p>
+<pre>Full recurrence per head:
+  S = decay ** S  +++  beta ** (V -- recall) *** K
+  output = S_new @ Q
+
+Primitive sequence:
+  ** (decay state)  -&gt;  ** + Sigma (matvec S@K)  -&gt;  -- (subtract)  -&gt;  ** (scale beta)
+  -&gt;  *** (outer product)  -&gt;  +++ (matrix add)  -&gt;  ** + Sigma (matvec S@Q)</pre>
+<p><strong>SASS budget per head:</strong></p>
+<ul>
+  <li>Decay: 128x128 = 16384 FMULs</li>
+  <li>Matvec S@K: 128x128 FMULs + 128 Sigma reductions</li>
+  <li>Subtract + scale: 128 FADDs + 128 FMULs</li>
+  <li>Outer product: 128x128 = 16384 FMULs</li>
+  <li>Matrix add: 128x128 = 16384 FADDs</li>
+  <li>Matvec S@Q: 128x128 FMULs + 128 Sigma reductions</li>
+  <li><strong>Total per head:</strong> ~65K FP ops + 256 shuffle-tree reductions.</li>
+  <li><strong>Total across 48 heads:</strong> ~3.1M FP ops.</li>
+</ul>
+</section>
+
+<!-- ==================== 9. POST-PROCESS ==================== -->
+<section>
+<h2>9. Post-Process (Group-Norm, Gate, Project, Residual)</h2>
+<p><strong>PyTorch:</strong> Group norm per head, SiLU-gated output, linear projection, residual add.</p>
+<p><strong>Lithos:</strong> <code>rmsnorm</code> + <code>silu ** **</code> + <code>project</code> + <code>++</code></p>
+<p><strong>Input:</strong> recurrence output[48, 128], z[48, 128], x_input[5120]. <strong>Output:</strong> layer_output[5120].</p>
+
+<h3>9a. Group norm (RMSNorm per head, plain w &mdash; NOT 1+w)</h3>
+<pre>GroupNorm / RMSNorm (Framework Layer)
+  -&gt; rmsnorm out w 128 (Lithos Composition), per head (48 heads):
+    -&gt; ** (square each element)                   -&gt; FMUL Rd, Ra, Ra                      [depth 1, O(128)]
+    -&gt; Sigma (sum 128 squares)                    -&gt; stride FFMA partials                  [O(128)]
+                                                     5x SHFL.BFLY + FADD                  [O(log 32)]
+                                                     STS + BAR.SYNC + LDS                 [O(warps)]
+    -&gt; / 128 (divide by head_dim)                 -&gt; MUFU.RCP Rt, 128.0                   [scalar, O(1)]
+                                                     FMUL Rd, Ra, Rt
+    -&gt; + eps (add epsilon)                        -&gt; FADD Rd, Ra, 1e-6                    [scalar, O(1)]
+    -&gt; 1/sqrt (reciprocal square root)            -&gt; MUFU.RSQ Rd, Ra                      [scalar, O(1)]
+    -&gt; ** (scale by 1/rms)                        -&gt; FMUL Rd, Ra, Rb                      [depth 1, O(128)]
+    -&gt; ** (multiply by weight w)                  -&gt; FMUL Rd, Ra, Rb                      [depth 1, O(128)]</pre>
+
+<h3>9b. Gate with Z (SiLU on z, then element-multiply)</h3>
+<pre>SiLU Gate (Framework Layer)
+  -&gt; silu z then ** (Lithos Composition), per head (48 heads):
+    -&gt; * -1 (negate z)                            -&gt; FMUL Rd, Ra, -1.0                    [scalar, O(1)]
+    -&gt; exp (e^(-z))                               -&gt; FMUL Rt, Ra, 1.442695                [scalar, O(1)]
+                                                     MUFU.EX2 Rd, Rt                      [SFU, O(1)]
+    -&gt; + 1 (add one)                              -&gt; FADD Rd, Ra, 1.0                     [scalar, O(1)]
+    -&gt; 1/ (reciprocal = sigmoid(z))               -&gt; MUFU.RCP Rd, Ra                      [SFU, O(1)]
+    -&gt; ** (z * sigmoid(z) = SiLU(z))              -&gt; FMUL Rd, Ra, Rb                      [scalar, O(1)]
+    -&gt; ** (normed_output * SiLU(z) = gated)       -&gt; FMUL Rd, Ra, Rb                      [depth 1, O(128)]</pre>
+
+<h3>9c. Output projection</h3>
+<pre>Linear / GEMV (Framework Layer)
+  -&gt; project W_o gated X (Lithos Composition &mdash; W4A16 dequant GEMV)
+    [identical SASS structure to project-qkv]
+    Input: gated[6144] (48 heads concatenated). Output: projected[5120].
+    -&gt; LDG + LOP3 + I2F + FADD + FMUL + FFMA   per nibble         [depth 3, O(5120 x 768 x 8)]
+    -&gt; 5x SHFL.BFLY + FADD                      per row reduction  [O(log 32)]</pre>
+
+<h3>9d. Residual add</h3>
+<pre>Residual Connection (Framework Layer)
+  -&gt; ++ (elementwise vector add)                  -&gt; FADD Rd, Ra, Rb                      [depth 1, O(5120)]</pre>
+</section>
+
+<!-- ==================== 10. MLP BLOCK ==================== -->
+<section>
+<h2>10. MLP Block (RMSNorm + Gate/Up + SiLU + Down + Residual)</h2>
+<p><strong>PyTorch:</strong> Standard gated MLP: <code>x + W_down(SiLU(W_gate(norm(x))) * W_up(norm(x)))</code>.</p>
+<p><strong>Lithos:</strong> <code>rmsnorm</code> + <code>project</code> x2 + <code>silu</code> + <code>**</code> + <code>project</code> + <code>++</code></p>
+<p><strong>Input:</strong> x[5120] (post-attention residual). <strong>Output:</strong> x'[5120].</p>
+
+<h3>10a. MLP RMSNorm (same as step 1, with 1+w variant)</h3>
+<pre>RMSNorm (Framework Layer)
+  -&gt; rmsnorm x w 5120 (Lithos Composition)
+    -&gt; ** (square)                                -&gt; FMUL Rd, Ra, Ra                      [depth 1, O(5120)]
+    -&gt; Sigma (sum squares)                        -&gt; stride FFMA + 5x SHFL.BFLY + FADD    [O(5120) + O(log 32)]
+                                                     STS + BAR.SYNC + LDS                 [O(warps)]
+    -&gt; / 5120 (mean)                              -&gt; MUFU.RCP + FMUL                      [scalar, O(1)]
+    -&gt; + eps                                      -&gt; FADD Rd, Ra, 1e-6                    [scalar, O(1)]
+    -&gt; 1/sqrt                                     -&gt; MUFU.RSQ Rd, Ra                      [scalar, O(1)]
+    -&gt; ** (scale)                                 -&gt; FMUL Rd, Ra, Rb                      [depth 1, O(5120)]
+    -&gt; + 1 then ** (Qwen 1+w)                     -&gt; FADD + FMUL                          [depth 1, O(5120)]</pre>
+
+<h3>10b. Gate projection (W4A16 GEMV)</h3>
+<pre>Linear / GEMV (Framework Layer)
+  -&gt; project W_gate x gate (Lithos &mdash; W4A16 dequant GEMV)
+    Input: x_normed[5120]. Output: gate[17408].
+    -&gt; LDG + LOP3 + I2F + FADD + FMUL + FFMA   per nibble         [depth 3, O(17408 x 640 x 8)]
+    -&gt; 5x SHFL.BFLY + FADD                      per row reduction  [O(log 32)]</pre>
+
+<h3>10c. Up projection (W4A16 GEMV)</h3>
+<pre>Linear / GEMV (Framework Layer)
+  -&gt; project W_up x up (Lithos &mdash; W4A16 dequant GEMV)
+    Input: x_normed[5120]. Output: up[17408].
+    -&gt; LDG + LOP3 + I2F + FADD + FMUL + FFMA   per nibble         [depth 3, O(17408 x 640 x 8)]
+    -&gt; 5x SHFL.BFLY + FADD                      per row reduction  [O(log 32)]</pre>
+
+<h3>10d. SiLU on gate</h3>
+<pre>SiLU Activation (Framework Layer)
+  -&gt; silu gate (Lithos Composition), elementwise across 17408 elements:
+    -&gt; * -1                                       -&gt; FMUL Rd, Ra, -1.0                    [scalar, O(1)]
+    -&gt; exp                                        -&gt; FMUL Rt, Ra, 1.442695                [scalar, O(1)]
+                                                     MUFU.EX2 Rd, Rt                      [SFU, O(1)]
+    -&gt; + 1                                        -&gt; FADD Rd, Ra, 1.0                     [scalar, O(1)]
+    -&gt; 1/                                         -&gt; MUFU.RCP Rd, Ra                      [SFU, O(1)]
+    -&gt; ** (gate * sigmoid(gate))                  -&gt; FMUL Rd, Ra, Rb                      [scalar, O(1)]</pre>
+
+<h3>10e. Gate * Up (elementwise multiply)</h3>
+<pre>Hadamard Product (Framework Layer)
+  -&gt; ** (elementwise multiply gate_activated * up) -&gt; FMUL Rd, Ra, Rb                     [depth 1, O(17408)]</pre>
+
+<h3>10f. Down projection (W4A16 GEMV)</h3>
+<pre>Linear / GEMV (Framework Layer)
+  -&gt; project W_down intermediate X (Lithos &mdash; W4A16 dequant GEMV)
+    Input: intermediate[17408]. Output: projected[5120].
+    -&gt; LDG + LOP3 + I2F + FADD + FMUL + FFMA   per nibble         [depth 3, O(5120 x 2176 x 8)]
+    -&gt; 5x SHFL.BFLY + FADD                      per row reduction  [O(log 32)]</pre>
+
+<h3>10g. Residual add</h3>
+<pre>Residual Connection (Framework Layer)
+  -&gt; ++ (elementwise vector add)                  -&gt; FADD Rd, Ra, Rb                      [depth 1, O(5120)]</pre>
+
+<p><strong>MLP SASS budget:</strong> Dominated by 3 GEMV projections (gate: 5120-&gt;17408, up: 5120-&gt;17408, down: 17408-&gt;5120). ~205M FMA-equivalent ops. SiLU adds 6 ops x 17408 = 104K ops (negligible).</p>
+</section>
+
+<!-- ==================== PRIMITIVE INVENTORY ==================== -->
+<section>
+<h2>Complete Primitive Inventory (41 Steps)</h2>
+<table>
+  <tr><th>Step</th><th>Operation</th><th>Lithos Primitive(s)</th><th>SASS Core Instruction(s)</th><th>Depth</th></tr>
+  <tr><td>1</td><td>normalize</td><td><code>** Sigma / + 1/sqrt ** + **</code></td><td>FMUL, SHFL.BFLY+FADD, RCP+FMUL, FADD, RSQ, FMUL, FADD, FMUL</td><td>0-1</td></tr>
+  <tr><td>2</td><td>project qkv</td><td><code>project</code> (x3)</td><td>LDG, LOP3, I2F, FADD, FMUL, FFMA, SHFL.BFLY</td><td>3</td></tr>
+  <tr><td>3</td><td>project z</td><td><code>project</code></td><td>LDG, LOP3, I2F, FADD, FMUL, FFMA, SHFL.BFLY</td><td>3</td></tr>
+  <tr><td>4</td><td>conv1d multiply</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>5</td><td>conv1d reduce</td><td><code>Sigma</code> (4-tap, unrolled)</td><td>3x FADD</td><td>0</td></tr>
+  <tr><td>6</td><td>silu negate</td><td><code>* -1</code></td><td>FMUL</td><td>0</td></tr>
+  <tr><td>7</td><td>silu exp</td><td><code>exp</code></td><td>FMUL + MUFU.EX2</td><td>0</td></tr>
+  <tr><td>8</td><td>silu add-one</td><td><code>++</code></td><td>FADD</td><td>1</td></tr>
+  <tr><td>9</td><td>silu reciprocal</td><td><code>//</code></td><td>MUFU.RCP</td><td>1</td></tr>
+  <tr><td>10</td><td>silu multiply</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>11</td><td>l2norm square</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>12</td><td>l2norm sum</td><td><code>Sigma</code></td><td>SHFL.BFLY + FADD + STS + BAR.SYNC + LDS</td><td>log N</td></tr>
+  <tr><td>13</td><td>l2norm rsqrt</td><td><code>1/sqrt</code></td><td>MUFU.RSQ</td><td>0</td></tr>
+  <tr><td>14</td><td>l2norm scale</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>15</td><td>scale Q</td><td><code>* 0.08839</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>16</td><td>sigmoid (beta)</td><td><code>* -1 exp ++ //</code></td><td>FMUL, FMUL+EX2, FADD, RCP</td><td>0</td></tr>
+  <tr><td>17</td><td>softplus exp</td><td><code>exp</code></td><td>FMUL + MUFU.EX2</td><td>0</td></tr>
+  <tr><td>18</td><td>softplus add-one</td><td><code>++</code></td><td>FADD</td><td>1</td></tr>
+  <tr><td>19</td><td>softplus log</td><td><code>log</code></td><td>MUFU.LG2 + FMUL</td><td>0</td></tr>
+  <tr><td>20</td><td>matvec S@K products</td><td><code>**</code></td><td>FMUL</td><td>2</td></tr>
+  <tr><td>21</td><td>matvec S@K reduce</td><td><code>Sigma</code></td><td>SHFL.BFLY + FADD + STS + BAR.SYNC + LDS</td><td>log N</td></tr>
+  <tr><td>22</td><td>subtract V-recall</td><td><code>--</code></td><td>FADD (negate modifier)</td><td>1</td></tr>
+  <tr><td>23</td><td>scale by beta</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>24</td><td>outer product</td><td><code>***</code></td><td>FMUL</td><td>2</td></tr>
+  <tr><td>25</td><td>decay state</td><td><code>**</code></td><td>FMUL</td><td>2</td></tr>
+  <tr><td>26</td><td>state add</td><td><code>+++</code></td><td>FADD</td><td>2</td></tr>
+  <tr><td>27</td><td>matvec S@Q products</td><td><code>**</code></td><td>FMUL</td><td>2</td></tr>
+  <tr><td>28</td><td>matvec S@Q reduce</td><td><code>Sigma</code></td><td>SHFL.BFLY + FADD + STS + BAR.SYNC + LDS</td><td>log N</td></tr>
+  <tr><td>29</td><td>group norm</td><td><code>** Sigma / + 1/sqrt ** **</code></td><td>FMUL, SHFL.BFLY+FADD, RCP+FMUL, FADD, RSQ, FMUL, FMUL</td><td>0-1</td></tr>
+  <tr><td>30</td><td>sigmoid (gate z)</td><td><code>* -1 exp ++ //</code></td><td>FMUL, FMUL+EX2, FADD, RCP</td><td>0</td></tr>
+  <tr><td>31</td><td>silu z</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>32</td><td>output * gate</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>33</td><td>project out</td><td><code>project</code></td><td>LDG, LOP3, I2F, FADD, FMUL, FFMA, SHFL.BFLY</td><td>3</td></tr>
+  <tr><td>34</td><td>residual add</td><td><code>++</code></td><td>FADD</td><td>1</td></tr>
+  <tr><td>35</td><td>MLP rmsnorm</td><td><code>** Sigma / + 1/sqrt ** + **</code></td><td>same as step 1</td><td>0-1</td></tr>
+  <tr><td>36</td><td>MLP gate+up proj</td><td><code>project</code> (x2)</td><td>LDG, LOP3, I2F, FADD, FMUL, FFMA, SHFL.BFLY</td><td>3</td></tr>
+  <tr><td>37</td><td>MLP silu gate</td><td><code>* -1 exp ++ //</code></td><td>FMUL, FMUL+EX2, FADD, RCP</td><td>0</td></tr>
+  <tr><td>38</td><td>MLP silu multiply</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>39</td><td>MLP gate * up</td><td><code>**</code></td><td>FMUL</td><td>1</td></tr>
+  <tr><td>40</td><td>MLP down proj</td><td><code>project</code></td><td>LDG, LOP3, I2F, FADD, FMUL, FFMA, SHFL.BFLY</td><td>3</td></tr>
+  <tr><td>41</td><td>MLP residual add</td><td><code>++</code></td><td>FADD</td><td>1</td></tr>
+</table>
+</section>
+
+<!-- ==================== SASS SUMMARY ==================== -->
+<section>
+<h2>SASS Instruction Summary</h2>
+<p>Every SASS instruction used by a DeltaNet layer, organized by family:</p>
+<table>
+  <tr><th>SASS Instruction</th><th>Lithos Primitive</th><th>Usage</th></tr>
+  <tr><td><code>FMUL Rd, Ra, Rb</code></td><td><code>*</code>, <code>**</code>, <code>***</code></td><td>Multiply (elementwise, outer product, scale)</td></tr>
+  <tr><td><code>FFMA Rd, Ra, Rb, Rc</code></td><td><code>project</code> inner loop, <code>Sigma</code> partials</td><td>Fused multiply-add (dequant accumulate, partial sums)</td></tr>
+  <tr><td><code>FADD Rd, Ra, Rb</code></td><td><code>+</code>, <code>++</code>, <code>+++</code></td><td>Add (scalar, elementwise, matrix)</td></tr>
+  <tr><td><code>FADD Rd, Ra, -Rb</code></td><td><code>-</code>, <code>--</code></td><td>Subtract (negate source modifier, no dedicated SUB)</td></tr>
+  <tr><td><code>MUFU.RCP Rd, Ra</code></td><td><code>1/</code>, <code>//</code></td><td>SFU reciprocal (division, sigmoid)</td></tr>
+  <tr><td><code>MUFU.RSQ Rd, Ra</code></td><td><code>1/sqrt</code></td><td>SFU reciprocal square root (RMSNorm, L2Norm)</td></tr>
+  <tr><td><code>MUFU.EX2 Rd, Ra</code></td><td><code>exp</code> (after base conversion)</td><td>SFU 2^x (exponential via log2(e) multiply)</td></tr>
+  <tr><td><code>MUFU.LG2 Rd, Ra</code></td><td><code>log</code> (before base conversion)</td><td>SFU log2(x) (logarithm via ln(2) multiply)</td></tr>
+  <tr><td><code>SHFL.BFLY Rd, Ra, lane</code></td><td><code>Sigma</code></td><td>Butterfly shuffle (intra-warp reduction)</td></tr>
+  <tr><td><code>STS [addr], Rd</code></td><td><code>Sigma</code> (cross-warp)</td><td>Store to shared memory</td></tr>
+  <tr><td><code>LDS Rd, [addr]</code></td><td><code>Sigma</code> (cross-warp)</td><td>Load from shared memory</td></tr>
+  <tr><td><code>BAR.SYNC</code></td><td><code>Sigma</code> (cross-warp)</td><td>Warp barrier synchronization</td></tr>
+  <tr><td><code>LDG.E.SYS Rd, [addr]</code></td><td><code>project</code>, <code>matvec</code></td><td>Global memory load (weights, activations, state)</td></tr>
+  <tr><td><code>STG.E.SYS [addr], Rd</code></td><td>state write, history update</td><td>Global memory store</td></tr>
+  <tr><td><code>LOP3.LUT Rd, Ra, Rb, Rc</code></td><td><code>project</code> (nibble extract)</td><td>Bitwise operation (extract 4-bit from packed u32)</td></tr>
+  <tr><td><code>I2F.F32.U32 Rd, Ra</code></td><td><code>project</code> (dequant)</td><td>Integer to float conversion</td></tr>
+  <tr><td><code>S2R Rd, SR_TID.X</code></td><td>(compiler-derived)</td><td>Read thread/block ID for indexing</td></tr>
+  <tr><td><code>IMAD Rd, Ra, Rb, Rc</code></td><td>(compiler-derived)</td><td>Integer multiply-add for address computation</td></tr>
+  <tr><td><code>ISETP Pd, Ra, Rb</code></td><td>(compiler-derived)</td><td>Integer comparison for loop bounds</td></tr>
+  <tr><td><code>@P BRA target</code></td><td>(compiler-derived)</td><td>Conditional branch for stride loops</td></tr>
+  <tr><td><code>IADD3 Rd, Ra, Rb, Rc</code></td><td>(compiler-derived)</td><td>Integer add for loop increment</td></tr>
+</table>
+</section>
+
+<!-- ==================== COMPUTE BUDGET ==================== -->
+<section>
+<h2>Compute Budget per DeltaNet Layer</h2>
+<table>
+  <tr><th>Operation</th><th>Dominant SASS</th><th>FLOPs (approx)</th><th>% of layer</th></tr>
+  <tr><td>normalize (step 1)</td><td>FMUL, Sigma</td><td>20K</td><td>&lt;0.01%</td></tr>
+  <tr><td>project-qkv (step 2)</td><td>FFMA (dequant GEMV)</td><td>105M</td><td>19.6%</td></tr>
+  <tr><td>project-z (step 3)</td><td>FFMA (dequant GEMV)</td><td>63M</td><td>11.8%</td></tr>
+  <tr><td>conv1d (step 4-5)</td><td>FMUL, FADD</td><td>72K</td><td>&lt;0.01%</td></tr>
+  <tr><td>activate SiLU (step 6-10)</td><td>FMUL, EX2, RCP</td><td>62K</td><td>&lt;0.01%</td></tr>
+  <tr><td>normalize-qk (step 11-15)</td><td>FMUL, RSQ, Sigma</td><td>16K</td><td>&lt;0.01%</td></tr>
+  <tr><td>compute-gates (step 16-19)</td><td>FMUL, EX2, LG2, RCP</td><td>1.4M</td><td>0.3%</td></tr>
+  <tr><td>recurrence (step 20-28)</td><td>FMUL, FADD, Sigma</td><td>3.1M</td><td>0.6%</td></tr>
+  <tr><td>post-process norm+gate (step 29-32)</td><td>FMUL, RSQ, EX2, RCP</td><td>80K</td><td>&lt;0.01%</td></tr>
+  <tr><td>project out (step 33)</td><td>FFMA (dequant GEMV)</td><td>63M</td><td>11.8%</td></tr>
+  <tr><td>MLP rmsnorm (step 35)</td><td>FMUL, Sigma</td><td>20K</td><td>&lt;0.01%</td></tr>
+  <tr><td>MLP gate+up proj (step 36)</td><td>FFMA (dequant GEMV)</td><td>178M</td><td>33.3%</td></tr>
+  <tr><td>MLP SiLU + multiply (step 37-39)</td><td>FMUL, EX2, RCP</td><td>140K</td><td>&lt;0.01%</td></tr>
+  <tr><td>MLP down proj (step 40)</td><td>FFMA (dequant GEMV)</td><td>178M</td><td>33.3%</td></tr>
+  <tr><td>MLP residual (step 41)</td><td>FADD</td><td>5K</td><td>&lt;0.01%</td></tr>
+  <tr><td><strong>Total</strong></td><td></td><td><strong>~535M</strong></td><td></td></tr>
+</table>
+<div class="info-box">
+  <strong>Key insight:</strong> The 7 <code>project</code> calls (GPTQ dequant GEMV) account for <strong>99%</strong> of compute. The recurrence (the actual DeltaNet innovation) is 0.6%. This is why the model is memory-bandwidth-bound, not compute-bound: the bottleneck is streaming 14 GB of quantized weights through the SMs, not the arithmetic.
+</div>
+</section>
+
+<!-- ==================== COMPILER DERIVED ==================== -->
+<section>
+<h2>Compiler-Derived (Never in Source)</h2>
+<p>These appear in the final SASS but are NOT Lithos primitives. The compiler infers them from operand shapes and primitive context:</p>
+<table>
+  <tr><th>Concept</th><th>Source Primitive</th><th>Generated SASS</th></tr>
+  <tr><td>Thread indexing</td><td>any <code>**</code> or <code>***</code></td><td><code>S2R SR_TID.X</code> + <code>S2R SR_CTAID.X</code> + <code>IMAD</code></td></tr>
+  <tr><td>Stride loops</td><td>vector length &gt; blockDim</td><td><code>ISETP</code> + <code>@P BRA</code> + <code>IADD3</code></td></tr>
+  <tr><td>Warp shuffle tree</td><td><code>Sigma</code> on vector</td><td>5x <code>SHFL.BFLY</code> + <code>FADD</code></td></tr>
+  <tr><td>Shared memory</td><td><code>Sigma</code> cross-warp</td><td><code>STS</code> / <code>LDS</code> / <code>BAR.SYNC</code></td></tr>
+  <tr><td>Register allocation</td><td>all live values</td><td>linear-scan allocator</td></tr>
+  <tr><td>Coalesced access</td><td>array indexing</td><td>address arithmetic via <code>IMAD</code></td></tr>
+  <tr><td>Loop unrolling</td><td><code>project</code> inner loop</td><td>8x unroll for nibble extraction</td></tr>
+  <tr><td>Tiling</td><td><code>***</code> outer product</td><td>compiler decides tile shape per SM</td></tr>
+  <tr><td>Grid sync</td><td>layer boundary</td><td><code>BAR.SYNC.DEFER_BLOCKING</code> + <code>MEMBAR.GPU</code></td></tr>
+</table>
+</section>
+
+<p class="timestamp">Source: docs/language/deltanet-lineage.md</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos &mdash; Language Primitives</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0f; --bg-raised: #12121e; --bg-card: #14142a;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --green: #5ecc5e; --red: #e05555; --blue: #6e8ed0;
+  --cyan: #6ec8d0; --yellow: #e0c040; --border: #1e1e30;
+}
+html { font-size: 16px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { max-width: 1060px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav a.active { color: var(--accent); }
+nav .nav-docs { color: var(--bg); background: var(--accent); padding: 0.25rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
+nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
+
+.hero { padding: 4rem 0 2.5rem; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 2.6rem; font-weight: 200; letter-spacing: 0.1em; text-transform: uppercase; }
+.hero .sub { color: var(--text-dim); font-size: 1.15rem; margin-top: 0.5rem; letter-spacing: 0.04em; }
+
+section { padding: 2.5rem 0; }
+h2 { font-size: 1.15rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.2rem; }
+h3 { font-size: 1rem; font-weight: 500; color: var(--text); margin: 1.5rem 0 0.8rem; }
+
+p { margin-bottom: 1rem; font-size: 0.95rem; line-height: 1.8; }
+p code, li code, td code { background: #0e0e1a; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.88em; font-family: 'SF Mono', 'Fira Code', monospace; }
+
+pre { background: #0e0e1a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.88rem; overflow-x: auto; line-height: 1.7; margin-bottom: 1.5rem; color: var(--text); }
+
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; font-size: 0.92rem; }
+th { background: rgba(212, 160, 83, 0.12); color: var(--accent); text-align: left; padding: 0.7rem 1rem; border: 1px solid var(--border); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; }
+td { padding: 0.55rem 1rem; border: 1px solid var(--border); }
+tr:nth-child(even) { background: rgba(18, 18, 30, 0.5); }
+
+.intro-note { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.6rem; margin: 1.5rem 0; font-size: 0.92rem; color: var(--text-dim); }
+.intro-note strong { color: var(--text); }
+
+.grammar-group { margin-bottom: 0.3rem; }
+.grammar-label { color: var(--accent); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.2rem; display: block; }
+
+.timestamp { color: var(--text-faint); font-size: 0.78rem; text-align: center; padding: 3rem 0 2rem; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/compiler">Compiler</a>
+  <a href="/pipeline">Inference Stack</a>
+  <a href="/status">Status</a>
+  <a href="/language" class="active">Language</a>
+  <a href="/glossary">Glossary</a>
+  <a href="/docs" class="nav-docs">Docs</a>
+</div>
+</nav>
+
+<div class="container">
+
+<div class="hero">
+  <h1>Language Primitives</h1>
+  <p class="sub">Two targets. One language. Every primitive maps to one instruction on the target.</p>
+</div>
+
+<!-- ==================== INTRO ==================== -->
+<section>
+<div class="intro-note">
+  No functions. No call/return. Compositions &mdash; named sequences that the compiler
+  flattens into instruction streams.
+</div>
+</section>
+
+<!-- ==================== COMPLETE GRAMMAR ==================== -->
+<section>
+<h2>Complete Grammar</h2>
+<pre><span style="color:var(--accent); font-weight:600;">STRUCTURE</span>
+    name args :             composition (body follows, indented)
+    \                       comment (to end of line)
+
+<span style="color:var(--accent); font-weight:600;">MEMORY</span>
+    &rarr; width addr            load (8, 16, 32, 64 bits)
+    &larr; width addr val        store (8, 16, 32, 64 bits)
+
+<span style="color:var(--accent); font-weight:600;">REGISTERS</span>
+    &uarr; $N                    read register N
+    &darr; $N val                write val into register N
+    $NAME                   named special register (arch dictionary)
+
+<span style="color:var(--accent); font-weight:600;">ARITHMETIC</span>
+    +                       add
+    -                       subtract
+    *                       multiply
+    /                       divide
+
+<span style="color:var(--accent); font-weight:600;">DIMENSIONAL (GPU)</span>
+    **                      vector (elementwise loop)
+    ***                     matrix (nested loop)
+
+<span style="color:var(--accent); font-weight:600;">REDUCTIONS (GPU)</span>
+    &Sigma;                       sum
+    &bigtriangleup;                       max
+    &bigtriangledown;                       min
+    #                       index (# &bigtriangleup; x = argmax)
+
+<span style="color:var(--accent); font-weight:600;">MATH &mdash; ONE INSTRUCTION</span>
+    2^                      MUFU.EX2
+    log&#x2082;                    MUFU.LG2
+    &radic;                       MUFU.SQRT
+    1/                      MUFU.RCP
+    1/&radic;                     MUFU.RSQ
+    &cong;                       MUFU.SIN
+    &equiv;                       MUFU.COS
+
+<span style="color:var(--accent); font-weight:600;">MATH &mdash; COMPOSITES (TWO INSTRUCTIONS)</span>
+    e^                      * 1.44269504 then 2^
+    ln                      log&#x2082; then * 0.69314718
+
+<span style="color:var(--accent); font-weight:600;">CONTROL</span>
+    for i start end step    counted loop
+    each i                  thread-parallel (GPU)
+    stride i dim            stride loop (GPU)
+    if== a b                conditional
+    if&gt;= a b                conditional
+    if&lt; a b                 conditional
+
+<span style="color:var(--accent); font-weight:600;">SYSTEM</span>
+    trap                    syscall (ARM64: SVC #0)</pre>
+</section>
+
+<!-- ==================== EXAMPLES ==================== -->
+<section>
+<h2>Examples</h2>
+
+<h3>RMSNorm &mdash; normalize a vector by its root mean square</h3>
+<pre>rmsnorm x w D :
+    each i
+        sq &rarr; 32 x i * x i
+        s &Sigma; sq
+        rms &radic; s / D
+        &larr; 32 out i rms * w i</pre>
+
+<h3>Sigmoid &mdash; 1 / (1 + e^(-x))</h3>
+<pre>sigmoid x :
+    neg x * -1
+    ex e^ neg
+    s 1 + ex
+    1/ s</pre>
+
+<h3>SiLU &mdash; x * sigmoid(x)</h3>
+<pre>silu x :
+    sig sigmoid x
+    x * sig</pre>
+
+<h3>L2 normalize</h3>
+<pre>l2norm x :
+    sq x ** x
+    s &Sigma; sq
+    irs 1/&radic; s
+    x ** irs</pre>
+
+<h3>Token sampling &mdash; get the index of the largest logit</h3>
+<pre>sample logits :
+    # &bigtriangleup; logits</pre>
+
+<h3>Syscall &mdash; open a file</h3>
+<pre>open path flags mode :
+    &darr; $8 56
+    &darr; $0 -100
+    &darr; $1 path
+    &darr; $2 flags
+    &darr; $3 mode
+    trap
+    &uarr; $0</pre>
+
+<h3>MMIO &mdash; poke a GPU register via BAR0</h3>
+<pre>gsp_poke bar0 offset val :
+    &larr; 32 bar0 + offset val</pre>
+
+<h3>DeltaNet layer &mdash; composition of compositions</h3>
+<pre>deltanet_layer x X :
+    rmsnorm x w_norm D
+    project W_q x q
+    project W_k x k
+    project W_v x v
+    l2norm k
+    silu q
+    l2norm q
+    matvec S k recall
+    &larr; 32 out recall</pre>
+</section>
+
+<!-- ==================== ARCHITECTURE REGISTER DICTIONARIES ==================== -->
+<section>
+<h2>Architecture Register Dictionaries</h2>
+<p>
+  Each target has a dictionary mapping names to hardware register IDs.
+  <code>$N</code> is a numbered slot. <code>$NAME</code> looks up the dictionary.
+</p>
+
+<h3>arch/hopper.dict</h3>
+<pre>TID_X       S2R  0x21
+TID_Y       S2R  0x22
+CTAID_X     S2R  0x25
+LANEID      S2R  0x00</pre>
+
+<h3>arch/arm64.dict</h3>
+<pre>CNTVCT_EL0  MRS  0x5F01
+MPIDR_EL1   MRS  0xC005</pre>
+</section>
+
+<!-- ==================== SYMBOL TABLE ==================== -->
+<section>
+<h2>Symbol Table</h2>
+<pre>&rarr; &larr; &uarr; &darr; $                  memory and registers
+&Sigma; &bigtriangleup; &bigtriangledown; #                     reductions
+&cong; &equiv;                          trig (sine, cosine)
+&radic;                            square root
++ - * / ** ***              arithmetic and dimensional</pre>
+
+<h3>Unicode byte sequences for the lexer</h3>
+<table>
+<thead>
+<tr><th>Symbol</th><th>Bytes</th><th>Codepoint</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&rarr;</code></td><td><code>E2 86 92</code></td><td>U+2192</td></tr>
+<tr><td><code>&larr;</code></td><td><code>E2 86 90</code></td><td>U+2190</td></tr>
+<tr><td><code>&uarr;</code></td><td><code>E2 86 91</code></td><td>U+2191</td></tr>
+<tr><td><code>&darr;</code></td><td><code>E2 86 93</code></td><td>U+2193</td></tr>
+<tr><td><code>&Sigma;</code></td><td><code>CE A3</code></td><td>U+03A3</td></tr>
+<tr><td><code>&bigtriangleup;</code></td><td><code>E2 96 B3</code></td><td>U+25B3</td></tr>
+<tr><td><code>&bigtriangledown;</code></td><td><code>E2 96 BD</code></td><td>U+25BD</td></tr>
+<tr><td><code>&radic;</code></td><td><code>E2 88 9A</code></td><td>U+221A</td></tr>
+<tr><td><code>&cong;</code></td><td><code>E2 89 85</code></td><td>U+2245</td></tr>
+<tr><td><code>&equiv;</code></td><td><code>E2 89 A1</code></td><td>U+2261</td></tr>
+</tbody>
+</table>
+</section>
+
+<p class="timestamp">Lithos Language Primitives Reference</p>
+
+</div>
+</body>
+</html>

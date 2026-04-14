@@ -105,6 +105,11 @@
 .equ TOK_STAR,      52
 .equ TOK_SLASH,     53
 .equ TOK_EQ,        54
+.equ TOK_F32,       40
+.equ TOK_U32,       41
+.equ TOK_S32,       42
+.equ TOK_F16,       43
+.equ TOK_PTR,       44
 .equ TOK_EQEQ,     55
 .equ TOK_NEQ,       56
 .equ TOK_LT,        57
@@ -187,6 +192,8 @@
 // ============================================================
 // Token type constants
 // ============================================================
+// Type keywords (also used as variable names in compiler.ls)
+
 
 
 // Symbol table entry layout
@@ -1302,7 +1309,14 @@ handle_composition:
     add     x1, x1, next_reg@PAGEOFF
     ldr     w5, [x1]
     str     w5, [sp, #8]           // [sp+8] = old next_reg
-    str     w5, [x0]               // reg_floor = next_reg
+    // Cap reg_floor: compositions always start with fresh registers.
+    // If top-level vars consumed all registers (next_reg > REG_LAST),
+    // reset to REG_FIRST so the composition has a full register window.
+    cmp     w5, #REG_LAST
+    b.le    1f
+    mov     w5, #REG_FIRST
+1:  str     w5, [x0]               // reg_floor = min(next_reg, REG_FIRST)
+    str     w5, [x1]               // next_reg = reg_floor
 
     // Increment scope
     adrp x0, scope_depth@PAGE
@@ -1330,16 +1344,27 @@ handle_composition:
     MOVI32  w0, 0x910003FD
     bl      emit32
 
-    // Parse arguments — identifiers before the colon
+    // Parse arguments — identifiers (or type keywords used as names) before the colon
     mov     w8, #0                  // arg index
 .Lcomp_args:
     ldr     w0, [x19]
     cmp     w0, #TOK_COLON
     b.eq    .Lcomp_args_done
+    // Accept IDENT or type keywords as parameter names
     cmp     w0, #TOK_IDENT
-    b.eq .Lbskip_8
-    b parse_error
-.Lbskip_8:
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_PTR
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_F32
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_U32
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_F16
+    b.eq    .Lcomp_arg_ok
+    cmp     w0, #TOK_S32
+    b.eq    .Lcomp_arg_ok
+    b       parse_error
+.Lcomp_arg_ok:
 
     // Register arg as param with register = arg index (X0-X7)
     mov     w1, #KIND_PARAM
@@ -1427,20 +1452,29 @@ parse_body:
     b       .Lbody_loop
 .Lbody_newline:
     add     x19, x19, #TOK_STRIDE_SZ
-    // After newline: peek at next token. If it's NOT indent
-    // (or indent < body level), the body is over. This detects
-    // dedent back to column 0 (next top-level composition).
+    // After newline: peek at next token to detect dedent.
     cmp     x19, x27
     b.hs    .Lbody_done
     ldr     w0, [x19]
     cmp     w0, #TOK_NEWLINE
-    b.eq    .Lbody_loop         // blank line — keep going
+    b.eq    .Lbody_loop         // blank line (NEWLINE NEWLINE) — skip
     cmp     w0, #TOK_EOF
     b.eq    .Lbody_done
     cmp     w0, #TOK_INDENT
-    b.eq    .Lbody_loop         // has indent — let the loop check its level
-    // Non-indent token right after newline = column 0 = body over
-    b       .Lbody_done
+    b.ne    .Lbody_done         // non-indent after newline = column 0 = done
+    // It's an INDENT — check if it's a blank line (INDENT(0) + NEWLINE)
+    ldr     w1, [x19, #8]      // indent level
+    cbnz    w1, .Lbody_loop    // real indent → let loop check level
+    // INDENT(0): peek ahead — if next is NEWLINE, it's a blank line, skip both
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lbody_done
+    ldr     w2, [x4]
+    cmp     w2, #TOK_NEWLINE
+    b.ne    .Lbody_done         // INDENT(0) + non-newline = real dedent
+    // Blank line: skip INDENT(0) + NEWLINE
+    add     x19, x19, #TOK_STRIDE_SZ
+    b       .Lbody_newline      // process the NEWLINE (will advance + peek again)
 .Lbody_stmt:
     bl      parse_statement
     bl      reset_regs
@@ -1485,6 +1519,17 @@ parse_statement:
     cmp     w0, #TOK_LABEL
     b.eq    .Ls_label
     cmp     w0, #TOK_IDENT
+    b.eq    .Ls_ident
+    // Type keywords used as variable names
+    cmp     w0, #TOK_PTR
+    b.eq    .Ls_ident
+    cmp     w0, #TOK_F32
+    b.eq    .Ls_ident
+    cmp     w0, #TOK_U32
+    b.eq    .Ls_ident
+    cmp     w0, #TOK_F16
+    b.eq    .Ls_ident
+    cmp     w0, #TOK_S32
     b.eq    .Ls_ident
     cmp     w0, #TOK_TRAP
     b.eq    .Ls_trap
@@ -1973,9 +2018,9 @@ handle_label:
 
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.eq .Lbskip_9
+    b.eq .Lbskip_8
     b parse_error
-.Lbskip_9:
+.Lbskip_8:
 
     bl      emit_cur
     mov     w2, w0
@@ -2245,9 +2290,9 @@ handle_for:
     // Parse loop var name
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.eq .Lbskip_10
+    b.eq .Lbskip_9
     b parse_error
-.Lbskip_10:
+.Lbskip_9:
 
     bl      alloc_reg
     mov     w10, w0
@@ -2360,9 +2405,9 @@ handle_each:
 
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
-    b.eq .Lbskip_11
+    b.eq .Lbskip_10
     b parse_error
-.Lbskip_11:
+.Lbskip_10:
 
     bl      alloc_reg
     mov     w4, w0
@@ -2744,6 +2789,17 @@ parse_atom:
     b.eq    .La_int             // treat float as int for bootstrap
     cmp     w0, #TOK_IDENT
     b.eq    .La_ident
+    // Type keywords used as variable names in compiler.ls
+    cmp     w0, #TOK_PTR
+    b.eq    .La_ident
+    cmp     w0, #TOK_F32
+    b.eq    .La_ident
+    cmp     w0, #TOK_U32
+    b.eq    .La_ident
+    cmp     w0, #TOK_F16
+    b.eq    .La_ident
+    cmp     w0, #TOK_S32
+    b.eq    .La_ident
     cmp     w0, #TOK_LPAREN
     b.eq    .La_paren
     cmp     w0, #TOK_MINUS
@@ -3019,13 +3075,14 @@ parse_atom:
     ret
 
 .La_load:
-    add     x19, x19, #TOK_STRIDE_SZ
-    bl      parse_atom
-    mov     w4, w0
-    bl      parse_atom
-    mov     w5, w0
+    add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
+    bl      parse_atom                  // width (8, 16, 32, 64)
+    mov     w4, w0                      // width register (ignored for now)
+    bl      parse_expr                  // address expression (can include + - etc.)
+    mov     w5, w0                      // address register
     bl      alloc_reg
-    mov     w6, w0
+    mov     w6, w0                      // result register
+    // Emit: LDR Xresult, [Xaddr, #0]
     mov     w0, w6
     mov     w1, w5
     mov     w2, #0
@@ -3090,12 +3147,23 @@ parse_atom:
 // Error handlers
 // ============================================================
 parse_error:
+    // Save the return address (identifies call site)
+    mov     x9, x30
     adrp x1, err_parse@PAGE
     add     x1, x1, err_parse@PAGEOFF
     mov     x2, #13
     mov     x0, #2
     mov x16, #4             // SYS_WRITE
     svc #0x80
+    // Print return address (call site identifier)
+    adrp x1, err_at_tok@PAGE
+    add     x1, x1, err_at_tok@PAGEOFF
+    mov     x2, #10
+    mov     x0, #2
+    mov x16, #4             // SYS_WRITE
+    svc #0x80
+    mov     w0, w9
+    bl      print_dec
     // Print token position info
     adrp x1, err_at_tok@PAGE
     add     x1, x1, err_at_tok@PAGEOFF

@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos &mdash; Language Specification Review</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0f; --bg-raised: #12121e; --bg-card: #14142a;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --green: #5ecc5e; --red: #e05555; --blue: #6e8ed0;
+  --cyan: #6ec8d0; --yellow: #e0c040; --border: #1e1e30;
+}
+html { font-size: 16px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { max-width: 1060px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav .nav-docs { color: var(--bg); background: var(--accent); padding: 0.25rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
+nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
+
+.hero { padding: 4rem 0 2.5rem; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 2.6rem; font-weight: 200; letter-spacing: 0.1em; text-transform: uppercase; }
+.hero .sub { color: var(--text-dim); font-size: 1.15rem; margin-top: 0.5rem; letter-spacing: 0.04em; }
+.hero .reviewer { color: var(--accent); font-weight: 500; }
+.hero .meta { color: var(--text-faint); font-size: 0.85rem; margin-top: 0.8rem; line-height: 1.9; }
+
+section { padding: 2.5rem 0; border-bottom: 1px solid var(--border); }
+section:last-of-type { border-bottom: none; }
+
+h2 { font-size: 1.15rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.2rem; }
+h3 { font-size: 1rem; font-weight: 500; color: var(--text); margin: 1.5rem 0 0.8rem; }
+h4 { font-size: 0.9rem; font-weight: 600; color: var(--cyan); margin: 1.2rem 0 0.6rem; }
+
+p { margin-bottom: 0.8rem; font-size: 0.95rem; }
+strong { color: var(--text); }
+em { color: var(--text-dim); font-style: italic; }
+code { background: #0e0e1a; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.88em; font-family: 'SF Mono', 'Fira Code', monospace; }
+
+pre { background: #0e0e1a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; overflow-x: auto; line-height: 1.6; margin: 1rem 0 1.5rem; color: var(--text); }
+
+table { width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem; font-size: 0.88rem; }
+th { background: var(--bg-raised); color: var(--accent); text-align: left; padding: 0.6rem 1rem; border: 1px solid var(--border); font-weight: 600; letter-spacing: 0.04em; font-size: 0.82rem; text-transform: uppercase; }
+td { padding: 0.5rem 1rem; border: 1px solid var(--border); vertical-align: top; }
+td code { font-size: 0.82em; }
+tr:nth-child(even) { background: rgba(18, 18, 30, 0.5); }
+
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+li { margin-bottom: 0.4rem; font-size: 0.95rem; }
+
+.info-box { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.6rem; margin: 1rem 0 1.8rem; font-size: 0.92rem; color: var(--text-dim); }
+.info-box strong { color: var(--text); }
+
+.callout { background: #1a1400; border: 1px solid #3a3000; border-radius: 8px; padding: 1.2rem 1.6rem; margin: 1rem 0 1.8rem; font-size: 0.92rem; }
+.callout strong { color: var(--yellow); }
+.callout p { margin-bottom: 0.4rem; }
+
+.verdict { background: #0a1a0a; border: 1px solid #1a3a1a; border-radius: 8px; padding: 1.2rem 1.6rem; margin: 1rem 0 1.8rem; font-size: 0.92rem; }
+.verdict strong { color: var(--green); }
+
+blockquote { border-left: 3px solid var(--accent); padding-left: 1.2rem; margin: 1rem 0 1.5rem; color: var(--text-dim); font-style: italic; }
+
+.numbered-item { margin-bottom: 1.2rem; padding-bottom: 1.2rem; border-bottom: 1px solid #111120; }
+.numbered-item:last-child { border-bottom: none; }
+.numbered-item h3 { color: var(--cyan); margin-top: 0; }
+
+.timestamp { color: var(--text-faint); font-size: 0.78rem; text-align: center; padding: 3rem 0 2rem; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/compiler">Compiler</a>
+  <a href="/pipeline">Inference Stack</a>
+  <a href="/status">Status</a>
+  <a href="/language">Language</a>
+  <a href="/glossary">Glossary</a>
+  <a href="/docs" class="nav-docs">Docs</a>
+</div>
+</nav>
+
+<div class="container">
+
+<div class="hero">
+  <h1>Language Specification Review</h1>
+  <p class="sub">Reviewed by <span class="reviewer">Chuck Moore</span></p>
+  <p class="meta">
+    <strong>Date:</strong> 2026-04-14<br>
+    <strong>Sources:</strong> <code>docs/language-primitives.md</code>, <code>PRIMITIVES.md</code>, <code>VOCABULARY.md</code>, <code>GAPS.md</code>, <code>PLAN.md</code>, <code>SHIPPING.md</code>, <code>compiler/compiler.ls</code>, <code>inference/*.ls</code>, <code>kernels.ls</code>, <code>derivatives.ls</code>, <code>primitives.ls</code>
+  </p>
+</div>
+
+<!-- ==================== WHAT I LIKE ==================== -->
+<section>
+<h2>What I Like</h2>
+
+<p>The instinct is right. One language, two targets, compositions that flatten. No functions, no call stack, no ABI. The compiler sees everything and inlines everything. That is how you get to the metal.</p>
+
+<blockquote>"Fusion is the default. There is nothing to fuse because nothing was ever separated."</blockquote>
+
+<p>That sentence is correct. It is also the most important sentence in the entire specification. Most GPU programmers spend their careers gluing kernels back together that should never have been apart. Lithos starts from the right place.</p>
+
+<p>The shipping story is correct too. Two files on disk. One binary, one weights file. Sub-second cold start. <code>scp</code> two files, run the binary. That is how computing should work. Everything else &mdash; Python, CUDA toolkit, PyTorch, Docker, conda &mdash; is infrastructure to manage infrastructure. Lithos skips it. Good.</p>
+
+<p>The dimensional notation &mdash; <code>*</code>, <code>**</code>, <code>***</code>, <code>****</code> &mdash; is the best idea in the language. Each symbol adds a loop. The programmer sees the dimensionality of the operation in the operator itself. <code>**</code> is a vector operation. <code>***</code> is a matrix operation. You do not need to read a type signature or count array indices. The loop depth is in the name. That is what notation should do: make the structure visible.</p>
+
+<p>The MUFU mapping is clean. <code>1/</code> is one instruction. <code>1/sqrt</code> is one instruction. <code>sqrt</code> is two (reciprocal-square-root then reciprocal). The programmer sees the hardware cost in the symbol. No mystery about what is fast and what is not.</p>
+
+<p>The libcuda replacement is the right ambition. 450 ioctls at startup, then pure memory writes for dispatch. A few hundred lines of Lithos replacing 80 MB of <code>libcuda.so</code>. That ratio tells you everything about what is wrong with conventional systems.</p>
+
+<p>The megakernel architecture &mdash; two cooperative cubins, 48 layers and 16 layers, grid sync between layers, no per-layer dispatch &mdash; is the correct design. Per-kernel dispatch is a 1990s idea. The GPU runs a program. Let it run the whole program.</p>
+</section>
+
+<!-- ==================== WHAT IS MISSING ==================== -->
+<section>
+<h2>What Is Missing</h2>
+
+<!-- 1 -->
+<div class="numbered-item">
+<h3>1. The spec has three languages, not one</h3>
+
+<p>Read <code>language-primitives.md</code>. It describes a language with arrows (<code>-&gt;</code>, <code>&lt;-</code>), <code>each</code>, <code>for</code>, <code>stride</code>, <code>if==</code>, <code>trap</code>, and register syntax (<code>$N</code>, <code>$NAME</code>). Compositions are <code>name args :</code> with indented bodies. Bindings are <code>name expr</code> (no <code>=</code>).</p>
+
+<p>Now read <code>inference/gemv.ls</code>. It uses <code>=</code> for assignment. It uses <code>[ ]</code> for array indexing. It uses <code>if&gt;=</code> with labels. It uses <code>shr</code>, <code>shl</code>, <code>and</code>, <code>mul</code>, <code>add</code>, <code>fma</code>, <code>neg</code>, <code>rcp</code>, <code>rsqrt</code>, <code>u32&gt;f32</code> as keywords. It uses <code>param K u32</code> and <code>shared smem_reduce 256 f32</code> as declarations. None of these appear in the grammar.</p>
+
+<p>Now read <code>kernels.ls</code>. It uses a stack-oriented postfix notation where bare names push to the stack and bare operators pop-and-apply. <code>sigmoid x :</code> followed by <code>0</code>, <code>- x</code>, <code>e^</code>, <code>+ 1</code>, <code>reciprocal</code>. That is a third language &mdash; concatenative, stack-based, implicit operands.</p>
+
+<p>These three languages need to become one language. Right now an implementer cannot write a parser because the grammar in <code>language-primitives.md</code> does not describe the language that <code>inference/*.ls</code> actually uses. The grammar document says bindings have no <code>=</code>. The real code uses <code>=</code> on every line.</p>
+
+<p>The compiler's token list (<code>compiler.ls</code> section 0) reveals the truth: there are 84 token types including <code>TOK_EQ</code>, <code>TOK_LBRACK</code>, <code>TOK_RBRACK</code>, brackets for array indexing, comparison operators, bitwise operators. The grammar document mentions none of this.</p>
+
+<div class="callout">
+  <strong>The spec must describe the language the compiler actually parses.</strong>
+  <p>Everything else is aspirational, not specification.</p>
+</div>
+</div>
+
+<!-- 2 -->
+<div class="numbered-item">
+<h3>2. No formal grammar</h3>
+
+<p>There is no BNF, no PEG, no production rules. The "Complete Grammar" section is a categorized list of symbols with English descriptions. That is a cheat sheet, not a grammar.</p>
+
+<p>An implementer needs to know:</p>
+<ul>
+  <li>Is <code>acc = 0.0</code> a binding or an assignment? The spec says "no <code>=</code>" but the real code uses it everywhere.</li>
+  <li>Is <code>output [ i ] = a [ i ] + b [ i ]</code> parsed as <code>store(output[i], add(load(a[i]), load(b[i])))</code>? Or is <code>[ ]</code> syntactic sugar for <code>-&gt;</code> / <code>&lt;-</code>? What are the precedence rules?</li>
+  <li>Is <code>fma acc dq0 xval0 acc</code> a composition call with four arguments? A keyword with three operands? How does the parser know?</li>
+  <li>What is the difference between <code>each i</code> and <code>stride i hidden_dim</code> and <code>for k_p tid_local K_packed 256</code>? The grammar lists all three but does not define their scope rules. Where does the body of a <code>for</code> end? At dedent? At a blank line?</li>
+</ul>
+
+<p>Write the grammar. Ten lines of BNF would eliminate these questions.</p>
+</div>
+
+<!-- 3 -->
+<div class="numbered-item">
+<h3>3. Types are present but undeclared</h3>
+
+<p>The grammar says nothing about types. The compiler has token types for <code>f32</code>, <code>u32</code>, <code>s32</code>, <code>f16</code>, <code>ptr</code>, <code>void</code>. The <code>param</code> declaration takes a type: <code>param K u32</code>. The <code>shared</code> declaration takes a type: <code>shared smem_reduce 256 f32</code>.</p>
+
+<p>But compositions have no type annotations on their arguments. <code>rmsnorm x weight y :</code> &mdash; what are the types of <code>x</code>, <code>weight</code>, <code>y</code>? Pointers? The compiler must know to emit <code>LDG</code> vs <code>FADD</code>. How does it know?</p>
+
+<p>If types are inferred, say so and describe the inference rules. If types are implicit (everything is f32 unless declared otherwise), say so. Silence on this question is the worst option because every implementer will guess differently.</p>
+</div>
+
+<!-- 4 -->
+<div class="numbered-item">
+<h3>4. Memory model is undefined</h3>
+
+<p>The language has <code>-&gt;</code> (load) and <code>&lt;-</code> (store) with widths. But <code>inference/*.ls</code> uses <code>x [ i ]</code> for loads and <code>output [ i ] = result</code> for stores. These are two different notations for the same operation. Which is canonical? Does <code>[ ]</code> desugar to arrow notation or is it a separate construct?</p>
+
+<p>More importantly: what memory spaces exist? The GPU has global memory, shared memory, registers, constant memory, and local memory. The language has <code>shared</code> declarations but no <code>global</code> or <code>local</code>. Are composition arguments always in global memory? Are locals always in registers? What about spills?</p>
+
+<p>The ARM64 target has a flat address space. The GPU target has five address spaces. The language must say which space each name lives in, or describe the rules by which the compiler decides.</p>
+</div>
+
+<!-- 5 -->
+<div class="numbered-item">
+<h3>5. The composition/function distinction is not enforced</h3>
+
+<p>The spec says: "No functions. No call/return. Compositions &mdash; named sequences that the compiler flattens into instruction streams."</p>
+
+<p>But <code>kernels.ls</code> has <code>DeltaNet_Inference :</code> calling <code>Embed</code>, <code>Layer * 64</code>, <code>RMSNorm</code>, <code>LMHead</code>, <code>Sample</code>. <code>Layer * 64</code> means "repeat Layer 64 times." That is not flattening &mdash; that is a loop. Does the compiler unroll 64 copies of the layer body? If so, the megakernel cubin will be enormous (each DeltaNet layer is 41 primitives, each primitive emits multiple SASS instructions, times 64 layers). GAPS.md says the cubin buffer is 512KB but a 64-layer megakernel needs ~300MB. That is a real problem the spec ignores.</p>
+
+<p>If compositions are truly flattened, the spec must address code size. If they are sometimes calls, the spec must say when.</p>
+</div>
+
+<!-- 6 -->
+<div class="numbered-item">
+<h3>6. Control flow scope rules</h3>
+
+<p><code>for</code>, <code>each</code>, <code>stride</code>, <code>if==</code>, <code>if&gt;=</code>, <code>if&lt;</code> all introduce scope. How does that scope end? By indentation (Python-style)? By a closing keyword? By end-of-line?</p>
+
+<p>In <code>elementwise.ls</code>, <code>each i</code> is followed by an indented body. In <code>gemv.ls</code>, <code>for k_p tid_local K_packed 256</code> is followed by an indented body that spans 60+ lines. In <code>reduce.ls</code>, <code>if== lane_id 0</code> is followed by an indented body, and <code>else</code> starts a new block.</p>
+
+<p>So scope is by indentation. But the grammar does not say this. The compiler's parser must have indentation tracking (the token list includes <code>TOK_INDENT</code>). Document it. Say: "Bodies are indented. Scope ends at dedent." Simple rule, but it must be stated.</p>
+</div>
+
+<!-- 7 -->
+<div class="numbered-item">
+<h3>7. The register model has two dialects</h3>
+
+<p><code>language-primitives.md</code> describes registers as <code>$N</code> (numbered) and <code>$NAME</code> (dictionary lookup). <code>compiler.ls</code> uses <code>%r0</code>, <code>%r1</code>, <code>%r2</code> in comments and presumably in emission. The inference files use bare names like <code>tid</code>, <code>lane_id</code>, <code>warp_id</code> that are clearly register-allocated.</p>
+
+<p>What does the programmer write? <code>$0</code>? <code>%r0</code>? <code>tid</code>? All three appear in different documents. If the language has named bindings that the compiler maps to registers, then <code>$N</code> is a backend detail that should not appear in the language spec. If <code>$N</code> is user-facing (for syscall setup), that is a different semantic than named bindings.</p>
+</div>
+
+<!-- 8 -->
+<div class="numbered-item">
+<h3>8. Intrinsics vs. compositions: the honest primitive set</h3>
+
+<p>VOCABULARY.md says the language has 12 irreducible families. But the real <code>.ls</code> files use <code>fma</code>, <code>neg</code>, <code>rcp</code>, <code>rsqrt</code>, <code>shr</code>, <code>shl</code>, <code>and</code>, <code>or</code>, <code>xor</code>, <code>u32&gt;f32</code>, <code>shfl.down</code>, <code>barrier</code> as primitive operations that are not compositions and cannot be decomposed further.</p>
+
+<p>The honest primitive set is not 12 families. It is closer to 30 operations:</p>
+<ul>
+  <li><strong>Arithmetic:</strong> <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>fma</code></li>
+  <li><strong>Bitwise:</strong> <code>and</code>, <code>or</code>, <code>xor</code>, <code>shr</code>, <code>shl</code></li>
+  <li><strong>Conversion:</strong> <code>u32&gt;f32</code>, <code>f32&gt;f16</code>, etc.</li>
+  <li><strong>MUFU:</strong> <code>exp</code> (2^), <code>log</code> (log2), <code>sqrt</code>, <code>rcp</code>, <code>rsqrt</code>, <code>sin</code>, <code>cos</code></li>
+  <li><strong>Warp:</strong> <code>shfl.down</code>, <code>shfl.bfly</code></li>
+  <li><strong>Sync:</strong> <code>barrier</code></li>
+  <li><strong>Memory:</strong> load, store (with width), shared load/store</li>
+  <li><strong>System:</strong> <code>trap</code> (syscall on ARM64)</li>
+</ul>
+
+<p>That is still a small number. Thirty operations is fine. But say thirty, not twelve. The twelve-family story is elegant but the inference kernels use thirty.</p>
+</div>
+</section>
+
+<!-- ==================== AMBIGUITIES ==================== -->
+<section>
+<h2>Ambiguities an Implementer Would Hit</h2>
+
+<div class="numbered-item">
+<h3>A. Binding vs. assignment vs. store</h3>
+<p>Three patterns appear in real <code>.ls</code> code:</p>
+<ol>
+  <li><code>acc = 0.0</code> &mdash; assignment to a local</li>
+  <li><code>output [ i ] = result</code> &mdash; store to memory via array syntax</li>
+  <li><code>partial_ss = partial_ss + t0</code> &mdash; mutation of an existing binding</li>
+</ol>
+<p>Are these three operations? Two? One? Does the <code>=</code> in pattern 1 create a new binding or mutate an existing one? In a language with "no <code>=</code>" these all need explanation.</p>
+</div>
+
+<div class="numbered-item">
+<h3>B. When <code>=</code> disappears</h3>
+<p>The spec says bindings are <code>name expr</code> with no <code>=</code>. The real code uses <code>=</code> everywhere. PLAN.md says the compiler is being rewritten to remove all <code>=</code>. If <code>=</code> is going away, what replaces <code>output [ i ] = result</code>? The arrow <code>&lt;- 32 output i result</code>? That changes every line of every inference kernel.</p>
+<p>This is a language design decision that is unresolved. The spec should not describe a syntax that does not exist yet and will require rewriting 800+ lines of kernel source.</p>
+</div>
+
+<div class="numbered-item">
+<h3>C. Implicit thread model</h3>
+<p><code>each i</code> parallelizes across GPU threads. But <code>i</code> is never declared and its range is never specified. In <code>residual_add</code>, <code>each i</code> iterates over... what? The length of <code>a</code>? The length of <code>b</code>? The length of <code>output</code>? All three? What if they differ?</p>
+<p>The compiler derives thread indexing from "vector operands" per PRIMITIVES.md. But the rules for this derivation are not stated. Does the compiler look at the first array access inside the <code>each</code> body? The composition parameters? The <code>param</code> declarations?</p>
+</div>
+
+<div class="numbered-item">
+<h3>D. Stride loop mechanics</h3>
+<p><code>stride i hidden_dim</code> appears in <code>reduce.ls</code>. This is different from <code>each i</code> (which is thread-parallel) and <code>for i start end step</code> (which is sequential). The difference matters enormously for GPU code generation. <code>stride</code> means each thread handles elements <code>tid, tid+blockDim, tid+2*blockDim, ...</code> &mdash; but this is not stated anywhere in the grammar.</p>
+</div>
+
+<div class="numbered-item">
+<h3>E. Composition parameter passing</h3>
+<p><code>rmsnorm x weight y :</code> takes three parameters. <code>residual_add a b output :</code> takes three parameters. When composed: <code>rmsnorm x w_norm D</code> appears in <code>language-primitives.md</code> examples &mdash; is <code>D</code> passed as a runtime value or a compile-time constant? The <code>param</code> declaration exists but is separate from composition arguments. The spec needs to distinguish between runtime parameters (pointers, values on the GPU) and compile-time parameters (dimensions, constants known at parse time).</p>
+</div>
+</section>
+
+<!-- ==================== WHAT A SPEC SHOULD CLARIFY ==================== -->
+<section>
+<h2>What a Comprehensive Spec Should Clarify</h2>
+
+<ol>
+  <li><strong>One grammar, formally stated.</strong> BNF or PEG. Cover everything the parser accepts: assignments, array indexing, declarations, control flow, compositions, Unicode operators. Ten to twenty production rules.</li>
+  <li><strong>Scope rules.</strong> Indentation-based scope with explicit rules for nesting depth, blank lines, and multi-line expressions.</li>
+  <li><strong>Type system.</strong> Even if minimal: "Everything is f32 unless declared otherwise. <code>param</code> introduces typed compile-time constants. <code>shared</code> introduces typed shared-memory arrays. Composition arguments are untyped pointers to global memory." Something. Anything.</li>
+  <li><strong>Memory model.</strong> Which names live in which memory spaces. How the compiler decides. How the programmer overrides (if they can).</li>
+  <li><strong>Thread model.</strong> What <code>each</code> does. What <code>stride</code> does. How the compiler derives grid and block dimensions from composition arguments.</li>
+  <li><strong>Composition semantics.</strong> Are they always inlined? What about <code>Layer * 64</code>? What is the code size model? When does the compiler emit a call instead of inlining?</li>
+  <li><strong>The real primitive set.</strong> List every operation the compiler recognizes as a keyword. Not the conceptual twelve &mdash; the actual thirty. Include <code>fma</code>, <code>neg</code>, <code>rcp</code>, <code>shr</code>, <code>and</code>, <code>shfl.down</code>, <code>barrier</code>, <code>u32&gt;f32</code>, and everything else that appears in <code>inference/*.ls</code>.</li>
+  <li><strong>The binding model.</strong> Resolve the <code>=</code> question. Either bindings use <code>=</code> (and the grammar document is wrong) or they do not (and 800 lines of kernel source must be rewritten). Pick one and document it.</li>
+  <li><strong>Error model.</strong> GAPS.md gets this right: "Lithos has no error handling as a language feature, and this is correct." But the spec should say this explicitly rather than leaving it as an implicit absence.</li>
+  <li><strong>Architecture dictionaries.</strong> The grammar mentions <code>arch/hopper.dict</code> and <code>arch/arm64.dict</code> but does not specify their format. One line of BNF: <code>entry = NAME OPCODE HEX_ID</code>.</li>
+</ol>
+</section>
+
+<!-- ==================== THE DEEPER QUESTION ==================== -->
+<section>
+<h2>The Deeper Question</h2>
+
+<p>This language wants to be two things. The grammar document describes a Forth-like concatenative language with Unicode operators and stack semantics. The inference kernels are written in a register-transfer language with named variables, array indexing, C-like assignment syntax, and explicit control flow.</p>
+
+<p>Both are valid choices. The concatenative style (<code>kernels.ls</code>, <code>derivatives.ls</code>) is beautiful for expressing mathematical compositions. Sigmoid is five lines. RMSNorm is six lines. You can see the whole DeltaNet layer in 41 steps. That is the language you show to a mathematician.</p>
+
+<p>The register-transfer style (<code>inference/gemv.ls</code>, <code>inference/reduce.ls</code>) is what you need when you are hand-scheduling a W4A16 dequant loop with 8-way nibble extraction and warp shuffle reductions. That is the language you show to a GPU programmer.</p>
+
+<p>I have spent my career arguing that one language can serve both. Forth does. But Forth achieves this by being genuinely stack-based &mdash; there are no named variables, no array syntax, no assignment. Everything goes through the stack. The stack is the abstraction that unifies the mathematical view and the machine view.</p>
+
+<p>Lithos is not stack-based. It has named bindings, and the inference kernels use them on every line. That is fine &mdash; I am not saying it must be Forth. But it must be honest about what it is. Right now the spec describes a stack language and the code is a register language. The compiler parses the register language. The spec should describe the register language.</p>
+
+<p>If the concatenative notation in <code>kernels.ls</code> and <code>VOCABULARY.md</code> is a high-level view that desugars into the register-transfer notation of <code>inference/*.ls</code>, say so. Define the desugaring. Make <code>kernels.ls</code> a macro layer over <code>inference/*.ls</code>. That would be clean.</p>
+
+<p>If the concatenative notation is the real language and the register-transfer notation is temporary scaffolding that will be rewritten, say so and do the rewriting.</p>
+
+<div class="callout">
+  <strong>What you cannot do is ship a spec that describes language A while the compiler implements language B.</strong>
+  <p>That is not a specification. That is a wish.</p>
+</div>
+</section>
+
+<!-- ==================== SUMMARY ==================== -->
+<section>
+<h2>Summary</h2>
+
+<div class="verdict">
+<p><strong>The design instinct is excellent.</strong> The shipping vision is correct. The dimensional notation is genuinely good. The megakernel architecture is the right choice. The libcuda replacement is bold and justified.</p>
+</div>
+
+<p>But the specification is not a specification. It is three documents describing three overlapping but incompatible views of the same language. An implementer would be blocked on line one of the parser because the grammar does not match the source files.</p>
+
+<p>Write the real grammar. Resolve the <code>=</code> question. List the real primitives. Define scope rules. State the type discipline. Describe the thread model. One document, complete, no contradictions.</p>
+
+<p>The language is small enough to specify completely in a few pages. That is its greatest strength. Do not waste it by leaving the spec in three inconsistent pieces.</p>
+
+<blockquote>If you cannot hold the whole thing in your head, it is too complicated. This language is small enough. The spec should be too.</blockquote>
+</section>
+
+<p class="timestamp">Source: docs/language/REVIEW.md</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos &mdash; Language Specification</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0f; --bg-raised: #12121e; --bg-card: #14142a;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --green: #5ecc5e; --red: #e05555; --blue: #6e8ed0;
+  --cyan: #6ec8d0; --yellow: #e0c040; --border: #1e1e30;
+}
+html { font-size: 16px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .wrap { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav .nav-docs { color: var(--bg); background: var(--accent); padding: 0.25rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
+nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
+
+.container { max-width: 1060px; margin: 0 auto; padding: 0 2rem 4rem; }
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 2rem; }
+
+.hero { padding: 4rem 0 2.5rem; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 2.6rem; font-weight: 200; letter-spacing: 0.1em; text-transform: uppercase; }
+.hero .sub { color: var(--text-dim); font-size: 1.15rem; margin-top: 0.5rem; letter-spacing: 0.04em; }
+.hero .version { color: var(--accent); font-weight: 500; }
+
+.spec-intro { color: var(--text-dim); font-size: 1rem; line-height: 1.8; margin: 2rem 0; padding: 1.5rem 2rem; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; }
+.spec-intro strong { color: var(--text); }
+
+h2.sec { font-size: 1.15rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin: 3rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+h3.sub-sec { font-size: 0.95rem; font-weight: 500; letter-spacing: 0.08em; color: var(--text); margin: 2rem 0 0.8rem; }
+
+p { margin: 0.6rem 0; font-size: 0.95rem; line-height: 1.8; }
+
+ol.principles { list-style: none; counter-reset: principle; margin: 1rem 0; }
+ol.principles li { counter-increment: principle; position: relative; padding: 0.8rem 0 0.8rem 2.5rem; border-bottom: 1px solid #111120; font-size: 0.95rem; }
+ol.principles li:last-child { border-bottom: none; }
+ol.principles li::before { content: counter(principle) "."; position: absolute; left: 0; color: var(--accent); font-weight: 600; font-size: 1.1rem; }
+ol.principles li strong { color: var(--accent); }
+
+pre.code-block { background: #0e0e1a; border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.6rem; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 0.88rem; line-height: 1.7; overflow-x: auto; margin: 0.8rem 0 1.2rem; color: var(--text); }
+pre.code-block .comment { color: var(--text-faint); }
+pre.code-block .keyword { color: var(--accent); }
+pre.code-block .number { color: var(--cyan); }
+
+code { background: #0e0e1a; padding: 0.15rem 0.45rem; border-radius: 3px; font-size: 0.88em; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; color: var(--cyan); }
+
+table { width: 100%; border-collapse: collapse; margin: 0.8rem 0 1.5rem; font-size: 0.9rem; }
+table th { text-align: left; padding: 0.6rem 1rem; background: var(--bg-card); color: var(--accent); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 2px solid var(--border); }
+table td { padding: 0.5rem 1rem; border-bottom: 1px solid #111120; vertical-align: top; }
+table tr:last-child td { border-bottom: none; }
+table code { font-size: 0.85em; }
+table td:first-child { white-space: nowrap; }
+
+.toc { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem 2rem; margin: 2rem 0; }
+.toc h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--text-faint); margin-bottom: 0.8rem; }
+.toc ol { margin-left: 1.5rem; }
+.toc li { margin: 0.3rem 0; font-size: 0.9rem; }
+.toc a { color: var(--text-dim); }
+.toc a:hover { color: var(--accent); }
+
+hr.divider { border: none; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+
+.timestamp { color: var(--text-faint); font-size: 0.78rem; text-align: center; padding: 3rem 0 2rem; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+
+<nav>
+<div class="wrap">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/compiler">Compiler</a>
+  <a href="/pipeline">Pipeline</a>
+  <a href="/status">Status</a>
+  <a href="/language">Language</a>
+  <a href="/glossary">Glossary</a>
+  <a href="/docs" class="nav-docs">Docs</a>
+</div>
+</nav>
+
+<div class="container">
+
+<div class="hero">
+  <h1>Language Specification</h1>
+  <p class="sub"><span class="version">Version 1.0</span> &mdash; Complete reference for the Lithos GPU compute language.</p>
+</div>
+
+<div class="spec-intro">
+Lithos compiles <code>.ls</code> source files directly to SASS (NVIDIA GPU machine code) and ARM64 (host machine code). One source language, two backends. No intermediate representation, no runtime library, no framework dependencies.<br><br>
+<strong>Target hardware:</strong> NVIDIA GH200 (Hopper SM_90a + Grace ARM64).<br>
+<strong>Target workload:</strong> Qwen 3.5 27B (64 hybrid layers: 48 DeltaNet + 16 full attention).
+</div>
+
+<!-- Table of Contents -->
+<div class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#design-principles">Design Principles</a></li>
+    <li><a href="#lexical-structure">Lexical Structure</a></li>
+    <li><a href="#grammar">Grammar</a></li>
+    <li><a href="#compilation-model">Compilation Model</a></li>
+    <li><a href="#type-system">Type System</a></li>
+    <li><a href="#composition-library">Composition Library</a></li>
+    <li><a href="#primitive-families">The 12 Primitive Families</a></li>
+    <li><a href="#memory-model">Memory Model</a></li>
+    <li><a href="#runtime">Runtime</a></li>
+    <li><a href="#deltanet-example">Complete Example: DeltaNet Layer</a></li>
+    <li><a href="#appendix-a">Appendix A: SASS Instruction Reference</a></li>
+    <li><a href="#appendix-b">Appendix B: Qwen 3.5 27B Dimensions</a></li>
+  </ol>
+</div>
+
+<!-- ==================== 1. DESIGN PRINCIPLES ==================== -->
+<h2 class="sec" id="design-principles">1. Design Principles</h2>
+
+<ol class="principles">
+  <li><strong>Compositions, not functions.</strong> Named sequences that the compiler flattens into instruction streams. No call stack, no return address, no ABI.</li>
+  <li><strong>One primitive = one hardware pattern.</strong> Every primitive maps to a known SASS instruction sequence. The compiler never invents new patterns.</li>
+  <li><strong>Dimensional encoding in syntax.</strong> Loop depth is encoded by symbol repetition: <code>*</code> is scalar, <code>**</code> is vector, <code>***</code> is matrix, <code>****</code> is tensor.</li>
+  <li><strong>Fusion by default.</strong> Compositions are concatenated instruction streams. There is nothing to fuse because nothing was ever separated.</li>
+  <li><strong>Two targets, one grammar.</strong> The same <code>.ls</code> source emits SASS or ARM64 depending on the backend selected at compile time.</li>
+</ol>
+
+<hr class="divider">
+
+<!-- ==================== 2. LEXICAL STRUCTURE ==================== -->
+<h2 class="sec" id="lexical-structure">2. Lexical Structure</h2>
+
+<h3 class="sub-sec">2.1 Comments</h3>
+<pre class="code-block"><span class="comment">\\  comment to end of line</span></pre>
+
+<h3 class="sub-sec">2.2 Identifiers</h3>
+<p>Alphanumeric sequences starting with a letter or underscore: <code>[a-zA-Z_][a-zA-Z0-9_]*</code></p>
+
+<h3 class="sub-sec">2.3 Numeric Literals</h3>
+<p>Integer and floating-point literals in decimal notation:</p>
+<pre class="code-block"><span class="number">42</span>          <span class="comment">integer</span>
+<span class="number">3.14159</span>     <span class="comment">floating point</span>
+<span class="number">1e-6</span>        <span class="comment">scientific notation</span>
+<span class="number">-1</span>          <span class="comment">negative (unary minus attached to literal)</span>
+<span class="number">0.08839</span>     <span class="comment">fractional</span></pre>
+
+<h3 class="sub-sec">2.4 Special Symbols (Unicode)</h3>
+<table>
+  <tr><th>Symbol</th><th>Unicode</th><th>UTF-8 Bytes</th><th>Meaning</th></tr>
+  <tr><td><code>&rarr;</code></td><td>U+2192</td><td>E2 86 92</td><td>Load from memory</td></tr>
+  <tr><td><code>&larr;</code></td><td>U+2190</td><td>E2 86 90</td><td>Store to memory</td></tr>
+  <tr><td><code>&uarr;</code></td><td>U+2191</td><td>E2 86 91</td><td>Read register</td></tr>
+  <tr><td><code>&darr;</code></td><td>U+2193</td><td>E2 86 93</td><td>Write register</td></tr>
+  <tr><td><code>&Sigma;</code></td><td>U+03A3</td><td>CE A3</td><td>Reduction (sum)</td></tr>
+  <tr><td><code>&#9651;</code></td><td>U+25B3</td><td>E2 96 B3</td><td>Reduction (max)</td></tr>
+  <tr><td><code>&#9661;</code></td><td>U+25BD</td><td>E2 96 BD</td><td>Reduction (min)</td></tr>
+  <tr><td><code>&radic;</code></td><td>U+221A</td><td>E2 88 9A</td><td>Square root</td></tr>
+  <tr><td><code>&cong;</code></td><td>U+2245</td><td>E2 89 85</td><td>Sine (MUFU.SIN)</td></tr>
+  <tr><td><code>&equiv;</code></td><td>U+2261</td><td>E2 89 A1</td><td>Cosine (MUFU.COS)</td></tr>
+</table>
+
+<h3 class="sub-sec">2.5 ASCII Symbols</h3>
+<pre class="code-block"><span class="keyword">+ - * / $ #</span>           <span class="comment">arithmetic, register prefix, index reduction</span>
+<span class="keyword">** *** ****</span>            <span class="comment">dimensional multiply (2, 3, 4 loop depth)</span>
+<span class="keyword">++ +++ ++++</span>            <span class="comment">dimensional add</span>
+<span class="keyword">-- --- ----</span>            <span class="comment">dimensional subtract</span>
+<span class="keyword">// /// ////</span>            <span class="comment">dimensional divide</span>
+<span class="keyword">:</span>                      <span class="comment">composition definition terminator</span></pre>
+
+<h3 class="sub-sec">2.6 Keywords</h3>
+<pre class="code-block"><span class="keyword">for each stride</span>         <span class="comment">loop constructs</span>
+<span class="keyword">if== if>= if&lt;</span>           <span class="comment">conditionals</span>
+<span class="keyword">trap</span>                    <span class="comment">system call</span></pre>
+
+<hr class="divider">
+
+<!-- ==================== 3. GRAMMAR ==================== -->
+<h2 class="sec" id="grammar">3. Grammar</h2>
+
+<h3 class="sub-sec">3.1 Composition Definition</h3>
+<pre class="code-block"><span class="keyword">name</span> arg1 arg2 ... argN <span class="keyword">:</span>
+    body</pre>
+<p>A composition is a named sequence of operations. The body is indented. The compiler flattens compositions inline at every use site &mdash; there is no call/return overhead. Compositions may reference other compositions.</p>
+
+<h3 class="sub-sec">3.2 Memory Operations</h3>
+<pre class="code-block"><span class="keyword">&rarr;</span> width addr            <span class="comment">load (width = 8, 16, 32, or 64 bits)</span>
+<span class="keyword">&larr;</span> width addr val        <span class="comment">store (width = 8, 16, 32, or 64 bits)</span></pre>
+<p><code>width</code> determines the load/store instruction width. <code>addr</code> is a base address expression. <code>val</code> is the value to store.</p>
+<p>ARM64 backend: <code>LDR</code> / <code>STR</code> variants.<br>
+GPU backend: <code>LDG</code> / <code>STG</code> (global), <code>LDS</code> / <code>STS</code> (shared).</p>
+
+<h3 class="sub-sec">3.3 Register Operations</h3>
+<pre class="code-block"><span class="keyword">&uarr;</span> $N                    <span class="comment">read hardware register N (by number)</span>
+<span class="keyword">&darr;</span> $N val                <span class="comment">write val into hardware register N</span>
+<span class="keyword">$NAME</span>                   <span class="comment">read named register (resolved via arch dictionary)</span></pre>
+<p>Architecture dictionaries map symbolic names to hardware register IDs:</p>
+<pre class="code-block"><span class="comment">arch/hopper.dict:           arch/arm64.dict:</span>
+    TID_X    S2R <span class="number">0x21</span>           CNTVCT_EL0  MRS <span class="number">0x5F01</span>
+    TID_Y    S2R <span class="number">0x22</span>           MPIDR_EL1   MRS <span class="number">0xC005</span>
+    CTAID_X  S2R <span class="number">0x25</span>
+    LANEID   S2R <span class="number">0x00</span></pre>
+
+<h3 class="sub-sec">3.4 Arithmetic Operations</h3>
+<p>Scalar operations (loop depth 0):</p>
+<table>
+  <tr><th>Symbol</th><th>Operation</th><th>GPU SASS</th><th>ARM64</th></tr>
+  <tr><td><code>+</code></td><td>Add</td><td><code>FADD Rd, Ra, Rb</code></td><td><code>FADD Dd, Da, Db</code></td></tr>
+  <tr><td><code>-</code></td><td>Subtract</td><td><code>FADD Rd, Ra, -Rb</code> (negate modifier)</td><td><code>FSUB Dd, Da, Db</code></td></tr>
+  <tr><td><code>*</code></td><td>Multiply</td><td><code>FMUL Rd, Ra, Rb</code></td><td><code>FMUL Dd, Da, Db</code></td></tr>
+  <tr><td><code>/</code></td><td>Divide</td><td><code>MUFU.RCP Rt, Rb</code> then <code>FMUL Rd, Ra, Rt</code></td><td><code>FDIV Dd, Da, Db</code></td></tr>
+</table>
+
+<h3 class="sub-sec">3.5 Dimensional Operations</h3>
+<p>Loop depth is encoded by symbol count. Each additional symbol adds one enclosing <code>for</code> loop around the inner SASS instruction.</p>
+<table>
+  <tr><th>Depth</th><th>Multiply</th><th>Add</th><th>Subtract</th><th>Divide</th><th>Complexity</th></tr>
+  <tr><td>0 (scalar)</td><td><code>*</code></td><td><code>+</code></td><td><code>-</code></td><td><code>/</code></td><td>O(1)</td></tr>
+  <tr><td>1 (vector)</td><td><code>**</code></td><td><code>++</code></td><td><code>--</code></td><td><code>//</code></td><td>O(N)</td></tr>
+  <tr><td>2 (matrix)</td><td><code>***</code></td><td><code>+++</code></td><td><code>---</code></td><td><code>///</code></td><td>O(N &times; M)</td></tr>
+  <tr><td>3 (tensor)</td><td><code>****</code></td><td><code>++++</code></td><td><code>----</code></td><td><code>////</code></td><td>O(N &times; M &times; K)</td></tr>
+</table>
+<p>The inner SASS instruction is always the same regardless of depth.<br>
+<code>**</code> (elementwise vector multiply) emits: <code>for i: FMUL Rd[i], Ra[i], Rb[i]</code>.<br>
+<code>***</code> (outer product) emits: <code>for i: for j: FMUL M[i,j], A[i], B[j]</code>.<br>
+<code>****</code> (matmul index space) emits: <code>for i: for j: for k: FFMA C[i,j], A[i,k], B[k,j], C[i,j]</code>.</p>
+<p>On Hopper, <code>***</code> may emit <code>HMMA</code> (tensor core) for FP16 when dimensions align to 16&times;16&times;16.</p>
+
+<h3 class="sub-sec">3.6 Reductions</h3>
+<table>
+  <tr><th>Symbol</th><th>Operation</th><th>SASS Pattern</th></tr>
+  <tr><td><code>&Sigma;</code></td><td>Sum</td><td>Shuffle tree: stride loop partial sums, 5&times; <code>SHFL.BFLY</code> + <code>FADD</code>, then smem cross-warp</td></tr>
+  <tr><td><code>&#9651;</code></td><td>Max</td><td>Same structure, <code>FMNMX</code> (max) instead of <code>FADD</code></td></tr>
+  <tr><td><code>&#9661;</code></td><td>Min</td><td>Same structure, <code>FMNMX</code> (min) instead of <code>FADD</code></td></tr>
+  <tr><td><code>#</code></td><td>Index</td><td>Prefix modifies a reduction: <code># &#9651; x</code> = argmax</td></tr>
+</table>
+<p>Reductions are NOT loops. They collapse one dimension via the shuffle tree in O(log N). This is the ONLY primitive family that requires shared memory, barriers, and shuffles.</p>
+<p>Implementation detail:</p>
+<ol style="margin-left:1.5rem; margin-top:0.5rem; font-size:0.92rem; line-height:2;">
+  <li>Stride loop: each thread accumulates partial result via <code>FFMA</code>/<code>FADD</code></li>
+  <li>Intra-warp: 5&times; <code>SHFL.BFLY</code> + reduction op (butterfly, 32 threads to 1)</li>
+  <li>Cross-warp: <code>STS</code> to shared memory, <code>BAR.SYNC</code>, first warp loads + reduces</li>
+  <li>Broadcast: <code>STS</code> result to smem[0], <code>BAR.SYNC</code>, all threads <code>LDS</code></li>
+</ol>
+
+<h3 class="sub-sec">3.7 Mathematical Functions</h3>
+<p>Single-instruction operations using the Special Function Unit (SFU):</p>
+<table>
+  <tr><th>Symbol</th><th>Operation</th><th>SASS Instruction</th><th>Notes</th></tr>
+  <tr><td><code>1/</code></td><td>Reciprocal</td><td><code>MUFU.RCP Rd, Ra</code></td><td>One SFU op</td></tr>
+  <tr><td><code>1/&radic;</code></td><td>Reciprocal sqrt</td><td><code>MUFU.RSQ Rd, Ra</code></td><td>One SFU op. Core of RMSNorm.</td></tr>
+  <tr><td><code>2^</code></td><td>Power of 2</td><td><code>MUFU.EX2 Rd, Ra</code></td><td>One SFU op</td></tr>
+  <tr><td><code>log&#8322;</code></td><td>Log base 2</td><td><code>MUFU.LG2 Rd, Ra</code></td><td>One SFU op</td></tr>
+  <tr><td><code>&radic;</code></td><td>Square root</td><td><code>MUFU.RSQ Rt, Ra</code> then <code>MUFU.RCP Rd, Rt</code></td><td>Two SFU ops</td></tr>
+  <tr><td><code>&cong;</code></td><td>Sine</td><td><code>MUFU.SIN Rd, Ra</code></td><td>One SFU op</td></tr>
+  <tr><td><code>&equiv;</code></td><td>Cosine</td><td><code>MUFU.COS Rd, Ra</code></td><td>One SFU op</td></tr>
+</table>
+
+<p>Two-instruction composite math:</p>
+<table>
+  <tr><th>Symbol</th><th>Operation</th><th>SASS Sequence</th></tr>
+  <tr><td><code>e^</code></td><td>Natural exp</td><td><code>FMUL Rt, Ra, 1.442695</code> then <code>MUFU.EX2 Rd, Rt</code></td></tr>
+  <tr><td><code>ln</code></td><td>Natural log</td><td><code>MUFU.LG2 Rt, Ra</code> then <code>FMUL Rd, Rt, 0.693147</code></td></tr>
+</table>
+
+<p>All math functions are scalar-only. To apply elementwise, wrap in <code>**</code>: <code>** 1/&radic;</code> applies reciprocal square root to every element of a vector.</p>
+
+<h3 class="sub-sec">3.8 Control Flow</h3>
+<pre class="code-block"><span class="keyword">for</span> i start end step        <span class="comment">counted loop</span>
+<span class="keyword">each</span> i                      <span class="comment">thread-parallel dispatch (GPU only)</span>
+<span class="keyword">stride</span> i dim                <span class="comment">stride loop for vectors longer than blockDim (GPU only)</span>
+<span class="keyword">if==</span> a b                    <span class="comment">conditional (equality)</span>
+<span class="keyword">if>=</span> a b                    <span class="comment">conditional (greater or equal)</span>
+<span class="keyword">if&lt;</span> a b                     <span class="comment">conditional (less than)</span></pre>
+<p><code>for</code> emits <code>ISETP</code> + <code>@P BRA</code> + <code>IADD3</code> for the loop counter.<br>
+<code>each</code> maps to thread indexing: <code>S2R SR_TID.X</code> + <code>S2R SR_CTAID.X</code> + <code>IMAD</code>.<br>
+<code>stride</code> emits a stride loop for processing vectors that exceed the thread block size.</p>
+
+<h3 class="sub-sec">3.9 System Calls</h3>
+<pre class="code-block"><span class="keyword">trap</span>                        <span class="comment">ARM64: SVC #0 (supervisor call)</span></pre>
+<p>Used for host-side I/O (file open, mmap, etc.). Not available on the GPU backend.</p>
+
+<h3 class="sub-sec">3.10 Named Primitives</h3>
+<p>Two operations are too hardware-specific to encode in dimensional symbols:</p>
+<table>
+  <tr><th>Name</th><th>Operation</th><th>Why it's named</th></tr>
+  <tr><td><code>project</code></td><td>W4A16 GPTQ dequant GEMV</td><td>40 SASS instructions per 8-weight group: <code>LDG</code> + 8&times;(<code>LOP3</code> + <code>I2F</code> + <code>FADD</code> + <code>FMUL</code> + <code>FFMA</code>) + warp reduction. Quantization scheme parameterizes the dequant sequence.</td></tr>
+  <tr><td><code>matvec</code></td><td>FP32 state matrix-vector multiply</td><td>Simpler than <code>project</code> &mdash; no dequant. Stride loop of <code>LDG</code> + <code>FFMA</code>, then warp reduction. Structurally <code>***&Sigma;</code>.</td></tr>
+</table>
+
+<hr class="divider">
+
+<!-- ==================== 4. COMPILATION MODEL ==================== -->
+<h2 class="sec" id="compilation-model">4. Compilation Model</h2>
+
+<h3 class="sub-sec">4.1 Flattening</h3>
+<p>Compositions are inlined at every use site. The compiler produces a flat instruction stream with no call/return overhead.</p>
+<pre class="code-block"><span class="keyword">sigmoid</span> x <span class="keyword">:</span>                 <span class="keyword">silu</span> x <span class="keyword">:</span>
+    * <span class="number">-1</span>                        sigmoid x
+    e^                          * x
+    + <span class="number">1</span>
+    <span class="number">1</span>/</pre>
+<p><code>silu x</code> flattens to: <code>* -1</code>, <code>e^</code>, <code>+ 1</code>, <code>1/</code>, <code>* x</code> &mdash; five instructions.</p>
+
+<h3 class="sub-sec">4.2 Compiler-Derived Constructs</h3>
+<p>The following are NEVER written in source. The compiler derives them:</p>
+<table>
+  <tr><th>Concept</th><th>Derived from</th><th>Implementation</th></tr>
+  <tr><td>Thread indexing</td><td>Vector operand shape</td><td><code>S2R SR_TID.X</code> + <code>S2R SR_CTAID.X</code> + <code>IMAD</code></td></tr>
+  <tr><td>Stride loops</td><td>Vector length &gt; blockDim</td><td><code>ISETP</code> + <code>@P BRA</code> + <code>IADD3</code></td></tr>
+  <tr><td>Warp shuffle tree</td><td><code>&Sigma;</code> / <code>&#9651;</code> / <code>&#9661;</code> on vector</td><td>5&times; <code>SHFL.BFLY</code> + reduction op</td></tr>
+  <tr><td>Shared memory allocation</td><td>Cross-warp communication</td><td><code>STS</code> / <code>LDS</code> / <code>BAR.SYNC</code></td></tr>
+  <tr><td>Barriers</td><td>Cross-warp synchronization</td><td><code>BAR.SYNC</code></td></tr>
+  <tr><td>Register allocation</td><td>All live values</td><td>Linear-scan allocator</td></tr>
+  <tr><td>Coalesced memory access</td><td>Array indexing pattern</td><td>Address arithmetic</td></tr>
+  <tr><td>Loop unrolling</td><td><code>project</code> inner loop</td><td>Compiler decides unroll factor</td></tr>
+  <tr><td>Tiling</td><td><code>***</code>, <code>project</code></td><td>Compiler decides tile shape</td></tr>
+  <tr><td>Grid synchronization</td><td>Layer boundaries</td><td>Cooperative barrier</td></tr>
+</table>
+
+<h3 class="sub-sec">4.3 Self-Hosting</h3>
+<p>The compiler (<code>compiler/compiler.ls</code>, 5,467 lines) is written in Lithos with 7 sections: ARM64 backend, GPU backend, Lexer, Parser, Safetensors reader, ELF writer, Main entry. Bootstrapped from pure ARM64 assembly (<code>bootstrap/*.s</code>).</p>
+
+<hr class="divider">
+
+<!-- ==================== 5. TYPE SYSTEM ==================== -->
+<h2 class="sec" id="type-system">5. Type System</h2>
+
+<p>Lithos has no explicit type system. Types are determined by context:</p>
+<ul style="margin-left:1.5rem; margin-top:0.5rem; font-size:0.95rem; line-height:2;">
+  <li><strong>Scalars:</strong> FP32 by default. Integer when used in address arithmetic or loop counters.</li>
+  <li><strong>Vectors:</strong> Arrays of scalars. Length determined by the operand.</li>
+  <li><strong>Matrices:</strong> 2D arrays. Dimensions determined by the operand.</li>
+  <li><strong>Width specifier:</strong> Memory operations (<code>&rarr;</code> / <code>&larr;</code>) take an explicit bit width (8/16/32/64).</li>
+</ul>
+<p>The compiler infers types from usage context. There are no type declarations, type annotations, or type errors. If you write <code>* -1</code> on a vector, you get elementwise negation. If you write <code>** -1</code> on a vector, you get the same thing with an explicit loop.</p>
+
+<hr class="divider">
+
+<!-- ==================== 6. COMPOSITION LIBRARY ==================== -->
+<h2 class="sec" id="composition-library">6. Composition Library</h2>
+
+<h3 class="sub-sec">6.1 Standard Compositions</h3>
+<p>These compositions are defined in terms of primitives. They are the vocabulary for building inference kernels.</p>
+<pre class="code-block"><span class="keyword">sigmoid</span> x <span class="keyword">:</span>                             <span class="comment">\\  4 primitives</span>
+    * <span class="number">-1</span>                                <span class="comment">\\  negate</span>
+    e^                                  <span class="comment">\\  exponential</span>
+    + <span class="number">1</span>                                 <span class="comment">\\  add one</span>
+    <span class="number">1</span>/                                  <span class="comment">\\  reciprocal</span>
+
+<span class="keyword">silu</span> x <span class="keyword">:</span>                                <span class="comment">\\  5 primitives</span>
+    sigmoid x                           <span class="comment">\\  (flattens to 4 above)</span>
+    * x                                 <span class="comment">\\  multiply by original</span>
+
+<span class="keyword">softplus</span> x <span class="keyword">:</span>                            <span class="comment">\\  3 primitives</span>
+    e^                                  <span class="comment">\\  exponential</span>
+    + <span class="number">1</span>                                 <span class="comment">\\  add one</span>
+    ln                                  <span class="comment">\\  natural log</span>
+
+<span class="keyword">rmsnorm</span> x w D <span class="keyword">:</span>                         <span class="comment">\\  6 primitives</span>
+    ** x x                              <span class="comment">\\  square each element</span>
+    &Sigma;                                   <span class="comment">\\  sum of squares</span>
+    / D                                 <span class="comment">\\  divide by dimension</span>
+    <span class="number">1</span>/&radic;                                 <span class="comment">\\  reciprocal square root</span>
+    ** x                                <span class="comment">\\  scale input</span>
+    ** w                                <span class="comment">\\  multiply by weight</span>
+
+<span class="keyword">l2norm</span> x <span class="keyword">:</span>                              <span class="comment">\\  4 primitives</span>
+    ** x x                              <span class="comment">\\  square each element</span>
+    &Sigma;                                   <span class="comment">\\  sum of squares</span>
+    <span class="number">1</span>/&radic;                                 <span class="comment">\\  reciprocal square root</span>
+    ** x                                <span class="comment">\\  scale to unit length</span></pre>
+
+<h3 class="sub-sec">6.2 Composition Algebra</h3>
+<p>Compositions combine by concatenation. The SASS instruction count is the sum of the constituent primitives:</p>
+<table>
+  <tr><th>Composition</th><th>Primitives</th><th>SASS Instructions (approx.)</th></tr>
+  <tr><td><code>sigmoid</code></td><td><code>* -1</code>, <code>e^</code>, <code>+ 1</code>, <code>1/</code></td><td>5 (FMUL + FMUL + MUFU.EX2 + FADD + MUFU.RCP)</td></tr>
+  <tr><td><code>silu</code></td><td>sigmoid + <code>**</code></td><td>6</td></tr>
+  <tr><td><code>softplus</code></td><td><code>e^</code>, <code>+ 1</code>, <code>ln</code></td><td>5 (FMUL + MUFU.EX2 + FADD + MUFU.LG2 + FMUL)</td></tr>
+  <tr><td><code>rmsnorm</code></td><td><code>**</code>, <code>&Sigma;</code>, <code>/</code>, <code>1/&radic;</code>, <code>**</code></td><td>~25 (&Sigma; dominates with shuffle tree)</td></tr>
+  <tr><td><code>l2norm</code></td><td><code>**</code>, <code>&Sigma;</code>, <code>1/&radic;</code>, <code>**</code></td><td>~25 (&Sigma; dominates)</td></tr>
+</table>
+
+<hr class="divider">
+
+<!-- ==================== 7. THE 12 PRIMITIVE FAMILIES ==================== -->
+<h2 class="sec" id="primitive-families">7. The 12 Primitive Families</h2>
+
+<p>Complete enumeration of every irreducible operation in Lithos:</p>
+<pre class="code-block"><span class="comment">Family 1-4:  Arithmetic with dimensional variants</span>
+    <span class="keyword">*   **   ***   ****</span>         <span class="comment">multiply at depth 0/1/2/3</span>
+    <span class="keyword">+   ++   +++   ++++</span>         <span class="comment">add at depth 0/1/2/3</span>
+    <span class="keyword">-   --   ---   ----</span>         <span class="comment">subtract at depth 0/1/2/3</span>
+    <span class="keyword">/   //   ///   ////</span>         <span class="comment">divide at depth 0/1/2/3</span>
+
+<span class="comment">Family 5:   Reductions</span>
+    <span class="keyword">&Sigma;   &#9651;   &#9661;   #</span>               <span class="comment">sum, max, min, index</span>
+
+<span class="comment">Family 6-10: Scalar math (SFU)</span>
+    <span class="keyword">1/</span>                          <span class="comment">reciprocal</span>
+    <span class="keyword">1/&radic;</span>                         <span class="comment">reciprocal square root</span>
+    <span class="keyword">2^</span>                          <span class="comment">power of 2</span>
+    <span class="keyword">log&#8322;</span>                        <span class="comment">log base 2</span>
+    <span class="keyword">&radic;</span>                           <span class="comment">square root</span>
+
+<span class="comment">Family 11-12: Named GEMV operations</span>
+    <span class="keyword">project</span>                     <span class="comment">W4A16 dequant GEMV</span>
+    <span class="keyword">matvec</span>                      <span class="comment">FP32 state GEMV</span></pre>
+<p>Total unique symbols/names: 25.<br>
+Total primitive families: 12.<br>
+Every Lithos program is a sequence drawn from these 12 families.</p>
+
+<hr class="divider">
+
+<!-- ==================== 8. MEMORY MODEL ==================== -->
+<h2 class="sec" id="memory-model">8. Memory Model</h2>
+
+<h3 class="sub-sec">8.1 GPU Memory Spaces</h3>
+<p>The compiler selects memory space based on access pattern:</p>
+<table>
+  <tr><th>Space</th><th>SASS Prefix</th><th>Latency</th><th>Usage</th></tr>
+  <tr><td>Global (HBM)</td><td><code>LDG</code> / <code>STG</code></td><td>~400 cycles</td><td>Weights, activations, state</td></tr>
+  <tr><td>Shared (SMEM)</td><td><code>LDS</code> / <code>STS</code></td><td>~30 cycles</td><td>Cross-warp reductions</td></tr>
+  <tr><td>Registers</td><td><code>MOV</code></td><td>0 cycles</td><td>All intermediate values</td></tr>
+  <tr><td>Constant</td><td><code>LDC</code></td><td>~4 cycles</td><td>Compile-time constants</td></tr>
+</table>
+
+<h3 class="sub-sec">8.2 State Persistence</h3>
+<p>The DeltaNet recurrence state matrix S[48, 128, 128] persists in HBM across tokens. It is loaded, updated, and stored back each token. The compiler handles the load/store scheduling.</p>
+
+<hr class="divider">
+
+<!-- ==================== 9. RUNTIME ==================== -->
+<h2 class="sec" id="runtime">9. Runtime</h2>
+
+<p>The Lithos runtime (<code>runtime/*.ls</code>, 11 files) replaces <code>libcuda.so</code> entirely. It communicates with the GPU via direct register writes through <code>vfio-pci</code>:</p>
+<ul style="margin-left:1.5rem; margin-top:0.5rem; font-size:0.95rem; line-height:2;">
+  <li>QMD (Queue Meta Data) construction</li>
+  <li>GPFIFO (GPU FIFO) submission</li>
+  <li>Doorbell register writes</li>
+  <li>GSP (GPU System Processor) boot sequence</li>
+</ul>
+<p>No CUDA toolkit, no <code>cuLaunchKernel</code>, no driver API.</p>
+
+<hr class="divider">
+
+<!-- ==================== 10. COMPLETE EXAMPLE ==================== -->
+<h2 class="sec" id="deltanet-example">10. Complete Example: DeltaNet Layer</h2>
+
+<p>A full DeltaNet layer is 41 primitive steps (see Section 6 compositions):</p>
+<pre class="code-block"><span class="keyword">deltanet_layer</span> x X <span class="keyword">:</span>
+    rmsnorm x w_norm <span class="number">5120</span>           <span class="comment">\\  1. normalize input</span>
+    project W_qkv x qkv            <span class="comment">\\  2. project to Q, K, V</span>
+    project W_z x z                 <span class="comment">\\  3. project gate signal</span>
+    conv1d qkv history              <span class="comment">\\  4. temporal convolution</span>
+    silu qkv                        <span class="comment">\\  5. activate</span>
+    l2norm k                        <span class="comment">\\  6. normalize keys</span>
+    l2norm q                        <span class="comment">\\     normalize queries</span>
+    * q <span class="number">0.08839</span>                     <span class="comment">\\     scale Q by 1/&radic;128</span>
+    sigmoid beta_raw                <span class="comment">\\  7. input gate</span>
+    softplus dt_raw                 <span class="comment">\\     compute dt</span>
+    e^ A_log                        <span class="comment">\\     compute decay</span>
+    * decay dt                      <span class="comment">\\</span>
+    * <span class="number">-1</span>                            <span class="comment">\\</span>
+    e^                              <span class="comment">\\</span>
+    matvec S k recall               <span class="comment">\\  8. read from state</span>
+    -- v recall                     <span class="comment">\\     compute residual</span>
+    ** beta                         <span class="comment">\\     gate residual</span>
+    *** delta k                     <span class="comment">\\     outer product (rank-1 update)</span>
+    ** decay S                      <span class="comment">\\     decay old state</span>
+    +++ S update                    <span class="comment">\\     update state</span>
+    matvec S q output               <span class="comment">\\     query state</span>
+    rmsnorm output w_head <span class="number">128</span>       <span class="comment">\\  9. group norm per head</span>
+    silu z                          <span class="comment">\\     gate activation</span>
+    ** output gate                  <span class="comment">\\     apply gate</span>
+    project W_out gated hidden      <span class="comment">\\     project to hidden dim</span>
+    ++ X hidden                     <span class="comment">\\     residual connection</span></pre>
+<p>This is the complete source for one DeltaNet layer. The compiler handles thread indexing, memory coalescing, tiling, register allocation, shared memory, barriers, and GPU launch configuration.</p>
+
+<hr class="divider">
+
+<!-- ==================== APPENDIX A ==================== -->
+<h2 class="sec" id="appendix-a">Appendix A: SASS Instruction Reference</h2>
+
+<table>
+  <tr><th>SASS Instruction</th><th>Lithos Primitive</th><th>Unit</th></tr>
+  <tr><td><code>FADD</code></td><td><code>+</code>, <code>-</code> (negate modifier)</td><td>FP32 core</td></tr>
+  <tr><td><code>FMUL</code></td><td><code>*</code></td><td>FP32 core</td></tr>
+  <tr><td><code>FFMA</code></td><td><code>*</code> + <code>+</code> (fused)</td><td>FP32 core</td></tr>
+  <tr><td><code>MUFU.RCP</code></td><td><code>1/</code></td><td>SFU</td></tr>
+  <tr><td><code>MUFU.RSQ</code></td><td><code>1/&radic;</code></td><td>SFU</td></tr>
+  <tr><td><code>MUFU.EX2</code></td><td><code>2^</code></td><td>SFU</td></tr>
+  <tr><td><code>MUFU.LG2</code></td><td><code>log&#8322;</code></td><td>SFU</td></tr>
+  <tr><td><code>MUFU.SQRT</code></td><td><code>&radic;</code></td><td>SFU</td></tr>
+  <tr><td><code>MUFU.SIN</code></td><td><code>&cong;</code></td><td>SFU</td></tr>
+  <tr><td><code>MUFU.COS</code></td><td><code>&equiv;</code></td><td>SFU</td></tr>
+  <tr><td><code>FMNMX</code></td><td><code>&#9651;</code>, <code>&#9661;</code></td><td>FP32 core</td></tr>
+  <tr><td><code>SHFL.BFLY</code></td><td><code>&Sigma;</code> (intra-warp)</td><td>Warp shuffle</td></tr>
+  <tr><td><code>STS</code> / <code>LDS</code></td><td><code>&Sigma;</code> (cross-warp)</td><td>Shared memory</td></tr>
+  <tr><td><code>BAR.SYNC</code></td><td><code>&Sigma;</code> (barrier)</td><td>Barrier unit</td></tr>
+  <tr><td><code>LDG</code> / <code>STG</code></td><td><code>&rarr;</code> / <code>&larr;</code> (global)</td><td>Memory</td></tr>
+  <tr><td><code>S2R</code></td><td><code>&uarr; $NAME</code></td><td>System register</td></tr>
+  <tr><td><code>HMMA</code></td><td><code>***</code> (FP16 aligned)</td><td>Tensor core</td></tr>
+  <tr><td><code>LOP3</code></td><td><code>project</code> (nibble extract)</td><td>Integer</td></tr>
+  <tr><td><code>I2F</code></td><td><code>project</code> (int-to-float)</td><td>Conversion</td></tr>
+  <tr><td><code>ISETP</code> + <code>BRA</code></td><td><code>for</code>, <code>if==</code>, <code>if>=</code>, <code>if&lt;</code></td><td>Integer + branch</td></tr>
+  <tr><td><code>IADD3</code></td><td><code>for</code> (loop counter)</td><td>Integer</td></tr>
+</table>
+
+<hr class="divider">
+
+<!-- ==================== APPENDIX B ==================== -->
+<h2 class="sec" id="appendix-b">Appendix B: Qwen 3.5 27B Dimensions</h2>
+
+<table>
+  <tr><th>Parameter</th><th>Value</th></tr>
+  <tr><td>Hidden dimension</td><td>5120</td></tr>
+  <tr><td>K heads (key/query)</td><td>16</td></tr>
+  <tr><td>V heads (value)</td><td>48</td></tr>
+  <tr><td>Head dimension</td><td>128</td></tr>
+  <tr><td>GQA ratio</td><td>3:1 (each K-head serves 3 V-heads)</td></tr>
+  <tr><td>Conv kernel size</td><td>4</td></tr>
+  <tr><td>Total layers</td><td>64 (48 DeltaNet + 16 full attention)</td></tr>
+  <tr><td>State matrix per head</td><td>[128, 128] FP32</td></tr>
+  <tr><td>Quantization</td><td>W4A16 GPTQ</td></tr>
+</table>
+
+<p class="timestamp">Lithos Language Specification v1.0</p>
+
+</div>
+</body>
+</html>

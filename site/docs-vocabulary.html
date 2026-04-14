@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lithos &mdash; Vocabulary</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0f; --bg-raised: #12121e; --bg-card: #14142a;
+  --text: #e0e0e8; --text-dim: #888898; --text-faint: #555568;
+  --accent: #d4a053; --green: #5ecc5e; --red: #e05555; --blue: #6e8ed0;
+  --cyan: #6ec8d0; --yellow: #e0c040; --border: #1e1e30;
+}
+html { font-size: 16px; scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.7; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { max-width: 1060px; margin: 0 auto; padding: 0 2rem; }
+
+nav { position: sticky; top: 0; z-index: 100; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0.6rem 0; font-size: 0.8rem; letter-spacing: 0.04em; }
+nav .container { display: flex; gap: 1.8rem; flex-wrap: wrap; align-items: center; }
+nav a { color: var(--text-dim); }
+nav a:hover { color: var(--accent); text-decoration: none; }
+nav .nav-brand { color: var(--accent); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; font-size: 0.75rem; }
+nav a.active { color: var(--accent); }
+nav .nav-docs { color: var(--bg); background: var(--accent); padding: 0.25rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; }
+nav .nav-docs:hover { background: #e8b46a; color: var(--bg); }
+
+.hero { padding: 4rem 0 2.5rem; border-bottom: 1px solid var(--border); }
+.hero h1 { font-size: 2.6rem; font-weight: 200; letter-spacing: 0.1em; text-transform: uppercase; }
+.hero .sub { color: var(--text-dim); font-size: 1.15rem; margin-top: 0.5rem; letter-spacing: 0.04em; }
+
+section { padding: 2.5rem 0; }
+h2 { font-size: 1.15rem; font-weight: 300; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 1.2rem; }
+h3 { font-size: 1rem; font-weight: 500; color: var(--text); margin: 1.5rem 0 0.8rem; }
+
+p { margin-bottom: 1rem; font-size: 0.95rem; line-height: 1.8; }
+p code, li code, td code { background: #0e0e1a; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.88em; font-family: 'SF Mono', 'Fira Code', monospace; }
+
+pre { background: #0e0e1a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.88rem; overflow-x: auto; line-height: 1.7; margin-bottom: 1.5rem; color: var(--text); }
+
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; font-size: 0.92rem; }
+th { background: rgba(212, 160, 83, 0.12); color: var(--accent); text-align: left; padding: 0.7rem 1rem; border: 1px solid var(--border); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; }
+td { padding: 0.55rem 1rem; border: 1px solid var(--border); }
+tr:nth-child(even) { background: rgba(18, 18, 30, 0.5); }
+
+ol { margin-left: 1.5rem; margin-bottom: 1.5rem; }
+ol li { margin-bottom: 0.3rem; font-size: 0.95rem; }
+
+.intro-note { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.6rem; margin: 1.5rem 0; font-size: 0.92rem; color: var(--text-dim); }
+.intro-note strong { color: var(--text); }
+
+.timestamp { color: var(--text-faint); font-size: 0.78rem; text-align: center; padding: 3rem 0 2rem; letter-spacing: 0.06em; }
+</style>
+</head>
+<body>
+
+<nav>
+<div class="container">
+  <a href="/" class="nav-brand">Lithos</a>
+  <a href="/">Home</a>
+  <a href="/architecture">Architecture</a>
+  <a href="/compiler">Compiler</a>
+  <a href="/pipeline">Inference Stack</a>
+  <a href="/status">Status</a>
+  <a href="/language" class="active">Language</a>
+  <a href="/glossary">Glossary</a>
+  <a href="/docs" class="nav-docs">Docs</a>
+</div>
+</nav>
+
+<div class="container">
+
+<div class="hero">
+  <h1>Vocabulary</h1>
+  <p class="sub">DeltaNet layer operations &mdash; 25 symbols, 12 irreducible families, 41 primitive steps</p>
+</div>
+
+<!-- ==================== INTRO ==================== -->
+<section>
+<div class="intro-note">
+  A DeltaNet layer is a sequence of operations on a hidden state vector <strong>x</strong>,
+  accumulating into the residual stream <strong>X</strong>. There is no &ldquo;kernel&rdquo; concept.
+  Every operation is a math function. Composition is fusion.
+</div>
+</section>
+
+<!-- ==================== THE LAYER AS OPERATIONS ==================== -->
+<section>
+<h2>The Layer as Operations</h2>
+<ol>
+  <li>normalise</li>
+  <li>project</li>
+  <li>project</li>
+  <li>convolve</li>
+  <li>silu</li>
+  <li>l2norm</li>
+  <li>scale</li>
+  <li>sigmoid</li>
+  <li>softplus</li>
+  <li>matvec</li>
+  <li><code>--</code> &nbsp; <code>**</code></li>
+  <li><code>***</code> &nbsp; <code>**</code> &nbsp; <code>++</code></li>
+  <li>matvec</li>
+  <li>rmsnorm</li>
+  <li>sigmoid &nbsp; <code>**</code> &nbsp; <code>**</code></li>
+  <li>project</li>
+  <li><code>++</code></li>
+  <li>rmsnorm</li>
+  <li>project</li>
+  <li>silu &nbsp; <code>**</code></li>
+  <li>project</li>
+  <li><code>++</code></li>
+</ol>
+</section>
+
+<!-- ==================== FULLY DECOMPOSED ==================== -->
+<section>
+<h2>Fully Decomposed &mdash; 41 Primitive Steps</h2>
+<p>Every composite operation broken into irreducible math:</p>
+<table>
+<thead>
+<tr><th>Step</th><th>Operation</th><th>Context</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>normalise</td><td>input hidden state</td></tr>
+<tr><td>2</td><td>project</td><td>&rarr; q k v</td></tr>
+<tr><td>3</td><td>project</td><td>&rarr; z</td></tr>
+<tr><td>4</td><td><code>**</code></td><td>convolve (FIR tap, elementwise)</td></tr>
+<tr><td>5</td><td><code>&Sigma;</code></td><td>convolve (reduction)</td></tr>
+<tr><td>6</td><td><code>* -1</code></td><td>silu: negate</td></tr>
+<tr><td>7</td><td><code>exp</code></td><td>silu: e^x</td></tr>
+<tr><td>8</td><td><code>++</code></td><td>silu: add 1 (elementwise)</td></tr>
+<tr><td>9</td><td><code>//</code></td><td>silu: 1/ (elementwise reciprocal)</td></tr>
+<tr><td>10</td><td><code>**</code></td><td>silu: elementwise multiply</td></tr>
+<tr><td>11</td><td><code>**</code></td><td>l2norm: square each element</td></tr>
+<tr><td>12</td><td><code>&Sigma;</code></td><td>l2norm: sum all squares</td></tr>
+<tr><td>13</td><td><code>1/&radic;</code></td><td>l2norm: reciprocal root</td></tr>
+<tr><td>14</td><td><code>**</code></td><td>l2norm: elementwise scale</td></tr>
+<tr><td>15</td><td><code>* 1/&radic;d</code></td><td>scale q by 1/&radic;d</td></tr>
+<tr><td>16</td><td>sigmoid</td><td>&rarr; beta</td></tr>
+<tr><td>17</td><td><code>exp</code></td><td>softplus</td></tr>
+<tr><td>18</td><td><code>++</code></td><td>softplus: + 1</td></tr>
+<tr><td>19</td><td><code>log</code></td><td>softplus: ln</td></tr>
+<tr><td>20</td><td><code>**</code></td><td>matvec S @ k (element products)</td></tr>
+<tr><td>21</td><td><code>&Sigma;</code></td><td>matvec S @ k (reduction)</td></tr>
+<tr><td>22</td><td><code>--</code></td><td>v - recall</td></tr>
+<tr><td>23</td><td><code>**</code></td><td>* beta &rarr; correction (elementwise)</td></tr>
+<tr><td>24</td><td><code>***</code></td><td>correction &otimes; k (outer product)</td></tr>
+<tr><td>25</td><td><code>**</code></td><td>decay * S (elementwise)</td></tr>
+<tr><td>26</td><td><code>+++</code></td><td>S update (matrix add)</td></tr>
+<tr><td>27</td><td><code>**</code></td><td>matvec S @ q (element products)</td></tr>
+<tr><td>28</td><td><code>&Sigma;</code></td><td>matvec S @ q (reduction)</td></tr>
+<tr><td>29</td><td>rmsnorm</td><td>output</td></tr>
+<tr><td>30</td><td>sigmoid</td><td>gate z</td></tr>
+<tr><td>31</td><td><code>**</code></td><td>silu(z) (elementwise)</td></tr>
+<tr><td>32</td><td><code>**</code></td><td>output * gate (elementwise)</td></tr>
+<tr><td>33</td><td>project</td><td>&rarr; hidden dim</td></tr>
+<tr><td>34</td><td><code>++</code></td><td>residual X</td></tr>
+<tr><td>35</td><td>rmsnorm</td><td>MLP input</td></tr>
+<tr><td>36</td><td>project</td><td>&rarr; gate, up</td></tr>
+<tr><td>37</td><td>sigmoid</td><td>silu gate</td></tr>
+<tr><td>38</td><td><code>**</code></td><td>silu gate (elementwise)</td></tr>
+<tr><td>39</td><td><code>**</code></td><td>gate * up (elementwise)</td></tr>
+<tr><td>40</td><td>project</td><td>&rarr; down</td></tr>
+<tr><td>41</td><td><code>++</code></td><td>residual X</td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ==================== THE PRIMITIVES ==================== -->
+<section>
+<h2>The Primitives</h2>
+<p>Dimensional notation: the number of repeated symbols encodes loop depth.</p>
+<pre>*   **   ***   ****        multiply: 1 / N / N&times;M / N&times;M&times;K
++   ++   +++   ++++        add:      1 / N / N&times;M / N&times;M&times;K
+-   --   ---   ----        subtract: 1 / N / N&times;M / N&times;M&times;K
+/   //   ///   ////        divide:   1 / N / N&times;M / N&times;M&times;K
+&Sigma;                          reduce one dimension &mdash; O(log N), NOT a loop
+exp   log   &radic;   1/   1/&radic;  scalar only; apply elementwise via **
+project                    W4A16 dequant GEMV (too specific to encode in stars)
+matvec                     FP32 state GEMV (ditto)</pre>
+
+<p>Total: 25 symbols / names. The 12 irreducible operation families:</p>
+<pre>*   **   ***   ****
++   ++   +++   ++++
+-   --   ---   ----
+/   //   ///   ////
+&Sigma;
+exp   log   &radic;   1/   1/&radic;
+project   matvec</pre>
+
+<p><code>outer</code> is gone. It is <code>***</code>.</p>
+</section>
+
+<!-- ==================== DIMENSIONAL TABLE ==================== -->
+<section>
+<h2>Dimensional Table</h2>
+<table>
+<thead>
+<tr><th>Symbols</th><th>Loop Depth</th><th>Complexity</th><th>What It Does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>*</code></td><td>0 (scalar)</td><td>O(1)</td><td>one FMUL</td></tr>
+<tr><td><code>**</code></td><td>1</td><td>O(N)</td><td>loop of FMULs &mdash; elementwise</td></tr>
+<tr><td><code>***</code></td><td>2</td><td>O(N&times;M)</td><td>nested loop of FMULs &mdash; outer product</td></tr>
+<tr><td><code>****</code></td><td>3</td><td>O(N&times;M&times;K)</td><td>triple nested &mdash; matmul index space</td></tr>
+<tr><td><code>+</code></td><td>0 (scalar)</td><td>O(1)</td><td>one FADD</td></tr>
+<tr><td><code>++</code></td><td>1</td><td>O(N)</td><td>loop of FADDs &mdash; elementwise</td></tr>
+<tr><td><code>+++</code></td><td>2</td><td>O(N&times;M)</td><td>nested loop of FADDs &mdash; matrix add</td></tr>
+<tr><td><code>++++</code></td><td>3</td><td>O(N&times;M&times;K)</td><td>triple nested &mdash; tensor add</td></tr>
+<tr><td><code>-</code></td><td>0</td><td>O(1)</td><td>one FADD (negate modifier)</td></tr>
+<tr><td><code>--</code></td><td>1</td><td>O(N)</td><td>elementwise subtract</td></tr>
+<tr><td><code>---</code></td><td>2</td><td>O(N&times;M)</td><td>matrix subtract</td></tr>
+<tr><td><code>----</code></td><td>3</td><td>O(N&times;M&times;K)</td><td>tensor subtract</td></tr>
+<tr><td><code>/</code></td><td>0</td><td>O(1)</td><td>one RCP + FMUL</td></tr>
+<tr><td><code>//</code></td><td>1</td><td>O(N)</td><td>elementwise divide</td></tr>
+<tr><td><code>///</code></td><td>2</td><td>O(N&times;M)</td><td>matrix divide</td></tr>
+<tr><td><code>////</code></td><td>3</td><td>O(N&times;M&times;K)</td><td>tensor divide</td></tr>
+<tr><td><code>&Sigma;</code></td><td>&mdash;</td><td>O(log N)</td><td>shuffle tree &mdash; collapses one dimension</td></tr>
+<tr><td><code>exp</code></td><td>scalar</td><td>O(1)</td><td>one EX2 + FMUL</td></tr>
+<tr><td><code>log</code></td><td>scalar</td><td>O(1)</td><td>one LG2 + FMUL</td></tr>
+<tr><td><code>&radic;</code></td><td>scalar</td><td>O(1)</td><td>RSQ + RCP</td></tr>
+<tr><td><code>1/</code></td><td>scalar</td><td>O(1)</td><td>one RCP</td></tr>
+<tr><td><code>1/&radic;</code></td><td>scalar</td><td>O(1)</td><td>one RSQ</td></tr>
+<tr><td><code>project</code></td><td>&mdash;</td><td>O(N&times;M)</td><td>W4A16 GEMV with dequant</td></tr>
+<tr><td><code>matvec</code></td><td>&mdash;</td><td>O(N&times;M)</td><td>FP32 state GEMV</td></tr>
+</tbody>
+</table>
+
+<div class="intro-note">
+  <code>&Sigma;</code> is NOT a loop. It is the shuffle tree: O(log N) communication steps.<br>
+  Single symbols are O(1). Every extra symbol = one more enclosing <code>for</code> loop.<br>
+  <code>exp</code>, <code>log</code>, <code>&radic;</code>, <code>1/</code>, <code>1/&radic;</code> are scalar; wrap in <code>**</code> to apply elementwise.
+</div>
+</section>
+
+<!-- ==================== WHY THIS MATTERS ==================== -->
+<section>
+<h2>Why This Matters</h2>
+<p>
+  A &ldquo;fused kernel&rdquo; is a redundant phrase. Every function is already a
+  composition of smaller functions. RMSNorm is <code>**</code>, <code>&Sigma;</code>, <code>/</code>, <code>1/&radic;</code>, <code>**</code>.
+  SiLU is <code>* -1</code>, <code>exp</code>, <code>++</code>, <code>//</code>, <code>**</code>. The word &ldquo;fused&rdquo; only exists
+  because other systems make separation the default and fusion the exception.
+</p>
+<p>
+  In Lithos, composition is the default. There is nothing to fuse because
+  nothing was ever separated. A DeltaNet layer is 41 math steps. The compiler
+  decides how many GPU launches that becomes.
+</p>
+</section>
+
+<!-- ==================== COMPOSITION EXAMPLES ==================== -->
+<section>
+<h2>Composition Examples</h2>
+<pre>rmsnorm   = **  &Sigma;  / D  1/&radic;  **          square &rarr; reduce &rarr; mean &rarr; reciproot &rarr; scale
+silu      = * -1  exp  ++  //  **         negate &rarr; exp &rarr; add1 &rarr; recip &rarr; multiply
+l2norm    = **  &Sigma;  1/&radic;  **               square &rarr; reduce &rarr; reciproot &rarr; scale
+softplus  = exp  ++  log                  exp &rarr; add1 &rarr; ln
+sigmoid   = * -1  exp  ++  //            negate &rarr; exp &rarr; add1 &rarr; recip</pre>
+
+<p>Outer product (formerly <code>outer</code>, now <code>***</code>):</p>
+<pre>correction &otimes; k  =  ***   (for each i,j: result[i,j] = correction[i] * k[j])</pre>
+
+<p>State update uses <code>***</code> and <code>+++</code>:</p>
+<pre>S = decay ** S  +++  beta ** (v -- recall) ***k
+    &boxur; elementwise &boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxul;  &boxur;&boxh;&boxh; elementwise &boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxh;&boxul; &boxur;outer&boxul;</pre>
+</section>
+
+<p class="timestamp">Lithos Vocabulary Reference</p>
+
+</div>
+</body>
+</html>
