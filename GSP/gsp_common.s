@@ -84,7 +84,7 @@
 
 // ---- PMC (Power Management Controller) ----
 .equ PMC_BOOT_0,            0x000000    // pmc_check.s
-.equ ARCH_HOPPER,           0xA        // pmc_check.s (bits[23:20])
+.equ ARCH_HOPPER,           0x180      // pmc_check.s -- GH100 chip_id in bits[31:20]
 
 // ---- Falcon engine control ----
 .equ FALCON_ENGINE,         0x1103C0    // falcon_reset.s
