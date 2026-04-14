@@ -15,9 +15,10 @@ SRCS := \
 	poll_lockdown.s \
 	rpc_channel.s
 
-# Enable these once they exist:
-#SRCS += gsp_common.s
-#SRCS += boot.s
+# Common string/message pool + the _start driver that calls the 9 steps.
+# Previously commented out with "Enable these once they exist" — they exist.
+SRCS += gsp_common.s
+SRCS += boot.s
 
 OBJS := $(SRCS:.s=.o)
 
