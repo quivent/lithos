@@ -23,6 +23,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# ------------------------------------------------------------------
+# 0. Parse --target argument (linux | darwin)
+# ------------------------------------------------------------------
+TARGET=linux
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --target)
+            TARGET="${2:-linux}"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
 BUILD=build-darwin
 SRCS=(
     ls-shared.s
@@ -118,7 +134,8 @@ darwin_transform() {
     input=$(cat)
 
     # Pass 1: hoist .equ constants with Darwin platform values applied
-    echo "$input" | grep -E '^\.equ[[:space:]]' | sed -E \
+    local hoisted
+    hoisted=$(echo "$input" | grep -E '^\.equ[[:space:]]' | sed -E \
         -e 's/^(\.equ[[:space:]]+SYS_READ,[[:space:]]*)63/\13/' \
         -e 's/^(\.equ[[:space:]]+SYS_WRITE,[[:space:]]*)64/\14/' \
         -e 's/^(\.equ[[:space:]]+SYS_OPENAT,[[:space:]]*)56/\1463/' \
@@ -131,8 +148,17 @@ darwin_transform() {
         -e 's/^(\.equ[[:space:]]+SYS_FSTAT,[[:space:]]*)80/\1339/' \
         -e 's/^(\.equ[[:space:]]+AT_FDCWD,[[:space:]]*)-100/\1-2/' \
         -e 's/^(\.equ[[:space:]]+O_WCT,[[:space:]]*)577/\11537/' \
-        -e 's/^(\.equ[[:space:]]+ARM64_SVC_0,[[:space:]]*)0xD4000001/\10xD4001001/' \
-        || true
+        || true)
+
+    # If --target darwin, rewrite ARM64_SVC_0 so compiled output emits SVC #0x80.
+    # Matches both flat form (0xD4000001) and split form ((0xD400 << 16) | 0x0001).
+    if [ "$TARGET" = "darwin" ]; then
+        hoisted=$(echo "$hoisted" | sed -E \
+            -e 's/^(\.equ[[:space:]]+ARM64_SVC_0,[[:space:]]*)0xD4000001/\10xD4001001/' \
+            -e 's/^(\.equ[[:space:]]+ARM64_SVC_0,.*\| *)0x0001/\10x1001/' \
+        )
+    fi
+    echo "$hoisted"
 
     # Pass 2: transform body (.equ deleted — already hoisted with correct values)
     echo "$input" | sed -E \

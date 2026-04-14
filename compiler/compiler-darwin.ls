@@ -143,13 +143,10 @@
 \\ ============================================================================
 \\ ENTRY POINT — must be FIRST composition (ELF entry = start of code buffer)
 \\ ============================================================================
-\\ Linux ARM64: argc at [SP], argv at SP+8
+\\ macOS ARM64: argc in X0, argv in X1 (passed by dyld)
 main :
-    ↓ $0 0
-    argc → 64 $31 0
-    argv $31 + 8
-    lithos_main argc argv
-    ↓ $8 93
+    lithos_main $0 $1
+    ↓ $16 1
     ↓ $0 0
     trap
 
@@ -160,16 +157,16 @@ main :
 buf tokens 262144
 var token_count 0
 
-const SYS_READ      63
-const SYS_WRITE     64
-const SYS_OPENAT    56
-const SYS_CLOSE     57
-const SYS_LSEEK     62
-const SYS_MMAP      222
-const SYS_MUNMAP    215
-const SYS_MPROTECT  226
-const SYS_EXIT      93
-const SYS_BRK       214
+const SYS_READ      3
+const SYS_WRITE     4
+const SYS_OPENAT    463
+const SYS_CLOSE     6
+const SYS_LSEEK     199
+const SYS_MMAP      197
+const SYS_MUNMAP    73
+const SYS_MPROTECT  74
+const SYS_EXIT      1
+const SYS_BRK       12
 
 \\ ############################################################################
 \\ ##                                                                        ##
@@ -795,39 +792,39 @@ emit_cbnz_fwd rt :
 \\ ============================================================
 
 emit_trap_exit :
-    emit_movz X8 SYS_EXIT 0
+    emit_movz X16 SYS_EXIT 0
     emit_trap
 
 emit_trap_read :
-    emit_movz X8 SYS_READ 0
+    emit_movz X16 SYS_READ 0
     emit_trap
 
 emit_trap_write :
-    emit_movz X8 SYS_WRITE 0
+    emit_movz X16 SYS_WRITE 0
     emit_trap
 
 emit_trap_openat :
-    emit_movz X8 SYS_OPENAT 0
+    emit_movz X16 SYS_OPENAT 0
     emit_trap
 
 emit_trap_close :
-    emit_movz X8 SYS_CLOSE 0
+    emit_movz X16 SYS_CLOSE 0
     emit_trap
 
 emit_trap_mmap :
-    emit_movz X8 SYS_MMAP 0
+    emit_movz X16 SYS_MMAP 0
     emit_trap
 
 emit_trap_munmap :
-    emit_movz X8 SYS_MUNMAP 0
+    emit_movz X16 SYS_MUNMAP 0
     emit_trap
 
 emit_trap_mprotect :
-    emit_movz X8 SYS_MPROTECT 0
+    emit_movz X16 SYS_MPROTECT 0
     emit_trap
 
 emit_trap_brk :
-    emit_movz X8 SYS_BRK 0
+    emit_movz X16 SYS_BRK 0
     emit_trap
 
 \\ ============================================================
@@ -4795,7 +4792,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
 \\ ============================================================
 
 elf_save path :
-    trap fd SYS_OPENAT -100 path 577 420
+    trap fd SYS_OPENAT -2 path 1537 420
 
     written 0
     remaining cubin_pos
@@ -4924,8 +4921,8 @@ elf_build_arm64 code_buf code_size :
 \\ Returns base pointer and file size.
 host mmap_file path :
     \\ openat(AT_FDCWD, path, O_RDONLY, 0)
-    ↓ $8 56
-    ↓ $0 -100
+    ↓ $16 463
+    ↓ $0 -2
     ↓ $1 path
     ↓ $2 0
     ↓ $3 0
@@ -4933,7 +4930,7 @@ host mmap_file path :
     fd ↑ $0
 
     \\ lseek(fd, 0, SEEK_END)
-    ↓ $8 62
+    ↓ $16 199
     ↓ $0 fd
     ↓ $1 0
     ↓ $2 2
@@ -4941,7 +4938,7 @@ host mmap_file path :
     file_size ↑ $0
 
     \\ mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0)
-    ↓ $8 222
+    ↓ $16 197
     ↓ $0 0
     ↓ $1 file_size
     ↓ $2 1
@@ -4952,17 +4949,17 @@ host mmap_file path :
     base ↑ $0
 
     \\ close(fd)
-    ↓ $8 57
+    ↓ $16 6
     ↓ $0 fd
     trap
 
 \\ write_file — open (create/trunc), write buffer, close
 host write_file path buf buf_len :
     \\ openat(AT_FDCWD, path, O_WRONLY|O_CREAT|O_TRUNC, 0755)
-    ↓ $8 56
-    ↓ $0 -100
+    ↓ $16 463
+    ↓ $0 -2
     ↓ $1 path
-    ↓ $2 577
+    ↓ $2 1537
     ↓ $3 493
     trap
     fd ↑ $0
@@ -4973,7 +4970,7 @@ host write_file path buf buf_len :
     write_loop:
         if<= remaining 0
             goto write_done
-        ↓ $8 64
+        ↓ $16 4
         ↓ $0 fd
         ↓ $1 buf + written
         ↓ $2 remaining
@@ -4987,7 +4984,7 @@ host write_file path buf buf_len :
 
     write_done:
     \\ close(fd)
-    ↓ $8 57
+    ↓ $16 6
     ↓ $0 fd
     trap
 
@@ -5014,7 +5011,7 @@ host lithos_main argc argv :
     \\ Validate argument count (need at least source and output)
     if< argc 3
         \\ Too few arguments — exit with error
-        ↓ $8 93
+        ↓ $16 1
         ↓ $0 1
         trap
 
@@ -5051,7 +5048,7 @@ host lithos_main argc argv :
         elf_save out_path
 
     \\ Step 6: Exit successfully
-    ↓ $8 93
+    ↓ $16 1
     ↓ $0 0
     trap
 
