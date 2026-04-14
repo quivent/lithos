@@ -174,19 +174,10 @@ hbm_alloc:
     ret
 
 .alloc_zero:
-    // Zero-size request: return current position without advancing.
-    // cpu_addr = hbm_base + current bump, gpu_va = hbm_phys + current bump
-    adrp    x3, hbm_bump
-    add     x3, x3, :lo12:hbm_bump
-    ldr     x4, [x3]
-    adrp    x3, hbm_base
-    add     x3, x3, :lo12:hbm_base
-    ldr     x3, [x3]
-    add     x0, x3, x4
-    adrp    x3, hbm_phys
-    add     x3, x3, :lo12:hbm_phys
-    ldr     x3, [x3]
-    add     x1, x3, x4
+    // Zero-size request: return NULL to signal "nothing allocated".
+    // Callers should not use a zero-size allocation as a valid pointer.
+    mov     x0, #0
+    mov     x1, #0
     ret
 
 .alloc_oom:

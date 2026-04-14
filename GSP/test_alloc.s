@@ -18,9 +18,15 @@
 // ---- Syscall numbers (aarch64) ----
 .equ SYS_WRITE, 64
 .equ SYS_EXIT,  93
+.equ SYS_MMAP,  222
 
 // ---- File descriptors ----
 .equ FD_STDERR, 2
+
+// ---- mmap constants ----
+.equ PROT_READ_WRITE, 3       // PROT_READ | PROT_WRITE
+.equ MAP_PRIVATE_ANON, 0x22   // MAP_PRIVATE | MAP_ANONYMOUS
+.equ BAR4_FAKE_SIZE, 0x10000000  // 256MB
 
 // ---- Test parameters ----
 // base (virtual)  = 0x200000000
@@ -70,6 +76,9 @@ msg_all_pass_len = . - msg_all_pass
 msg_some_fail:  .ascii "=== test_alloc: FAILED ===\n"
 msg_some_fail_len = . - msg_some_fail
 
+msg_mmap_fail:  .ascii "test_alloc: FATAL: mmap for fake BAR4 failed\n"
+msg_mmap_fail_len = . - msg_mmap_fail
+
 // ============================================================
 // Text section
 // ============================================================
@@ -95,14 +104,26 @@ _start:
     mov     x8, #SYS_WRITE
     svc     #0
 
+    // ---- mmap a 256MB anonymous region to act as fake BAR4 ----
+    mov     x8, #SYS_MMAP
+    mov     x0, #0                  // addr = NULL
+    mov     x1, #BAR4_FAKE_SIZE     // 256MB
+    mov     x2, #PROT_READ_WRITE
+    mov     x3, #MAP_PRIVATE_ANON
+    mov     x4, #-1                 // fd = -1 (anonymous)
+    mov     x5, #0                  // offset = 0
+    svc     #0
+    cmn     x0, #4096
+    b.hi    .mmap_fail
+    mov     x20, x0                 // x20 = fake BAR4 base (real mapped memory)
+
     // ---- Initialize allocator ----
-    // x0 = virtual base  = 0x200000000
-    // x1 = physical base = 0x100000000
+    // x0 = virtual base  = mmap'd region (real writable memory)
+    // x1 = physical base = 0x100000000 (fake, only used for arithmetic)
     // x2 = initial offset = 0x400000
-    mov     x0, #0x2
-    lsl     x0, x0, #32            // x0 = 0x200000000
+    mov     x0, x20                 // real mmap'd address
     mov     x1, #0x1
-    lsl     x1, x1, #32            // x1 = 0x100000000
+    lsl     x1, x1, #32            // x1 = 0x100000000 (fake phys)
     mov     x2, #0x400000           // x2 = 0x400000 (4MB offset)
     bl      hbm_alloc_init
 
@@ -273,5 +294,16 @@ _start:
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #48
     mov     x0, #1
+    mov     x8, #SYS_EXIT
+    svc     #0
+
+.mmap_fail:
+    mov     x0, #FD_STDERR
+    adrp    x1, msg_mmap_fail
+    add     x1, x1, :lo12:msg_mmap_fail
+    mov     x2, #msg_mmap_fail_len
+    mov     x8, #SYS_WRITE
+    svc     #0
+    mov     x0, #2
     mov     x8, #SYS_EXIT
     svc     #0
