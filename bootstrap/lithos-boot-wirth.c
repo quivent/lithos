@@ -1489,43 +1489,34 @@ static void parse_stmt(void) {
 
     if (t->type == TOK_IF) {
         tk++;
-        int ct = cur()->type;
-        int is_compound = (ct == TOK_LT || ct == TOK_GT || ct == TOK_LTE ||
-                           ct == TOK_GTE || ct == TOK_EQEQ || ct == TOK_NEQ);
-        int patch_off;
+        /* if/elif/else chain.  Each branch emits:
+         *   [cond test + inverted B.cond / CBZ to patch_off_skip]
+         *   <body>
+         *   B 0                 — patched to end-of-chain
+         * After each body, patch_off_skip is patched to land at the start
+         * of the next branch (or the fallthrough after the whole chain).
+         * `else` has no condition and no skip-patch. */
+        int end_patch_offs[32];
+        int n_end_patches = 0;
 
-        if (is_compound) {
-            tk++;
-            int a = parse_expr();
-            int b = parse_expr();
-            emit_cmp_reg(a, b);
-            int cc_inv;
-            switch (ct) {
-            case TOK_LT:   cc_inv = CC_GE; break;
-            case TOK_GT:   cc_inv = CC_LE; break;
-            case TOK_LTE:  cc_inv = CC_GT; break;
-            case TOK_GTE:  cc_inv = CC_LT; break;
-            case TOK_EQEQ: cc_inv = CC_NE; break;
-            case TOK_NEQ:  cc_inv = CC_EQ; break;
-            default:       cc_inv = CC_AL;
-            }
-            patch_off = cur_off();
-            emit_b_cond(cc_inv, 0);
-        } else {
-            /* Simple `if expr [cmp rhs]`. If a relational operator appears
-             * after the first expression, treat the whole form as a
-             * comparison and emit CMP + inverted B.cond. Otherwise fall
-             * back to the original "truthy expr" (CBZ skip) form. */
-            int a = parse_expr();
-            int rel = cur()->type;
-            int is_rel = (rel == TOK_LT || rel == TOK_GT || rel == TOK_LTE ||
-                          rel == TOK_GTE || rel == TOK_EQEQ || rel == TOK_NEQ);
-            if (is_rel) {
+        /* Parse the initial `if` condition like before, then reuse the
+         * same loop for each `elif` branch (continue) and finally for
+         * optional `else` (handled after the break). */
+        for (;;) {
+            int is_compound = 0;
+            int patch_off_skip = 0;
+            int patch_is_cbz = 0;
+
+            int ct = cur()->type;
+            int is_cmp_compound = (ct == TOK_LT || ct == TOK_GT || ct == TOK_LTE ||
+                                   ct == TOK_GTE || ct == TOK_EQEQ || ct == TOK_NEQ);
+            if (is_cmp_compound) {
                 tk++;
+                int a = parse_expr();
                 int b = parse_expr();
                 emit_cmp_reg(a, b);
                 int cc_inv;
-                switch (rel) {
+                switch (ct) {
                 case TOK_LT:   cc_inv = CC_GE; break;
                 case TOK_GT:   cc_inv = CC_LE; break;
                 case TOK_LTE:  cc_inv = CC_GT; break;
@@ -1534,31 +1525,122 @@ static void parse_stmt(void) {
                 case TOK_NEQ:  cc_inv = CC_EQ; break;
                 default:       cc_inv = CC_AL;
                 }
-                patch_off = cur_off();
+                patch_off_skip = cur_off();
                 emit_b_cond(cc_inv, 0);
-                is_compound = 1;   /* reuse the same patch format below */
+                is_compound = 1;
             } else {
-                patch_off = cur_off();
-                emit_cbz(a, 0);
+                /* Simple `cond expr [cmp rhs]`.  If a relational operator
+                 * appears after the first expression, emit CMP + inverted
+                 * B.cond.  Otherwise fall back to "truthy expr" (CBZ skip). */
+                int a = parse_expr();
+                int rel = cur()->type;
+                int is_rel = (rel == TOK_LT || rel == TOK_GT || rel == TOK_LTE ||
+                              rel == TOK_GTE || rel == TOK_EQEQ || rel == TOK_NEQ);
+                if (is_rel) {
+                    tk++;
+                    int b = parse_expr();
+                    emit_cmp_reg(a, b);
+                    int cc_inv;
+                    switch (rel) {
+                    case TOK_LT:   cc_inv = CC_GE; break;
+                    case TOK_GT:   cc_inv = CC_LE; break;
+                    case TOK_LTE:  cc_inv = CC_GT; break;
+                    case TOK_GTE:  cc_inv = CC_LT; break;
+                    case TOK_EQEQ: cc_inv = CC_NE; break;
+                    case TOK_NEQ:  cc_inv = CC_EQ; break;
+                    default:       cc_inv = CC_AL;
+                    }
+                    patch_off_skip = cur_off();
+                    emit_b_cond(cc_inv, 0);
+                    is_compound = 1;
+                } else {
+                    patch_off_skip = cur_off();
+                    emit_cbz(a, 0);
+                    patch_is_cbz = 1;
+                    is_compound = 0;
+                }
             }
+            if (cur()->type == TOK_COLON) tk++;
+            if (cur()->type == TOK_NEWLINE) tk++;
+
+            parse_body(-1);
+            /* sym_trim removed: inner-scope names persist to end of composition */
+            /* frame_next_slot reset removed: slots persist across inner scopes */
+
+            /* After the body: peek past any INDENT tokens at the same
+             * column as the `if` to see if there's an `elif` or `else`.
+             * parse_body returns with `cur` sitting on an INDENT whose
+             * .len < body_indent (i.e. the indent of the if/elif/else). */
+            int has_more = 0;
+            int saved_tk = tk;
+            /* Skip blank lines and indents */
+            while (cur()->type == TOK_NEWLINE ||
+                   (cur()->type == TOK_INDENT && toks[tk+1].type == TOK_NEWLINE)) {
+                if (cur()->type == TOK_NEWLINE) tk++;
+                else tk += 2;
+            }
+            int after_indent_tk = tk;
+            if (cur()->type == TOK_INDENT) {
+                after_indent_tk = tk + 1;
+            }
+            int next_tt = (after_indent_tk < ntoks) ? toks[after_indent_tk].type : TOK_EOF;
+
+            if (next_tt == TOK_ELIF || next_tt == TOK_ELSE) {
+                /* Consume the INDENT (if any) and the elif/else keyword. */
+                if (cur()->type == TOK_INDENT) tk++;
+                has_more = 1;
+            } else {
+                /* No continuation — rewind so the outer parse_body still
+                 * sees the INDENT we peeked past. */
+                tk = saved_tk;
+            }
+
+            /* Emit the unconditional B to skip past the rest of the chain.
+             * We emit this only if there's a continuation; if there isn't,
+             * the skip-patch naturally lands right after this body. */
+            if (has_more) {
+                if (n_end_patches < 32) {
+                    end_patch_offs[n_end_patches++] = cur_off();
+                }
+                emit_b(0);
+            }
+
+            /* Patch the cond-skip to land here (at the next branch start,
+             * or the fallthrough if this was the last conditional branch). */
+            int delta = cur_off() - patch_off_skip;
+            u32 old = code[patch_off_skip / 4];
+            if (patch_is_cbz) {
+                u32 rt = old & 0x1F;
+                u32 w = 0xB4000000u | (((u32)(delta / 4) & 0x7FFFFu) << 5) | rt;
+                patch32(patch_off_skip, w);
+            } else if (is_compound) {
+                u32 cc = old & 0xF;
+                u32 w = 0x54000000u | (((u32)(delta / 4) & 0x7FFFFu) << 5) | cc;
+                patch32(patch_off_skip, w);
+            }
+
+            if (!has_more) break;
+
+            /* Now cur() is at TOK_ELIF or TOK_ELSE — consume the keyword. */
+            if (cur()->type == TOK_ELIF) {
+                tk++;
+                continue;   /* top of loop parses the next condition */
+            }
+            /* TOK_ELSE: parse a body with no condition test, then end. */
+            tk++;
+            if (cur()->type == TOK_COLON) tk++;
+            if (cur()->type == TOK_NEWLINE) tk++;
+            parse_body(-1);
+            break;
         }
-        if (cur()->type == TOK_COLON) tk++;
-        if (cur()->type == TOK_NEWLINE) tk++;
 
-        parse_body(-1);
-        /* sym_trim removed: inner-scope names persist to end of composition */
-        /* frame_next_slot reset removed: slots persist across inner scopes */
-
-        int delta = cur_off() - patch_off;
-        u32 old = code[patch_off / 4];
-        if (is_compound) {
-            u32 cc = old & 0xF;
-            u32 w = 0x54000000u | (((u32)(delta / 4) & 0x7FFFFu) << 5) | cc;
-            patch32(patch_off, w);
-        } else {
-            u32 rt = old & 0x1F;
-            u32 w = 0xB4000000u | (((u32)(delta / 4) & 0x7FFFFu) << 5) | rt;
-            patch32(patch_off, w);
+        /* Patch all the "end-of-branch" B instructions to land here. */
+        int end_off = cur_off();
+        for (int i = 0; i < n_end_patches; i++) {
+            int po = end_patch_offs[i];
+            int dd = end_off - po;
+            u32 w = 0x14000000u | ((u32)(dd / 4) & 0x3FFFFFFu);
+            patch32(po, w);
         }
         return;
     }
@@ -1995,9 +2077,14 @@ static int trampoline_bl_main_off;
 static int trampoline_exit_stub_off;
 
 static void emit_trampoline_placeholder(void) {
-    /* Zero X0 before entering main so that programs whose `trap` path
-     * never touches $0 exit with status 0 rather than argc. */
-    emit_mov_imm64(0, 0);
+    /* Darwin arm64 LC_MAIN convention: kernel/dyld invoke the entry point
+     * as a C-style main(argc, argv) — argc in X0, argv in X1.  We must
+     * preserve both so that compositions like `main : argc ↑ $0 ; argv ↑ $1`
+     * can read them.  Previously we zeroed X0 here to force an exit status
+     * of 0 for programs that never call `trap`, but that broke argc for
+     * every program that actually reads arguments.  The fall-through
+     * exit_stub path below zeroes X0 *after* main returns, which handles
+     * the no-trap case without clobbering argc on the way in. */
     trampoline_bl_main_off = cur_off();
     emit_bl(0);                  /* patched later */
     trampoline_exit_stub_off = cur_off();
