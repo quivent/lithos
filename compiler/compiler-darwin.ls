@@ -1783,11 +1783,13 @@ EIATTR_COOP_GROUP_MASK_REGIDS   0x29
 \\ ============================================================================
 
 emit_token type offset length :
-    idx token_count * 3
+    \\ Each token is 12 bytes: type (u32) + offset (u32) + length (u32).
+    \\ Use byte offsets since `← 32 addr val` stores at byte address.
+    idx token_count * 12
     ← 32 tokens + idx type
-    idx1 idx + 1
+    idx1 idx + 4
     ← 32 tokens + idx1 offset
-    idx2 idx + 2
+    idx2 idx + 8
     ← 32 tokens + idx2 length
     token_count token_count + 1
 
@@ -2425,15 +2427,15 @@ var n_comps 0
 \\ ============================================================================
 
 peek_type :
-    idx tok_pos * 3
+    idx tok_pos * 12
     → 32 tokens idx
 
 peek_offset :
-    idx tok_pos * 3 + 1
+    idx tok_pos * 12 + 4
     → 32 tokens idx
 
 peek_length :
-    idx tok_pos * 3 + 2
+    idx tok_pos * 12 + 8
     → 32 tokens idx
 
 consume :
@@ -4254,15 +4256,17 @@ parse_comp_args count :
 parse_file :
     t peek_type
     if== t 0
-        0
+        return 0
 
     if== t 1
         consume
         parse_file
+        return 0
 
     if== t 2
         consume
         parse_file
+        return 0
 
     if== t 35
         consume
@@ -4270,17 +4274,20 @@ parse_file :
         parse_composition
         emit_target 0
         parse_file
+        return 0
 
     if== t 5
         emit_target 0
         parse_composition
         parse_file
+        return 0
 
     if== t 11
         consume
         emit_target 0
         parse_composition
         parse_file
+        return 0
 
     \\ Forth-style: VALUE constant NAME (at file scope)
     if== t 3
@@ -4295,6 +4302,7 @@ parse_file :
             emit_p_mov_imm rd val
             sym_add name_ptr name_len 1 rd
             parse_file
+            return 0
         \\ Not a constant decl, put token back
         tok_pos tok_pos - 1
 
@@ -4303,7 +4311,9 @@ parse_file :
         consume
         parse_constant_decl
         parse_file
+        return 0
 
+    \\ Unknown top-level token — skip and continue
     consume
     parse_file
 
