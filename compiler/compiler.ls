@@ -4528,18 +4528,45 @@ nvi_sval_emit val sym_idx attr fmt :
 
 \\ ============================================================
 \\ elf_build — Build complete 9-section GPU ELF
+\\ Split into sub-compositions to stay within the bootstrap's
+\\ 20-register window. Section metadata passed via globals.
 \\ ============================================================
 
-elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size :
+\\ Globals for section offsets/sizes (shared between sub-compositions)
+var elf_shstrtab_off 0
+var elf_shstrtab_size 0
+var elf_strtab_off 0
+var elf_strtab_size 0
+var elf_symtab_off 0
+var elf_symtab_size 0
+var elf_nvinfo_off 0
+var elf_nvinfo_size 0
+var elf_nvinfo_k_off 0
+var elf_nvinfo_k_size 0
+var elf_text_off 0
+var elf_text_size 0
+var elf_const0_off 0
+var elf_const0_size 0
+var elf_shdrs_off 0
+var elf_sym_kernel_off 0
+var elf_param_bytes 0
 
-    elf_init
-    elf_write_header
+\\ Section name offsets within .shstrtab
+var elf_SN_shstrtab 0
+var elf_SN_strtab 0
+var elf_SN_symtab 0
+var elf_SN_nvinfo 0
+var elf_SN_nvinfo_k 0
+var elf_SN_text 0
+var elf_SN_const0 0
+var elf_SN_shared 0
 
-    \\ .shstrtab (section 1)
-    shstrtab_off cubin_pos
+\\ ---- Sub-composition: emit .shstrtab section names ----
+elf_emit_shstrtab kernel_name kernel_nlen :
+    elf_shstrtab_off cubin_pos
     cb_emit 0
 
-    SN_shstrtab cubin_pos - shstrtab_off
+    elf_SN_shstrtab cubin_pos - elf_shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 104
@@ -4551,7 +4578,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_strtab cubin_pos - shstrtab_off
+    elf_SN_strtab cubin_pos - elf_shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 116
@@ -4561,7 +4588,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_symtab cubin_pos - shstrtab_off
+    elf_SN_symtab cubin_pos - elf_shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 121
@@ -4571,7 +4598,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_nvinfo cubin_pos - shstrtab_off
+    elf_SN_nvinfo cubin_pos - elf_shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4582,7 +4609,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 111
     cb_emit 0
 
-    SN_nvinfo_k cubin_pos - shstrtab_off
+    elf_SN_nvinfo_k cubin_pos - elf_shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4595,7 +4622,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_text cubin_pos - shstrtab_off
+    elf_SN_text cubin_pos - elf_shstrtab_off
     cb_emit 46
     cb_emit 116
     cb_emit 101
@@ -4605,7 +4632,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_const0 cubin_pos - shstrtab_off
+    elf_SN_const0 cubin_pos - elf_shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4623,7 +4650,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_shared cubin_pos - shstrtab_off
+    elf_SN_shared cubin_pos - elf_shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4648,41 +4675,43 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 0
 
     calign 4
-    shstrtab_size cubin_pos - shstrtab_off
+    elf_shstrtab_size cubin_pos - elf_shstrtab_off
 
-    \\ .strtab (section 2)
-    strtab_off cubin_pos
+\\ ---- Sub-composition: emit .strtab + .symtab ----
+elf_emit_strtab_symtab kernel_name kernel_nlen :
+    elf_strtab_off cubin_pos
     cb_emit 0
     cb_emit 0
-    strsym_kernel cubin_pos - strtab_off
+    strsym_kernel cubin_pos - elf_strtab_off
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
-    strtab_size cubin_pos - strtab_off
+    elf_strtab_size cubin_pos - elf_strtab_off
 
-    \\ .symtab (section 3)
     calign 8
-    symtab_off cubin_pos
+    elf_symtab_off cubin_pos
     sym64_emit 0 0 0 0 0 0
     sym64_emit 0 3 0 5 0 0
     sym64_emit 0 3 0 8 0 0
-    sym_kernel_off cubin_pos
+    elf_sym_kernel_off cubin_pos
     sym64_emit strsym_kernel 18 16 5 0 0
-    symtab_size cubin_pos - symtab_off
+    elf_symtab_size cubin_pos - elf_symtab_off
 
-    \\ .nv.info (section 4)
+\\ ---- Sub-composition: emit .nv.info (global attrs) ----
+elf_emit_nvinfo reg_count :
     calign 4
-    nvinfo_off cubin_pos
+    elf_nvinfo_off cubin_pos
     reg_val reg_count + 1
     if< reg_val 8
         reg_val 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
     nvi_sval_emit 0 3 EIATTR_FRAME_SIZE NVI_FMT_U32
     nvi_sval_emit 0 3 EIATTR_MIN_STACK_SIZE NVI_FMT_U32
-    nvinfo_size cubin_pos - nvinfo_off
+    elf_nvinfo_size cubin_pos - elf_nvinfo_off
 
-    \\ .nv.info.<kernel> (section 6)
+\\ ---- Sub-composition: emit .nv.info.<kernel> (per-kernel attrs) ----
+elf_emit_nvinfo_k n_kparams smem_size code_size :
     calign 4
-    nvinfo_k_off cubin_pos
+    elf_nvinfo_k_off cubin_pos
     nvi_u32_emit 128 EIATTR_CUDA_API_VERSION NVI_FMT_U32
 
     for pi 0 n_kparams 1
@@ -4736,16 +4765,16 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
         cw_emit 4
         cd_emit code_size - 16
 
-    param_bytes n_kparams * 8
+    elf_param_bytes n_kparams * 8
     cb_emit 3
     cb_emit EIATTR_CBANK_PARAM_SIZE
-    cw_emit param_bytes
+    cw_emit elf_param_bytes
 
     cb_emit 4
     cb_emit EIATTR_PARAM_CBANK
     cw_emit 8
     cd_emit 2
-    cbank_val (param_bytes << 16) | 528
+    cbank_val (elf_param_bytes << 16) | 528
     cd_emit cbank_val
 
     cb_emit 4
@@ -4759,11 +4788,12 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
         cw_emit 4
         cd_emit smem_size
 
-    nvinfo_k_size cubin_pos - nvinfo_k_off
+    elf_nvinfo_k_size cubin_pos - elf_nvinfo_k_off
 
-    \\ .text.<kernel> (section 5)
+\\ ---- Sub-composition: emit .text + .nv.constant0 ----
+elf_emit_text_const0 code_buf code_size :
     calign 128
-    text_off cubin_pos
+    elf_text_off cubin_pos
 
     if== code_size 0
         for zb 0 48 1
@@ -4775,48 +4805,58 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
             cb_emit byte
         endfor
 
-    text_size cubin_pos - text_off
-    elf_put_u64 text_size (sym_kernel_off + 16)
+    elf_text_size cubin_pos - elf_text_off
+    elf_put_u64 elf_text_size (elf_sym_kernel_off + 16)
 
-    \\ .nv.constant0.<kernel>
     calign 4
-    const0_off cubin_pos
-    const0_total 528 + param_bytes
+    elf_const0_off cubin_pos
+    const0_total 528 + elf_param_bytes
     for c0i 0 const0_total 1
         cb_emit 0
     endfor
-    const0_size cubin_pos - const0_off
+    elf_const0_size cubin_pos - elf_const0_off
 
-    \\ Section headers (9 x 64)
+\\ ---- Sub-composition: emit section headers + patch ELF header ----
+elf_emit_shdrs smem_size :
     calign 64
-    shdrs_off cubin_pos
+    elf_shdrs_off cubin_pos
 
     shdr64_a 0 0 0 0 0
     shdr64_b 0 0 0 0 0
-    shdr64_a SN_shstrtab SHT_STRTAB 0 0 shstrtab_off
-    shdr64_b shstrtab_size 0 0 1 0
-    shdr64_a SN_strtab SHT_STRTAB 0 0 strtab_off
-    shdr64_b strtab_size 0 0 1 0
-    shdr64_a SN_symtab SHT_SYMTAB 0 0 symtab_off
-    shdr64_b symtab_size 2 3 8 24
-    shdr64_a SN_nvinfo SHT_LOPROC 0 0 nvinfo_off
-    shdr64_b nvinfo_size 3 0 4 0
-    shdr64_a SN_text SHT_PROGBITS 6 0 text_off
-    shdr64_b text_size 3 3 128 0
-    shdr64_a SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off
-    shdr64_b nvinfo_k_size 3 5 4 0
-    shdr64_a SN_shared SHT_NOBITS 3 0 const0_off
+    shdr64_a elf_SN_shstrtab SHT_STRTAB 0 0 elf_shstrtab_off
+    shdr64_b elf_shstrtab_size 0 0 1 0
+    shdr64_a elf_SN_strtab SHT_STRTAB 0 0 elf_strtab_off
+    shdr64_b elf_strtab_size 0 0 1 0
+    shdr64_a elf_SN_symtab SHT_SYMTAB 0 0 elf_symtab_off
+    shdr64_b elf_symtab_size 2 3 8 24
+    shdr64_a elf_SN_nvinfo SHT_LOPROC 0 0 elf_nvinfo_off
+    shdr64_b elf_nvinfo_size 3 0 4 0
+    shdr64_a elf_SN_text SHT_PROGBITS 6 0 elf_text_off
+    shdr64_b elf_text_size 3 3 128 0
+    shdr64_a elf_SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 elf_nvinfo_k_off
+    shdr64_b elf_nvinfo_k_size 3 5 4 0
+    shdr64_a elf_SN_shared SHT_NOBITS 3 0 elf_const0_off
     shdr64_b smem_size 0 0 16 0
-    shdr64_a SN_const0 SHT_PROGBITS 66 0 const0_off
-    shdr64_b const0_size 0 5 4 0
+    shdr64_a elf_SN_const0 SHT_PROGBITS 66 0 elf_const0_off
+    shdr64_b elf_const0_size 0 5 4 0
 
-    \\ Patch ELF header
     elf_put_u64 0 32
-    elf_put_u64 shdrs_off 40
+    elf_put_u64 elf_shdrs_off 40
     elf_put_u16 0 54
     elf_put_u16 0 56
     elf_put_u16 9 60
     elf_put_u16 1 62
+
+\\ ---- Orchestrator: calls sub-compositions in order ----
+elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size :
+    elf_init
+    elf_write_header
+    elf_emit_shstrtab kernel_name kernel_nlen
+    elf_emit_strtab_symtab kernel_name kernel_nlen
+    elf_emit_nvinfo reg_count
+    elf_emit_nvinfo_k n_kparams smem_size code_size
+    elf_emit_text_const0 code_buf code_size
+    elf_emit_shdrs smem_size
 
 \\ ============================================================
 \\ elf_save — Write cubin_buf to file
