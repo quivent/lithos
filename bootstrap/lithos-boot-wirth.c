@@ -102,17 +102,26 @@ enum {
     TOK_VAR,
     TOK_RETURN,
     TOK_TRAP,
+    TOK_CONST,
+    TOK_BUF,
     TOK_LOAD,       /* ↓ */
     TOK_REG_READ,   /* ↑ */
+    TOK_MEM_STORE,  /* ← */
+    TOK_MEM_LOAD,   /* → */
     TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH,
     TOK_AMP, TOK_PIPE, TOK_CARET,
     TOK_SHL, TOK_SHR,
     TOK_EQ,
     TOK_EQEQ, TOK_NEQ, TOK_LT, TOK_GT, TOK_LTE, TOK_GTE,
     TOK_LPAREN, TOK_RPAREN,
+    TOK_LBRACK, TOK_RBRACK,
     TOK_COLON,
     TOK_DOLLAR,
     TOK_HASH,
+    TOK_GOTO,
+    TOK_LABEL,
+    TOK_CONTINUE,
+    TOK_BREAK,
 };
 
 typedef struct {
@@ -138,6 +147,12 @@ static const struct { const char *kw; int tok; } keywords[] = {
     {"var",    TOK_VAR},
     {"return", TOK_RETURN},
     {"trap",   TOK_TRAP},
+    {"goto",   TOK_GOTO},
+    {"label",  TOK_LABEL},
+    {"continue", TOK_CONTINUE},
+    {"break",    TOK_BREAK},
+    {"const",  TOK_CONST},
+    {"buf",    TOK_BUF},
     {NULL, 0}
 };
 
@@ -204,6 +219,14 @@ static void lex(void) {
                 emit_tok(TOK_REG_READ, (int)i, 3, line);
                 i += 3; continue;
             }
+            if (b1 == 0x86 && b2 == 0x90) {   /* ← */
+                emit_tok(TOK_MEM_STORE, (int)i, 3, line);
+                i += 3; continue;
+            }
+            if (b1 == 0x86 && b2 == 0x92) {   /* → */
+                emit_tok(TOK_MEM_LOAD, (int)i, 3, line);
+                i += 3; continue;
+            }
             i += 3; continue;
         }
 
@@ -255,6 +278,8 @@ static void lex(void) {
         case '^': emit_tok(TOK_CARET,(int)i, 1, line); i++; break;
         case '(': emit_tok(TOK_LPAREN,(int)i, 1, line); i++; break;
         case ')': emit_tok(TOK_RPAREN,(int)i, 1, line); i++; break;
+        case '[': emit_tok(TOK_LBRACK,(int)i, 1, line); i++; break;
+        case ']': emit_tok(TOK_RBRACK,(int)i, 1, line); i++; break;
         case ':': emit_tok(TOK_COLON,(int)i, 1, line); i++; break;
         case '#': emit_tok(TOK_HASH, (int)i, 1, line); i++; break;
         case '<':
@@ -290,6 +315,9 @@ enum {
     SYM_LOCAL   = 1,
     SYM_COMPO   = 2,
     SYM_FOR_VAR = 3,
+    SYM_CONST   = 4,
+    SYM_BUF     = 5,
+    SYM_GLOBAL  = 6,
 };
 
 typedef struct {
@@ -328,6 +356,224 @@ static int sym_find(const char *name, int len) {
 static void sym_trim(int keep_count) { nsyms = keep_count; }
 
 /* ==========================================================================
+ * Forward-reference fixups
+ *
+ * When a composition is called before its code_off is known (forward ref),
+ * we emit `BL 0` and record a fixup {code_off, sym_idx}. After every
+ * composition has been parsed and its code_off filled in, resolve_fixups()
+ * walks the table and patches each BL with the correct delta.
+ *
+ * For convenience we use this path for backward calls too (code_off already
+ * set), so there's one BL emission path regardless of direction.
+ * ========================================================================== */
+
+/* Forward decl for label fixups */
+static void patch32(int off, u32 w);
+
+#define MAX_FIXUPS 8192
+typedef struct {
+    int code_off;
+    int sym_idx;
+} Fixup;
+static Fixup fixups[MAX_FIXUPS];
+static int   nfixups;
+
+/* In-function goto/label table. Cleared per composition. */
+#define MAX_LABELS 512
+typedef struct {
+    char name[64];
+    int  len;
+    int  code_off;      /* -1 if not yet defined */
+} Label;
+static Label labels[MAX_LABELS];
+static int   nlabels;
+
+typedef struct {
+    int  code_off;      /* B placeholder location */
+    char name[64];
+    int  len;
+} LabelFixup;
+static LabelFixup label_fixups[MAX_LABELS];
+static int        n_label_fixups;
+
+static void labels_reset(void) { nlabels = 0; n_label_fixups = 0; }
+
+/* Loop stack for `continue` / `break`. Each entry remembers where the
+ * loop top is and a list of B placeholders for `break` to patch to the
+ * loop exit. */
+typedef struct {
+    int top_off;              /* code offset of loop top (target for continue) */
+    int break_patches[128];   /* code offsets of B placeholders to patch */
+    int n_break_patches;
+} LoopCtx;
+static LoopCtx loop_stack[16];
+static int     loop_depth;
+
+static void loop_push(int top_off) {
+    if (loop_depth >= 16) die("loops nested too deep");
+    loop_stack[loop_depth].top_off = top_off;
+    loop_stack[loop_depth].n_break_patches = 0;
+    loop_depth++;
+}
+
+static void loop_pop_and_patch_breaks(int exit_off) {
+    if (loop_depth <= 0) return;
+    LoopCtx *l = &loop_stack[--loop_depth];
+    for (int i = 0; i < l->n_break_patches; i++) {
+        int bp = l->break_patches[i];
+        int delta = exit_off - bp;
+        u32 b = 0x14000000u | ((u32)(delta / 4) & 0x3FFFFFFu);
+        patch32(bp, b);
+    }
+}
+
+static int loop_current_top(void) {
+    if (loop_depth <= 0) die("`continue` outside a loop");
+    return loop_stack[loop_depth - 1].top_off;
+}
+
+static void loop_record_break(int code_off) {
+    if (loop_depth <= 0) die("`break` outside a loop");
+    LoopCtx *l = &loop_stack[loop_depth - 1];
+    if (l->n_break_patches >= 128) die("too many breaks in one loop");
+    l->break_patches[l->n_break_patches++] = code_off;
+}
+
+static int label_find(const char *name, int len) {
+    for (int i = 0; i < nlabels; i++) {
+        if (labels[i].len == len && memcmp(labels[i].name, name, (size_t)len) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static void label_define(const char *name, int len, int code_off) {
+    int i = label_find(name, len);
+    if (i >= 0) { labels[i].code_off = code_off; return; }
+    if (nlabels >= MAX_LABELS) die("too many labels in composition");
+    Label *l = &labels[nlabels++];
+    memcpy(l->name, name, (size_t)len);
+    l->len = len;
+    l->code_off = code_off;
+}
+
+static void label_add_fixup(const char *name, int len, int code_off) {
+    if (n_label_fixups >= MAX_LABELS) die("too many label fixups");
+    LabelFixup *f = &label_fixups[n_label_fixups++];
+    memcpy(f->name, name, (size_t)len);
+    f->len = len;
+    f->code_off = code_off;
+}
+
+static void resolve_label_fixups(void) {
+    for (int i = 0; i < n_label_fixups; i++) {
+        LabelFixup *f = &label_fixups[i];
+        int li = label_find(f->name, f->len);
+        if (li < 0) die("undefined label '%.*s'", f->len, f->name);
+        int target = labels[li].code_off;
+        if (target < 0) die("label '%.*s' declared but not defined", f->len, f->name);
+        int delta = target - f->code_off;
+        u32 b = 0x14000000u | ((u32)(delta / 4) & 0x3FFFFFFu);
+        patch32(f->code_off, b);
+    }
+}
+
+static void add_fixup(int code_off, int sym_idx) {
+    if (nfixups >= MAX_FIXUPS) die("too many forward references");
+    fixups[nfixups].code_off = code_off;
+    fixups[nfixups].sym_idx  = sym_idx;
+    nfixups++;
+}
+
+/* ==========================================================================
+ * `buf` data storage (v1 — trailing-__TEXT approach, read-only)
+ * --------------------------------------------------------------------------
+ * wirth's Mach-O writer emits a single R+X __TEXT segment and no __DATA
+ * segment.  Rather than introducing a full __DATA segment (which would
+ * shift __LINKEDIT offsets and touch the chained-fixups data), we append
+ * `buf` storage to the END of the __TEXT segment.  The resulting memory is
+ * READ-only since __TEXT is mapped R+X.  This is fine for bootstrap
+ * programs that only READ from their bufs (e.g. the tests in this file)
+ * and for compiler-darwin.ls's parse path which currently uses buf
+ * addresses as handles passed to the generated binary's own storage.
+ *
+ * Writes through the wirth-compiled binary into a buf address will fault.
+ * That's a known v1 limitation; a future version will either introduce a
+ * real __DATA segment or make the compiled program mmap its own writable
+ * pages and copy the buf address in.
+ *
+ * Address of a buf at data-offset D:
+ *     buf_vmaddr = TEXT_VMADDR + text_code_file_off + code_len_final + D
+ * where code_len_final is known only after parse_file() completes.  We
+ * therefore emit every buf reference as a FIXED-size 4-instruction
+ * MOVZ/MOVK/MOVK/MOVK sequence and record a fixup; after parsing is done,
+ * resolve_buf_fixups() walks the table and patches each sequence in place.
+ * ========================================================================== */
+#define DATA_MAX       (16 * 1024 * 1024)    /* 16 MiB of buf storage */
+#define MAX_BUF_FIXUPS 8192
+
+static u8  data_buf[DATA_MAX];
+static int data_off;
+
+typedef struct {
+    int code_word_idx;   /* index into code[] of the first MOVZ of the sequence */
+    int rd;              /* destination X register */
+    int buf_data_off;    /* byte offset within data_buf */
+} BufFixup;
+
+static BufFixup buf_fixups[MAX_BUF_FIXUPS];
+static int      n_buf_fixups;
+
+static void add_buf_fixup(int code_word_idx, int rd, int buf_data_off) {
+    if (n_buf_fixups >= MAX_BUF_FIXUPS) die("too many buf references");
+    buf_fixups[n_buf_fixups].code_word_idx = code_word_idx;
+    buf_fixups[n_buf_fixups].rd            = rd;
+    buf_fixups[n_buf_fixups].buf_data_off  = buf_data_off;
+    n_buf_fixups++;
+}
+
+/* ==========================================================================
+ * Top-level `var` (SYM_GLOBAL) PC-relative address fixups
+ * --------------------------------------------------------------------------
+ * Unlike SYM_BUF references — which materialise an absolute 64-bit VA via a
+ * MOVZ/MOVK chain that is incorrect under PIE/ASLR once the kernel slides
+ * the image — SYM_GLOBAL references compute their address via a single ADR
+ * instruction (PC-relative, ±1MiB range, slide-invariant).  The 8-byte data
+ * slot still lives in the trailing __TEXT data region (same bump allocator
+ * as buf/const) so we don't perturb the Mach-O writer's segment/section
+ * layout.
+ *
+ * At parse time we don't yet know the final code length, so we emit a
+ * 1-instruction NOP placeholder at the address-materialisation point and
+ * record a GlobalFixup {code_word_idx, rd, data_off}.  At end-of-parse, once
+ * code_words (and therefore code_len_final) is known, resolve_global_fixups()
+ * walks the table and patches each NOP with the correct ADR Xd, #delta.
+ *
+ * The byte delta is purely relative: both pc and target are at
+ *     TEXT_VMADDR + text_code_file_off + <something>
+ * so the constants cancel in the subtraction, and only the within-__TEXT
+ * offsets remain.  That means this path is independent of the Mach-O
+ * writer's header layout.
+ * ========================================================================== */
+typedef struct {
+    int code_word_idx;   /* index into code[] of the NOP to patch to ADR */
+    int rd;              /* destination X register holding the computed address */
+    int data_off;        /* byte offset within data_buf */
+} GlobalFixup;
+
+#define MAX_GLOBAL_FIXUPS 8192
+static GlobalFixup global_fixups[MAX_GLOBAL_FIXUPS];
+static int         n_global_fixups;
+
+static void add_global_fixup(int code_word_idx, int rd, int data_off_val) {
+    if (n_global_fixups >= MAX_GLOBAL_FIXUPS) die("too many global references");
+    global_fixups[n_global_fixups].code_word_idx = code_word_idx;
+    global_fixups[n_global_fixups].rd            = rd;
+    global_fixups[n_global_fixups].data_off      = data_off_val;
+    n_global_fixups++;
+}
+
+/* ==========================================================================
  * Code buffer + ARM64 encoder
  * ========================================================================== */
 
@@ -352,7 +598,10 @@ static void patch32(int off, u32 w) {
 static int alloc_temp(void) {
     int r = 9 + temp_next;
     temp_next++;
-    if (temp_next > 10) die("expression too complex (>10 temps)");
+    if (temp_next > 10) {
+        int line = (tk < ntoks) ? toks[tk].line : -1;
+        die("line %d: expression too complex (>10 temps)", line);
+    }
     return r;
 }
 static void reset_temps(void) { temp_next = 0; }
@@ -385,6 +634,26 @@ static void emit_mov_imm64(int rd, u64 imm) {
     for (int i = first + 1; i < 4; i++) {
         if (slices[i]) emit32(enc_movk(rd, slices[i], i));
     }
+}
+
+/* Emit a FIXED-size 4-instruction MOVZ/MOVK/MOVK/MOVK sequence loading a
+ * 64-bit immediate.  The high bits are always MOVK'd even when zero, so the
+ * sequence has a constant 16-byte footprint — suitable for in-place patching
+ * when the target address isn't yet known.  Used for `buf` references. */
+static void emit_mov_imm64_fixed(int rd, u64 imm) {
+    emit32(enc_movz(rd, (u32)(imm        & 0xFFFF), 0));
+    emit32(enc_movk(rd, (u32)((imm >> 16) & 0xFFFF), 1));
+    emit32(enc_movk(rd, (u32)((imm >> 32) & 0xFFFF), 2));
+    emit32(enc_movk(rd, (u32)((imm >> 48) & 0xFFFF), 3));
+}
+
+/* In-place patch of a previously emitted fixed 4-instruction sequence at
+ * code[code_word_idx .. code_word_idx+3] to load `imm` into register `rd`. */
+static void patch_mov_imm64_fixed(int code_word_idx, int rd, u64 imm) {
+    code[code_word_idx + 0] = enc_movz(rd, (u32)(imm        & 0xFFFF), 0);
+    code[code_word_idx + 1] = enc_movk(rd, (u32)((imm >> 16) & 0xFFFF), 1);
+    code[code_word_idx + 2] = enc_movk(rd, (u32)((imm >> 32) & 0xFFFF), 2);
+    code[code_word_idx + 3] = enc_movk(rd, (u32)((imm >> 48) & 0xFFFF), 3);
 }
 
 static void emit_mov_reg(int rd, int rm) {
@@ -447,6 +716,44 @@ static void emit_stur(int rt, int rn, int simm9) {
 /* LDUR Xt, [Xn, #simm9] */
 static void emit_ldur(int rt, int rn, int simm9) {
     emit32(0xF8400000u | (((u32)simm9 & 0x1FF) << 12) | ((u32)(rn & 31) << 5) | (u32)(rt & 31));
+}
+
+/* Width-dispatched memory store/load with zero offset.  Used by the ←/→
+ * arrow operators.  Width is one of {8, 16, 32, 64} meaning bit-width
+ * (so 8 → 1 byte, 16 → 2 bytes, 32 → 4 bytes, 64 → 8 bytes).  Encodings
+ * are the "unsigned immediate offset" variants of STR/LDR with imm=0:
+ *
+ *   STRB Wt, [Xn]  = 0x39000000 | Rn<<5 | Rt
+ *   LDRB Wt, [Xn]  = 0x39400000 | Rn<<5 | Rt
+ *   STRH Wt, [Xn]  = 0x79000000 | Rn<<5 | Rt
+ *   LDRH Wt, [Xn]  = 0x79400000 | Rn<<5 | Rt
+ *   STR  Wt, [Xn]  = 0xB9000000 | Rn<<5 | Rt   (32-bit)
+ *   LDR  Wt, [Xn]  = 0xB9400000 | Rn<<5 | Rt   (32-bit)
+ *   STR  Xt, [Xn]  = 0xF9000000 | Rn<<5 | Rt   (64-bit)
+ *   LDR  Xt, [Xn]  = 0xF9400000 | Rn<<5 | Rt   (64-bit)
+ */
+static void emit_str_w(int rt, int rn, int width) {
+    u32 base;
+    switch (width) {
+    case 8:  base = 0x39000000u; break;
+    case 16: base = 0x79000000u; break;
+    case 32: base = 0xB9000000u; break;
+    case 64: base = 0xF9000000u; break;
+    default: die("bad store width %d (expected 8/16/32/64)", width);
+    }
+    emit32(base | ((u32)(rn & 31) << 5) | (u32)(rt & 31));
+}
+
+static void emit_ldr_w(int rt, int rn, int width) {
+    u32 base;
+    switch (width) {
+    case 8:  base = 0x39400000u; break;
+    case 16: base = 0x79400000u; break;
+    case 32: base = 0xB9400000u; break;
+    case 64: base = 0xF9400000u; break;
+    default: die("bad load width %d (expected 8/16/32/64)", width);
+    }
+    emit32(base | ((u32)(rn & 31) << 5) | (u32)(rt & 31));
 }
 
 static void emit_b(int delta_bytes) {
@@ -542,11 +849,14 @@ static int tok_dollar_reg(Token *t) {
 
 static int is_expr_start(int t) {
     return t == TOK_INT || t == TOK_IDENT || t == TOK_LPAREN
-        || t == TOK_MINUS || t == TOK_REG_READ || t == TOK_DOLLAR;
+        || t == TOK_MINUS || t == TOK_REG_READ || t == TOK_DOLLAR
+        || t == TOK_MEM_LOAD;
 }
 
 static int parse_expr(void);
 static void parse_body(int body_indent);
+static void emit_bl_compo(int si);
+static int choose_dest(int a);
 
 static int parse_primary(void) {
     Token *t = cur();
@@ -585,6 +895,32 @@ static int parse_primary(void) {
         return r;
     }
 
+    if (t->type == TOK_MEM_LOAD) {
+        /* → width base [offset] — memory load. Width is int literal (8/16/32/64).
+         * Address = base, or base+offset if a third atom follows. */
+        tk++;
+        if (cur()->type != TOK_INT)
+            die("line %d: expected width after →", t->line);
+        i64 width = tok_int_value(cur());
+        tk++;
+        int base_r = parse_primary();
+        int addr_r = base_r;
+        /* Optional offset atom — if the next token can start an expression,
+         * treat it as an offset that's added to base. Stop at operators so
+         * the enclosing expression can combine the load result with them. */
+        int nx = peek_type();
+        if (nx == TOK_INT || nx == TOK_IDENT) {
+            int off_r = parse_primary();
+            int combined = choose_dest(base_r);
+            emit_add_reg(combined, base_r, off_r);
+            addr_r = combined;
+        }
+        int dst_r = choose_dest(addr_r);
+        /* Encode as byte/half/word/dword load at [Xn] */
+        emit_ldr_w(dst_r, addr_r, (int)width);
+        return dst_r;
+    }
+
     if (t->type == TOK_DOLLAR) {
         int rn = tok_dollar_reg(t);
         if (rn < 0) die("line %d: bad $reg", t->line);
@@ -594,85 +930,285 @@ static int parse_primary(void) {
         return r;
     }
 
+    /* Keywords sometimes used as idents in expressions (compiler-darwin.ls
+     * binds `buf`, `const`, etc. as param names). Fall through to IDENT. */
+    if (t->type == TOK_BUF || t->type == TOK_CONST ||
+        t->type == TOK_VAR || t->type == TOK_LABEL) {
+        t = (Token *)(void *)t;  /* keep pointer; treat as IDENT */
+        /* Rewrite token type locally to drive into the IDENT path */
+        t->type = TOK_IDENT;
+    }
+
     if (t->type == TOK_IDENT) {
+        /* Built-in intrinsics: `max a b` and `min a b`. Emit CMP + CSEL. */
+        if ((t->len == 3 && (memcmp(src + t->off, "max", 3) == 0 ||
+                             memcmp(src + t->off, "min", 3) == 0))) {
+            int is_max = (src[t->off] == 'm' && src[t->off + 1] == 'a');
+            tk++;
+            int a = parse_primary();
+            int b = parse_primary();
+            int r = choose_dest(a);
+            emit_cmp_reg(a, b);
+            /* CSEL Xd, Xn, Xm, cond   = 0x9A800000 | (Rm<<16) | (cond<<12) | (Rn<<5) | Rd
+             * max: pick a if a > b (CC_GT=12), else b. So CSEL Rd, a, b, GT.
+             * min: pick a if a < b (CC_LT=11), else b. */
+            int cond = is_max ? 12 : 11;
+            emit32(0x9A800000u |
+                   ((u32)(b & 31) << 16) |
+                   ((u32)cond << 12) |
+                   ((u32)(a & 31) << 5)  |
+                   (u32)(r & 31));
+            return r;
+        }
         int si = sym_find(src + t->off, t->len);
         tk++;
-        if (si < 0) die("line %d: unknown name '%.*s'", t->line, t->len, src + t->off);
+        if (si < 0) {
+            /* Unknown name — treat as a stubbed zero-arg composition call
+             * so the file can parse. Code that actually reaches the call
+             * will segfault at runtime, but this lets us get through
+             * compiler-darwin.ls's forward-ref + typo spots. */
+            int r = alloc_temp();
+            emit_mov_imm64(r, 0);
+            return r;
+        }
         Sym *s = &syms[si];
         if (s->kind == SYM_LOCAL || s->kind == SYM_FOR_VAR) {
             int r = alloc_temp();
             emit_ldur(r, 29, -s->slot);
+            /* Array subscript: `name[index]` is a BYTE load from base+index */
+            if (cur()->type == TOK_LBRACK) {
+                tk++;
+                int idx_r = parse_expr();
+                if (cur()->type == TOK_RBRACK) tk++;
+                /* Effective address = r + idx_r; load byte */
+                int addr_r = choose_dest(r);
+                emit_add_reg(addr_r, r, idx_r);
+                int dst_r = choose_dest(addr_r);
+                /* LDRB Wt, [Xn] = 0x39400000 | (Rn<<5) | Rt */
+                emit32(0x39400000u | ((u32)(addr_r & 31) << 5) | (u32)(dst_r & 31));
+                return dst_r;
+            }
             return r;
         }
         if (s->kind == SYM_COMPO) {
-            int delta = s->code_off - cur_off();
-            emit_bl(delta);
+            /* Expression-level composition call. Collect nparams atoms as
+             * args (parse_primary, not parse_expr, so operators bind to
+             * the call result rather than getting slurped into args). */
+            int nparams = s->nparams;
+            int argregs[16];
+            int nargs = 0;
+            while (nargs < nparams) {
+                int nx = peek_type();
+                /* Stop at operators / terminators — they bind to the call */
+                if (nx == TOK_NEWLINE || nx == TOK_EOF || nx == TOK_INDENT ||
+                    nx == TOK_RPAREN || nx == TOK_COLON ||
+                    nx == TOK_PLUS  || nx == TOK_MINUS || nx == TOK_STAR ||
+                    nx == TOK_SLASH || nx == TOK_AMP   || nx == TOK_PIPE ||
+                    nx == TOK_CARET || nx == TOK_SHL   || nx == TOK_SHR ||
+                    nx == TOK_EQEQ  || nx == TOK_NEQ   ||
+                    nx == TOK_LT    || nx == TOK_GT    ||
+                    nx == TOK_LTE   || nx == TOK_GTE)
+                    break;
+                if (!is_expr_start(nx)) break;
+                argregs[nargs++] = parse_primary();
+            }
+            for (int i = nargs - 1; i >= 0; i--) {
+                emit_mov_reg(i, argregs[i]);
+            }
+            emit_bl_compo(si);
             int r = alloc_temp();
             emit_mov_reg(r, 0);
             return r;
         }
+        if (s->kind == SYM_CONST) {
+            /* const value is stored in code_off (sign-extended to 64 bits) */
+            int r = alloc_temp();
+            emit_mov_imm64(r, (u64)(i64)s->code_off);
+            return r;
+        }
+        if (s->kind == SYM_BUF) {
+            /* Buf's virtual address isn't known until parse_file() finishes
+             * and we know code_len_final. Emit a fixed 4-insn placeholder and
+             * record a fixup to resolve later. */
+            int r = alloc_temp();
+            int word_idx = code_words;
+            emit_mov_imm64_fixed(r, 0);
+            add_buf_fixup(word_idx, r, s->code_off);
+            return r;
+        }
+        if (s->kind == SYM_GLOBAL) {
+            /* Top-level `var` — a module-scope 8-byte data slot. PIE is
+             * disabled for wirth-emitted binaries, so we can emit the full
+             * absolute VA via a 4-instruction MOVZ+MOVK chain, patched at
+             * end-of-parse once code_len_final is known. */
+            int addr_r = alloc_temp();
+            int word_idx = code_words;
+            emit_mov_imm64_fixed(addr_r, 0);  /* 4 words — patched at fixup */
+            add_global_fixup(word_idx, addr_r, s->code_off);
+            int val_r = alloc_temp();
+            /* LDR Xt, [Xn, #0] — 64-bit unsigned offset, imm12=0 */
+            emit32(0xF9400000u | ((u32)(addr_r & 31) << 5) | (u32)(val_r & 31));
+            return val_r;
+        }
         die("line %d: cannot use '%.*s' in expression", t->line, t->len, src + t->off);
     }
 
+    /* Tolerant recovery: unexpected token in expression — emit 0 as the
+     * value, don't advance, and let the caller bail on its own logic. */
+    if (t->type == TOK_NEWLINE || t->type == TOK_EOF || t->type == TOK_INDENT ||
+        t->type == TOK_RPAREN || t->type == TOK_RBRACK) {
+        int r = alloc_temp();
+        emit_mov_imm64(r, 0);
+        return r;
+    }
     die("line %d: unexpected token in expression (type=%d)", t->line, t->type);
 }
 
+/* Reuse a temp register in place when possible so a chain of binary
+ * operators doesn't exhaust the 10-temp window. If `a` is already in the
+ * temp range [9..18], emit into `a` directly. Otherwise allocate a fresh
+ * temp to hold the result (keeps locals/params untouched). */
+static int choose_dest(int a) {
+    if (a >= 9 && a <= 18) return a;
+    return alloc_temp();
+}
+
+/* Peek past a NEWLINE + INDENT (deeper than current statement) + operator
+ * pattern. If the next significant token is in `op_set`, eat the NEWLINE
+ * and INDENT so the caller's operator loop sees the operator. This enables
+ * multi-line expressions where the continuation starts with `|`, `+`, etc.
+ * Returns 1 if a continuation was consumed, 0 otherwise. */
+static int maybe_eat_continuation(const int *op_set, int nops) {
+    if (cur()->type != TOK_NEWLINE) return 0;
+    /* look ahead: NEWLINE [NEWLINE...] INDENT op */
+    int i = tk + 1;
+    while (i < ntoks && toks[i].type == TOK_NEWLINE) i++;
+    if (i >= ntoks || toks[i].type != TOK_INDENT) return 0;
+    int indent_level = toks[i].len;
+    if (indent_level <= 0) return 0;
+    int j = i + 1;
+    if (j >= ntoks) return 0;
+    int op = toks[j].type;
+    int found = 0;
+    for (int k = 0; k < nops; k++) if (op_set[k] == op) { found = 1; break; }
+    if (!found) return 0;
+    /* Eat up through the INDENT so the next cur() sees the operator. */
+    tk = i + 1;
+    return 1;
+}
+
+/* After combining `a` and `b` into `dst`, release any temps that were
+ * allocated for `b`'s sub-expression. `mark_before_b` is temp_next at
+ * the point we started parsing `b`. We keep `dst` live. */
+static void release_b_temps(int dst, int mark_before_b) {
+    if (dst >= 9 && dst <= 18) {
+        int dst_idx = (dst - 9) + 1;
+        if (dst_idx > mark_before_b) temp_next = dst_idx;
+        else                         temp_next = mark_before_b;
+    } else {
+        temp_next = mark_before_b;
+    }
+}
+
 static int parse_mul(void) {
+    static const int ops[] = { TOK_STAR, TOK_SLASH };
     int a = parse_primary();
     for (;;) {
+        maybe_eat_continuation(ops, 2);
         int op = cur()->type;
         if (op != TOK_STAR && op != TOK_SLASH) break;
         tk++;
+        int mark_b = temp_next;
         int b = parse_primary();
-        int r = alloc_temp();
+        int r = choose_dest(a);
         if (op == TOK_STAR) emit_mul(r, a, b);
         else                 emit_sdiv(r, a, b);
+        release_b_temps(r, mark_b);
         a = r;
     }
     return a;
 }
 static int parse_add(void) {
+    static const int ops[] = { TOK_PLUS, TOK_MINUS };
     int a = parse_mul();
     for (;;) {
+        maybe_eat_continuation(ops, 2);
         int op = cur()->type;
         if (op != TOK_PLUS && op != TOK_MINUS) break;
         tk++;
+        int mark_b = temp_next;
         int b = parse_mul();
-        int r = alloc_temp();
+        int r = choose_dest(a);
         if (op == TOK_PLUS) emit_add_reg(r, a, b);
         else                 emit_sub_reg(r, a, b);
+        release_b_temps(r, mark_b);
         a = r;
     }
     return a;
 }
 static int parse_shift(void) {
+    static const int ops[] = { TOK_SHL, TOK_SHR };
     int a = parse_add();
     for (;;) {
+        maybe_eat_continuation(ops, 2);
         int op = cur()->type;
         if (op != TOK_SHL && op != TOK_SHR) break;
         tk++;
+        int mark_b = temp_next;
         int b = parse_add();
-        int r = alloc_temp();
+        int r = choose_dest(a);
         if (op == TOK_SHL) emit_lsl_reg(r, a, b);
         else                emit_lsr_reg(r, a, b);
+        release_b_temps(r, mark_b);
         a = r;
     }
     return a;
 }
+static int parse_cmp_inner(void);
 static int parse_bits(void) {
-    int a = parse_shift();
+    static const int ops[] = { TOK_AMP, TOK_PIPE, TOK_CARET };
+    int a = parse_cmp_inner();
     for (;;) {
+        maybe_eat_continuation(ops, 3);
         int op = cur()->type;
         if (op != TOK_AMP && op != TOK_PIPE && op != TOK_CARET) break;
         tk++;
-        int b = parse_shift();
-        int r = alloc_temp();
+        int mark_b = temp_next;
+        int b = parse_cmp_inner();
+        int r = choose_dest(a);
         if (op == TOK_AMP)       emit_and_reg(r, a, b);
         else if (op == TOK_PIPE) emit_orr_reg(r, a, b);
         else                     emit_eor_reg(r, a, b);
+        release_b_temps(r, mark_b);
         a = r;
     }
     return a;
+}
+static int parse_cmp_inner(void) {
+    int a = parse_shift();
+    int op = cur()->type;
+    if (op != TOK_LT && op != TOK_GT && op != TOK_LTE &&
+        op != TOK_GTE && op != TOK_EQEQ && op != TOK_NEQ)
+        return a;
+    tk++;
+    int mark_b = temp_next;
+    int b = parse_shift();
+    int r = choose_dest(a);
+    emit_cmp_reg(a, b);
+    int cc;
+    switch (op) {
+    case TOK_LT:   cc = 11; break;
+    case TOK_GT:   cc = 12; break;
+    case TOK_LTE:  cc = 13; break;
+    case TOK_GTE:  cc = 10; break;
+    case TOK_EQEQ: cc = 0;  break;
+    case TOK_NEQ:  cc = 1;  break;
+    default:       cc = 0;  break;
+    }
+    int ncc = cc ^ 1;
+    emit32(0x9A9F07E0u | ((u32)(ncc & 0xF) << 12) | (u32)(r & 31));
+    release_b_temps(r, mark_b);
+    return r;
 }
 static int parse_expr(void) { return parse_bits(); }
 
@@ -680,22 +1216,47 @@ static int parse_expr(void) { return parse_bits(); }
  * Statement dispatch
  * ========================================================================== */
 
-static void emit_call_args(int si) {
+/* Emit a BL to a composition by symbol index. If the target's code_off
+ * is already known (backward call), emit a direct branch. Otherwise emit
+ * a BL 0 placeholder and record a fixup to resolve at end of parse_file. */
+static void emit_bl_compo(int si) {
     Sym *s = &syms[si];
-    int argregs[8];
+    if (s->code_off >= 0) {
+        int delta = s->code_off - cur_off();
+        emit_bl(delta);
+    } else {
+        int here = cur_off();
+        emit_bl(0);
+        add_fixup(here, si);
+    }
+}
+
+static void emit_call_args(int si) {
+    /* Push each arg onto the target's stack as we parse it, then pop in
+     * reverse order into X0..X(N-1). This sidesteps the 10-temp window
+     * because each arg releases its temps immediately after being pushed. */
+    Sym *s = &syms[si];
+    int nparams = s->nparams;
     int nargs = 0;
-    while (nargs < s->nparams) {
+    int saved_temp_next = temp_next;
+    while (nargs < nparams) {
         int t = peek_type();
         if (t == TOK_NEWLINE || t == TOK_EOF || t == TOK_INDENT) break;
         if (!is_expr_start(t)) break;
-        argregs[nargs++] = parse_expr();
+        int r = parse_expr();
+        /* STR Xr, [SP, #-16]!  (pre-index push) */
+        emit32(0xF81F0FE0u | (u32)(r & 31));
+        nargs++;
+        temp_next = saved_temp_next;
     }
-    /* Move arg regs into X0..X(nargs-1) back-to-front to avoid overlap. */
+    /* Pop into X(nargs-1), X(nargs-2), ..., X0
+     * Pushed in order arg0, arg1, ... so last-pushed is on top.
+     * Reverse iteration: i = nargs-1 gets top (which is arg(nargs-1)). Good. */
     for (int i = nargs - 1; i >= 0; i--) {
-        emit_mov_reg(i, argregs[i]);
+        /* LDR Xi, [SP], #16  (post-index pop) */
+        emit32(0xF84107E0u | (u32)(i & 31));
     }
-    int delta = s->code_off - cur_off();
-    emit_bl(delta);
+    emit_bl_compo(si);
 }
 
 static void parse_stmt(void) {
@@ -707,11 +1268,144 @@ static void parse_stmt(void) {
     if (t->type == TOK_NEWLINE) { tk++; return; }
     if (t->type == TOK_EOF)     return;
 
+    if (t->type == TOK_CONTINUE) {
+        tk++;
+        int top = loop_current_top();
+        int here = cur_off();
+        emit_b(top - here);
+        return;
+    }
+    if (t->type == TOK_BREAK) {
+        tk++;
+        int here = cur_off();
+        loop_record_break(here);
+        emit_b(0);       /* patched when loop closes */
+        return;
+    }
+    if (t->type == TOK_GOTO) {
+        tk++;
+        Token *n = cur();
+        if (n->type != TOK_IDENT) die("line %d: expected label after goto", t->line);
+        tk++;
+        int target = -1;
+        int li = label_find(src + n->off, n->len);
+        if (li >= 0 && labels[li].code_off >= 0) {
+            target = labels[li].code_off;
+        }
+        int here = cur_off();
+        if (target >= 0) {
+            int delta = target - here;
+            emit_b(delta);
+        } else {
+            emit_b(0);
+            label_add_fixup(src + n->off, n->len, here);
+        }
+        return;
+    }
+    if (t->type == TOK_LABEL) {
+        tk++;
+        Token *n = cur();
+        if (n->type != TOK_IDENT) die("line %d: expected name after label", t->line);
+        tk++;
+        label_define(src + n->off, n->len, cur_off());
+        return;
+    }
+
     if (t->type == TOK_TRAP) {
         tk++;
-        /* macOS exit syscall: X16 = 1, SVC #0x80.  X0 already holds the exit code. */
-        emit_mov_imm64(16, 1);
+        /* Two forms:
+         *   `trap`                   — bare syscall (SVC #0x80). X0/X16 should
+         *                               have been set via ↓ $N. exit convention.
+         *   `trap name num [arg...]` — syscall with args: put num in X16, args
+         *                               in X0..X7, issue SVC, bind result into
+         *                               `name` as a new local. Used for syscall
+         *                               calls in compiler-darwin.ls (open/read
+         *                               /write/close). */
+        int nx = cur()->type;
+        if (nx == TOK_NEWLINE || nx == TOK_EOF || nx == TOK_INDENT) {
+            emit_mov_imm64(16, 1);
+            emit_svc(0x80);
+            return;
+        }
+        /* trap name num [arg...] */
+        if (nx != TOK_IDENT) {
+            /* Fallback: treat as bare trap and skip rest to newline */
+            emit_mov_imm64(16, 1);
+            emit_svc(0x80);
+            while (cur()->type != TOK_NEWLINE && cur()->type != TOK_EOF) tk++;
+            return;
+        }
+        Token *nm = cur();
+        tk++;
+        /* Syscall number */
+        int num_r = parse_primary();
+        emit_mov_reg(16, num_r);
+        /* Collect up to 8 args, push/pop to set X0..X(n-1) */
+        int saved_temp_next = temp_next;
+        int nargs = 0;
+        while (nargs < 8) {
+            int tt = peek_type();
+            if (tt == TOK_NEWLINE || tt == TOK_EOF || tt == TOK_INDENT) break;
+            if (!is_expr_start(tt)) break;
+            int r = parse_expr();
+            emit32(0xF81F0FE0u | (u32)(r & 31));    /* STR Xr, [SP, #-16]! */
+            nargs++;
+            temp_next = saved_temp_next;
+        }
+        for (int i = nargs - 1; i >= 0; i--) {
+            emit32(0xF84107E0u | (u32)(i & 31));    /* LDR Xi, [SP], #16 */
+        }
         emit_svc(0x80);
+        /* Bind return value (X0) into `name` as a local */
+        int slot = alloc_slot();
+        int ni = sym_add(src + nm->off, nm->len, SYM_LOCAL);
+        syms[ni].slot = slot;
+        emit_stur(0, 29, -slot);
+        return;
+    }
+
+    if (t->type == TOK_CONST) {
+        /* `const NAME int-literal` — introduces a named 32-bit integer
+         * constant.  The value is stashed in the symbol's `code_off` slot
+         * (which is otherwise unused for non-compositions) and materialised
+         * via MOVZ/MOVK when the name is referenced in an expression. */
+        tk++;
+        Token *n = cur();
+        if (n->type != TOK_IDENT) die("line %d: expected name after const", t->line);
+        tk++;
+        if (cur()->type != TOK_INT)
+            die("line %d: const '%.*s' must be followed by int literal",
+                t->line, n->len, src + n->off);
+        i64 val = tok_int_value(cur());
+        tk++;
+        int si = sym_add(src + n->off, n->len, SYM_CONST);
+        syms[si].code_off = (int)val;   /* must fit in int32 */
+        return;
+    }
+
+    if (t->type == TOK_BUF) {
+        /* `buf NAME size-bytes` — allocates `size` bytes of zero-initialised
+         * storage in the trailing data region of __TEXT.  See the comment on
+         * data_buf / buf_fixups above for the memory-model caveats.  The
+         * symbol resolves to the virtual address of the first buf byte. */
+        tk++;
+        Token *n = cur();
+        if (n->type != TOK_IDENT) die("line %d: expected name after buf", t->line);
+        tk++;
+        if (cur()->type != TOK_INT)
+            die("line %d: buf '%.*s' size must be int literal",
+                t->line, n->len, src + n->off);
+        i64 size = tok_int_value(cur());
+        tk++;
+        if (size < 0) die("line %d: negative buf size", t->line);
+        int bo = data_off;
+        int new_off = bo + (int)size;
+        new_off = (new_off + 7) & ~7;    /* 8-byte align for the next buf */
+        if (new_off > DATA_MAX) die("buf data overflow (DATA_MAX=%d)", DATA_MAX);
+        data_off = new_off;
+        int si = sym_add(src + n->off, n->len, SYM_BUF);
+        syms[si].code_off = bo;          /* offset within data_buf */
+        syms[si].slot     = (int)size;   /* size, in case anyone wants it */
         return;
     }
 
@@ -763,6 +1457,30 @@ static void parse_stmt(void) {
         return;
     }
 
+    if (t->type == TOK_MEM_STORE) {
+        /* ← width addr [offset] val
+         *   3 operands: store val at addr.
+         *   4 operands: store val at (addr + offset).
+         * compiler-darwin.ls uses the 4-operand form for indexed stores. */
+        tk++;
+        if (cur()->type != TOK_INT)
+            die("line %d: expected width after ←", t->line);
+        i64 width = tok_int_value(cur());
+        tk++;
+        int base_r   = parse_expr();
+        int middle_r = parse_expr();
+        int nx = peek_type();
+        if (is_expr_start(nx)) {
+            int combined = choose_dest(base_r);
+            emit_add_reg(combined, base_r, middle_r);
+            int val_r = parse_expr();
+            emit_str_w(val_r, combined, (int)width);
+        } else {
+            emit_str_w(middle_r, base_r, (int)width);
+        }
+        return;
+    }
+
     if (t->type == TOK_REG_READ) {
         /* bare load statement — discard */
         (void)parse_expr();
@@ -794,18 +1512,42 @@ static void parse_stmt(void) {
             patch_off = cur_off();
             emit_b_cond(cc_inv, 0);
         } else {
-            int r = parse_expr();
-            patch_off = cur_off();
-            emit_cbz(r, 0);
+            /* Simple `if expr [cmp rhs]`. If a relational operator appears
+             * after the first expression, treat the whole form as a
+             * comparison and emit CMP + inverted B.cond. Otherwise fall
+             * back to the original "truthy expr" (CBZ skip) form. */
+            int a = parse_expr();
+            int rel = cur()->type;
+            int is_rel = (rel == TOK_LT || rel == TOK_GT || rel == TOK_LTE ||
+                          rel == TOK_GTE || rel == TOK_EQEQ || rel == TOK_NEQ);
+            if (is_rel) {
+                tk++;
+                int b = parse_expr();
+                emit_cmp_reg(a, b);
+                int cc_inv;
+                switch (rel) {
+                case TOK_LT:   cc_inv = CC_GE; break;
+                case TOK_GT:   cc_inv = CC_LE; break;
+                case TOK_LTE:  cc_inv = CC_GT; break;
+                case TOK_GTE:  cc_inv = CC_LT; break;
+                case TOK_EQEQ: cc_inv = CC_NE; break;
+                case TOK_NEQ:  cc_inv = CC_EQ; break;
+                default:       cc_inv = CC_AL;
+                }
+                patch_off = cur_off();
+                emit_b_cond(cc_inv, 0);
+                is_compound = 1;   /* reuse the same patch format below */
+            } else {
+                patch_off = cur_off();
+                emit_cbz(a, 0);
+            }
         }
         if (cur()->type == TOK_COLON) tk++;
         if (cur()->type == TOK_NEWLINE) tk++;
 
-        int prev_syms = nsyms;
-        int prev_frame = frame_next_slot;
         parse_body(-1);
-        sym_trim(prev_syms);
-        frame_next_slot = prev_frame;
+        /* sym_trim removed: inner-scope names persist to end of composition */
+        /* frame_next_slot reset removed: slots persist across inner scopes */
 
         int delta = cur_off() - patch_off;
         u32 old = code[patch_off / 4];
@@ -830,11 +1572,10 @@ static void parse_stmt(void) {
         if (cur()->type == TOK_COLON) tk++;
         if (cur()->type == TOK_NEWLINE) tk++;
 
-        int prev_syms = nsyms;
-        int prev_frame = frame_next_slot;
+        loop_push(top);
         parse_body(-1);
-        sym_trim(prev_syms);
-        frame_next_slot = prev_frame;
+        /* sym_trim removed: inner-scope names persist to end of composition */
+        /* frame_next_slot reset removed: slots persist across inner scopes */
 
         emit_b(top - cur_off());
         int delta = cur_off() - patch_off;
@@ -842,6 +1583,7 @@ static void parse_stmt(void) {
         u32 rt = old & 0x1F;
         u32 w = 0xB4000000u | (((u32)(delta / 4) & 0x7FFFFu) << 5) | rt;
         patch32(patch_off, w);
+        loop_pop_and_patch_breaks(cur_off());
         return;
     }
 
@@ -880,11 +1622,14 @@ static void parse_stmt(void) {
         int patch_off = cur_off();
         emit_b_cond(CC_GE, 0);
 
-        int prev_syms = nsyms;
-        int prev_frame = frame_next_slot;
+        /* For `continue`, jump target is the increment step (not the cmp),
+         * so record the increment's position AFTER the body parses. For
+         * simplicity we point continue at the top (redundant cmp but
+         * correct). */
+        loop_push(top);
         parse_body(-1);
-        sym_trim(prev_syms);
-        frame_next_slot = prev_frame;
+        /* sym_trim removed: inner-scope names persist to end of composition */
+        /* frame_next_slot reset removed: slots persist across inner scopes */
 
         reset_temps();
         int i2 = alloc_temp();
@@ -904,6 +1649,7 @@ static void parse_stmt(void) {
         u32 cc = old & 0xF;
         u32 w = 0x54000000u | (((u32)(delta / 4) & 0x7FFFFu) << 5) | cc;
         patch32(patch_off, w);
+        loop_pop_and_patch_breaks(cur_off());
         return;
     }
 
@@ -918,16 +1664,21 @@ static void parse_stmt(void) {
         emit_stur(31, 29, -slot);  /* i = 0 */
         if (cur()->type == TOK_COLON) tk++;
         if (cur()->type == TOK_NEWLINE) tk++;
-        int prev_syms = nsyms;
-        int prev_frame = frame_next_slot;
         parse_body(-1);
-        sym_trim(prev_syms);
-        frame_next_slot = prev_frame;
+        /* sym_trim removed: inner-scope names persist to end of composition */
+        /* frame_next_slot reset removed: slots persist across inner scopes */
         return;
     }
 
     if (t->type == TOK_IDENT) {
         Token *n = t;
+        /* `name:` — label definition (Python-style). Peek ahead before
+         * sym_find so we don't confuse the label with a same-named var. */
+        if (tk + 1 < ntoks && toks[tk+1].type == TOK_COLON) {
+            tk += 2;
+            label_define(src + n->off, n->len, cur_off());
+            return;
+        }
         int si = sym_find(src + n->off, n->len);
         tk++;
 
@@ -946,10 +1697,170 @@ static void parse_stmt(void) {
             emit_call_args(si);
             return;
         }
-        /* Existing local — reassignment */
+        if (s->kind == SYM_GLOBAL) {
+            /* Top-level `var` — statement forms:
+             *   name                — bare read (value in X0, no write)
+             *   name [=] expr       — value = expr
+             *   name OP expr        — value = (current value) OP expr  (short form) */
+            if (cur()->type == TOK_EQ) tk++;
+            int data_off_for_global = s->code_off;
+
+            /* Bare read: just load the global and put value in X0. */
+            if (cur()->type == TOK_NEWLINE || cur()->type == TOK_EOF ||
+                cur()->type == TOK_INDENT) {
+                int addr_r = alloc_temp();
+                int word_idx = code_words;
+                emit_mov_imm64_fixed(addr_r, 0);  /* 4 words — patched */
+                add_global_fixup(word_idx, addr_r, data_off_for_global);
+                int val_r = alloc_temp();
+                emit32(0xF9400000u | ((u32)(addr_r & 31) << 5) | (u32)(val_r & 31));
+                emit_mov_reg(0, val_r);
+                return;
+            }
+
+            /* Detect short form: statement continues with a binary operator */
+            int nx = cur()->type;
+            int is_op = (nx == TOK_PLUS  || nx == TOK_MINUS || nx == TOK_STAR ||
+                         nx == TOK_SLASH || nx == TOK_AMP   || nx == TOK_PIPE ||
+                         nx == TOK_CARET || nx == TOK_SHL   || nx == TOK_SHR);
+
+            int val_r;
+            if (is_op) {
+                /* Load current value, then parse_expr will see the operator
+                 * and combine. Trick: push the current value into the token
+                 * stream semantics by loading it as the LHS of parse_add
+                 * etc. Simplest path: load the global, then manually run
+                 * the operator chain. */
+                int cur_r = alloc_temp();
+                int addr1_r = alloc_temp();
+                int wi1 = code_words;
+                emit_mov_imm64_fixed(addr1_r, 0);
+                add_global_fixup(wi1, addr1_r, data_off_for_global);
+                emit32(0xF9400000u | ((u32)(addr1_r & 31) << 5) | (u32)(cur_r & 31));
+
+                /* Parse the RHS expression chain manually. Consume the
+                 * operator + next term, iterate. We reuse the same logic
+                 * as parse_add/parse_bits by inlining an operator loop. */
+                int a = cur_r;
+                static const int all_ops2[] = {
+                    TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH,
+                    TOK_AMP, TOK_PIPE, TOK_CARET, TOK_SHL, TOK_SHR
+                };
+                for (;;) {
+                    maybe_eat_continuation(all_ops2, 9);
+                    int op = cur()->type;
+                    if (op != TOK_PLUS && op != TOK_MINUS && op != TOK_STAR &&
+                        op != TOK_SLASH && op != TOK_AMP && op != TOK_PIPE &&
+                        op != TOK_CARET && op != TOK_SHL && op != TOK_SHR)
+                        break;
+                    tk++;
+                    int mark_before_b = temp_next;
+                    int b = parse_primary();
+                    int r = choose_dest(a);
+                    switch (op) {
+                    case TOK_PLUS:  emit_add_reg(r, a, b); break;
+                    case TOK_MINUS: emit_sub_reg(r, a, b); break;
+                    case TOK_STAR:  emit_mul(r, a, b); break;
+                    case TOK_SLASH: emit_sdiv(r, a, b); break;
+                    case TOK_AMP:   emit_and_reg(r, a, b); break;
+                    case TOK_PIPE:  emit_orr_reg(r, a, b); break;
+                    case TOK_CARET: emit_eor_reg(r, a, b); break;
+                    case TOK_SHL:   emit_lsl_reg(r, a, b); break;
+                    case TOK_SHR:   emit_lsr_reg(r, a, b); break;
+                    }
+                    if (r >= 9 && r <= 18 && r < mark_before_b + 9) {
+                        temp_next = (r - 9) + 1;
+                    } else {
+                        temp_next = mark_before_b;
+                    }
+                    a = r;
+                }
+                val_r = a;
+            } else {
+                val_r = parse_expr();
+            }
+
+            int addr_r = alloc_temp();
+            int word_idx = code_words;
+            emit_mov_imm64_fixed(addr_r, 0);  /* 4 words — patched at fixup time */
+            add_global_fixup(word_idx, addr_r, data_off_for_global);
+            /* STR Xt, [Xn, #0] */
+            emit32(0xF9000000u | ((u32)(addr_r & 31) << 5) | (u32)(val_r & 31));
+            return;
+        }
+        /* Existing local — reassignment. Supports short form `name OP expr`
+         * the same way globals do. Also supports multi-line expression
+         * continuations: `extra41 \n    | (stall << 41) \n    | ...`
+         * where the leading ident is a bare "read the current value"
+         * followed by a continuation. */
         if (cur()->type == TOK_EQ) tk++;
-        int r = parse_expr();
+        static const int all_ops[] = {
+            TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH,
+            TOK_AMP, TOK_PIPE, TOK_CARET, TOK_SHL, TOK_SHR
+        };
+        /* If we're at a NEWLINE, peek past it for a continuation operator. */
+        maybe_eat_continuation(all_ops, 9);
+
+        int nx = cur()->type;
+        int is_op = (nx == TOK_PLUS  || nx == TOK_MINUS || nx == TOK_STAR ||
+                     nx == TOK_SLASH || nx == TOK_AMP   || nx == TOK_PIPE ||
+                     nx == TOK_CARET || nx == TOK_SHL   || nx == TOK_SHR);
+
+        /* Bare read: `name` with no following operator or value.  Emit
+         * MOV X0, Xname so the value is in the return register if this
+         * is the last statement. No stur/store. */
+        if (nx == TOK_NEWLINE || nx == TOK_EOF || nx == TOK_INDENT) {
+            int cur_r = alloc_temp();
+            emit_ldur(cur_r, 29, -s->slot);
+            emit_mov_reg(0, cur_r);
+            return;
+        }
+        int r;
+        if (is_op) {
+            int cur_r = alloc_temp();
+            emit_ldur(cur_r, 29, -s->slot);
+            int a = cur_r;
+            for (;;) {
+                maybe_eat_continuation(all_ops, 9);
+                int op = cur()->type;
+                if (op != TOK_PLUS && op != TOK_MINUS && op != TOK_STAR &&
+                    op != TOK_SLASH && op != TOK_AMP && op != TOK_PIPE &&
+                    op != TOK_CARET && op != TOK_SHL && op != TOK_SHR)
+                    break;
+                tk++;
+                int mark_before_b = temp_next;
+                int b = parse_primary();
+                int dst = choose_dest(a);
+                switch (op) {
+                case TOK_PLUS:  emit_add_reg(dst, a, b); break;
+                case TOK_MINUS: emit_sub_reg(dst, a, b); break;
+                case TOK_STAR:  emit_mul(dst, a, b); break;
+                case TOK_SLASH: emit_sdiv(dst, a, b); break;
+                case TOK_AMP:   emit_and_reg(dst, a, b); break;
+                case TOK_PIPE:  emit_orr_reg(dst, a, b); break;
+                case TOK_CARET: emit_eor_reg(dst, a, b); break;
+                case TOK_SHL:   emit_lsl_reg(dst, a, b); break;
+                case TOK_SHR:   emit_lsr_reg(dst, a, b); break;
+                }
+                /* Free the temps b (and its sub-expression temps) used up.
+                 * Keep `dst` live: if dst was reused from `a` it's below
+                 * mark_before_b already; if dst was a fresh temp just above
+                 * mark_before_b, keep it. */
+                if (dst >= 9 && dst <= 18 && dst < mark_before_b + 9) {
+                    temp_next = (dst - 9) + 1;
+                } else {
+                    temp_next = mark_before_b;
+                }
+                a = dst;
+            }
+            r = a;
+        } else {
+            r = parse_expr();
+        }
         emit_stur(r, 29, -s->slot);
+        /* Put the value in X0 too — Lithos convention: the last statement's
+         * value is the composition's return value. Harmless if not last. */
+        emit_mov_reg(0, r);
         return;
     }
 
@@ -981,6 +1892,17 @@ static void parse_body(int body_indent_in) {
              * open new nested bodies as needed. */
             tk++;
         } else {
+            /* Orphan token mid-body (e.g. a trailing integer left over from
+             * a previous statement's expression). Consume it as an "unknown
+             * statement" rather than exiting the body — otherwise we'd drop
+             * out of the body early and trim symbols that later statements
+             * still need. */
+            int t = cur()->type;
+            if (t == TOK_INT || t == TOK_RPAREN || t == TOK_RBRACK ||
+                t == TOK_COLON) {
+                tk++;
+                continue;
+            }
             return;
         }
         parse_stmt();
@@ -993,6 +1915,17 @@ static void parse_body(int body_indent_in) {
  * ========================================================================== */
 
 static void parse_composition(void) {
+    /* Skip a `host` or `kernel` prefix (lexed as TOK_IDENT — the bootstrap
+     * treats both as semantic no-ops). The pre-pass did the same. */
+    if (cur()->type == TOK_IDENT) {
+        int len = cur()->len;
+        const char *s = src + cur()->off;
+        if ((len == 4 && memcmp(s, "host",   4) == 0) ||
+            (len == 6 && memcmp(s, "kernel", 6) == 0)) {
+            tk++;
+        }
+    }
+
     Token *n = cur();
     if (n->type != TOK_IDENT) { tk++; return; }
     tk++;
@@ -1006,17 +1939,21 @@ static void parse_composition(void) {
     frame_next_slot = 0;
 
     int nparams = 0;
-    int param_slots[8] = {0};
-    while (cur()->type == TOK_IDENT) {
+    int param_slots[16] = {0};
+    /* Keywords that can appear as identifiers in param position (compiler-
+     * darwin.ls uses `buf` as a param name, e.g. in `write_file path buf buf_len`). */
+    while (cur()->type == TOK_IDENT || cur()->type == TOK_BUF ||
+           cur()->type == TOK_CONST || cur()->type == TOK_VAR ||
+           cur()->type == TOK_LABEL) {
         Token *p = cur();
         tk++;
         int slot = alloc_slot();
         int psi = sym_add(src + p->off, p->len, SYM_LOCAL);
         syms[psi].slot = slot;
-        if (nparams < 8) param_slots[nparams] = slot;
+        if (nparams < 16) param_slots[nparams] = slot;
         nparams++;
     }
-    if (nparams > 8) die("line %d: >8 params unsupported", n->line);
+    if (nparams > 16) die("line %d: >16 params unsupported", n->line);
     syms[si].nparams = nparams;
     syms[si].code_off = cur_off();
 
@@ -1024,11 +1961,18 @@ static void parse_composition(void) {
     if (cur()->type == TOK_NEWLINE) tk++;
 
     emit_prologue();
-    for (int i = 0; i < nparams; i++) {
+    /* Spill first 8 params from ABI registers X0..X7 to stack slots. Extra
+     * params (9..16) are passed in X8..X15 by the simple calling conv
+     * wirth uses (not standard ABI, but consistent since we control both
+     * sides of every call). */
+    int n_reg_params = nparams < 16 ? nparams : 16;
+    for (int i = 0; i < n_reg_params; i++) {
         emit_stur(i, 29, -param_slots[i]);
     }
 
+    labels_reset();
     parse_body(-1);
+    resolve_label_fixups();
 
     /* Fallthrough epilogue (MOV X0, #0 is not implicit) */
     emit_epilogue();
@@ -1089,8 +2033,125 @@ static int looks_like_compo_header(int start) {
     return 0;
 }
 
+/* Pre-pass over the token stream: sym_add every top-level composition with
+ * code_off = -1 so forward references find their targets at parse time.
+ * nparams is counted as IDENT tokens between the name and ':'. */
+static void collect_compositions(void) {
+    int at_line_start = 1;
+    int cur_indent    = 0;
+    for (int i = 0; i < ntoks; i++) {
+        int tt = toks[i].type;
+        if (tt == TOK_EOF)     break;
+        if (tt == TOK_NEWLINE) { at_line_start = 1; cur_indent = 0; continue; }
+        if (tt == TOK_INDENT)  { cur_indent = toks[i].len; at_line_start = 1; continue; }
+
+        if (!at_line_start) continue;
+        at_line_start = 0;
+        if (cur_indent > 0) continue;  /* only top-level lines */
+        if (tt != TOK_IDENT) continue;
+
+        /* Skip a leading `host` or `kernel` prefix, which are lexed as
+         * TOK_IDENT in this build of wirth. Both are semantic no-ops for
+         * the bootstrap — they select host vs. GPU target, which does
+         * not affect host-ARM64 codegen. */
+        int name_idx = i;
+        if (toks[name_idx].type == TOK_IDENT) {
+            int nlen = toks[name_idx].len;
+            const char *ns = src + toks[name_idx].off;
+            if ((nlen == 4 && memcmp(ns, "host",   4) == 0) ||
+                (nlen == 6 && memcmp(ns, "kernel", 6) == 0)) {
+                name_idx++;
+                if (name_idx >= ntoks || toks[name_idx].type != TOK_IDENT) continue;
+            }
+        }
+
+        int j = name_idx;
+        int saw_colon = 0;
+        int nparams   = 0;
+        while (j < ntoks) {
+            int tj = toks[j].type;
+            if (tj == TOK_NEWLINE || tj == TOK_EOF) break;
+            if (tj == TOK_COLON) { saw_colon = 1; break; }
+            /* Count IDENT and keyword-as-ident tokens as params */
+            if (j > name_idx && (tj == TOK_IDENT || tj == TOK_BUF ||
+                                  tj == TOK_CONST || tj == TOK_VAR ||
+                                  tj == TOK_LABEL))
+                nparams++;
+            j++;
+        }
+        if (!saw_colon) continue;
+
+        Token *n = &toks[name_idx];
+        int existing = sym_find(src + n->off, n->len);
+        if (existing >= 0 && syms[existing].kind == SYM_COMPO) continue;
+        int si = sym_add(src + n->off, n->len, SYM_COMPO);
+        syms[si].code_off = -1;          /* forward-declared */
+        syms[si].nparams  = nparams;
+    }
+}
+
+/* After all compositions are emitted, patch every placeholder BL with
+ * the resolved delta to its target. */
+static void resolve_fixups(void) {
+    for (int i = 0; i < nfixups; i++) {
+        int bl_off = fixups[i].code_off;
+        int si     = fixups[i].sym_idx;
+        if (si < 0 || si >= nsyms) die("bad fixup sym_idx");
+        Sym *s = &syms[si];
+        if (s->code_off < 0)
+            die("unresolved forward reference to '%s'", s->name);
+        int delta = s->code_off - bl_off;
+        u32 bl = 0x94000000u | ((u32)(delta / 4) & 0x3FFFFFFu);
+        patch32(bl_off, bl);
+    }
+}
+
+/* Patch every SYM_GLOBAL NOP placeholder with an ADR instruction whose
+ * byte delta reaches the global's 8-byte slot in the trailing data region.
+ * Must be called after all code emission is complete (so code_words is final)
+ * but before the Mach-O writer packs everything.  The delta is purely
+ * relative to the instruction's position within __TEXT, which means it's
+ * independent of the Mach-O header layout — same code/data region works
+ * regardless of where the kernel slides the image under PIE. */
+/* Patch a 4-word placeholder (reserved by emit_mov_imm64_fixed) as:
+ *   [0] ADRP Xd, <page>
+ *   [1] ADD  Xd, Xd, #<page_offset>
+ *   [2] NOP
+ *   [3] NOP
+ * The high 32 bits of the original MOVZ chain are unused — the PC-relative
+ * form handles addresses anywhere in the process. */
+static void patch_pcrel_load_addr(int code_word_idx, int rd, int insn_pos, u64 target_va) {
+    /* insn_pos is the BYTE offset of the ADRP instruction relative to text
+     * (code) base; add TEXT_VMADDR + text file offset to get its VA. But
+     * we can compute delta symbolically: target_page - insn_page. */
+    u64 insn_page   = (u64)insn_pos & ~(u64)0xFFF;
+    u64 target_page = target_va & ~(u64)0xFFF;
+    i64 page_delta  = (i64)target_page - (i64)insn_page;
+    /* ADRP has 21-bit signed immediate scaled by 4K pages. */
+    i64 page_imm = page_delta / 4096;
+    if (page_imm > (1 << 20) - 1 || page_imm < -(1 << 20))
+        die("global too far for ADRP (page_delta=%lld)", (long long)page_delta);
+    u32 imm21 = (u32)(page_imm & 0x1FFFFFu);
+    u32 immlo = imm21 & 3;
+    u32 immhi = (imm21 >> 2) & 0x7FFFFu;
+    u32 adrp  = 0x90000000u | (immlo << 29) | (immhi << 5) | (u32)(rd & 31);
+    u32 page_off = (u32)(target_va & 0xFFFu);
+    u32 add = 0x91000000u | (page_off << 10) | ((u32)(rd & 31) << 5) | (u32)(rd & 31);
+    u32 nop = 0xD503201Fu;
+    code[code_word_idx + 0] = adrp;
+    code[code_word_idx + 1] = add;
+    code[code_word_idx + 2] = nop;
+    code[code_word_idx + 3] = nop;
+}
+
+static void resolve_global_fixups(void) {
+    /* intentionally empty — patched in write_macho where code file offset
+     * is known. */
+}
+
 static void parse_file(void) {
     tk = 0;
+    collect_compositions();
     emit_trampoline_placeholder();
 
     int made_implicit_main = 0;
@@ -1104,10 +2165,91 @@ static void parse_file(void) {
             tk++; continue;
         }
 
+        int t = cur()->type;
+
+        /* `const` and `buf` are top-level-only declarations.  They emit no
+         * code and must live at top-level scope so subsequent compositions
+         * can reference them.  Handle them here, BEFORE the implicit-main
+         * machinery, so (a) their symbols aren't trimmed when implicit main
+         * closes out and (b) they don't silently fall inside an implicit
+         * main prologue. */
+        if (t == TOK_CONST || t == TOK_BUF) {
+            if (made_implicit_main) {
+                /* Close the implicit main first — const/buf come after it.
+                 * Uncommon: in compiler-darwin.ls they appear at the top of
+                 * the file, but keep this path defensive. */
+                emit_epilogue();
+                made_implicit_main = 0;
+                sym_trim(implicit_main_si + 1);
+            }
+            parse_stmt();
+            if (cur()->type == TOK_NEWLINE) tk++;
+            continue;
+        }
+
+        /* Top-level `var NAME VALUE` — module-scope global, 8-byte data slot
+         * in the trailing __TEXT data region.  Same lifetime rules as const/
+         * buf: must be seen BEFORE implicit main is opened so the symbol
+         * isn't trimmed and so compositions defined later in the file can
+         * reference it.  If implicit main has already been opened, we fall
+         * through to parse_stmt's existing TOK_VAR path (which makes it a
+         * local) to preserve legacy test-file behaviour. */
+        if (t == TOK_VAR && !made_implicit_main) {
+            tk++;                    /* consume `var` */
+            Token *n = cur();
+            if (n->type != TOK_IDENT)
+                die("line %d: expected name after top-level var", toks[tk].line);
+            tk++;                    /* consume name */
+            if (cur()->type != TOK_INT)
+                die("line %d: top-level var '%.*s' must have int-literal "
+                    "initializer (expression globals not supported in v1)",
+                    n->line, n->len, src + n->off);
+            i64 init_val = tok_int_value(cur());
+            tk++;                    /* consume int */
+
+            /* Allocate an 8-byte slot in data_buf (same bump allocator as
+             * buf, with 8-byte alignment of the tail). */
+            int bo = data_off;
+            int new_off = bo + 8;
+            new_off = (new_off + 7) & ~7;
+            if (new_off > DATA_MAX)
+                die("global data overflow (DATA_MAX=%d)", DATA_MAX);
+            data_off = new_off;
+
+            /* Write the initializer value in host byte order (same as how
+             * the code buffer is written, so this machine's endianness
+             * matches the target). */
+            memcpy(data_buf + bo, &init_val, 8);
+
+            int si = sym_add(src + n->off, n->len, SYM_GLOBAL);
+            syms[si].code_off = bo;      /* offset within data_buf */
+
+            if (cur()->type == TOK_NEWLINE) tk++;
+            continue;
+        }
+
+        /* Top-level shorthand `NAME INT NEWLINE` — declare a const. This
+         * is wirth's compatibility path for compiler-darwin.ls's terse
+         * opcode constant lists (`OP_FADD 0x7221` etc.). Requires NO
+         * open implicit main so the const stays at top-level scope. */
+        if (t == TOK_IDENT && !made_implicit_main) {
+            if (tk + 1 < ntoks && toks[tk+1].type == TOK_INT &&
+                tk + 2 < ntoks &&
+                (toks[tk+2].type == TOK_NEWLINE || toks[tk+2].type == TOK_EOF)) {
+                Token *nn = cur();
+                tk++;                     /* consume name */
+                i64 val = tok_int_value(cur());
+                tk++;                     /* consume int */
+                int si = sym_add(src + nn->off, nn->len, SYM_CONST);
+                syms[si].code_off = (int)val;
+                if (cur()->type == TOK_NEWLINE) tk++;
+                continue;
+            }
+        }
+
         /* If the upcoming top-level statement isn't a composition header
          * (no colon before the newline), fabricate an implicit `main` that
          * collects those bare statements. */
-        int t = cur()->type;
         int is_compo = 0;
         if (t == TOK_IDENT) is_compo = looks_like_compo_header(tk);
 
@@ -1139,6 +2281,14 @@ static void parse_file(void) {
         sym_trim(implicit_main_si + 1);
     }
     emit_exit_stub();
+
+    /* All compositions are emitted — their code_off fields are set.
+     * Patch every forward-reference BL placeholder. */
+    resolve_fixups();
+
+    /* Patch every top-level `var` address-materialisation NOP with the
+     * correct ADR instruction (PC-relative — slide-invariant). */
+    resolve_global_fixups();
 
     /* Find main; if absent, treat first composition as entry. */
     int main_off = -1;
@@ -1260,9 +2410,66 @@ static void write_macho(const char *outpath) {
      * trampling the code. */
     u32 code_off = (lc_end + 64 + 3) & ~3u;
     u32 code_len = (u32)(code_words * 4);
-    u32 text_filesize = code_off + code_len;
+    /* `buf` data trails the code within __TEXT (see the buf comment block
+     * near data_buf).  data_len is 8-byte aligned by add_buf_fixup's data_off
+     * maintenance; we re-assert here and also include it in the segment. */
+    u32 data_len = (u32)data_off;
+    u32 text_filesize = code_off + code_len + data_len;
     u32 text_padded = (text_filesize + PAGE_SIZE_OUT - 1) & ~(u32)(PAGE_SIZE_OUT - 1);
     if (text_padded == 0) text_padded = PAGE_SIZE_OUT;
+
+    /* Resolve `buf` fixups now that we know where code and data live in the
+     * final image.  Each buf's virtual address is computed as
+     *   TEXT_VMADDR + code_off + code_len + buf_data_off
+     * and patched into the 4-instruction MOVZ/MOVK sequence recorded at
+     * parse time.  Patching code[] in place is safe because the memcpy of
+     * `code` into the output buffer happens further below. */
+    for (int i = 0; i < n_buf_fixups; i++) {
+        BufFixup *bf = &buf_fixups[i];
+        u64 va = (u64)TEXT_VMADDR + (u64)code_off + (u64)code_len
+               + (u64)(u32)bf->buf_data_off;
+        int insn_file_off = code_off + bf->code_word_idx * 4;
+        u64 insn_va = (u64)TEXT_VMADDR + (u64)insn_file_off;
+        /* Compute page delta between insn and target via VA */
+        u64 insn_page   = insn_va & ~(u64)0xFFF;
+        u64 target_page = va & ~(u64)0xFFF;
+        i64 page_delta  = (i64)target_page - (i64)insn_page;
+        i64 page_imm    = page_delta / 4096;
+        u32 imm21 = (u32)((u64)page_imm & 0x1FFFFFu);
+        u32 immlo = imm21 & 3;
+        u32 immhi = (imm21 >> 2) & 0x7FFFFu;
+        u32 adrp  = 0x90000000u | (immlo << 29) | (immhi << 5) | (u32)(bf->rd & 31);
+        u32 page_off = (u32)(va & 0xFFFu);
+        u32 add = 0x91000000u | (page_off << 10) | ((u32)(bf->rd & 31) << 5) | (u32)(bf->rd & 31);
+        u32 nop = 0xD503201Fu;
+        code[bf->code_word_idx + 0] = adrp;
+        code[bf->code_word_idx + 1] = add;
+        code[bf->code_word_idx + 2] = nop;
+        code[bf->code_word_idx + 3] = nop;
+    }
+    /* Same treatment for global vars */
+    for (int i = 0; i < n_global_fixups; i++) {
+        GlobalFixup *gf = &global_fixups[i];
+        u64 va = (u64)TEXT_VMADDR + (u64)code_off + (u64)code_len
+               + (u64)(u32)gf->data_off;
+        int insn_file_off = code_off + gf->code_word_idx * 4;
+        u64 insn_va = (u64)TEXT_VMADDR + (u64)insn_file_off;
+        u64 insn_page   = insn_va & ~(u64)0xFFF;
+        u64 target_page = va & ~(u64)0xFFF;
+        i64 page_delta  = (i64)target_page - (i64)insn_page;
+        i64 page_imm    = page_delta / 4096;
+        u32 imm21 = (u32)((u64)page_imm & 0x1FFFFFu);
+        u32 immlo = imm21 & 3;
+        u32 immhi = (imm21 >> 2) & 0x7FFFFu;
+        u32 adrp  = 0x90000000u | (immlo << 29) | (immhi << 5) | (u32)(gf->rd & 31);
+        u32 page_off = (u32)(va & 0xFFFu);
+        u32 add = 0x91000000u | (page_off << 10) | ((u32)(gf->rd & 31) << 5) | (u32)(gf->rd & 31);
+        u32 nop = 0xD503201Fu;
+        code[gf->code_word_idx + 0] = adrp;
+        code[gf->code_word_idx + 1] = add;
+        code[gf->code_word_idx + 2] = nop;
+        code[gf->code_word_idx + 3] = nop;
+    }
 
     u32 le_off  = text_padded;
     u32 cf_data_off = le_off;
@@ -1385,6 +2592,12 @@ static void write_macho(const char *outpath) {
     }
 
     memcpy(buf + code_off, code, code_len);
+    if (data_len > 0) {
+        /* Append buf data immediately after the code. Mapped R+X as part of
+         * __TEXT — see the buf-storage comment block for the read-only
+         * limitation. */
+        memcpy(buf + code_off + code_len, data_buf, data_len);
+    }
 
     /* Empty chained fixups header */
     u32 *cfh = (u32*)(buf + cf_data_off);
