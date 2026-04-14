@@ -933,7 +933,7 @@ parse_dollar_reg:
     add     w4, w4, #1
     b       .Ldollar_lp
 .Ldollar_end:
-    cmp     w0, #31
+    cmp     w0, #30
     b.hi    parse_error
     add     x19, x19, #TOK_STRIDE_SZ
     ldp     x29, x30, [sp], #16

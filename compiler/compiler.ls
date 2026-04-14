@@ -145,9 +145,15 @@
 \\ ============================================================================
 \\ Linux ARM64: argc at [SP], argv at SP+8
 main :
-    sp_save $31 + 16
-    argc → 64 sp_save
-    argv sp_save + 8
+    \\ After prologue STP [SP,#-16]!, X29=SP. Original SP = X29+16.
+    \\ Use explicit register writes to avoid expression codegen issues.
+    \\ X29 (frame ptr) = post-prologue SP. argc at [X29+16], argv at [X29+24].
+    ↓ $9 $29
+    ↓ $10 16
+    entry_sp $9 + $10
+    argc → 64 entry_sp
+    ↓ $10 8
+    argv entry_sp + $10
     lithos_main argc argv
     ↓ $8 93
     ↓ $0 0
