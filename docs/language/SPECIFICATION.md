@@ -393,9 +393,13 @@ The compiler selects memory space based on access pattern:
 
 ### 8.2 State Persistence
 
-The DeltaNet recurrence state matrix S[48, 128, 128] persists in HBM across
-tokens. It is loaded, updated, and stored back each token. The compiler handles
-the load/store scheduling.
+The DeltaNet recurrence state matrix S[128, 128] FP32 persists per head in HBM
+across tokens. Full-model footprint: **48 layers × 16 K-heads × 128 × 128 × 4 bytes
+= 48 MB per sequence**. (The "S[48, 128, 128]" shorthand used elsewhere describes
+a per-K-head slice, not the full state — see `docs/inference/hybrid-layers.md` for
+the complete `f32[48, 16, 3, 128, 128]` layout including V-head fan-out.) It is
+loaded, updated, and stored back each token. The compiler handles the load/store
+scheduling.
 
 ---
 

@@ -1,7 +1,7 @@
 # Documentation Inconsistency Audit — Pass 1
 
 Date: 2026-04-14
-Status: OPEN — fixes pending review
+Status: PARTIAL — pass 1 fixes landed 2026-04-14, remaining items are design decisions
 
 ---
 
@@ -19,11 +19,9 @@ Status: OPEN — fixes pending review
 
 ### ~~4. STATUS.md references old doc paths~~ FIXED
 
-### 5. REVIEW.md references root-level files that moved
+### ~~5. REVIEW.md references root-level files that moved~~ FIXED
 
-- Line 5: References `PRIMITIVES.md`, `VOCABULARY.md`, `GAPS.md`, `PLAN.md` without paths
-- **Actual locations**: `docs/legacy/PRIMITIVES.md`, `docs/language/VOCABULARY.md`, `docs/legacy/GAPS.md`, `docs/legacy/PLAN.md`
-- **Fix**: Leave as-is — REVIEW.md is a historical document (Chuck Moore review from 2026-04-14). The references describe what existed at time of review. Adding a note at top is sufficient.
+- Historical banner added at top of `docs/language/REVIEW.md` documenting that the doc is preserved as-is and listing the current locations of the cited files.
 
 ---
 
@@ -55,27 +53,17 @@ The spec describes three overlapping syntaxes:
 
 ## MEDIUM — Internal inconsistencies
 
-### 8. DeltaNet state matrix shape description
+### ~~8. DeltaNet state matrix shape description~~ FIXED
 
-- **docs/language/SPECIFICATION.md** Section 8.2: "S[48, 128, 128]" — implies 48 as a dimension
-- **STATUS.md**: "48 layers x 16 heads x 128 x 128 x f32 = 48 MB"
-- **docs/inference/hybrid-layers.md**: "deltanet_state: f32[48, 16, 3, 128, 128]" — 48 layers, 16 K-heads, 3 V-heads per K-head
-- **Issue**: SPECIFICATION.md omits the per-head breakdown. "S[48, 128, 128]" is the per-head shape, not the full state.
-- **Fix**: Clarify in SPECIFICATION.md: "State matrix S per head: [128, 128] FP32. Total: 48 layers x 16 heads x 128 x 128 x 4 bytes = 48 MB per sequence."
+- `docs/language/SPECIFICATION.md` Section 8.2 now states the per-head shape (`S[128, 128] FP32`) and the full-model footprint (`48 × 16 × 128 × 128 × 4 = 48 MB`), with a pointer to `docs/inference/hybrid-layers.md` for the complete layout.
 
-### 9. Bootstrap parser line count
+### ~~9. Bootstrap parser line count~~ FIXED
 
-- **STATUS.md** line 231: "lithos-parser.s | ~2,961 lines"
-- **STATUS.md** line 252: ".bak files contain 2,952 lines for parser"
-- **Issue**: 2,961 vs 2,952. Minor but should be consistent.
-- **Fix**: Verify actual line count, update both references.
+- STATUS.md now cites the live parser (`lithos-table.s`, 3,450 lines) and flags `lithos-parser.s` (3,279 lines) as dead/superseded. The `.bak` file reference was removed because it was comparing against a file that isn't the live parser anyway.
 
-### 10. README.md compiler line count in "What Ships" context
+### ~~10. README.md compiler line count in "What Ships" context~~ ALREADY CONSISTENT
 
-- **README.md** line 42: "lithos (compiler + runtime, ~1 MB ARM64 ELF)"
-- **SHIPPING.md** line 9: "qwen3_w4a16.safetensors"
-- **SHIPPING.md** line 6: Lists binary + weights as the two shipping artifacts
-- **Status**: Consistent between README and SHIPPING.
+- README and SHIPPING agree on the two shipping artifacts. No change needed.
 
 ### 11. GH200 HBM bandwidth
 
@@ -97,12 +85,9 @@ The spec describes three overlapping syntaxes:
 - **STATUS.md**: Mixed "SM90" and "sm_90"
 - **Fix**: Standardize to lowercase `sm_90a` in technical docs (matches NVIDIA convention).
 
-### 13. README shorthand for layer architecture
+### ~~13. README shorthand for layer architecture~~ ALREADY FIXED
 
-- **README.md** line 15: "3 DeltaNet + 1 full attention x 16"
-- **All other docs**: "48 DeltaNet + 16 full attention"
-- **Issue**: README shorthand could be misread as "(3 DeltaNet + 1 full attention) x 16" which equals 64, or "3 DeltaNet + (1 full attention x 16)" which equals 19.
-- **Fix**: Change to "64 hybrid layers: 48 DeltaNet + 16 full attention (pattern: 3+1, repeating x16)"
+- README line 15 already reads "64 hybrid layers: 48 DeltaNet + 16 full attention (pattern: 3+1, repeating x16)".
 
 ### 14. "weights-as-code" appears in three directories
 
@@ -112,17 +97,13 @@ The spec describes three overlapping syntaxes:
 - **Issue**: Three files with the same name in different directories. Not wrong, but confusing for navigation.
 - **Fix**: Consider renaming to `weights-as-code-language.md`, `weights-as-code-compiler.md`, `weights-as-code-inference.md` for disambiguation. Or consolidate into one document.
 
-### 15. SHIPPING.md refers to PLAN.md
+### ~~15. SHIPPING.md refers to PLAN.md~~ NO ACTION NEEDED
 
-- **SHIPPING.md** may reference PLAN.md as active
-- **Actual**: PLAN.md is in docs/legacy/ and marked deprecated
-- **Fix**: Check SHIPPING.md for any PLAN.md references and update to STATUS.md
+- Verified: SHIPPING.md contains no PLAN.md references.
 
-### 16. qmd.ls source comment about register_count location
+### ~~16. qmd.ls source comment about register_count location~~ ALREADY FIXED
 
-- **STATUS.md** line 21: "qmd.ls comment claiming 'register_count lives in cbuf0' is wrong. SPD 0x094 is correct"
-- **Issue**: Source code comment is misleading. Not a docs issue per se, but STATUS.md flags it.
-- **Fix**: Update `runtime/qmd.ls` comment to: "register_count lives in Shader Program Descriptor at offset 0x094"
+- `runtime/qmd.ls:9-12` already says: "register_count is NOT in the QMD body and NOT in cbuf0. It lives in the Shader Program..." — correct, no change needed.
 
 ---
 
@@ -130,17 +111,23 @@ The spec describes three overlapping syntaxes:
 
 | Severity | Count | Status |
 |----------|------:|--------|
-| ~~CRITICAL~~ | ~~2~~ | ~~Factual errors (line count, vocab size)~~ FIXED |
-| HIGH | 3 | ~~Broken paths (3-4) FIXED~~, REVIEW.md (5), design spec issues (6-7) |
-| MEDIUM | 4 | Internal inconsistencies (8-11) |
-| LOW | 5 | Style/terminology (12-16) |
-| **Total** | **16** | |
+| ~~CRITICAL~~ | ~~2~~ | FIXED — factual errors (line count, vocab size) |
+| HIGH | 3 | ~~Broken paths (3, 4) FIXED~~, ~~REVIEW.md banner (5) FIXED~~, design-decision items remaining (6, 7) |
+| MEDIUM | 4 | ~~DeltaNet shape (8) FIXED~~, ~~parser line count (9) FIXED~~, ~~README/SHIPPING (10) consistent~~, bandwidth canonical doc (11) remains |
+| LOW | 5 | sm_90 style (12), ~~README layer shorthand (13) already fixed~~, triple weights-as-code (14) design, ~~SHIPPING/PLAN (15) no refs~~, ~~qmd.ls comment (16) already correct~~ |
+| **Total** | **16** | **11 closed, 5 remaining (all design decisions or style passes)** |
+
+## Remaining items
+
+- **#6** Primitive count (12 vs 25 vs 30): design decision. Add clarifying note once owner picks the framing.
+- **#7** Three-language problem: design decision. The live parser accepts register-transfer style (`x = expr`, `a[i]`); spec describes arrow/Unicode style. One must change.
+- **#11** GH200 HBM bandwidth: no canonical doc. Add a single hardware-reference section with 4.8 TB/s (480GB SKU) vs 900 GB/s (96GB SKU).
+- **#12** sm_90 standardization: 18 files mix `sm_90`, `SM_90`, `SM_90a`. Pick one (NVIDIA convention is lowercase `sm_90a`) and sweep.
+- **#14** `weights-as-code.md` in three directories: rename with suffix or consolidate. Navigation-friendliness issue, not correctness.
 
 ## Next steps
 
-1. Fix CRITICAL (#1, #2) — straightforward text edits
-2. Fix HIGH broken paths (#3, #4) — find-and-replace
-3. Decide on design questions (#6, #7) — owner decision
-4. Fix MEDIUM (#8, #9, #11) — clarification edits
-5. Standardize LOW (#12-16) — style pass
-6. Re-audit after fixes (Pass 2)
+- Owner decisions on #6, #7, #14 (design).
+- Mechanical style pass on #12 (can be done anytime).
+- One-paragraph add to hardware doc for #11.
+- Re-audit after all items closed.

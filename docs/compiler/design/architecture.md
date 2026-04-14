@@ -1,5 +1,12 @@
 # Lithos Self-Hosting Compiler Architecture
 
+> **Stale reference document — prescriptive content predates the Forth retirement.**
+> The body of this document describes a Forth-based bootstrap (`forth-bootstrap lithos.fs compiler.ls ...`) and references `.fs` files (`parser.fs`, `emit-arm64.fs`, `gpu/emit.fs`, `elf-wrap.fs`, `opcodes-sm90.fs`, `lexer.fs`) that no longer exist. Per `docs/legacy/PLAN.md`: **Zero Forth, 21 files deleted.**
+>
+> The current bootstrap is pure ARM64 assembly: `bootstrap/build.sh` → `bootstrap/lithos-bootstrap` (ELF binary) which parses `.ls` files directly. The live parser is `bootstrap/lithos-table.s` (~3,450 lines). Forth tokens in this doc should be read as historical design notes, not as instructions for today's build.
+>
+> See `STATUS.md` for the current pipeline and `docs/INCONSISTENCIES.md` for the drift list. Retained as-is so commit history remains readable; not to be followed as a how-to.
+
 ## Overview
 
 The self-hosting compiler is a single `.ls` source file (`compiler.ls`) that

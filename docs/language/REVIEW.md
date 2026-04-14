@@ -4,6 +4,8 @@
 **Date**: 2026-04-14
 **Sources**: `docs/language-primitives.md`, `PRIMITIVES.md`, `VOCABULARY.md`, `GAPS.md`, `PLAN.md`, `SHIPPING.md`, `compiler/compiler.ls`, `inference/*.ls`, `kernels.ls`, `derivatives.ls`, `primitives.ls`
 
+> **Historical document.** This review was written against the repo state on 2026-04-14 and cites filenames that have since moved or been retired: `PRIMITIVES.md` / `GAPS.md` / `PLAN.md` are now under `docs/legacy/` (deprecated); `VOCABULARY.md` is at `docs/language/VOCABULARY.md`. The review is preserved as-is for the record — do not patch filenames into the body.
+
 ---
 
 ## What I Like
