@@ -76,6 +76,8 @@ gsp_poll_lockdown:
     add x1, sp, #64                     // timespec at sp+64
     mov x8, #SYS_CLOCK_GETTIME
     svc #0
+    cmp x0, #0
+    b.lt .timeout                        // clock_gettime failed -- treat as timeout
     ldr x21, [sp, #64]                  // x21 = start_seconds
 
 .poll_loop:
@@ -110,6 +112,8 @@ gsp_poll_lockdown:
     add x1, sp, #64
     mov x8, #SYS_CLOCK_GETTIME
     svc #0
+    cmp x0, #0
+    b.lt .timeout                        // clock_gettime failed -- treat as timeout
     ldr x0, [sp, #64]                   // current_seconds
     sub x0, x0, x21                     // elapsed seconds
     cmp x0, #TIMEOUT_SECS

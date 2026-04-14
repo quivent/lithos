@@ -35,6 +35,7 @@
 .equ COT_SCRATCH_STACK,     896      // 860 bumped to 16-byte alignment
 .equ RESP_BUF_SIZE,         256      // one EMEM packet
 .equ FSP_CHANNEL,           0
+.equ FSP_EMEM_CH0_MSGQ_OFFSET, 512   // FSP->CPU response queue starts at EMEM byte 512
 .equ NVDM_TYPE_COT,         0x14     // per kern_fsp.h (see fsp_plan.md)
 
 // ---- Error codes returned in x0 ----
@@ -253,7 +254,7 @@ fsp_send_boot_commands:
 
     ldr     x0, [sp, #OFF_BAR0]
     mov     x1, #FSP_CHANNEL
-    mov     w2, #0                      // byte offset: start of EMEM
+    mov     w2, #FSP_EMEM_CH0_MSGQ_OFFSET // byte offset: FSP->CPU response queue
     add     x3, sp, #OFF_RESP_BUF
     mov     w4, #RESP_BUF_SIZE          // 256 bytes
     bl      fsp_emem_read

@@ -244,10 +244,15 @@ gsp_fw_load:
     ldr     x22, [x28, #SH_OFFSET]     // fwimage file offset
     ldr     x23, [x28, #SH_SIZE]       // fwimage size
 
-    // ---- Validate .fwimage fits in file ----
-    // Check: fwimage_offset + fwimage_size <= file_size
-    add     x0, x22, x23
-    cmp     x0, x20                     // compare against file_size
+    // ---- Validate .fwimage fits in file (overflow-safe) ----
+    // Check each operand individually before adding to prevent
+    // 64-bit unsigned wraparound from bypassing the bounds check.
+    cmp     x22, x20                    // fwimage_offset > file_size?
+    b.hi    .fw_fwimg_oob
+    cmp     x23, x20                    // fwimage_size > file_size?
+    b.hi    .fw_fwimg_oob
+    add     x0, x22, x23               // safe: both <= file_size, no wrap
+    cmp     x0, x20                     // sum > file_size?
     b.hi    .fw_fwimg_oob
 
     // Store image size
@@ -322,17 +327,25 @@ gsp_fw_load:
     // ---- 10b. Validate code/data/manifest offsets within .fwimage ----
     // x0 still points to .fwimage header in mmap'd file, x23 = fwimage_size
 
-    // code_offset + code_size <= fwimage_size
+    // code_offset + code_size <= fwimage_size (overflow-safe)
     ldr     x1, [x0, #0x10]            // code_offset
     ldr     x2, [x0, #0x18]            // code_size
-    add     x1, x1, x2
+    cmp     x1, x23                    // code_offset > fwimage_size?
+    b.hi    .fw_seg_oob
+    cmp     x2, x23                    // code_size > fwimage_size?
+    b.hi    .fw_seg_oob
+    add     x1, x1, x2                // safe: both <= fwimage_size, no wrap
     cmp     x1, x23
     b.hi    .fw_seg_oob
 
-    // data_offset + data_size <= fwimage_size
+    // data_offset + data_size <= fwimage_size (overflow-safe)
     ldr     x1, [x0, #0x20]            // data_offset
     ldr     x2, [x0, #0x28]            // data_size
-    add     x1, x1, x2
+    cmp     x1, x23                    // data_offset > fwimage_size?
+    b.hi    .fw_seg_oob
+    cmp     x2, x23                    // data_size > fwimage_size?
+    b.hi    .fw_seg_oob
+    add     x1, x1, x2                // safe: both <= fwimage_size, no wrap
     cmp     x1, x23
     b.hi    .fw_seg_oob
 

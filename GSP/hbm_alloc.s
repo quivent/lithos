@@ -77,15 +77,20 @@ hbm_alloc_init:
 // used for WPR regions, page tables, and DMA structures that
 // require large-page alignment.
 //
-// Clobbers: x2, x3, x4, x5
+// Clobbers: x2, x3, x4, x5, x6, x7, x8, x9
 // ---------------------------------------------------------------
 .globl hbm_alloc
 hbm_alloc:
     // Align size up to 2MB: size = (size + 0x1FFFFF) & ~0x1FFFFF
+    mov     x9, x0                  // x9 = original requested size (for overflow check)
     mov     x2, ALIGN_2MB_MASK
     add     x0, x0, x2              // size + 0x1FFFFF
     bic     x0, x0, x2              // clear low 21 bits => aligned size
     // x0 = aligned_size
+
+    // Guard: reject zero-size requests (aliased pointers) and wraparound
+    cbz     x9, .alloc_oom          // zero-size request => return -1
+    cbz     x0, .alloc_oom          // aligned wrapped to zero => overflow
 
     // Load current bump offset
     adrp    x3, hbm_bump

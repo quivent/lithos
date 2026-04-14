@@ -35,6 +35,11 @@
 // ---- Syscall numbers ----
 .equ SYS_WRITE,          64
 .equ SYS_CLOCK_GETTIME,  113
+.equ SYS_RT_SIGPROCMASK, 135
+
+// ---- Signal masking constants ----
+.equ SIG_BLOCK,          0
+.equ SIG_UNBLOCK,        1
 
 // ---- Clock IDs ----
 .equ CLOCK_MONOTONIC,    1
@@ -70,6 +75,10 @@ msg_deassert_timeout_len = . - msg_deassert_timeout - 1
 falcon_msg_bar0_null:      .asciz "gsp: ERROR: BAR0 not mapped for falcon reset\n"
 falcon_msg_bar0_null_len = . - falcon_msg_bar0_null - 1
 
+.align 3
+.Lsigmask:
+    .quad   0x8006               // bits for SIGHUP(1), SIGINT(2), SIGTERM(15)
+
 // ============================================================
 // Text section
 // ============================================================
@@ -94,6 +103,14 @@ falcon_reset:
     mov     x29, sp
     stp     x19, x20, [sp, #16]
     stp     x21, x22, [sp, #32]
+
+    // Block SIGTERM/SIGINT/SIGHUP during critical MMIO
+    mov     x0, #SIG_BLOCK
+    adr     x1, .Lsigmask        // pointer to signal set
+    mov     x2, #0               // don't save old set
+    mov     x3, #8               // sigsetsize
+    mov     x8, #SYS_RT_SIGPROCMASK
+    svc     #0
 
     // Load BAR0 base
     adrp    x19, bar0_base
@@ -124,6 +141,8 @@ falcon_reset:
     add     x1, sp, #48              // timespec at sp+48
     mov     x8, #SYS_CLOCK_GETTIME
     svc     #0
+    cmp     x0, #0
+    b.lt    .falcon_assert_timeout    // clock_gettime failed -- treat as timeout
     ldr     x21, [sp, #48]           // x21 = start_seconds
 
     isb                               // serialize before first MMIO read
@@ -138,6 +157,8 @@ falcon_reset:
     add     x1, sp, #48
     mov     x8, #SYS_CLOCK_GETTIME
     svc     #0
+    cmp     x0, #0
+    b.lt    .falcon_assert_timeout    // clock_gettime failed -- treat as timeout
     ldr     x0, [sp, #48]            // current_seconds
     sub     x0, x0, x21              // elapsed seconds
     cmp     x0, #FALCON_TIMEOUT_SECS
@@ -169,6 +190,8 @@ falcon_reset:
     add     x1, sp, #48              // timespec at sp+48
     mov     x8, #SYS_CLOCK_GETTIME
     svc     #0
+    cmp     x0, #0
+    b.lt    .falcon_deassert_timeout  // clock_gettime failed -- treat as timeout
     ldr     x21, [sp, #48]           // x21 = start_seconds
 
     isb                               // serialize before first MMIO read
@@ -183,6 +206,8 @@ falcon_reset:
     add     x1, sp, #48
     mov     x8, #SYS_CLOCK_GETTIME
     svc     #0
+    cmp     x0, #0
+    b.lt    .falcon_deassert_timeout  // clock_gettime failed -- treat as timeout
     ldr     x0, [sp, #48]            // current_seconds
     sub     x0, x0, x21              // elapsed seconds
     cmp     x0, #FALCON_TIMEOUT_SECS
@@ -236,6 +261,20 @@ falcon_reset:
     mov     x0, #-3                   // -3 = BAR0 not mapped
 
 .falcon_return:
+    // Save return value across sigprocmask call
+    mov     x19, x0
+
+    // Unblock signals
+    mov     x0, #SIG_UNBLOCK
+    adr     x1, .Lsigmask
+    mov     x2, #0
+    mov     x3, #8
+    mov     x8, #SYS_RT_SIGPROCMASK
+    svc     #0
+
+    // Restore return value
+    mov     x0, x19
+
     ldp     x21, x22, [sp, #32]
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #64
