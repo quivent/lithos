@@ -50,11 +50,14 @@ gsp_bcr_start:
     cbz     x1, .bcr_bad_params
 
     // Block SIGTERM/SIGINT/SIGHUP during critical MMIO
-    // Save bar0 (x0) and fmc_params_pa (x1) across syscall --
-    // adr x1 overwrites the original x1, so we must save it explicitly.
+    // Save x0-x3 across the sigprocmask syscall. The setup clobbers
+    // x0 (SIG_BLOCK), x1 (sigmask ptr), x2 (oldset=0), x3 (sigsetsize=8),
+    // and x8 (syscall nr). x4-x5 are untouched before svc, so the kernel
+    // preserves them. x0-x3 must be explicitly saved/restored.
     mov     x9, x0               // save bar0 base
     mov     x10, x1              // save fmc_params_pa
     mov     x11, x2              // save fmc_image_pa
+    mov     x12, x3              // save code_offset
     mov     x0, #SIG_BLOCK
     adr     x1, .Lbcr_sigmask    // pointer to signal set
     mov     x2, #0               // don't save old set
@@ -64,7 +67,8 @@ gsp_bcr_start:
     mov     x0, x9               // restore bar0 base
     mov     x1, x10              // restore fmc_params_pa
     mov     x2, x11              // restore fmc_image_pa
-    // x3-x5 preserved by kernel across syscall
+    mov     x3, x12              // restore code_offset
+    // x4-x5 untouched before svc, preserved by kernel
 
     // ----------------------------------------------------------------
     // 1. Write fmc_params_pa to MAILBOX0/1
@@ -180,6 +184,6 @@ gsp_bcr_start:
 
 .align 3
 .Lbcr_sigmask:
-    .quad   0x8006               // bits for SIGHUP(1), SIGINT(2), SIGTERM(15)
+    .quad   0x4003               // SIGHUP(1)=bit0, SIGINT(2)=bit1, SIGTERM(15)=bit14
 
 .size gsp_bcr_start, . - gsp_bcr_start

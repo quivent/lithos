@@ -264,11 +264,22 @@ bar_map_init:
     b       .bar_map_return
 
 .bar4_mmap_fail:
-    // mmap failed but fd in x19 is still open -- close it before erroring
+    // mmap failed but BAR4 fd in x19 is still open -- close it
     mov     x0, x19
     mov     x8, #SYS_CLOSE
     svc     #0
 .bar4_open_fail:
+    // Also close BAR0 lock fd (release flock so retries/other processes aren't blocked)
+    adrp    x1, bar0_lock_fd
+    add     x1, x1, :lo12:bar0_lock_fd
+    ldr     x0, [x1]
+    cmn     x0, #1                    // skip if bar0_lock_fd == -1 (never set)
+    b.eq    .bar4_skip_lockfd_close
+    mov     x8, #SYS_CLOSE
+    svc     #0
+    mov     x0, #-1
+    str     x0, [x1]                  // reset to -1
+.bar4_skip_lockfd_close:
     adrp    x1, msg_bar4_fail
     add     x1, x1, :lo12:msg_bar4_fail
     mov     x2, #msg_bar4_fail_len

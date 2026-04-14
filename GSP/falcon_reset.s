@@ -290,4 +290,4 @@ falcon_print_msg:
 // Signal mask literal in .text (must be in same section as adr references)
 .align 3
 .Lsigmask:
-    .quad   0x8006               // bits for SIGHUP(1), SIGINT(2), SIGTERM(15)
+    .quad   0x4003               // SIGHUP(1)=bit0, SIGINT(2)=bit1, SIGTERM(15)=bit14
