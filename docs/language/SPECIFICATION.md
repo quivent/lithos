@@ -493,5 +493,4 @@ memory, barriers, and GPU launch configuration.
 | Conv kernel size | 4 |
 | Total layers | 64 (48 DeltaNet + 16 full attention) |
 | State matrix per head | [128, 128] FP32 |
-| Vocabulary size | 248,320 |
 | Quantization | W4A16 GPTQ |

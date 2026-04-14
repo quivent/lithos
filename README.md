@@ -16,7 +16,7 @@ Target: **Qwen 3.5 27B** (Huihui-abliterated, GPTQ W4A16) on GH200 480GB.
 
 ## Architecture
 
-The self-hosting compiler (compiler/compiler.ls, 5,467 lines) has 7 sections:
+The self-hosting compiler (compiler/compiler.ls) has 7 sections:
 ARM64 backend, GPU backend, Lexer, Parser, Safetensors reader, ELF writer, Main entry.
 
 Supporting infrastructure:

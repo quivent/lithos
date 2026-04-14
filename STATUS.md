@@ -15,7 +15,7 @@
 - Compile-time unrolling would copy the layer body N times (48× or 16×), producing enormous, inflexible code. Runtime grid-sync is fast (Hopper hardware primitive) and keeps code compact.
 - Both cubins emitted from `.ls` source by the Lithos compiler as raw Hopper binary (direct instruction encoding). No SASS assembler, no ptxas, no PTX, no CUDA runtime.
 - Launcher calls dispatch a handful of times per token, not per-layer.
-- `compiler.ls` — **5,467 lines** (not 4,739 as previously listed in PLAN.md).
+- `compiler.ls` — line count removed from docs (was going stale). Run `wc -l compiler/compiler.ls` for current.
 - DeltaNet state memory: **48MB** fixed per sequence (48 layers × 16 heads × 128 × 128 × f32). Not 12.6MB.
 - `register_count` lives in the **Shader Program Descriptor (SPD) at offset 0x094** — not in cbuf0 or QMD.
 - `qmd.ls` comment claiming "register_count lives in cbuf0" is wrong. SPD 0x094 is correct (3-point verified via cbuf0_fields.md probe).
