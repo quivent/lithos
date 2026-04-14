@@ -120,7 +120,7 @@
 .equ KIND_COMP,      4
 .equ KIND_CONST,     6
 
-.equ MAX_SYMS,      512
+.equ MAX_SYMS,      1024
 .equ MAX_PATCH,     64
 .equ MAX_LOOP,      16
 
@@ -1361,7 +1361,21 @@ parse_body:
     ldr     w1, [x19, #8]
     ldr     w9, [sp]
     cmp     w1, w9
-    b.lt    .Lbody_done
+    b.ge    .Lbody_indent_ok
+    // Indent < body level — but check for blank line first.
+    // Blank line = INDENT(0) + NEWLINE → skip, don't exit body.
+    cbnz    w1, .Lbody_done         // non-zero indent below body = real dedent
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lbody_done
+    ldr     w2, [x4]
+    cmp     w2, #TOK_NEWLINE
+    b.ne    .Lbody_done             // INDENT(0) + non-newline = real dedent
+    // Blank line: skip INDENT(0) + NEWLINE
+    add     x19, x19, #TOK_STRIDE_SZ
+    add     x19, x19, #TOK_STRIDE_SZ
+    b       .Lbody_loop
+.Lbody_indent_ok:
     add     x19, x19, #TOK_STRIDE_SZ
     b       .Lbody_loop
 .Lbody_newline:

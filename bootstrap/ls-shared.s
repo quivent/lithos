@@ -39,7 +39,7 @@
 .equ LS_CODE_BUF_SIZE,   1048576          // 1 MB
 .equ LS_TOKEN_BUF_SIZE,  1048572          // 87381 × 12 B (lexer cap)
 .equ LS_SYM_ENTRY_SIZE,  48
-.equ LS_SYM_MAX,         512
+.equ LS_SYM_MAX,         1024
 .equ LS_SYM_TABLE_SIZE,  (LS_SYM_ENTRY_SIZE * LS_SYM_MAX)   // 24 576
 .equ LS_COMP_ENTRY_SIZE, 48
 .equ LS_COMP_MAX,        256
