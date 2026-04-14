@@ -413,8 +413,9 @@ _start:
 
 // ============================================================
 .print_reg:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x22, [sp, #16]
     mov     w22, w0
     mov     x0, #1
     mov     x8, #SYS_WRITE
@@ -427,7 +428,8 @@ _start:
     mov     x2, #1
     mov     x8, #SYS_WRITE
     svc     #0
-    ldp     x29, x30, [sp], #16
+    ldr     x22, [sp, #16]
+    ldp     x29, x30, [sp], #32
     ret
 
 .print_hex32:

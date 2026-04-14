@@ -11,15 +11,17 @@
 //   fsp_init            -- verify FSP is ready (scratch group 2 magic,
 //                          queue/msgq empty).  bar0 in x0.
 //   cot_build_payload   -- populate an NVDM_PAYLOAD_COT struct.
-//                          x0 = dst buffer, x1 = fmc_phys, x2 = manifest_off,
-//                          x3 = boot_args_phys.  (See fsp/cot_payload.s.)
+//                          x0 = fw_image_bar4_cpu, x1 = manifest_off,
+//                          x2 = dst buffer.  (See fsp/cot_payload.s.)
 //   mctp_send_payload   -- frame + write packets to CPU->FSP EMEM queue.
-//                          x0 = bar0, x1 = channel (0), x2 = nvdm_type,
-//                          x3 = payload ptr, x4 = payload len.
+//                          x0 = bar0, x1 = channel (0), x2 = payload ptr,
+//                          x3 = payload len.
 //   fsp_response_poll   -- wait for MSGQ_HEAD != MSGQ_TAIL, with timeout.
-//                          x0 = bar0, x1 = channel.  Returns 0 / -ETIMEDOUT.
+//                          x0 = bar0, x1 = channel, x2 = timeout_secs.
+//                          Returns 0 / -1 on timeout.
 //   fsp_emem_read       -- drain one response packet from EMEM into buffer.
-//                          x0 = bar0, x1 = channel, x2 = dst, x3 = max dw.
+//                          x0 = bar0, x1 = channel, x2 = byte_offset,
+//                          x3 = dst, x4 = len_bytes.
 //   fsp_response_parse  -- validate MCTP+NVDM hdrs, extract status dword.
 //                          x0 = buf, x1 = len.  Returns FSP status (0 ok).
 //
@@ -33,7 +35,7 @@
 .equ COT_SCRATCH_STACK,     896      // 860 bumped to 16-byte alignment
 .equ RESP_BUF_SIZE,         256      // one EMEM packet
 .equ FSP_CHANNEL,           0
-.equ NVDM_TYPE_COT,         0x15     // per kern_fsp.h (see fsp_plan.md)
+.equ NVDM_TYPE_COT,         0x14     // per kern_fsp.h (see fsp_plan.md)
 
 // ---- Error codes returned in x0 ----
 .equ FSP_ERR_INIT,       -1
@@ -196,17 +198,15 @@ fsp_send_boot_commands:
     mov     x2, #msg_fsp_build_len
     bl      fsp_print
 
-    add     x0, sp, #OFF_COT_BUF        // dst scratch buffer
-
     adrp    x4, fw_bar4_cpu
     add     x4, x4, :lo12:fw_bar4_cpu
-    ldr     x1, [x4]                    // fw_bar4_cpu (u64)
+    ldr     x0, [x4]                    // x0 = fw_bar4_cpu (u64)
 
     adrp    x4, fw_manifest_offset
     add     x4, x4, :lo12:fw_manifest_offset
-    ldr     x2, [x4]                    // fw_manifest_offset (u64)
+    ldr     x1, [x4]                    // x1 = fw_manifest_offset (u64)
 
-    mov     x3, #0                      // boot-args PA: TODO
+    add     x2, sp, #OFF_COT_BUF        // x2 = dst scratch buffer
     bl      cot_build_payload
     cmp     w0, #0
     b.lt    .Lfail_build
@@ -221,9 +221,8 @@ fsp_send_boot_commands:
 
     ldr     x0, [sp, #OFF_BAR0]
     mov     x1, #FSP_CHANNEL
-    mov     x2, #NVDM_TYPE_COT
-    add     x3, sp, #OFF_COT_BUF
-    mov     x4, #COT_PAYLOAD_SIZE
+    add     x2, sp, #OFF_COT_BUF
+    mov     w3, #COT_PAYLOAD_SIZE
     bl      mctp_send_payload
     cmp     w0, #0
     b.lt    .Lfail_send
@@ -238,6 +237,7 @@ fsp_send_boot_commands:
 
     ldr     x0, [sp, #OFF_BAR0]
     mov     x1, #FSP_CHANNEL
+    mov     w2, #5                      // timeout: 5 seconds
     bl      fsp_response_poll
     cmp     w0, #0
     b.lt    .Lfail_poll
@@ -253,8 +253,9 @@ fsp_send_boot_commands:
 
     ldr     x0, [sp, #OFF_BAR0]
     mov     x1, #FSP_CHANNEL
-    add     x2, sp, #OFF_RESP_BUF
-    mov     x3, #(RESP_BUF_SIZE / 4)    // 64 dwords
+    mov     w2, #0                      // byte offset: start of EMEM
+    add     x3, sp, #OFF_RESP_BUF
+    mov     w4, #RESP_BUF_SIZE          // 256 bytes
     bl      fsp_emem_read
     cmp     w0, #0
     b.lt    .Lfail_read

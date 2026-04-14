@@ -130,6 +130,8 @@ msg_step6_begin:     .asciz "gsp: [6/9] gsp_bcr_start -- programming BCR, starti
 msg_step6_begin_len  = . - msg_step6_begin - 1
 msg_step6_done:      .asciz "gsp: [6/9] gsp_bcr_start -- OK (CPU started)\n"
 msg_step6_done_len   = . - msg_step6_done - 1
+msg_step6_fail:      .asciz "gsp: [6/9] gsp_bcr_start -- FAILED, aborting\n"
+msg_step6_fail_len   = . - msg_step6_fail - 1
 
 msg_step7_begin:     .asciz "gsp: [8/9] gsp_poll_lockdown -- waiting for PRIV_LOCKDOWN release...\n"
 msg_step7_begin_len  = . - msg_step7_begin - 1
@@ -238,7 +240,7 @@ _start:
     mov     x2, #GSP_RESERVED_BYTES         // x2 = 64 MB initial offset
     bl      hbm_alloc_init
     cmp     x0, #0
-    b.ne    .boot_fail_step4_alloc
+    b.lt    .boot_fail_step4_alloc
 
     adrp    x1, msg_step4_done
     add     x1, x1, :lo12:msg_step4_done
@@ -310,10 +312,18 @@ _start:
     ldr     x5, [x6]
 
     bl      gsp_bcr_start
+    cmp     x0, #0
+    b.lt    .boot_fail_step6
 
     adrp    x1, msg_step6_done
     add     x1, x1, :lo12:msg_step6_done
     mov     x2, #msg_step6_done_len
+    bl      boot_print
+
+    // Step 7: FSP -- not yet wired
+    adrp    x1, msg_step_fsp_todo
+    add     x1, x1, :lo12:msg_step_fsp_todo
+    mov     x2, #msg_step_fsp_todo_len
     bl      boot_print
 
     // =============================================================
@@ -420,6 +430,15 @@ _start:
     mov     x2, #msg_step3_fail_len
     bl      boot_print
     mov     x0, #3
+    mov     x8, #SYS_EXIT
+    svc     #0
+
+.boot_fail_step6:
+    adrp    x1, msg_step6_fail
+    add     x1, x1, :lo12:msg_step6_fail
+    mov     x2, #msg_step6_fail_len
+    bl      boot_print
+    mov     x0, #7
     mov     x8, #SYS_EXIT
     svc     #0
 

@@ -245,6 +245,7 @@ fsp_response_ack:
     ldr w4, [x3]                    // current tail
     add w4, w4, w2                  // += consumed_bytes
     str w4, [x3]
+    dsb     st                          // ensure MSGQ_TAIL write is committed
     // MMIO posted-write barrier: read-back to force ordering.
     ldr w4, [x3]
     ret

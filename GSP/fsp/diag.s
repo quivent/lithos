@@ -20,8 +20,8 @@
 .equ SYS_WRITE,     64
 
 // ---- FSP register offsets (from fsp_plan.md table) ----
-// NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(i) = 0x8F0320 + i*4  (8 dwords)
-// NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_3(i) = 0x8F0330 + i*4  (8 dwords)
+// NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_2(i) = 0x8F0320 + i*4  (4 dwords)
+// NV_PFSP_FALCON_COMMON_SCRATCH_GROUP_3(i) = 0x8F0330 + i*4  (4 dwords)
 // NV_PFSP_QUEUE_HEAD(i)                    = 0x8F2C00 + i*8
 // NV_PFSP_QUEUE_TAIL(i)                    = 0x8F2C04 + i*8
 // NV_PFSP_MSGQ_HEAD(i)                     = 0x8F2C80 + i*8
@@ -54,14 +54,6 @@ lbl_s2_2:   .asciz "FSP_SCRATCH2[2]"
 lbl_s2_2_l = . - lbl_s2_2 - 1
 lbl_s2_3:   .asciz "FSP_SCRATCH2[3]"
 lbl_s2_3_l = . - lbl_s2_3 - 1
-lbl_s2_4:   .asciz "FSP_SCRATCH2[4]"
-lbl_s2_4_l = . - lbl_s2_4 - 1
-lbl_s2_5:   .asciz "FSP_SCRATCH2[5]"
-lbl_s2_5_l = . - lbl_s2_5 - 1
-lbl_s2_6:   .asciz "FSP_SCRATCH2[6]"
-lbl_s2_6_l = . - lbl_s2_6 - 1
-lbl_s2_7:   .asciz "FSP_SCRATCH2[7]"
-lbl_s2_7_l = . - lbl_s2_7 - 1
 
 lbl_s3_0:   .asciz "FSP_SCRATCH3[0]"
 lbl_s3_0_l = . - lbl_s3_0 - 1
@@ -71,14 +63,6 @@ lbl_s3_2:   .asciz "FSP_SCRATCH3[2]"
 lbl_s3_2_l = . - lbl_s3_2 - 1
 lbl_s3_3:   .asciz "FSP_SCRATCH3[3]"
 lbl_s3_3_l = . - lbl_s3_3 - 1
-lbl_s3_4:   .asciz "FSP_SCRATCH3[4]"
-lbl_s3_4_l = . - lbl_s3_4 - 1
-lbl_s3_5:   .asciz "FSP_SCRATCH3[5]"
-lbl_s3_5_l = . - lbl_s3_5 - 1
-lbl_s3_6:   .asciz "FSP_SCRATCH3[6]"
-lbl_s3_6_l = . - lbl_s3_6 - 1
-lbl_s3_7:   .asciz "FSP_SCRATCH3[7]"
-lbl_s3_7_l = . - lbl_s3_7 - 1
 
 // Per-channel queue labels (short -- we only dump up to 8 channels).
 lbl_qh:     .asciz " QH"
@@ -260,7 +244,7 @@ print_hex32:
 // fsp_diag_dump_scratch(bar0)
 //   x0 = bar0 base
 //
-// Reads SCRATCH_GROUP_2 and SCRATCH_GROUP_3 (8 dwords each) and prints
+// Reads SCRATCH_GROUP_2 and SCRATCH_GROUP_3 (4 dwords each) and prints
 // each register as "FSP_SCRATCHn[i]: 0xXXXXXXXX\n" to stderr.
 // Clobbers: x0-x8, x16-x17.
 // ------------------------------------------------------------
@@ -280,7 +264,7 @@ fsp_diag_dump_scratch:
     movk    x20, #((SCRATCH_GROUP_2 >> 16) & 0xFFFF), lsl #16
     add     x20, x19, x20             // x20 = &SCRATCH_GROUP_2[0]
 
-    // ---- SCRATCH_GROUP_2 (8 dwords) ----
+    // ---- SCRATCH_GROUP_2 (4 dwords) ----
     ldr     w0, [x20, #(0*4)]
     adrp    x1, lbl_s2_0
     add     x1, x1, :lo12:lbl_s2_0
@@ -305,31 +289,7 @@ fsp_diag_dump_scratch:
     mov     w2, #lbl_s2_3_l
     bl      print_hex32
 
-    ldr     w0, [x20, #(4*4)]
-    adrp    x1, lbl_s2_4
-    add     x1, x1, :lo12:lbl_s2_4
-    mov     w2, #lbl_s2_4_l
-    bl      print_hex32
-
-    ldr     w0, [x20, #(5*4)]
-    adrp    x1, lbl_s2_5
-    add     x1, x1, :lo12:lbl_s2_5
-    mov     w2, #lbl_s2_5_l
-    bl      print_hex32
-
-    ldr     w0, [x20, #(6*4)]
-    adrp    x1, lbl_s2_6
-    add     x1, x1, :lo12:lbl_s2_6
-    mov     w2, #lbl_s2_6_l
-    bl      print_hex32
-
-    ldr     w0, [x20, #(7*4)]
-    adrp    x1, lbl_s2_7
-    add     x1, x1, :lo12:lbl_s2_7
-    mov     w2, #lbl_s2_7_l
-    bl      print_hex32
-
-    // ---- SCRATCH_GROUP_3 (8 dwords) ----
+    // ---- SCRATCH_GROUP_3 (4 dwords) ----
     // Repoint x20 to SCRATCH_GROUP_3 base.
     movz    x20, #(SCRATCH_GROUP_3 & 0xFFFF)
     movk    x20, #((SCRATCH_GROUP_3 >> 16) & 0xFFFF), lsl #16
@@ -357,30 +317,6 @@ fsp_diag_dump_scratch:
     adrp    x1, lbl_s3_3
     add     x1, x1, :lo12:lbl_s3_3
     mov     w2, #lbl_s3_3_l
-    bl      print_hex32
-
-    ldr     w0, [x20, #(4*4)]
-    adrp    x1, lbl_s3_4
-    add     x1, x1, :lo12:lbl_s3_4
-    mov     w2, #lbl_s3_4_l
-    bl      print_hex32
-
-    ldr     w0, [x20, #(5*4)]
-    adrp    x1, lbl_s3_5
-    add     x1, x1, :lo12:lbl_s3_5
-    mov     w2, #lbl_s3_5_l
-    bl      print_hex32
-
-    ldr     w0, [x20, #(6*4)]
-    adrp    x1, lbl_s3_6
-    add     x1, x1, :lo12:lbl_s3_6
-    mov     w2, #lbl_s3_6_l
-    bl      print_hex32
-
-    ldr     w0, [x20, #(7*4)]
-    adrp    x1, lbl_s3_7
-    add     x1, x1, :lo12:lbl_s3_7
-    mov     w2, #lbl_s3_7_l
     bl      print_hex32
 
     ldp     x19, x20, [sp, #16]

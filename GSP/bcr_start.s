@@ -13,7 +13,7 @@
 //   x4 = data_offset   (RM_RISCV_UCODE_DESC.monitorDataOffset)
 //   x5 = manifest_offset (RM_RISCV_UCODE_DESC.manifestOffset)
 //
-// Returns: void (no error path -- registers are fire-and-forget)
+// Returns: x0 = 0 on success, -1 null params, -2 lock verify fail
 //
 // Register allocation:
 //   x0  = bar0 base (preserved)
@@ -34,11 +34,16 @@
 
 gsp_bcr_start:
     // No stack frame needed -- leaf function, no callee-saved regs used.
-    // All work done in x0-x8.
+    // All work done in x0-x9.
     //
     // BAR0 offsets exceed the 12-bit unsigned immediate range for str
     // (max 16380 for 32-bit str), so we load each offset into x8 and
     // use str w_, [x0, x8].
+
+    // ----------------------------------------------------------------
+    // 0. Null-check fmc_params_pa
+    // ----------------------------------------------------------------
+    cbz     x1, .bcr_bad_params
 
     // ----------------------------------------------------------------
     // 1. Write fmc_params_pa to MAILBOX0/1
@@ -92,6 +97,9 @@ gsp_bcr_start:
     add x8, x8, #4                      // x8 = 0x111674 (BCR_PKCPARAM_HI)
     str w7, [x0, x8]                    // BAR0+0x111674 <- manifest[63:32]
 
+    // Barrier: ensure all 6 BCR address writes are committed before lock
+    dsb     st
+
     // ----------------------------------------------------------------
     // 5. Lock BCR and set DMA target = coherent sysmem
     //    bit 31 = LOCK (prevent further BCR modification)
@@ -103,6 +111,13 @@ gsp_bcr_start:
     mov x8, #0x166C
     movk x8, #0x0011, lsl #16           // x8 = 0x11166C (BCR_DMACFG)
     str w7, [x0, x8]                    // BAR0+0x11166C <- LOCK|COHERENT
+    dsb     st                           // drain stores before readback
+    ldr w9, [x0, x8]                    // read back DMACFG
+    tbnz    w9, #31, .bcr_locked        // bit 31 set = locked, good
+    // lock failed
+    mov x0, #-2
+    ret
+.bcr_locked:
 
     // ----------------------------------------------------------------
     // 6. Start RISC-V CPU
@@ -118,6 +133,11 @@ gsp_bcr_start:
     // ordered and visible to the GPU before we return.
     dsb sy
 
+    mov x0, #0                          // success
+    ret
+
+.bcr_bad_params:
+    mov x0, #-1                         // null fmc_params_pa
     ret
 
 .size gsp_bcr_start, . - gsp_bcr_start

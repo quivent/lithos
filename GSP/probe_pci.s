@@ -579,9 +579,10 @@ _start:
 //   x0 = label addr, w1 = label len, x2 = path addr
 // ============================================================
 .print_sysfs_value:
-    stp     x29, x30, [sp, #-48]!
+    stp     x29, x30, [sp, #-64]!
     mov     x29, sp
-    str     x2, [sp, #16]      // save path
+    stp     x19, x23, [sp, #16]
+    str     x2, [sp, #32]      // save path
     // Print label
     mov     x2, x1
     mov     x1, x0
@@ -590,7 +591,7 @@ _start:
     svc     #0
     // Open file
     mov     x0, #AT_FDCWD
-    ldr     x1, [sp, #16]
+    ldr     x1, [sp, #32]
     mov     x2, #O_RDONLY
     mov     x3, #0
     mov     x8, #SYS_OPENAT
@@ -619,7 +620,8 @@ _start:
     mov     x2, x23
     mov     x8, #SYS_WRITE
     svc     #0
-    ldp     x29, x30, [sp], #48
+    ldp     x19, x23, [sp, #16]
+    ldp     x29, x30, [sp], #64
     ret
 .sysfs_na:
     // Print "N/A\n"
@@ -628,7 +630,8 @@ _start:
     mov     x2, #4
     mov     x8, #SYS_WRITE
     svc     #0
-    ldp     x29, x30, [sp], #48
+    ldp     x19, x23, [sp, #16]
+    ldp     x29, x30, [sp], #64
     ret
 .sysfs_na_str:
     .ascii "N/A\n"
@@ -638,8 +641,9 @@ _start:
 //   w0 = value, x1 = prefix addr, w2 = prefix len
 // ============================================================
 .print_reg:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x22, [sp, #16]
     mov     w22, w0
     // Print prefix
     mov     x0, #1
@@ -649,7 +653,8 @@ _start:
     mov     w0, w22
     bl      .print_hex32
     bl      .print_nl
-    ldp     x29, x30, [sp], #16
+    ldr     x22, [sp, #16]
+    ldp     x29, x30, [sp], #32
     ret
 
 // ============================================================
@@ -657,8 +662,9 @@ _start:
 //   w0 = value (low 16 bits), x1 = prefix addr, w2 = prefix len
 // ============================================================
 .print_hex16_nl:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x22, [sp, #16]
     mov     w22, w0
     mov     x0, #1
     mov     x8, #SYS_WRITE
@@ -666,7 +672,8 @@ _start:
     mov     w0, w22
     bl      .print_hex16
     bl      .print_nl
-    ldp     x29, x30, [sp], #16
+    ldr     x22, [sp, #16]
+    ldp     x29, x30, [sp], #32
     ret
 
 // ============================================================
@@ -674,8 +681,9 @@ _start:
 //   w0 = value (low 8 bits), x1 = prefix addr, w2 = prefix len
 // ============================================================
 .print_hex8_nl:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x22, [sp, #16]
     mov     w22, w0
     mov     x0, #1
     mov     x8, #SYS_WRITE
@@ -683,7 +691,8 @@ _start:
     mov     w0, w22
     bl      .print_hex8
     bl      .print_nl
-    ldp     x29, x30, [sp], #16
+    ldr     x22, [sp, #16]
+    ldp     x29, x30, [sp], #32
     ret
 
 // ============================================================
@@ -691,8 +700,9 @@ _start:
 //   w0 = value (low 24 bits), x1 = prefix addr, w2 = prefix len
 // ============================================================
 .print_hex24_nl:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x22, [sp, #16]
     mov     w22, w0
     mov     x0, #1
     mov     x8, #SYS_WRITE
@@ -700,7 +710,8 @@ _start:
     mov     w0, w22
     bl      .print_hex24
     bl      .print_nl
-    ldp     x29, x30, [sp], #16
+    ldr     x22, [sp, #16]
+    ldp     x29, x30, [sp], #32
     ret
 
 // ============================================================
@@ -708,8 +719,9 @@ _start:
 //   x0 = 64-bit value, x1 = prefix addr, w2 = prefix len
 // ============================================================
 .print_hex64_with_prefix_nl:
-    stp     x29, x30, [sp, #-16]!
+    stp     x29, x30, [sp, #-32]!
     mov     x29, sp
+    str     x22, [sp, #16]
     mov     x22, x0
     mov     x0, #1
     mov     x8, #SYS_WRITE
@@ -717,7 +729,8 @@ _start:
     mov     x0, x22
     bl      .print_hex64
     bl      .print_nl
-    ldp     x29, x30, [sp], #16
+    ldr     x22, [sp, #16]
+    ldp     x29, x30, [sp], #32
     ret
 
 // ============================================================
