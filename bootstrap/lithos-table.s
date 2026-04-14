@@ -2731,6 +2731,41 @@ parse_atom:
     b.eq    .La_ident_unknown       // dispatch as expression-level call
     ldr     w0, [x0, #SYM_REG]
     add     x19, x19, #TOK_STRIDE_SZ
+    // Check for array subscript: name[expr]
+    cmp     x19, x27
+    b.hs    .La_ident_done
+    ldr     w1, [x19]
+    cmp     w1, #TOK_LBRACK
+    b.ne    .La_ident_done
+    // Array subscript: emit LDRB Xresult, [Xbase, Xindex]
+    add     x19, x19, #TOK_STRIDE_SZ   // skip '['
+    mov     w4, w0                      // base register
+    stp     w4, wzr, [sp, #-16]!
+    bl      parse_expr                  // index expression
+    ldp     w4, wzr, [sp], #16
+    mov     w6, w0                      // index register
+    // Skip ']'
+    cmp     x19, x27
+    b.hs    .La_subscript_emit
+    ldr     w1, [x19]
+    cmp     w1, #TOK_RBRACK
+    b.ne    .La_subscript_emit
+    add     x19, x19, #TOK_STRIDE_SZ
+.La_subscript_emit:
+    // Emit: LDRB Wresult, [Xbase, Xindex]
+    // Encoding: 0x38606800 | (Rm << 16) | (Rn << 5) | Rd
+    bl      alloc_reg
+    mov     w7, w0                      // result register
+    lsl     w1, w6, #16                 // Rm (index)
+    lsl     w2, w4, #5                  // Rn (base)
+    orr     w0, w7, w1
+    orr     w0, w0, w2
+    movz    w3, #0x6800
+    movk    w3, #0x3860, lsl #16
+    orr     w0, w0, w3
+    bl      emit32
+    mov     w0, w7
+.La_ident_done:
     ldp     x29, x30, [sp], #16
     ret
 
