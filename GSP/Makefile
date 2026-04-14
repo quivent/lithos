@@ -17,36 +17,10 @@ SRCS := \
 	rpc_channel.s
 
 # Common string/message pool + the _start driver that calls the 9 steps.
-# Previously commented out with "Enable these once they exist" — they exist.
 SRCS += gsp_common.s
 SRCS += boot.s
 
-# FSP (Step 7) sources — Firmware Security Processor boot-command exchange.
-# ~3,225 LOC. Links clean as of 2026-04-14 after renaming
-# fsp_queue_advance → fsp_queue_advance_head in fsp/emem_xfer.s (matches
-# the .extern declaration in fsp/mctp.s:73 and the .equ NV_PFSP_QUEUE_HEAD
-# register it writes to).
-#
-# NOTE: linking these files makes fsp_send_boot_commands callable, but
-# boot.s:123 still prints the TODO placeholder at step 7 — the dispatch
-# (replace the TODO with `bl fsp_send_boot_commands`) is a separate
-# commit, gated on a dry-run validation plan (see docs/runtime/
-# gsp-hard-test-protocol.md).
-#
-# Symbol inventory (per grep on globals):
-#   fsp/bootcmd.s      : fsp_send_boot_commands
-#   fsp/cot_payload.s  : cot_extract_hash, cot_extract_pubkey,
-#                        cot_extract_signature, cot_build_payload
-#   fsp/diag.s         : print_hex32, fsp_diag_dump_scratch,
-#                        fsp_diag_dump_queues, fsp_diag_decode_error
-#   fsp/emem_xfer.s    : fsp_emem_write, fsp_emem_read, fsp_queue_advance_head
-#   fsp/fmc_load.s     : fmc_image_cpu/phys/size, fmc_hash_*, fmc_pubkey_*, fmc_sig_cpu
-#   fsp/init.s         : fsp_init
-#   fsp/mctp.s         : mctp_packetize, mctp_depacketize
-#                        (calls fsp_queue_advance_head via .extern)
-#   fsp/registers.s    : equ-only register map
-#   fsp/response.s     : fsp_response_poll, fsp_response_parse, fsp_response_ack
-#
+# FSP (Step 7) sources.
 SRCS += fsp/registers.s
 SRCS += fsp/init.s
 SRCS += fsp/emem_xfer.s
@@ -81,7 +55,15 @@ RESET_SRCS := reset_main.s bar_map.s gsp_common.s falcon_reset.s
 RESET_OBJS := $(RESET_SRCS:.s=.o)
 RESET_BIN  := gsp_reset
 
-.PHONY: all clean check test reset
+# Dry-run probe binaries — safe validation tools.
+# probe_bcr_dry: programs BCR registers, reads back, skips CPUCTL (no RISC-V start)
+# probe_fsp_dry: writes/reads EMEM, skips QUEUE_HEAD advance (FSP not notified)
+PROBE_COMMON_OBJS := bar_map.o pmc_check.o falcon_reset.o hbm_alloc.o fw_load.o \
+	bcr_start.o poll_lockdown.o rpc_channel.o gsp_common.o \
+	fsp/registers.o fsp/init.o fsp/emem_xfer.o fsp/mctp.o \
+	fsp/cot_payload.o fsp/response.o fsp/fmc_load.o fsp/diag.o fsp/bootcmd.o
+
+.PHONY: all clean check test reset probes
 all: $(BIN)
 
 # Link all .o into the final executable. No libc.
@@ -106,15 +88,21 @@ reset: $(RESET_BIN)
 $(RESET_BIN): $(RESET_OBJS)
 	$(LD) -o $@ $(RESET_OBJS)
 
+# Dry-run probe binaries.
+probes: probe_bcr_dry probe_fsp_dry
+
+probe_bcr_dry: probe_bcr_dry.o $(PROBE_COMMON_OBJS)
+	$(LD) -o $@ probe_bcr_dry.o $(PROBE_COMMON_OBJS)
+
+probe_fsp_dry: probe_fsp_dry.o $(PROBE_COMMON_OBJS)
+	$(LD) -o $@ probe_fsp_dry.o $(PROBE_COMMON_OBJS)
+
 # Assemble each .s into .o. Rebuilds if the .s changes.
-# Every .o depends on gsp_common.s because constant definitions
-# are duplicated and must stay in sync.
 %.o: %.s gsp_common.s
 	$(AS) $(ASFLAGS) -o $@ $<
 
-# Syntax check: assemble every source (including test) to /dev/null.
-# sort -u deduplicates files shared between SRCS and TEST_PROBE_SRCS.
-ALL_SRCS := $(sort $(SRCS) $(TEST_PROBE_SRCS) $(TEST_ALLOC_SRCS) $(TEST_FALCON_SRCS) $(RESET_SRCS))
+# Syntax check: assemble every source to /dev/null.
+ALL_SRCS := $(sort $(SRCS) $(TEST_PROBE_SRCS) $(TEST_ALLOC_SRCS) $(TEST_FALCON_SRCS) $(RESET_SRCS) probe_bcr_dry.s probe_fsp_dry.s)
 check:
 	@set -e; for f in $(ALL_SRCS); do \
 		echo "check $$f"; \
@@ -123,4 +111,6 @@ check:
 	@echo "All $(words $(ALL_SRCS)) sources pass syntax check."
 
 clean:
-	rm -f $(OBJS) $(TEST_PROBE_OBJS) $(TEST_ALLOC_OBJS) $(TEST_FALCON_OBJS) $(RESET_OBJS) $(BIN) $(TEST_PROBE_BIN) $(TEST_ALLOC_BIN) $(TEST_FALCON_BIN) $(RESET_BIN)
+	rm -f $(OBJS) $(TEST_PROBE_OBJS) $(TEST_ALLOC_OBJS) $(TEST_FALCON_OBJS) $(RESET_OBJS) \
+		$(BIN) $(TEST_PROBE_BIN) $(TEST_ALLOC_BIN) $(TEST_FALCON_BIN) $(RESET_BIN) \
+		probe_bcr_dry.o probe_bcr_dry probe_fsp_dry.o probe_fsp_dry
