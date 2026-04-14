@@ -75,10 +75,6 @@ msg_deassert_timeout_len = . - msg_deassert_timeout - 1
 falcon_msg_bar0_null:      .asciz "gsp: ERROR: BAR0 not mapped for falcon reset\n"
 falcon_msg_bar0_null_len = . - falcon_msg_bar0_null - 1
 
-.align 3
-.Lsigmask:
-    .quad   0x8006               // bits for SIGHUP(1), SIGINT(2), SIGTERM(15)
-
 // ============================================================
 // Text section
 // ============================================================
@@ -290,3 +286,8 @@ falcon_print_msg:
     mov     x8, #SYS_WRITE
     svc     #0
     ret
+
+// Signal mask literal in .text (must be in same section as adr references)
+.align 3
+.Lsigmask:
+    .quad   0x8006               // bits for SIGHUP(1), SIGINT(2), SIGTERM(15)

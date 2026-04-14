@@ -64,6 +64,7 @@
 bar0_base:      .quad 0               // mmap'd BAR0 virtual address
 bar4_base:      .quad 0               // mmap'd BAR4 virtual address
 bar4_phys:      .quad 0               // BAR4 physical base (parsed from sysfs)
+bar0_lock_fd:   .quad -1              // BAR0 resource fd kept open for flock
 
 .global bar0_base
 .global bar4_base
@@ -179,10 +180,12 @@ bar_map_init:
     add     x1, x1, :lo12:bar0_base
     str     x0, [x1]
 
-    // Close BAR0 fd (mmap persists after close)
-    mov     x0, x19
-    mov     x8, #SYS_CLOSE
-    svc     #0
+    // Keep BAR0 fd open -- flock is released on close, and we need
+    // the lock to persist for the lifetime of the boot sequence.
+    // The mmap persists independently of the fd.
+    adrp    x1, bar0_lock_fd
+    add     x1, x1, :lo12:bar0_lock_fd
+    str     x19, [x1]              // store fd for later cleanup
 
     // Print success
     adrp    x1, msg_bar0_ok

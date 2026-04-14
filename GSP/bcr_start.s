@@ -50,8 +50,11 @@ gsp_bcr_start:
     cbz     x1, .bcr_bad_params
 
     // Block SIGTERM/SIGINT/SIGHUP during critical MMIO
-    // Save bar0 base (x0) across syscall -- kernel preserves x1-x7
-    mov     x9, x0
+    // Save bar0 (x0) and fmc_params_pa (x1) across syscall --
+    // adr x1 overwrites the original x1, so we must save it explicitly.
+    mov     x9, x0               // save bar0 base
+    mov     x10, x1              // save fmc_params_pa
+    mov     x11, x2              // save fmc_image_pa
     mov     x0, #SIG_BLOCK
     adr     x1, .Lbcr_sigmask    // pointer to signal set
     mov     x2, #0               // don't save old set
@@ -59,7 +62,9 @@ gsp_bcr_start:
     mov     x8, #SYS_RT_SIGPROCMASK
     svc     #0
     mov     x0, x9               // restore bar0 base
-    // Note: x1-x5 preserved by kernel across syscall
+    mov     x1, x10              // restore fmc_params_pa
+    mov     x2, x11              // restore fmc_image_pa
+    // x3-x5 preserved by kernel across syscall
 
     // ----------------------------------------------------------------
     // 1. Write fmc_params_pa to MAILBOX0/1
