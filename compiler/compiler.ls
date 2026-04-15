@@ -80,24 +80,30 @@ is_newline c :
 \\ Accepts [a-zA-Z0-9_] plus a few punctuation chars used in keyword-ish tokens
 \\ (like `if==`, `if>=`, `if<`) so the whole thing is one token we dispatch on.
 scan_ident src pos end :
+    \\ Inlined alnum check to avoid the chained-call X0 collision in
+    \\ the current bootstrap.  Equivalent to:
+    \\   is_alnum c | (c == '.' | '<' | '>' | '=' | '!')
     np pos
     label si_loop
     if>= np end
         goto si_done
     c → 8 (src + np)
-    a is_alnum c
+    upper (c >= 65) & (c <= 90)
+    lower (c >= 97) & (c <= 122)
+    under c == 95
+    digit (c >= 48) & (c <= 57)
     dot c == 46
     al c == 60
     ar c == 62
     eq c == 61
     bg c == 33
-    ok a | dot | al | ar | eq | bg
+    ok upper | lower | under | digit | dot | al | ar | eq | bg
     if== ok 0
         goto si_done
     np np + 1
     goto si_loop
     label si_done
-    np
+    return np
 
 \\ scan_number — advance past an integer or float literal, including 0x.. hex.
 scan_number src pos end :
