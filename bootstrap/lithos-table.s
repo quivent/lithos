@@ -352,23 +352,22 @@ alloc_reg:
     ret
 
 .Lalloc_spill:
-    // All physical registers above reg_floor are exhausted.  Spill the
-    // register at reg_floor (the first *temporary* slot — not a live
-    // binding) into the TARGET program's stack, and recycle it.
-    //
-    // Spilling REG_FIRST instead is wrong: if handle_binding raised
-    // reg_floor above REG_FIRST, then REG_FIRST holds a live binding
-    // value that must not be clobbered.  reg_floor is always the
-    // highest reg that is *not* a protected binding, so it's safe to
-    // spill and reuse.
+    // Spill the register at min(reg_floor, REG_LAST) — the first
+    // temporary slot, but never x28 (BSS_BASE) or above.  If
+    // reg_floor has walked off the end of the allocator pool we must
+    // still recycle something in the legal range; REG_LAST is the
+    // highest register our code is allowed to touch.
     stp     x29, x30, [sp, #-16]!
     adrp    x2, reg_floor
     add     x2, x2, :lo12:reg_floor
     ldr     w2, [x2]
-    // ARM64 encoding: STR Xt, [SP, #-16]! = 0xF81F0FE0 | Rt
+    cmp     w2, #REG_LAST
+    b.le    1f
+    mov     w2, #REG_LAST
+1:  // ARM64 encoding: STR Xt, [SP, #-16]! = 0xF81F0FE0 | Rt
     mov     w0, #0x0FE0
     movk    w0, #0xF81F, lsl #16
-    add     w0, w0, w2                  // Rt = reg_floor
+    add     w0, w0, w2                  // Rt = spill reg
     bl      emit32
     // Increment spill count
     adrp    x0, spill_count
@@ -377,11 +376,14 @@ alloc_reg:
     add     w1, w1, #1
     str     w1, [x0]
     ldp     x29, x30, [sp], #16
-    // Return reg_floor as the recycled register
+    // Return the capped spill reg (min(reg_floor, REG_LAST))
     adrp    x0, reg_floor
     add     x0, x0, :lo12:reg_floor
     ldr     w0, [x0]
-    ret
+    cmp     w0, #REG_LAST
+    b.le    2f
+    mov     w0, #REG_LAST
+2:  ret
 
 free_reg:
     // Reclaim: set next_reg = w0 (frees everything above)
@@ -400,15 +402,20 @@ free_reg:
     // Must match .Lalloc_spill which pushed reg_floor, not REG_FIRST.
 .Lfree_fill_loop:
     cbz     w3, .Lfree_fill_done
-    // ARM64 encoding: LDR Xt, [SP], #16 = 0xF8410FE0 | Rt
+    // ARM64 encoding: LDR Xt, [SP], #16 = 0xF84107E0 | Rt  (post-index)
+    // Fill register must match what .Lalloc_spill pushed, which is
+    // min(reg_floor, REG_LAST).
     stp     w0, w3, [sp, #-16]!
     stp     x1, x2, [sp, #-16]!
     adrp    x4, reg_floor
     add     x4, x4, :lo12:reg_floor
     ldr     w4, [x4]
-    mov     w0, #0x0FE0
+    cmp     w4, #REG_LAST
+    b.le    3f
+    mov     w4, #REG_LAST
+3:  mov     w0, #0x07E0
     movk    w0, #0xF841, lsl #16
-    add     w0, w0, w4                 // Rt = reg_floor
+    add     w0, w0, w4                 // Rt = capped fill reg
     bl      emit32
     ldp     x1, x2, [sp], #16
     ldp     w0, w3, [sp], #16
@@ -2185,6 +2192,103 @@ handle_assign:
     ret
 
 // ============================================================
+// emit_save_bindings — push caller's live binding registers onto
+// the target program's stack.  Iterates over [REG_FIRST, reg_floor)
+// in pairs, emitting STP Xn,Xm,[SP,#-16]! for each pair, and a lone
+// STR for a trailing odd register.  Preserves reg_floor/next_reg.
+emit_save_bindings:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    ldr     w0, [x0]
+    mov     w1, #REG_FIRST
+    cmp     w1, w0
+    b.ge    .Lesb_done
+.Lesb_loop:
+    add     w2, w1, #1
+    cmp     w2, w0
+    b.ge    .Lesb_tail
+    // STP Xw1, Xw2, [SP, #-16]!  encoding:
+    // 0xA9BF0000 | (Xw2 << 10) | (SP=31 << 5) | Xw1
+    movz    w3, #0x0000
+    movk    w3, #0xA9BF, lsl #16
+    lsl     w4, w2, #10
+    orr     w3, w3, w4
+    mov     w4, #(31 << 5)
+    orr     w3, w3, w4
+    orr     w3, w3, w1
+    stp     w0, w1, [sp, #-16]!
+    mov     w0, w3
+    bl      emit32
+    ldp     w0, w1, [sp], #16
+    add     w1, w1, #2
+    cmp     w1, w0
+    b.lt    .Lesb_loop
+    b       .Lesb_done
+.Lesb_tail:
+    // Lone register left.  STR Xw1, [SP, #-16]! = 0xF81F0FE0 | w1
+    movz    w3, #0x0FE0
+    movk    w3, #0xF81F, lsl #16
+    orr     w3, w3, w1
+    mov     w0, w3
+    bl      emit32
+.Lesb_done:
+    ldp     x29, x30, [sp], #16
+    ret
+
+// emit_restore_bindings — counterpart to emit_save_bindings.
+// Pops the saved registers in reverse order.  For paired push,
+// emits LDP Xn,Xm,[SP],#16.  For the trailing STR, emits LDR X,[SP],#16.
+emit_restore_bindings:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    ldr     w0, [x0]                   // w0 = reg_floor
+    mov     w1, #REG_FIRST
+    cmp     w1, w0
+    b.ge    .Lerb_done
+    // Determine highest pair start.  If (reg_floor - REG_FIRST) is odd,
+    // a lone register was pushed last — pop it first.
+    sub     w2, w0, w1                 // count
+    and     w3, w2, #1
+    cbz     w3, .Lerb_pairs
+    // Pop lone register = REG_FIRST + (count - 1)
+    sub     w4, w0, #1
+    // LDR Xw4, [SP], #16 = 0xF84107E0 | w4  (post-index, bits 11:10=01)
+    movz    w3, #0x07E0
+    movk    w3, #0xF841, lsl #16
+    orr     w3, w3, w4
+    stp     w0, w1, [sp, #-16]!
+    mov     w0, w3
+    bl      emit32
+    ldp     w0, w1, [sp], #16
+    sub     w0, w0, #1                 // one fewer to pop
+.Lerb_pairs:
+    cmp     w1, w0
+    b.ge    .Lerb_done
+    // Pop pair from top: Xtop-2, Xtop-1
+    sub     w4, w0, #2
+    sub     w5, w0, #1
+    // LDP Xw4, Xw5, [SP], #16 = 0xA8C10000 | (Xw5 << 10) | (SP << 5) | Xw4
+    movz    w3, #0x0000
+    movk    w3, #0xA8C1, lsl #16
+    lsl     w6, w5, #10
+    orr     w3, w3, w6
+    mov     w6, #(31 << 5)
+    orr     w3, w3, w6
+    orr     w3, w3, w4
+    stp     w0, w1, [sp, #-16]!
+    mov     w0, w3
+    bl      emit32
+    ldp     w0, w1, [sp], #16
+    sub     w0, w0, #2
+    b       .Lerb_pairs
+.Lerb_done:
+    ldp     x29, x30, [sp], #16
+    ret
+
 // handle_call — name [arg1 arg2 ...]
 //   Look up composition, emit args into X0-X7, emit BL.
 // ============================================================
@@ -2225,6 +2329,13 @@ handle_call:
 
 .Lcall_emit:
     cbz     x5, .Lcall_unknown
+    // Save caller-live binding registers [REG_FIRST, reg_floor) onto
+    // the target program's stack before BL, then restore after.
+    // Bindings live below reg_floor and would otherwise be clobbered
+    // by the callee, which starts its allocator fresh at REG_FIRST.
+    stp     x5, xzr, [sp, #-16]!
+    bl      emit_save_bindings
+    ldp     x5, xzr, [sp], #16
     ldr     w0, [x5, #SYM_REG]
     bl      emit_cur
     mov     x1, x0
@@ -2235,6 +2346,7 @@ handle_call:
     ORRIMM  w2, 0x94000000, w16
     mov     w0, w2
     bl      emit32
+    bl      emit_restore_bindings
     ldp     x29, x30, [sp], #16
     ret
 
