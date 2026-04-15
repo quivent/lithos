@@ -1,3 +1,4 @@
+ls_bss_offset build-darwin/ls-shared.o
 ls_code_buf build-darwin/ls-shared.o
 ls_code_pos build-darwin/ls-shared.o
 ls_comp_count build-darwin/ls-shared.o
@@ -6,6 +7,10 @@ ls_data_buf build-darwin/ls-shared.o
 ls_data_pos build-darwin/ls-shared.o
 ls_elf_buf build-darwin/ls-shared.o
 ls_elf_pos build-darwin/ls-shared.o
+ls_fwd_gotos build-darwin/ls-shared.o
+ls_last_comp_addr build-darwin/ls-shared.o
+ls_load_width build-darwin/ls-shared.o
+ls_n_fwd_gotos build-darwin/ls-shared.o
 ls_source_buf_ptr build-darwin/ls-shared.o
 ls_source_len build-darwin/ls-shared.o
 ls_sym_count build-darwin/ls-shared.o
@@ -495,7 +500,9 @@ emit_mul_reg build-darwin/lithos-table.o
 emit_nop build-darwin/lithos-table.o
 emit_orr_reg build-darwin/lithos-table.o
 emit_ptr build-darwin/lithos-table.o
+emit_restore_bindings build-darwin/lithos-table.o
 emit_ret_inst build-darwin/lithos-table.o
+emit_save_bindings build-darwin/lithos-table.o
 emit_sdiv_reg build-darwin/lithos-table.o
 emit_str_imm build-darwin/lithos-table.o
 emit_str_reg build-darwin/lithos-table.o

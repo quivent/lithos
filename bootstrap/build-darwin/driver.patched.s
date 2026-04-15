@@ -507,11 +507,25 @@ drv_lithos_pipeline:
     cmp     x0, #2
     b.eq    .Lwrite_cubin
 
-    // ARM64: push (data-buf=0 data-len=0 bss-len=0 path), then ELF-WRITE-ARM64
+    // ARM64: push (data-buf=0 data-len=0 bss-len path), then ELF-WRITE-ARM64
+    // bss-len: sum all buf declarations from the symbol table.
+    // Walk ls_sym_table[0..ls_sym_count), accumulate sizes for KIND_BUF entries.
     str     x22, [x24, #-8]!     // text-len → NOS
     mov     x22, #0              // data-buf
     str     x22, [x24, #-8]!
     str     x22, [x24, #-8]!     // data-len
+
+    // BSS size is the running total kept in ls_bss_offset, which
+    // parse_buf_decl advances on every `buf NAME SIZE` declaration.
+    // (The sym table's SYM_REG slot holds each buf's *offset*, not its
+    // size, so walking the sym table here is wrong — use the counter.)
+    adrp x0, ls_bss_offset@PAGE
+    add     x0, x0, ls_bss_offset@PAGEOFF
+    ldr     x3, [x0]             // x3 = bss_total
+    // Align BSS to 16 bytes
+    add     x3, x3, #15
+    bic     x3, x3, #15
+    mov     x22, x3
     str     x22, [x24, #-8]!     // bss-len
     adrp x0, drv_output_path@PAGE
     add     x0, x0, drv_output_path@PAGEOFF

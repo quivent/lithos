@@ -25,7 +25,9 @@
 .global emit_nop
 .global emit_orr_reg
 .global emit_ptr
+.global emit_restore_bindings
 .global emit_ret_inst
+.global emit_save_bindings
 .global emit_sdiv_reg
 .global emit_str_imm
 .global emit_str_reg
@@ -165,9 +167,10 @@
 .equ MAX_LOOP,      16
 .equ ARM64_NOP,     0xD503201F
 .equ ARM64_RET,     0xD65F03C0
-.equ ARM64_SVC_0,   (0xD400 << 16) | 0x1001
+.equ ARM64_SVC_0,   (0xD400 << 16) | 0x0001
 .equ REG_FIRST,     9
-.equ REG_LAST,      28
+.equ REG_LAST,      27
+.equ REG_BSS_BASE,  28     // X28 reserved to hold BSS base address
 .equ CC_EQ, 0
 .equ CC_NE, 1
 .equ CC_LT, 11
@@ -255,6 +258,9 @@
 .extern ls_sym_count
 .extern ls_sym_table
 .extern ls_token_buf
+.extern ls_bss_offset
+.extern ls_fwd_gotos
+.extern ls_n_fwd_gotos
 
 // ============================================================
 // .text — all code
@@ -423,14 +429,22 @@ alloc_reg:
     ret
 
 .Lalloc_spill:
-    // All physical registers exhausted. Spill the oldest (REG_FIRST)
-    // into the TARGET program's stack, then recycle that register.
-    // Emit: STR X<REG_FIRST>, [SP, #-16]!  (pre-index push)
+    // Spill the register at min(reg_floor, REG_LAST) — the first
+    // temporary slot, but never x28 (BSS_BASE) or above.  If
+    // reg_floor has walked off the end of the allocator pool we must
+    // still recycle something in the legal range; REG_LAST is the
+    // highest register our code is allowed to touch.
     stp     x29, x30, [sp, #-16]!
-    // ARM64 encoding: STR Xt, [SP, #-16]! = 0xF81F0FE0 | Rt
+    adrp x2, reg_floor@PAGE
+    add     x2, x2, reg_floor@PAGEOFF
+    ldr     w2, [x2]
+    cmp     w2, #REG_LAST
+    b.le    1f
+    mov     w2, #REG_LAST
+1:  // ARM64 encoding: STR Xt, [SP, #-16]! = 0xF81F0FE0 | Rt
     mov     w0, #0x0FE0
     movk    w0, #0xF81F, lsl #16
-    add     w0, w0, #REG_FIRST
+    add     w0, w0, w2                  // Rt = spill reg
     bl      emit32
     // Increment spill count
     adrp x0, spill_count@PAGE
@@ -439,10 +453,14 @@ alloc_reg:
     add     w1, w1, #1
     str     w1, [x0]
     ldp     x29, x30, [sp], #16
-    // Return REG_FIRST as the recycled register
-    // (caller will overwrite its contents — the old value is on target stack)
-    mov     w0, #REG_FIRST
-    ret
+    // Return the capped spill reg (min(reg_floor, REG_LAST))
+    adrp x0, reg_floor@PAGE
+    add     x0, x0, reg_floor@PAGEOFF
+    ldr     w0, [x0]
+    cmp     w0, #REG_LAST
+    b.le    2f
+    mov     w0, #REG_LAST
+2:  ret
 
 free_reg:
     // Reclaim: set next_reg = w0 (frees everything above)
@@ -457,15 +475,24 @@ free_reg:
     add     x2, x2, spill_count@PAGEOFF
     ldr     w3, [x2]
     cbz     w3, .Lfree_done
-    // Emit LDR X<REG_FIRST>, [SP], #16 for each spilled register (LIFO)
+    // Emit LDR X<reg_floor>, [SP], #16 for each spilled register (LIFO).
+    // Must match .Lalloc_spill which pushed reg_floor, not REG_FIRST.
 .Lfree_fill_loop:
     cbz     w3, .Lfree_fill_done
-    // ARM64 encoding: LDR Xt, [SP], #16 = 0xF8410FE0 | Rt
+    // ARM64 encoding: LDR Xt, [SP], #16 = 0xF84107E0 | Rt  (post-index)
+    // Fill register must match what .Lalloc_spill pushed, which is
+    // min(reg_floor, REG_LAST).
     stp     w0, w3, [sp, #-16]!
     stp     x1, x2, [sp, #-16]!
-    mov     w0, #0x0FE0
+    adrp x4, reg_floor@PAGE
+    add     x4, x4, reg_floor@PAGEOFF
+    ldr     w4, [x4]
+    cmp     w4, #REG_LAST
+    b.le    3f
+    mov     w4, #REG_LAST
+3:  mov     w0, #0x07E0
     movk    w0, #0xF841, lsl #16
-    add     w0, w0, #REG_FIRST
+    add     w0, w0, w4                 // Rt = capped fill reg
     bl      emit32
     ldp     x1, x2, [sp], #16
     ldp     w0, w3, [sp], #16
@@ -561,17 +588,23 @@ emit_movk_imm16:
 // emit_mov_imm64 — load full 64-bit immediate into Xd
 //   w0 = dest reg, x1 = imm64
 emit_mov_imm64:
+    // x19 is saved here and restored on exit, so use it to stash the
+    // destination register.  The previous code used w3 for this, but
+    // emit_movk_imm16 uses w3 as its own scratch for the shift field —
+    // every call after the first would overwrite the saved dest, and
+    // later `mov w0, w3` lines would pass a garbage Rd whose high bits
+    // OR'd into the encoding and corrupted the hw (shift) field.
     stp     x30, x19, [sp, #-16]!
     stp     x0, x1, [sp, #-16]!
     and     w2, w1, #0xFFFF
-    mov     w3, w0
+    mov     w19, w0                 // w19 = dest reg (survives BL calls)
     mov     w1, w2
     bl      emit_mov_imm16
     ldp     x0, x1, [sp]
     lsr     x4, x1, #16
     and     w1, w4, #0xFFFF
     cbz     w1, .Lm64_c32
-    mov     w0, w3
+    mov     w0, w19
     mov     w2, #16
     bl      emit_movk_imm16
     ldp     x0, x1, [sp]
@@ -579,7 +612,7 @@ emit_mov_imm64:
     lsr     x4, x1, #32
     and     w1, w4, #0xFFFF
     cbz     w1, .Lm64_c48
-    mov     w0, w3
+    mov     w0, w19
     mov     w2, #32
     bl      emit_movk_imm16
     ldp     x0, x1, [sp]
@@ -587,7 +620,7 @@ emit_mov_imm64:
     lsr     x4, x1, #48
     and     w1, w4, #0xFFFF
     cbz     w1, .Lm64_done
-    mov     w0, w3
+    mov     w0, w19
     mov     w2, #48
     bl      emit_movk_imm16
 .Lm64_done:
@@ -1057,6 +1090,16 @@ parse_tokens:
     add     x0, x0, ls_sym_count@PAGEOFF
     str     wzr, [x0]
 
+    // Reset BSS allocation offset (for buf declarations)
+    adrp x0, ls_bss_offset@PAGE
+    add     x0, x0, ls_bss_offset@PAGEOFF
+    str     xzr, [x0]
+
+    // Reset forward-goto patch table count
+    adrp x0, ls_n_fwd_gotos@PAGE
+    add     x0, x0, ls_n_fwd_gotos@PAGEOFF
+    str     wzr, [x0]
+
     // Clear scope
     adrp x0, scope_depth@PAGE
     add     x0, x0, scope_depth@PAGEOFF
@@ -1120,6 +1163,9 @@ parse_toplevel:
     b.eq    .Ltop_skip_prefix
     cmp     w0, #TOK_KERNEL
     b.eq    .Ltop_skip_prefix
+    // Forth-style constant declaration:  INT  IDENT("constant")  IDENT(NAME)
+    cmp     w0, #TOK_INT
+    b.eq    .Ltop_maybe_forth_const
 
     // Any keyword 11-45 not already dispatched → treat as identifier
     cmp     w0, #11
@@ -1127,6 +1173,50 @@ parse_toplevel:
     cmp     w0, #45
     b.le    .Ltop_ident
 .Ltop_skip_unknown:
+    add     x19, x19, #TOK_STRIDE_SZ
+    b       .Ltop_loop
+
+.Ltop_maybe_forth_const:
+    // Need next two tokens: IDENT("constant"), IDENT(NAME).
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Ltop_skip_unknown
+    ldr     w5, [x4]
+    cmp     w5, #TOK_IDENT
+    b.ne    .Ltop_skip_unknown
+    // Length must be 8 ("constant" is 8 chars).
+    ldr     w5, [x4, #8]
+    cmp     w5, #8
+    b.ne    .Ltop_skip_unknown
+    // Compare source bytes to "constant".
+    ldr     w5, [x4, #4]            // source offset
+    add     x5, x28, x5
+    ldr     x6, [x5]                // 8 bytes starting at the ident
+    movz    x7, #0x6f63
+    movk    x7, #0x736e, lsl #16
+    movk    x7, #0x6174, lsl #32
+    movk    x7, #0x746e, lsl #48
+    cmp     x6, x7
+    b.ne    .Ltop_skip_unknown
+    // Third token must be IDENT (the name we're defining).
+    add     x4, x4, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Ltop_skip_unknown
+    ldr     w5, [x4]
+    cmp     w5, #TOK_IDENT
+    b.ne    .Ltop_skip_unknown
+    // Parse the int literal at x19.
+    stp     x4, xzr, [sp, #-16]!
+    bl      parse_int_literal
+    ldp     x4, xzr, [sp], #16
+    mov     w6, w0                  // const value
+    // sym_add reads name from x19 — point it at the NAME token.
+    mov     x19, x4
+    mov     w1, #KIND_CONST
+    mov     w2, w6
+    mov     w3, #0
+    bl      sym_add
+    // Advance past INT, "constant", NAME.
     add     x19, x19, #TOK_STRIDE_SZ
     b       .Ltop_loop
 .Ltop_skip_prefix:
@@ -1256,25 +1346,56 @@ handle_buf:
 parse_buf_decl:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x20, x21, [sp, #-16]!
     add     x19, x19, #TOK_STRIDE_SZ   // skip 'buf'
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
     b.eq .Lbskip_7
     b parse_error
 .Lbskip_7:
+    mov     x20, x19                    // x20 = save name token pos
+    // Check if size follows the name
+    add     x21, x19, #TOK_STRIDE_SZ   // peek at next token
+    ldr     w0, [x21]
+    mov     w2, #0                      // default buf size = 0
+    cmp     w0, #TOK_INT
+    b.ne    .Lbuf_add_sym
+    // Parse the int literal to get the size value
+    mov     x19, x21                    // point x19 at the int token
+    bl      parse_int_literal           // x0 = parsed integer value
+    mov     w2, w0                      // w2 = buf size for SYM_REG
+    mov     x19, x20                    // restore x19 to name token
+.Lbuf_add_sym:
+    // Save size on stack (w2 gets clobbered by sym_add)
+    stp     x2, xzr, [sp, #-16]!
+    // Compute BSS offset: current ls_bss_offset
+    adrp x4, ls_bss_offset@PAGE
+    add     x4, x4, ls_bss_offset@PAGEOFF
+    ldr     x5, [x4]
+    // Store BSS offset in SYM_REG instead of size.
+    mov     w2, w5
     mov     w1, #KIND_BUF
-    mov     w2, #0
     adrp x3, scope_depth@PAGE
     add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
+    // Restore size to x6
+    ldp     x6, xzr, [sp], #16
+    // Advance ls_bss_offset by buf size (aligned to 8 bytes)
+    adrp x4, ls_bss_offset@PAGE
+    add     x4, x4, ls_bss_offset@PAGEOFF
+    ldr     x5, [x4]
+    add     x5, x5, x6
+    add     x5, x5, #7
+    and     x5, x5, #-8
+    str     x5, [x4]
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
     ldr     w0, [x19]
     cmp     w0, #TOK_INT
     b.ne    .Lbuf_no_size
-    bl      parse_int_literal
-    add     x19, x19, #TOK_STRIDE_SZ
+    add     x19, x19, #TOK_STRIDE_SZ   // skip size (already parsed)
 .Lbuf_no_size:
+    ldp     x20, x21, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1340,14 +1461,19 @@ handle_composition:
     add     x1, x1, next_reg@PAGEOFF
     ldr     w5, [x1]
     str     w5, [sp, #8]           // [sp+8] = old next_reg
-    // Cap reg_floor: compositions always start with fresh registers.
-    // If top-level vars consumed all registers (next_reg > REG_LAST),
-    // reset to REG_FIRST so the composition has a full register window.
-    cmp     w5, #REG_LAST
-    b.le    1f
+    // Compositions always start with a fresh register window.  The
+    // previous composition's bindings are dead once we pop its scope,
+    // so reg_floor and next_reg both restart at REG_FIRST.  Inheriting
+    // the prior next_reg leaked state across compositions and made
+    // late-defined functions start with reg_floor near REG_LAST,
+    // which immediately blew the spill path.
     mov     w5, #REG_FIRST
-1:  str     w5, [x0]               // reg_floor = min(next_reg, REG_FIRST)
-    str     w5, [x1]               // next_reg = reg_floor
+    str     w5, [x0]               // reg_floor = REG_FIRST
+    str     w5, [x1]               // next_reg = REG_FIRST
+    // Reset spill count — new composition has its own stack frame
+    adrp x0, spill_count@PAGE
+    add     x0, x0, spill_count@PAGEOFF
+    str     wzr, [x0]
 
     // Increment scope
     adrp x0, scope_depth@PAGE
@@ -1360,6 +1486,10 @@ handle_composition:
     bl      emit_cur
     mov     w2, w0                  // code address
     str     x0, [sp, #16]          // save comp start address
+    // Track last composition for entry point (bottom-of-file = entry)
+    adrp x6, ls_last_comp_addr@PAGE
+    add     x6, x6, ls_last_comp_addr@PAGEOFF
+    str     x0, [x6]
     mov     w1, #KIND_COMP
     adrp x3, scope_depth@PAGE
     add     x3, x3, scope_depth@PAGEOFF
@@ -1408,6 +1538,54 @@ handle_composition:
 .Lcomp_args_done:
     add     x19, x19, #TOK_STRIDE_SZ   // skip ':'
 
+    // Move parameters out of X0..X7 (caller-saved) into freshly
+    // allocated bindings (X9..) so they survive any subsequent BL.
+    // Without this, every function with parameters loses them as
+    // soon as the body makes its first call — `copy_bytes(buf, len)`
+    // turning into `copy_bytes(garbage, len)` after one emit_byte.
+    cbz     w8, .Lcomp_no_param_move
+    mov     w9, #0                      // arg index iterator
+.Lcomp_pmove_loop:
+    cmp     w9, w8
+    b.ge    .Lcomp_no_param_move
+    // Find the param's sym entry: it's at sym_count - argc + w9.
+    // Equivalently, sym_count - argc + w9 = sym_count - (argc - w9).
+    adrp x0, ls_sym_count@PAGE
+    add     x0, x0, ls_sym_count@PAGEOFF
+    ldr     w1, [x0]                    // current sym_count
+    sub     w2, w8, w9
+    sub     w2, w1, w2                  // index of the w9-th param
+    adrp x3, ls_sym_table@PAGE
+    add     x3, x3, ls_sym_table@PAGEOFF
+    mov     w4, #SYM_SIZE
+    madd    x3, x2, x4, x3              // &sym_table[index]
+    // Allocate a fresh register and emit MOV new, Xw9
+    stp     x3, x9, [sp, #-16]!
+    stp     x8, xzr, [sp, #-16]!
+    bl      alloc_reg                   // w0 = new reg
+    ldp     x8, xzr, [sp], #16
+    ldp     x3, x9, [sp], #16
+    mov     w5, w0                      // new reg
+    mov     w0, w5                      // dest = new reg
+    mov     w1, w9                      // src = Xw9 (the arg reg)
+    stp     x3, x5, [sp, #-16]!
+    stp     x8, x9, [sp, #-16]!
+    bl      emit_mov_reg
+    ldp     x8, x9, [sp], #16
+    ldp     x3, x5, [sp], #16
+    // Update sym entry to point to the new register and bump reg_floor
+    str     w5, [x3, #SYM_REG]
+    adrp x0, reg_floor@PAGE
+    add     x0, x0, reg_floor@PAGEOFF
+    ldr     w1, [x0]
+    add     w2, w5, #1
+    cmp     w2, w1
+    b.le    1f
+    str     w2, [x0]
+1:  add     w9, w9, #1
+    b       .Lcomp_pmove_loop
+.Lcomp_no_param_move:
+
     // Parse body
     bl      skip_newlines
     ldr     w0, [x19]
@@ -1417,6 +1595,9 @@ handle_composition:
     cbz     w9, .Lcomp_no_body      // indent 0 = not indented → empty body
     bl      parse_body
 .Lcomp_no_body:
+
+    // Flush any pending register spills before epilogue
+    bl      reset_regs
 
     // Emit epilogue: LDP X29, X30, [SP], #16; RET
     MOVI32  w0, 0xA8C17BFD
@@ -1653,7 +1834,92 @@ parse_statement:
     ldp     x29, x30, [sp], #16
     ret
 .Ls_trap:
+    add     x19, x19, #TOK_STRIDE_SZ                    // skip 'trap'
+    // Two forms:
+    //   `trap`                   — bare SVC, caller has set X8 / X0..X7.
+    //   `trap NAME NUM args...`  — expand to:
+    //                                MOV X8, <num>
+    //                                MOV X0..X7, <args>
+    //                                SVC #0
+    //                                MOV <name_reg>, X0
+    //                              and add NAME as a local symbol.
+    cmp     x19, x27
+    b.hs    .Ls_trap_bare
+    ldr     w0, [x19]
+    cmp     w0, #TOK_IDENT
+    b.ne    .Ls_trap_bare
+    // Forth-style trap:  NAME NUM args...
+    str     x19, [sp, #-16]!                             // [sp] = NAME tok
+    add     x19, x19, #TOK_STRIDE_SZ                    // past NAME
+    bl      parse_expr                                   // w0 = num_reg
+    mov     w1, w0
+    mov     w0, #8                                       // dest = X8
+    bl      emit_mov_reg
+    mov     w4, #0                                       // arg idx
+.Ls_trap_arg_loop:
+    cmp     x19, x27
+    b.hs    .Ls_trap_svc
+    ldr     w0, [x19]
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Ls_trap_svc
+    cmp     w0, #TOK_EOF
+    b.eq    .Ls_trap_svc
+    cmp     w0, #TOK_INDENT
+    b.eq    .Ls_trap_svc
+    cmp     w4, #8
+    b.ge    .Ls_trap_svc
+    str     x4, [sp, #-16]!                              // save arg idx
+    bl      parse_expr
+    ldr     x4, [sp], #16
+    mov     w1, w0                                       // arg reg
+    mov     w0, w4                                       // dest = X<arg idx>
+    str     x4, [sp, #-16]!
+    bl      emit_mov_reg
+    ldr     x4, [sp], #16
+    add     w4, w4, #1
+    b       .Ls_trap_arg_loop
+.Ls_trap_svc:
+    bl      emit_svc                                     // SVC #0
+    // Bind NAME to X0 as a new local-register symbol.
+    bl      alloc_reg
+    mov     w5, w0                                       // name_reg
+    mov     w1, #0                                       // src = X0
+    mov     w0, w5                                       // dest = name_reg
+    bl      emit_mov_reg
+    ldr     x19, [sp], #16                               // restore NAME tok
+    mov     w1, #KIND_VAR
+    mov     w2, w5
+    adrp x3, scope_depth@PAGE
+    add     x3, x3, scope_depth@PAGEOFF
+    ldr     w3, [x3]
+    bl      sym_add
+    add     x19, x19, #TOK_STRIDE_SZ                    // past NAME
+    // Skip back past remaining args & num — x19 currently at NAME;
+    // but the arg-loop already advanced past them before we restored.
+    // Re-scan the line to EOL so the parser is positioned at NEWLINE.
+    // Actually the arg-loop left x19 PAST the last arg already; we
+    // just need to leave x19 at the original post-trap position so
+    // the NAME advance above is correct.  Arg loop already consumed
+    // through NEWLINE-peek; saved NAME pos is before everything, so
+    // after restoring x19 = NAME_pos and adding one stride, x19 sits
+    // at NUM.  That's wrong — the caller expects x19 at NEWLINE.
+    // Quick recovery: spin forward until NEWLINE/EOF/INDENT.
+.Ls_trap_eol:
+    cmp     x19, x27
+    b.hs    .Ls_trap_done
+    ldr     w0, [x19]
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Ls_trap_done
+    cmp     w0, #TOK_EOF
+    b.eq    .Ls_trap_done
+    cmp     w0, #TOK_INDENT
+    b.eq    .Ls_trap_done
     add     x19, x19, #TOK_STRIDE_SZ
+    b       .Ls_trap_eol
+.Ls_trap_done:
+    ldp     x29, x30, [sp], #16
+    ret
+.Ls_trap_bare:
     bl      emit_svc
     ldp     x29, x30, [sp], #16
     ret
@@ -1719,8 +1985,65 @@ handle_ident_stmt:
     ldp     x29, x30, [sp], #16
     ret
 .Lhi_goto_fwd:
-    // Forward goto — emit NOP placeholder
-    bl      emit_nop
+    // Forward goto — record in patch table, emit B placeholder (0x14000000)
+    // x19 points at the label name token.
+    // Record: name bytes + source offset in code_buf.
+    ldr     w2, [x19, #4]           // source offset of name token
+    ldr     w3, [x19, #8]           // name length
+    // Save tokp for later
+    str     x19, [sp, #-16]!
+    // Get current emit position (code_buf offset)
+    bl      emit_cur                 // x0 = emit_ptr
+    adrp x4, ls_code_buf@PAGE
+    add     x4, x4, ls_code_buf@PAGEOFF
+    sub     x5, x0, x4              // x5 = offset in code_buf
+    // Append to patch table
+    adrp x6, ls_n_fwd_gotos@PAGE
+    add     x6, x6, ls_n_fwd_gotos@PAGEOFF
+    ldr     w7, [x6]
+    adrp x8, ls_fwd_gotos@PAGE
+    add     x8, x8, ls_fwd_gotos@PAGEOFF
+    mov     x9, #40
+    mul     x9, x7, x9
+    add     x8, x8, x9              // x8 = &fwd_gotos[w7]
+    // Copy label name (up to 32 bytes)
+    ldr     x19, [sp]                // restore tokp
+    ldr     w2, [x19, #4]           // source offset
+    ldr     w3, [x19, #8]           // length
+    cmp     w3, #32
+    b.lt    1f
+    mov     w3, #32
+1:  add     x9, x28, x2             // src + offset
+    mov     w10, #0
+.Lfg_copy:
+    cmp     w10, w3
+    b.ge    .Lfg_copy_done
+    ldrb    w11, [x9, x10]
+    strb    w11, [x8, x10]
+    add     w10, w10, #1
+    b       .Lfg_copy
+.Lfg_copy_done:
+    // Pad remaining bytes with 0
+    cmp     w10, #32
+    b.ge    .Lfg_pad_done
+.Lfg_pad:
+    strb    wzr, [x8, x10]
+    add     w10, w10, #1
+    cmp     w10, #32
+    b.lt    .Lfg_pad
+.Lfg_pad_done:
+    // Store source offset at [x8 + 32]
+    str     w5, [x8, #32]
+    // Also store length at [x8 + 36]
+    str     w3, [x8, #36]
+    // Increment fwd_gotos count
+    add     w7, w7, #1
+    str     w7, [x6]
+    ldr     x19, [sp], #16
+    // Emit B with placeholder offset 0 (0x14000000)
+    mov     w0, #0x14000000
+    movk    w0, #0x1400, lsl #16
+    bl      emit32
     add     x19, x19, #TOK_STRIDE_SZ
     ldp     x29, x30, [sp], #16
     ret
@@ -1952,10 +2275,23 @@ parse_binding_compose:
     ldr     w3, [x3]
     bl      sym_add
 
-    // NOTE: we do NOT raise reg_floor here. Instead, parse_body
-    // skips reset_regs after binding statements (w0=1 flag).
-    // This prevents register recycling for bindings without
-    // exhausting the register window in large compositions.
+    // Raise reg_floor to protect this binding's register from being recycled
+    // by future reset_regs calls. Only raise if w4 is in the allocated range
+    // (not a param register X0-X8).
+    cmp     w4, #REG_FIRST
+    b.lt    .Lbind_no_floor
+    adrp x5, reg_floor@PAGE
+    add     x5, x5, reg_floor@PAGEOFF
+    ldr     w6, [x5]
+    add     w7, w4, #1              // new floor = binding_reg + 1
+    cmp     w7, w6
+    b.le    .Lbind_no_floor         // don't lower the floor
+    str     w7, [x5]
+    // Also update next_reg so future allocs start above this
+    adrp x5, next_reg@PAGE
+    add     x5, x5, next_reg@PAGEOFF
+    str     w7, [x5]
+.Lbind_no_floor:
 
     ldr     x19, [sp], #16         // restore post-expr position
     mov     w0, #1                 // return 1 = binding (don't reset regs)
@@ -2006,6 +2342,103 @@ handle_assign:
     ret
 
 // ============================================================
+// emit_save_bindings — push caller's live binding registers onto
+// the target program's stack.  Iterates over [REG_FIRST, reg_floor)
+// in pairs, emitting STP Xn,Xm,[SP,#-16]! for each pair, and a lone
+// STR for a trailing odd register.  Preserves reg_floor/next_reg.
+emit_save_bindings:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    adrp x0, reg_floor@PAGE
+    add     x0, x0, reg_floor@PAGEOFF
+    ldr     w0, [x0]
+    mov     w1, #REG_FIRST
+    cmp     w1, w0
+    b.ge    .Lesb_done
+.Lesb_loop:
+    add     w2, w1, #1
+    cmp     w2, w0
+    b.ge    .Lesb_tail
+    // STP Xw1, Xw2, [SP, #-16]!  encoding:
+    // 0xA9BF0000 | (Xw2 << 10) | (SP=31 << 5) | Xw1
+    movz    w3, #0x0000
+    movk    w3, #0xA9BF, lsl #16
+    lsl     w4, w2, #10
+    orr     w3, w3, w4
+    mov     w4, #(31 << 5)
+    orr     w3, w3, w4
+    orr     w3, w3, w1
+    stp     w0, w1, [sp, #-16]!
+    mov     w0, w3
+    bl      emit32
+    ldp     w0, w1, [sp], #16
+    add     w1, w1, #2
+    cmp     w1, w0
+    b.lt    .Lesb_loop
+    b       .Lesb_done
+.Lesb_tail:
+    // Lone register left.  STR Xw1, [SP, #-16]! = 0xF81F0FE0 | w1
+    movz    w3, #0x0FE0
+    movk    w3, #0xF81F, lsl #16
+    orr     w3, w3, w1
+    mov     w0, w3
+    bl      emit32
+.Lesb_done:
+    ldp     x29, x30, [sp], #16
+    ret
+
+// emit_restore_bindings — counterpart to emit_save_bindings.
+// Pops the saved registers in reverse order.  For paired push,
+// emits LDP Xn,Xm,[SP],#16.  For the trailing STR, emits LDR X,[SP],#16.
+emit_restore_bindings:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    adrp x0, reg_floor@PAGE
+    add     x0, x0, reg_floor@PAGEOFF
+    ldr     w0, [x0]                   // w0 = reg_floor
+    mov     w1, #REG_FIRST
+    cmp     w1, w0
+    b.ge    .Lerb_done
+    // Determine highest pair start.  If (reg_floor - REG_FIRST) is odd,
+    // a lone register was pushed last — pop it first.
+    sub     w2, w0, w1                 // count
+    and     w3, w2, #1
+    cbz     w3, .Lerb_pairs
+    // Pop lone register = REG_FIRST + (count - 1)
+    sub     w4, w0, #1
+    // LDR Xw4, [SP], #16 = 0xF84107E0 | w4  (post-index, bits 11:10=01)
+    movz    w3, #0x07E0
+    movk    w3, #0xF841, lsl #16
+    orr     w3, w3, w4
+    stp     w0, w1, [sp, #-16]!
+    mov     w0, w3
+    bl      emit32
+    ldp     w0, w1, [sp], #16
+    sub     w0, w0, #1                 // one fewer to pop
+.Lerb_pairs:
+    cmp     w1, w0
+    b.ge    .Lerb_done
+    // Pop pair from top: Xtop-2, Xtop-1
+    sub     w4, w0, #2
+    sub     w5, w0, #1
+    // LDP Xw4, Xw5, [SP], #16 = 0xA8C10000 | (Xw5 << 10) | (SP << 5) | Xw4
+    movz    w3, #0x0000
+    movk    w3, #0xA8C1, lsl #16
+    lsl     w6, w5, #10
+    orr     w3, w3, w6
+    mov     w6, #(31 << 5)
+    orr     w3, w3, w6
+    orr     w3, w3, w4
+    stp     w0, w1, [sp, #-16]!
+    mov     w0, w3
+    bl      emit32
+    ldp     w0, w1, [sp], #16
+    sub     w0, w0, #2
+    b       .Lerb_pairs
+.Lerb_done:
+    ldp     x29, x30, [sp], #16
+    ret
+
 // handle_call — name [arg1 arg2 ...]
 //   Look up composition, emit args into X0-X7, emit BL.
 // ============================================================
@@ -2046,6 +2479,13 @@ handle_call:
 
 .Lcall_emit:
     cbz     x5, .Lcall_unknown
+    // Save caller-live binding registers [REG_FIRST, reg_floor) onto
+    // the target program's stack before BL, then restore after.
+    // Bindings live below reg_floor and would otherwise be clobbered
+    // by the callee, which starts its allocator fresh at REG_FIRST.
+    stp     x5, xzr, [sp, #-16]!
+    bl      emit_save_bindings
+    ldp     x5, xzr, [sp], #16
     ldr     w0, [x5, #SYM_REG]
     bl      emit_cur
     mov     x1, x0
@@ -2056,6 +2496,7 @@ handle_call:
     ORRIMM  w2, 0x94000000, w16
     mov     w0, w2
     bl      emit32
+    bl      emit_restore_bindings
     ldp     x29, x30, [sp], #16
     ret
 
@@ -2074,12 +2515,27 @@ parse_mem_store:
     mov     x29, sp
     add     x19, x19, #TOK_STRIDE_SZ   // skip '←'
 
-    bl      parse_expr              // width
+    // Width is part of the STR opcode, not a runtime value.  Parse
+    // it as an int literal directly to avoid wasting a register.
+    ldr     w0, [x19]
+    cmp     w0, #TOK_INT
+    b.ne    .Lhs_width_expr
+    bl      parse_int_literal
+    add     x19, x19, #TOK_STRIDE_SZ
+    mov     w4, #0                  // sentinel: width consumed, no reg
+    b       .Lhs_addr
+.Lhs_width_expr:
+    bl      parse_expr              // fallback
     mov     w4, w0
+.Lhs_addr:
+    stp     x4, xzr, [sp, #-16]!
     bl      parse_expr              // addr (base, possibly with +offset inline)
     mov     w5, w0
+    ldp     x4, xzr, [sp], #16
+    stp     x4, x5, [sp, #-16]!
     bl      parse_expr              // value (or offset if there's a 4th operand)
     mov     w6, w0
+    ldp     x4, x5, [sp], #16
     // Check for 4th operand: if present, w6 is offset and next expr is value
     cmp     x19, x27
     b.hs    .Lstore_emit
@@ -2124,8 +2580,21 @@ parse_mem_load:
     mov     x29, sp
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
 
-    bl      parse_expr              // width
-    mov     w4, w0
+    // Width is almost always an int literal (8/16/32/64) — it's part
+    // of the LDR opcode, not a runtime value.  Parse it directly as
+    // an int literal and advance past it, rather than calling
+    // parse_expr (which would waste a register on a constant we
+    // never use).
+    ldr     w0, [x19]
+    cmp     w0, #TOK_INT
+    b.ne    .Lhl_width_expr
+    bl      parse_int_literal       // x0 = width value (not used)
+    add     x19, x19, #TOK_STRIDE_SZ   // advance past the int token
+    b       .Lhl_addr
+.Lhl_width_expr:
+    bl      parse_expr              // fallback: width as expr (rare)
+
+.Lhl_addr:
     bl      parse_expr              // addr
     mov     w5, w0
 
@@ -2138,7 +2607,24 @@ parse_mem_load:
     mov     w2, #0
     bl      emit_ldr_imm
 
-    ldp     x29, x30, [sp], #16
+    // The addr temp (w5) is dead now.  Compact the result down to w5's
+    // slot if w5 is a temp (above reg_floor), so each load only
+    // consumes one register slot from the caller.
+    adrp x0, reg_floor@PAGE
+    add     x0, x0, reg_floor@PAGEOFF
+    ldr     w7, [x0]
+    cmp     w5, w7
+    b.lt    1f                      // w5 is a binding, leave alone
+    cmp     w5, w6
+    b.eq    1f                      // already compact
+    mov     w0, w5
+    mov     w1, w6
+    bl      emit_mov_reg
+    add     w0, w5, #1
+    bl      free_reg
+    mov     w6, w5
+1:  ldp     x29, x30, [sp], #16
+    mov     w0, w6
     ret
 
 // ============================================================
@@ -2219,12 +2705,76 @@ handle_label:
 .Lbskip_10:
 
     bl      emit_cur
+    str     x0, [sp, #-16]!        // save label address
     mov     w2, w0
     mov     w1, #KIND_LOCAL_REG
     adrp x3, scope_depth@PAGE
     add     x3, x3, scope_depth@PAGEOFF
     ldr     w3, [x3]
     bl      sym_add
+
+    // Patch any forward gotos that target this label.
+    // Scan ls_fwd_gotos; for each entry whose name matches, emit B fix at the source offset.
+    ldr     x22, [sp]               // label address (emit_ptr absolute)
+    adrp x8, ls_n_fwd_gotos@PAGE
+    add     x8, x8, ls_n_fwd_gotos@PAGEOFF
+    ldr     w9, [x8]                // count
+    cbz     w9, .Lhl_no_patches
+    adrp x10, ls_fwd_gotos@PAGE
+    add     x10, x10, ls_fwd_gotos@PAGEOFF
+    mov     w11, #0                 // index
+    // Get label name info
+    ldr     w12, [x19, #4]          // name source offset
+    ldr     w13, [x19, #8]          // name length
+    cmp     w13, #32
+    b.lt    .Lhl_len_ok
+    mov     w13, #32
+.Lhl_len_ok:
+    add     x14, x28, x12           // label name ptr (src + offset)
+.Lhl_scan:
+    cmp     w11, w9
+    b.ge    .Lhl_no_patches
+    mov     x15, #40
+    mul     x15, x11, x15
+    add     x15, x10, x15           // &fwd_gotos[i]
+    // Check if name length matches
+    ldr     w16, [x15, #36]         // stored length
+    cmp     w16, w13
+    b.ne    .Lhl_next
+    // Compare name bytes
+    mov     w17, #0
+.Lhl_cmp:
+    cmp     w17, w13
+    b.ge    .Lhl_match
+    ldrb    w20, [x14, x17]
+    ldrb    w21, [x15, x17]
+    cmp     w20, w21
+    b.ne    .Lhl_next
+    add     w17, w17, #1
+    b       .Lhl_cmp
+.Lhl_match:
+    // Found matching forward goto — patch it
+    // Source offset in code_buf is at [x15 + 32]
+    ldr     w17, [x15, #32]        // source offset in code_buf
+    adrp x20, ls_code_buf@PAGE
+    add     x20, x20, ls_code_buf@PAGEOFF
+    add     x20, x20, x17           // absolute address of the B instruction
+    // Compute offset: (label_addr - source_addr) / 4
+    sub     x21, x22, x20
+    asr     x21, x21, #2
+    and     w21, w21, #0x3FFFFFF
+    // Build B instruction: 0x14000000 | imm26
+    mov     w2, #0x14000000
+    movk    w2, #0x1400, lsl #16
+    orr     w2, w2, w21
+    str     w2, [x20]
+    // Invalidate this entry by setting length to 0 so it won't rematch
+    str     wzr, [x15, #36]
+.Lhl_next:
+    add     w11, w11, #1
+    b       .Lhl_scan
+.Lhl_no_patches:
+    add     sp, sp, #16            // discard saved label address
     add     x19, x19, #TOK_STRIDE_SZ
 
     ldp     x29, x30, [sp], #16
@@ -2393,11 +2943,28 @@ handle_if:
     bl      patch_b_cond
 .Lif_patch_done:
 
-    // Check for elif/else
+    // Check for elif/else — peek past NEWLINE + INDENT without consuming
     bl      skip_newlines
     cmp     x19, x27
     b.hs    .Lif_end
     ldr     w0, [x19]
+    // If INDENT, peek past it for elif/else but don't consume yet
+    cmp     w0, #TOK_INDENT
+    b.ne    .Lif_check_kw
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lif_end
+    ldr     w0, [x4]
+    cmp     w0, #TOK_ELIF
+    b.eq    .Lif_skip_indent
+    cmp     w0, #TOK_ELSE
+    b.eq    .Lif_skip_indent
+    b       .Lif_end
+.Lif_skip_indent:
+    // Found elif/else after INDENT — consume the INDENT
+    add     x19, x19, #TOK_STRIDE_SZ
+    ldr     w0, [x19]
+.Lif_check_kw:
     cmp     w0, #TOK_ELIF
     b.eq    .Lif_elif
     cmp     w0, #TOK_ELSE
@@ -2694,8 +3261,11 @@ parse_expr:
     ldr     w6, [sp], #16
     ldp     w4, w5, [sp], #16
 
-    // Reuse left if scratch
-    cmp     w4, #REG_FIRST
+    // Reuse left only if it's a free temporary (>= reg_floor)
+    adrp x8, reg_floor@PAGE
+    add     x8, x8, reg_floor@PAGEOFF
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Lcmp_alloc
     mov     w7, w4
     b       .Lcmp_reclaim
@@ -2797,7 +3367,10 @@ parse_bitwise:
     bl      parse_shift
     ldp     w4, w5, [sp], #16
     mov     w6, w0
-    cmp     w4, #REG_FIRST
+    adrp x8, reg_floor@PAGE
+    add     x8, x8, reg_floor@PAGEOFF
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Lbit_alloc
     mov     w7, w4
     b       .Lbit_emit
@@ -2859,7 +3432,10 @@ parse_shift:
     bl      parse_additive
     ldp     w4, w5, [sp], #16
     mov     w6, w0
-    cmp     w4, #REG_FIRST
+    adrp x8, reg_floor@PAGE
+    add     x8, x8, reg_floor@PAGEOFF
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Lshift_alloc
     mov     w7, w4
     b       .Lshift_emit
@@ -2913,7 +3489,12 @@ parse_additive:
     bl      parse_multiplicative
     ldp     w4, w5, [sp], #16
     mov     w6, w0
-    cmp     w4, #REG_FIRST
+    // Same rule as parse_multiplicative: only reuse w4 if it is a free
+    // temporary (>= reg_floor), not a live binding's register.
+    adrp x8, reg_floor@PAGE
+    add     x8, x8, reg_floor@PAGEOFF
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Ladd_alloc
     mov     w7, w4
     b       .Ladd_emit
@@ -2967,7 +3548,14 @@ parse_multiplicative:
     bl      parse_atom
     ldp     w4, w5, [sp], #16
     mov     w6, w0
-    cmp     w4, #REG_FIRST
+    // Reuse w4 (left operand) as destination ONLY if it is a free
+    // temporary — i.e. >= reg_floor.  Regs below reg_floor belong to
+    // live bindings (handle_binding raised the floor to protect them),
+    // and overwriting them here would clobber the source variable.
+    adrp x8, reg_floor@PAGE
+    add     x8, x8, reg_floor@PAGEOFF
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Lmul_alloc
     mov     w7, w4
     b       .Lmul_emit
@@ -3078,6 +3666,8 @@ parse_atom:
     b.eq    .La_unary_math
     cmp     w0, #TOK_INDEX
     b.eq    .La_unary_math
+    cmp     w0, #TOK_DOLLAR
+    b.eq    .La_dollar
 
     // Keyword token used as variable name? Try sym_lookup.
     ldr     w1, [x19, #8]
@@ -3128,12 +3718,71 @@ parse_atom:
     ret
 
 .La_ident_lookup:
+    // Check for $N register reference (lexed as TOK_IDENT starting with '$')
+    ldr     w2, [x19, #4]           // source offset
+    ldrb    w3, [x28, x2]           // first character
+    cmp     w3, #'$'
+    b.ne    .La_ident_sym
+    // $N — call parse_dollar_reg (expects x19 on current token)
+    bl      parse_dollar_reg        // w0 = register number
+    ldp     x29, x30, [sp], #16
+    ret
+.La_ident_sym:
     bl      sym_lookup
     cbz     x0, .La_ident_unknown
     // Check if it's a composition — needs call dispatch, not register return
     ldr     w1, [x0, #SYM_KIND]
     cmp     w1, #KIND_COMP
     b.eq    .La_ident_unknown       // dispatch as expression-level call
+    // Check if it's a buf — emit ADD Xresult, X28 (BSS_BASE), #offset
+    cmp     w1, #KIND_BUF
+    b.ne    .La_ident_reg
+    // Buf: compute address as BSS_BASE + offset
+    ldr     w2, [x0, #SYM_REG]      // w2 = BSS offset
+    add     x19, x19, #TOK_STRIDE_SZ
+    // Save offset on stack; alloc_reg clobbers caller-saved regs
+    stp     x2, xzr, [sp, #-16]!
+    bl      alloc_reg               // w0 = fresh register for result
+    mov     w4, w0                  // result register
+    ldp     x2, xzr, [sp], #16
+    // Emit: ADD Xresult, X28, #(offset & 0xFFF)
+    // ARM64 ADD imm encoding: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd
+    // imm12 lives at bits 21:10, so bits 6..11 of imm12 land in the
+    // upper-16 region that `movk #0x9100, lsl #16` would otherwise
+    // overwrite.  Fold those bits into the movk constant.
+    and     w5, w2, #0xFFF          // w5 = imm12 (low 12 bits of offset)
+    and     w7, w5, #0x3F           // w7 = imm12[5:0]   → encoded bits 15:10
+    lsr     w8, w5, #6              // w8 = imm12[11:6]  → encoded bits 21:16
+    lsl     w7, w7, #10
+    mov     w6, #28
+    lsl     w6, w6, #5
+    orr     w0, w4, w7              // Rd | (low_imm << 10)
+    orr     w0, w0, w6              // | (Rn << 5)
+    movz    w9, #0x9100
+    orr     w9, w9, w8              // 0x9100 | high_imm[5:0]
+    orr     w0, w0, w9, lsl #16
+    stp     x2, x4, [sp, #-16]!    // save offset and result reg
+    bl      emit32
+    ldp     x2, x4, [sp], #16
+    // If offset >= 4096, emit another ADD with LSL #12
+    lsr     w5, w2, #12
+    cbz     w5, .La_buf_done
+    and     w5, w5, #0xFFF
+    and     w7, w5, #0x3F
+    lsr     w8, w5, #6
+    lsl     w7, w7, #10
+    lsl     w6, w4, #5              // Rn=Xresult
+    orr     w0, w4, w7
+    orr     w0, w0, w6
+    movz    w9, #0x9140             // ADD (imm, LSL #12): sh=1 (bit 22)
+    orr     w9, w9, w8
+    orr     w0, w0, w9, lsl #16
+    bl      emit32
+.La_buf_done:
+    mov     w0, w4                  // return result register
+    ldp     x29, x30, [sp], #16
+    ret
+.La_ident_reg:
     ldr     w0, [x0, #SYM_REG]
     add     x19, x19, #TOK_STRIDE_SZ
     // Check for array subscript: name[expr]
@@ -3273,14 +3922,16 @@ parse_atom:
     ldr     w0, [x5, #SYM_KIND]
     cmp     w0, #KIND_COMP
     b.ne    .La_call_nop
-    // Emit BL to composition
-    ldr     w1, [x5, #SYM_REG]     // code address
+    // Emit BL to composition (use same pattern as handle_call)
+    ldr     w0, [x5, #SYM_REG]     // code address
     bl      emit_cur
-    sub     w1, w1, w0
-    asr     w1, w1, #2
-    and     w1, w1, #0x3FFFFFF
-    movk    w1, #0x9400, lsl #16
-    mov     w0, w1
+    mov     x1, x0                  // x1 = current emit_ptr
+    ldr     w0, [x5, #SYM_REG]     // re-load target (emit_cur clobbered x0)
+    sub     x2, x0, x1             // offset = target - current
+    asr     x2, x2, #2
+    and     w2, w2, #0x3FFFFFF
+    ORRIMM  w2, 0x94000000, w16
+    mov     w0, w2
     bl      emit32
     b       .La_call_done
 .La_call_nop:
@@ -3326,10 +3977,43 @@ parse_atom:
     ldp     x29, x30, [sp], #16
     ret
 
+.La_dollar:
+    // $N — raw register reference. Returns register N as the atom value.
+    bl      parse_dollar_reg        // w0 = register number, x19 advanced
+    ldp     x29, x30, [sp], #16
+    ret
+
 .La_load:
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
-    bl      parse_atom                  // width (8, 16, 32, 64)
+    // Width is an int literal that becomes part of the LDR opcode.
+    // Parse it directly into ls_load_width without allocating a
+    // register.  Without this, every `name → W addr` binding wasted
+    // one register on the literal width value.
+    ldr     w0, [x19]
+    cmp     w0, #TOK_INT
+    b.ne    1f
+    ldr     w1, [x19, #4]              // source offset
+    ldr     w2, [x19, #8]              // token length
+    // Quick decimal parse for 1-2 digit widths
+    ldrb    w3, [x28, x1]              // first digit
+    sub     w3, w3, #'0'
+    cmp     w2, #1
+    b.eq    2f
+    mov     w4, #10
+    mul     w3, w3, w4
+    add     w1, w1, #1
+    ldrb    w4, [x28, x1]
+    sub     w4, w4, #'0'
+    add     w3, w3, w4
+2:  adrp x0, ls_load_width@PAGE
+    add     x0, x0, ls_load_width@PAGEOFF
+    str     w3, [x0]
+    add     x19, x19, #TOK_STRIDE_SZ   // advance past width token
+    mov     w4, #0                      // sentinel: width is in ls_load_width
+    b       .La_load_post_width
+1:  bl      parse_atom                  // width (non-literal: rare)
     mov     w4, w0                      // width register
+.La_load_post_width:
     bl      parse_expr                  // address/base expression
     mov     w5, w0                      // base register
     // Check for offset operand (token on same line, not an operator)
@@ -3344,7 +4028,7 @@ parse_atom:
     b.eq    .La_load_simple
     cmp     w0, #TOK_INDENT
     b.eq    .La_load_simple
-    // Has offset — parse it and emit indexed load: LDRB Wd, [Xbase, Xoff]
+    // Has offset — parse it and emit width-aware indexed load
     stp     w4, w5, [sp, #-16]!
     bl      parse_atom                  // offset
     ldp     w4, w5, [sp], #16
@@ -3355,8 +4039,36 @@ parse_atom:
     lsl     w2, w5, #5                  // Rn (base)
     orr     w0, w7, w1
     orr     w0, w0, w2
+    // Select opcode by width stored in w4 (register containing width literal).
+    // The width was parsed as an integer literal → MOV Xw4, #width.
+    // We saved the width VALUE before alloc_reg in the parse_atom call.
+    // Actually, w4 is the register number. We need to recover the width.
+    // Trick: the .La_load code parsed width via parse_atom which for an
+    // INT literal emits MOV Xreg, #imm and returns the register in w0.
+    // We saved w0→w4. But we can't read the register value at compile time.
+    //
+    // Simpler: read the width token directly BEFORE calling parse_atom.
+    // But we already consumed it. So we save the literal value separately.
+    // For now, use the saved width literal from ls_load_width (set below).
+    adrp x3, ls_load_width@PAGE
+    add     x3, x3, ls_load_width@PAGEOFF
+    ldr     w3, [x3]
+    cmp     w3, #64
+    b.eq    .La_load_off_64
+    cmp     w3, #32
+    b.eq    .La_load_off_32
+    // Default: 8-bit (LDRB)
     movz    w3, #0x6800
     movk    w3, #0x3860, lsl #16        // LDRB Wd, [Xn, Xm]
+    b       .La_load_off_emit
+.La_load_off_64:
+    movz    w3, #0x6800
+    movk    w3, #0xF860, lsl #16        // LDR Xd, [Xn, Xm]
+    b       .La_load_off_emit
+.La_load_off_32:
+    movz    w3, #0x6800
+    movk    w3, #0xB860, lsl #16        // LDR Wd, [Xn, Xm]
+.La_load_off_emit:
     orr     w0, w0, w3
     bl      emit32
     mov     w0, w7
