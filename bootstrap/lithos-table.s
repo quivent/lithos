@@ -1364,14 +1364,15 @@ handle_composition:
     add     x1, x1, :lo12:next_reg
     ldr     w5, [x1]
     str     w5, [sp, #8]           // [sp+8] = old next_reg
-    // Cap reg_floor: compositions always start with fresh registers.
-    // If top-level vars consumed all registers (next_reg > REG_LAST),
-    // reset to REG_FIRST so the composition has a full register window.
-    cmp     w5, #REG_LAST
-    b.le    1f
+    // Compositions always start with a fresh register window.  The
+    // previous composition's bindings are dead once we pop its scope,
+    // so reg_floor and next_reg both restart at REG_FIRST.  Inheriting
+    // the prior next_reg leaked state across compositions and made
+    // late-defined functions start with reg_floor near REG_LAST,
+    // which immediately blew the spill path.
     mov     w5, #REG_FIRST
-1:  str     w5, [x0]               // reg_floor = min(next_reg, REG_FIRST)
-    str     w5, [x1]               // next_reg = reg_floor
+    str     w5, [x0]               // reg_floor = REG_FIRST
+    str     w5, [x1]               // next_reg = REG_FIRST
     // Reset spill count — new composition has its own stack frame
     adrp    x0, spill_count
     add     x0, x0, :lo12:spill_count
