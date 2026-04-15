@@ -1592,10 +1592,25 @@ def main():
                 counts = interp._call_counts
                 print(f"=== INSTRUMENTATION ===", file=_sys.stderr)
                 print(f"max_depth={interp._max_depth}", file=_sys.stderr)
-                # Globals
+                # Key metrics — check globals first, then buf-backed values
                 g = getattr(interp, 'globals', {}) or {}
-                for gk in ('arm64_pos', 'gpu_pos', 'token_count'):
-                    print(f"global[{gk}]={g.get(gk, '<missing>')}", file=_sys.stderr)
+                b = getattr(interp, 'bufs', {}) or {}
+                for gk, buf_name, width in [
+                    ('arm64_pos', 'arm64_pos_v', 64),
+                    ('gpu_pos', 'gpu_pos_v', 64),
+                    ('token_count', 'token_count_buf', 32),
+                ]:
+                    if gk in g:
+                        val = g[gk]
+                    elif buf_name in b:
+                        off, _sz = b[buf_name]
+                        if width == 64:
+                            val = struct.unpack_from('<Q', interp.mem, off)[0]
+                        else:
+                            val = struct.unpack_from('<I', interp.mem, off)[0]
+                    else:
+                        val = '<missing>'
+                    print(f"global[{gk}]={val}", file=_sys.stderr)
                 # Top-called functions
                 emit_calls = {k: v for k, v in counts.items() if k.startswith('emit_')}
                 parse_calls = {k: v for k, v in counts.items() if k.startswith('parse_')}

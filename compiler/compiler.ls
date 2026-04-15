@@ -252,6 +252,14 @@ match_keyword src offset length :
                         if== b4 108
                             kw_type 33
                             return
+        \\ "const" -> CONSTANT (96)
+        if== b0 99
+            if== b1 111
+                if== b2 110
+                    if== b3 115
+                        if== b4 116
+                            kw_type 96
+                            return
 
     if== length 6
         b0 → 8 (src + offset)
@@ -1875,6 +1883,13 @@ buf buf_off_v       512        \\ u32 byte offset from X28
 buf buf_count_v       8
 buf buf_next_off_v    8
 
+\\ Constant table — `INT constant NAME` or `const NAME INT` at top level.
+\\ Populated by const_collect before walk_top_level.
+buf const_name_off_v 512
+buf const_name_len_v 512
+buf const_val_v      512
+buf const_count_v      8
+
 \\ `if==` / `if!=` / `if</>/`if<=` / `if>=` fixup stack.  Each entry is
 \\ (indent, branch_site).  When we see an INDENT token whose value is
 \\ <= the frame's indent, the body ended: patch the placeholder branch
@@ -2149,6 +2164,139 @@ emit_buf_addr buf_off :
     _dst alloc_scratch
     emit_a64_add _dst 28 _tmp
     return _dst
+
+\\ const_collect — scan the token stream for constant declarations at
+\\ column 0.  Two forms:
+\\   INT constant NAME   (e.g. `0 constant SHT_NULL`)
+\\   const NAME INT      (e.g. `const RZ 255`)
+\\ Must run after lex and before walk_top_level.
+const_collect :
+    ← 64 const_count_v 0
+    tc → 32 token_count_buf
+    src → 64 lex_src_v
+    i 0
+    label cc_loop
+    if>= i tc
+        goto cc_done
+    t tok_type i
+    if== t 0
+        goto cc_done
+    \\ Only top-level lines (preceded by INDENT with value 0).
+    if!= t 2
+        i i + 1
+        goto cc_loop
+    ind tok_length i
+    if!= ind 0
+        i i + 1
+        goto cc_loop
+    \\ After INDENT(0), look at the first real token.
+    ni i + 1
+    if>= ni tc
+        goto cc_done
+    ft tok_type ni
+    \\ Form 1: INT constant NAME
+    if== ft 3
+        ki ni + 1
+        if>= ki tc
+            i ni + 1
+            goto cc_loop
+        kt tok_type ki
+        if!= kt 96
+            i ni + 1
+            goto cc_loop
+        \\ Next must be IDENT (the name).
+        mi ki + 1
+        if>= mi tc
+            i ki + 1
+            goto cc_loop
+        mt tok_type mi
+        if!= mt 5
+            i ki + 1
+            goto cc_loop
+        \\ Parse the INT value.
+        _voff tok_offset ni
+        _vlen tok_length ni
+        _val parse_int_tok _voff _vlen
+        \\ Store the name and value.
+        _noff tok_offset mi
+        _nlen tok_length mi
+        _cc → 64 const_count_v
+        ← 32 const_name_off_v + _cc * 4 _noff
+        ← 32 const_name_len_v + _cc * 4 _nlen
+        ← 32 const_val_v + _cc * 4 _val
+        ← 64 const_count_v _cc + 1
+        i mi + 1
+        goto cc_loop
+    \\ Form 2: const/constant NAME INT (type 96 followed by IDENT, INT)
+    if== ft 96
+        \\ Next must be IDENT (the name).
+        ai ni + 1
+        if>= ai tc
+            i ni + 1
+            goto cc_loop
+        at tok_type ai
+        if!= at 5
+            i ni + 1
+            goto cc_loop
+        \\ Next must be INT (the value).
+        vi ai + 1
+        if>= vi tc
+            i ai + 1
+            goto cc_loop
+        vt tok_type vi
+        if!= vt 3
+            i ai + 1
+            goto cc_loop
+        _vo tok_offset vi
+        _vl tok_length vi
+        _cv parse_int_tok _vo _vl
+        _no tok_offset ai
+        _nl tok_length ai
+        _cc → 64 const_count_v
+        ← 32 const_name_off_v + _cc * 4 _no
+        ← 32 const_name_len_v + _cc * 4 _nl
+        ← 32 const_val_v + _cc * 4 _cv
+        ← 64 const_count_v _cc + 1
+        i vi + 1
+        goto cc_loop
+    \\ Neither form — advance past this token.
+    i ni + 1
+    goto cc_loop
+    label cc_done
+    0
+
+\\ const_find — look up a constant by name.  Returns its integer value,
+\\ or -999999 if the name is not a declared constant.
+const_find name_off name_len :
+    src → 64 lex_src_v
+    n → 64 const_count_v
+    i 0
+    label cfd_loop
+    if>= i n
+        goto cfd_miss
+    clen → 32 const_name_len_v + i * 4
+    if== clen name_len
+        coff → 32 const_name_off_v + i * 4
+        match 1
+        j 0
+        label cfd_cmp
+        if>= j clen
+            goto cfd_cmp_done
+        a → 8 src + coff + j
+        b → 8 src + name_off + j
+        if!= a b
+            match 0
+            goto cfd_cmp_done
+        j j + 1
+        goto cfd_cmp
+        label cfd_cmp_done
+        if== match 1
+            val → 32 const_val_v + i * 4
+            return val
+    i i + 1
+    goto cfd_loop
+    label cfd_miss
+    return -999999
 
 \\ Register allocator (bump) and virtual stack
 
@@ -2486,23 +2634,35 @@ wb_emit_regwrite :
             emit_a64_mov_imm _dtmp _dval
             emit_a64_mov_reg _drn _dtmp
     else
-        if== _dvt 5
-            _dvo tok_offset _dvp
-            _dvl tok_length _dvp
+        if== _dvt 97
             ← 64 walk_pos_v _dvp + 1
-            _src → 64 lex_src_v
-            _dc → 8 _src + _dvo
-            if== _dc 36
-                _dsn parse_int_tok (_dvo + 1) (_dvl - 1)
+            _dvp3 → 64 walk_pos_v
+            _dvt3 tok_type _dvp3
+            if== _dvt3 3
+                _dvo3 tok_offset _dvp3
+                _dvl3 tok_length _dvp3
+                _dsrc parse_int_tok _dvo3 _dvl3
+                ← 64 walk_pos_v _dvp3 + 1
                 if== et 1
-                    emit_a64_mov_reg _drn _dsn
-            else
-                _dslot sym_find _dvo _dvl
-                if> _dslot 0
+                    emit_a64_mov_reg _drn _dsrc
+        else
+            if== _dvt 5
+                _dvo tok_offset _dvp
+                _dvl tok_length _dvp
+                ← 64 walk_pos_v _dvp + 1
+                _src → 64 lex_src_v
+                _dc → 8 _src + _dvo
+                if== _dc 36
+                    _dsn parse_int_tok (_dvo + 1) (_dvl - 1)
                     if== et 1
-                        _dtmp alloc_scratch
-                        emit_a64_ldur _dtmp 29 (0 - _dslot)
-                        emit_a64_mov_reg _drn _dtmp
+                        emit_a64_mov_reg _drn _dsn
+                else
+                    _dslot sym_find _dvo _dvl
+                    if> _dslot 0
+                        if== et 1
+                            _dtmp alloc_scratch
+                            emit_a64_ldur _dtmp 29 (0 - _dslot)
+                            emit_a64_mov_reg _drn _dtmp
 
 \\ Phase 1 — Scan for top-level compositions.
 \\ A composition header is:  IDENT (IDENT*) COLON NEWLINE
@@ -3328,10 +3488,18 @@ walk_body body_start body_end :
                 _fs → 32 if_stack_site_v + _top * 4
                 _here → 64 arm64_pos_v
                 _delta _here - _fs
-                _d19 (_delta / 4) & 0x7FFFF
                 _old → 32 arm64_buf + _fs
-                _new (_old & 0xFF00001F) | (_d19 << 5)
-                ← 32 arm64_buf + _fs _new
+                _opc _old >> 24
+                \\ B.cond (0x54): imm19 in bits [23:5], preserve cond in [3:0].
+                \\ B      (0x14): imm26 in bits [25:0], preserve opcode in [31:26].
+                if== _opc 0x54
+                    _d19 (_delta / 4) & 0x7FFFF
+                    _new (_old & 0xFF00001F) | (_d19 << 5)
+                    ← 32 arm64_buf + _fs _new
+                else
+                    _d26 (_delta / 4) & 0x3FFFFFF
+                    _new 0x14000000 | _d26
+                    ← 32 arm64_buf + _fs _new
                 ← 64 if_stack_depth_v _top
                 goto wb_if_pop
             label wb_if_pop_done
@@ -3731,7 +3899,10 @@ walk_body body_start body_end :
             np → 64 walk_pos_v
             nt tok_type np
             if== nt 72
-                \\ `name :` label — consume the COLON, no binding.
+                \\ `name :` label — register label and patch forward gotos.
+                _lpos → 64 arm64_pos_v
+                label_add off len
+                goto_fix_patch off len _lpos
                 ← 64 walk_pos_v np + 1
                 ← 64 stmt_start_v 0
                 goto wb_loop
@@ -3747,6 +3918,16 @@ walk_body body_start body_end :
             if== et 1
                 _ba emit_buf_addr boff
                 vpush_with_op _ba
+            goto wb_loop
+        \\ Check constant table — named constants resolve to immediate values.
+        cval const_find off len
+        if!= cval -999999
+            ← 64 stmt_start_v 0
+            et → 64 emit_target_v
+            if== et 1
+                _cr alloc_scratch
+                emit_a64_mov_imm _cr cval
+                vpush_with_op _cr
             goto wb_loop
         \\ Unknown identifier mid-expression — placeholder zero.
         ← 64 stmt_start_v 0
@@ -3843,6 +4024,48 @@ walk_body body_start body_end :
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 70
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+
+    \\ Comma, dot, colon, @, $, brackets — transparent separators.
+    \\ Consume without clearing stmt_start so they behave as whitespace.
+    if== t 71
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 73
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 72
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 74
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 97
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 67
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 68
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+
+    \\ Backslash (single) — standalone token, just consume.
+    if== t 92
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+
+    \\ `constant NAME` — skip keyword + name (2 tokens).
+    if== t 96
+        ← 64 walk_pos_v p + 2
+        goto wb_loop
+
+    \\ `exit` / `host` at body level — skip (structural, no codegen).
+    if== t 34
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 35
         ← 64 walk_pos_v p + 1
         goto wb_loop
 
@@ -3974,6 +4197,7 @@ consume_operands n :
 walk_top_level :
     walk_collect
     buf_collect
+    const_collect
     ← 64 bl_fixup_count_v 0
     n → 64 comp_count_v
     i 0
