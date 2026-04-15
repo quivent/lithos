@@ -2155,7 +2155,9 @@ emit_buf_addr buf_off :
 reg_reset :
     ← 64 scratch_idx_v 0
     ← 64 vstack_sp_v 0
-    ← 64 frame_slot_v 8
+    \\ alloc_slot pre-increments then returns, so start at 0 to get
+    \\ first slot = 8 (FP-relative [FP, #-8]).
+    ← 64 frame_slot_v 0
     ← 64 pending_lo_op_v 0
     ← 64 pending_hi_op_v 0
     ← 64 last_was_atom_v 0
@@ -2177,8 +2179,12 @@ alloc_scratch :
 \\ it to get the FP-relative offset for STUR/LDUR.  This way sym_find
 \\ can return 0 for "not found" without colliding with valid slots.
 alloc_slot :
+    \\ Advance FIRST, then return.  Slot offsets must start at 8 (not 0),
+    \\ because [FP, #-0] aliases the saved FP itself.  First slot is
+    \\ [FP, #-8], second at [FP, #-16], etc.
     s → 64 frame_slot_v
-    ← 64 frame_slot_v s + 8
+    s s + 8
+    ← 64 frame_slot_v s
     return s
 
 \\ Legacy name — compositions that call alloc_reg get alloc_scratch.
