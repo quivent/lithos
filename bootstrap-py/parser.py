@@ -856,6 +856,14 @@ class Parser:
                 elif nxt.type == TT.NEQ:
                     self._advance()
                     op = '!='
+                else:
+                    # Bare "if expr" — single expression as boolean condition.
+                    # Parse one expression (may contain comparisons internally).
+                    cond = self._parse_expr()
+                    # "if expr" with boolean condition — wrap as "if!= expr 0"
+                    zero = IntLit(value=0)
+                    return If(op='!=', left=cond, right=zero,
+                              body=self._parse_block(indent), label=None, else_body=None)
 
         left = self._parse_expr()
         right = self._parse_expr()

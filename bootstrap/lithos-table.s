@@ -1347,6 +1347,9 @@ handle_composition:
     bl      parse_body
 .Lcomp_no_body:
 
+    // Flush any pending register spills before epilogue
+    bl      reset_regs
+
     // Emit epilogue: LDP X29, X30, [SP], #16; RET
     MOVI32  w0, 0xA8C17BFD
     bl      emit32
@@ -2320,11 +2323,28 @@ handle_if:
     bl      patch_b_cond
 .Lif_patch_done:
 
-    // Check for elif/else
+    // Check for elif/else — peek past NEWLINE + INDENT without consuming
     bl      skip_newlines
     cmp     x19, x27
     b.hs    .Lif_end
     ldr     w0, [x19]
+    // If INDENT, peek past it for elif/else but don't consume yet
+    cmp     w0, #TOK_INDENT
+    b.ne    .Lif_check_kw
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lif_end
+    ldr     w0, [x4]
+    cmp     w0, #TOK_ELIF
+    b.eq    .Lif_skip_indent
+    cmp     w0, #TOK_ELSE
+    b.eq    .Lif_skip_indent
+    b       .Lif_end
+.Lif_skip_indent:
+    // Found elif/else after INDENT — consume the INDENT
+    add     x19, x19, #TOK_STRIDE_SZ
+    ldr     w0, [x19]
+.Lif_check_kw:
     cmp     w0, #TOK_ELIF
     b.eq    .Lif_elif
     cmp     w0, #TOK_ELSE
