@@ -3376,6 +3376,7 @@ walk_body body_start body_end :
     \\ evaluates the address expression normally; newline flushes.
     if== t 36
         ← 64 stmt_start_v 0
+        ← 64 walk_pos_v p + 1
         _lp → 64 walk_pos_v
         _lt tok_type _lp
         if== _lt 3
@@ -3390,6 +3391,7 @@ walk_body body_start body_end :
     \\ evaluates addr then val; newline pops val, addr and emits STR.
     if== t 37
         ← 64 stmt_start_v 0
+        ← 64 walk_pos_v p + 1
         _sp → 64 walk_pos_v
         _st tok_type _sp
         if== _st 3
