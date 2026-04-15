@@ -45,29 +45,34 @@ emit_token type offset length :
 \\ Character classification
 
 is_alpha c :
-    upper c >= 65 & c <= 90
-    lower c >= 97 & c <= 122
+    upper (c >= 65) & (c <= 90)
+    lower (c >= 97) & (c <= 122)
     under c == 95
     result upper | lower | under
+    return result
 
 is_digit c :
-    result c >= 48 & c <= 57
+    result (c >= 48) & (c <= 57)
+    return result
 
 is_hex_digit c :
-    d c >= 48 & c <= 57
-    u c >= 65 & c <= 70
-    l c >= 97 & c <= 102
+    d (c >= 48) & (c <= 57)
+    u (c >= 65) & (c <= 70)
+    l (c >= 97) & (c <= 102)
     result d | u | l
+    return result
 
 is_alnum c :
     a is_alpha c
     d is_digit c
     result a | d
+    return result
 
 is_newline c :
     lf c == 10
     cr c == 13
     result lf | cr
+    return result
 
 \\ Token scanning helpers (goto-based — no `while`, no tail recursion)
 

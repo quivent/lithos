@@ -2257,7 +2257,12 @@ emit_save_bindings:
     adrp    x0, reg_floor
     add     x0, x0, :lo12:reg_floor
     ldr     w0, [x0]
-    mov     w1, #REG_FIRST
+    // Cap at REG_LAST + 1 so we never push X28 (BSS_BASE) or X29 (FP).
+    mov     w2, #(REG_LAST + 1)
+    cmp     w0, w2
+    b.le    1f
+    mov     w0, w2
+1:  mov     w1, #REG_FIRST
     cmp     w1, w0
     b.ge    .Lesb_done
 .Lesb_loop:
@@ -2301,7 +2306,13 @@ emit_restore_bindings:
     adrp    x0, reg_floor
     add     x0, x0, :lo12:reg_floor
     ldr     w0, [x0]                   // w0 = reg_floor
-    mov     w1, #REG_FIRST
+    // Cap at REG_LAST + 1 so we don't try to pop X28/X29.  Must
+    // match the cap in emit_save_bindings.
+    mov     w2, #(REG_LAST + 1)
+    cmp     w0, w2
+    b.le    2f
+    mov     w0, w2
+2:  mov     w1, #REG_FIRST
     cmp     w1, w0
     b.ge    .Lerb_done
     // Determine highest pair start.  If (reg_floor - REG_FIRST) is odd,
