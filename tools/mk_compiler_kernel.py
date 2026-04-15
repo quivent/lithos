@@ -15,20 +15,22 @@ from elf_writer import CubinWriter
 
 e = SM90Emitter()
 
-# S2R R0, SR_TID_X (thread index)
-e.emit_s2r(0, 0x21)
+# Matches reference register allocation exactly (R5 for TID/float, R2 for ptr/addr)
 
-# I2F R1, R0 (convert to float for output)
-e.emit_i2f(1, 0)
+# S2R R5, SR_TID_X (thread index)
+e.emit_s2r(5, 0x21)
+
+# I2F R5, R5 (convert to float for output, reuse R5)
+e.emit_i2f(5, 5)
 
 # LDC R2, c[0x2][0x84] (load output pointer from constant buffer 2)
 e.emit_ldc(2, 2, 0x84)
 
-# IMAD R3, R0, 4, R2 (byte address = tid * 4 + output_ptr)
-e.emit_imad_imm(3, 0, 4, 2)
+# IMAD R2, R5, 4, R2 (byte address = tid * 4 + output_ptr, overwrite R2)
+e.emit_imad_imm(2, 5, 4, 2)
 
-# STG [R3], R1 (store float to global memory)
-e.emit_stg(3, 1)
+# STG [R2], R5 (store float to global memory)
+e.emit_stg(2, 5)
 
 # EXIT
 e.emit_exit()
