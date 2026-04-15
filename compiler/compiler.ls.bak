@@ -1590,8 +1590,7 @@ gpu_mark :
     _gp
 
 gpu_patch saved_pos :
-    _gp → 64 gpu_pos_v
-    byte_offset _gp - saved_pos - 16
+    byte_offset gpu_pos - saved_pos - 16
     offset32 byte_offset / 4
     ← 32 gpu_buf + saved_pos + 4 offset32
 
@@ -1642,19 +1641,15 @@ buf _gs_r_v 8
 buf _gs_p_v 8
 
 gs_rreg :
-    _gr → 64 _gs_r_v
-    r _gr
-    _gr _gr + 1
-    ← 64 _gs_r_v _gr
+    r _gs_r
+    _gs_r + 1
 
 gs_preg :
-    _gsp → 64 _gs_p_v
-    p _gsp
-    _gsp _gsp + 1
-    ← 64 _gs_p_v _gsp
+    p _gs_p
+    _gs_p + 1
 
 emit_grid_sync ctr_reg flag_reg grid_size :
-    ← 64 gpu_cooperative_v 1
+    gpu_cooperative 1
     record_gridsync
 
     gs_old gs_rreg
@@ -2502,24 +2497,19 @@ buf n_comps_v 8
 \\ ============================================================================
 
 peek_type :
-    _tp → 64 tok_pos_v
-    idx _tp * 3
+    idx tok_pos * 3
     → 32 tokens idx
 
 peek_offset :
-    _tp → 64 tok_pos_v
-    idx _tp * 3 + 1
+    idx tok_pos * 3 + 1
     → 32 tokens idx
 
 peek_length :
-    _tp → 64 tok_pos_v
-    idx _tp * 3 + 2
+    idx tok_pos * 3 + 2
     → 32 tokens idx
 
 consume :
-    _tp → 64 tok_pos_v
-    _tp _tp + 1
-    ← 64 tok_pos_v _tp
+    tok_pos tok_pos + 1
 
 expect type :
     t peek_type
@@ -2544,8 +2534,7 @@ skip_newlines :
 
 tok_text_ptr :
     off peek_offset
-    _sb → 64 src_buf_v
-    _sb + off
+    src_buf + off
 
 \\ ============================================================================
 \\ Source text comparison
@@ -2648,11 +2637,10 @@ parse_float_token :
 \\ ============================================================================
 
 sym_reset :
-    ← 64 n_syms_v 0
+    n_syms 0
 
 sym_add name_ptr name_len kind reg :
-    _ns → 64 n_syms_v
-    idx _ns
+    idx n_syms
     if>= idx 64
         idx
 
@@ -2668,13 +2656,10 @@ sym_add name_ptr name_len kind reg :
         b → 8 name_ptr j
         ← 8 sym_names dest + j b
 
-    _ns → 64 n_syms_v
-    _ns _ns + 1
-    ← 64 n_syms_v _ns
+    n_syms n_syms + 1
 
 sym_find name_ptr name_len :
-    _ns → 64 n_syms_v
-    for i 0 _ns 1
+    for i 0 n_syms 1
         slen → 32 sym_lens i * 4
         if== slen name_len
             match 1
@@ -2705,46 +2690,36 @@ sym_reg i :
 \\ ============================================================================
 
 alloc_freg :
-    _nf → 64 next_freg_v
-    r _nf
-    _nf _nf + 1
-    ← 64 next_freg_v _nf
+    r next_freg
+    next_freg next_freg + 1
     r
 
 alloc_rreg :
-    _nr → 64 next_rreg_v
-    r _nr
-    _nr _nr + 1
-    ← 64 next_rreg_v _nr
+    r next_rreg
+    next_rreg next_rreg + 1
     r
 
 alloc_rdreg :
-    _nrd → 64 next_rdreg_v
-    r _nrd
-    _nrd _nrd + 1
-    ← 64 next_rdreg_v _nrd
+    r next_rdreg
+    next_rdreg next_rdreg + 1
     r
 
 alloc_preg :
-    _np → 64 next_preg_v
-    r _np
-    _np _np + 1
-    ← 64 next_preg_v _np
+    r next_preg
+    next_preg next_preg + 1
     r
 
 alloc_host_reg :
-    _nh → 64 next_host_reg_v
-    r _nh
-    _nh _nh + 1
-    ← 64 next_host_reg_v _nh
+    r next_host_reg
+    next_host_reg next_host_reg + 1
     r
 
 regs_reset :
-    ← 64 next_freg_v 0
-    ← 64 next_rreg_v 4
-    ← 64 next_rdreg_v 4
-    ← 64 next_preg_v 0
-    ← 64 next_host_reg_v 9
+    next_freg 0
+    next_rreg 4
+    next_rdreg 4
+    next_preg 0
+    next_host_reg 9
 
 \\ ============================================================================
 \\ Backend dispatch — dual target emission
@@ -2754,8 +2729,7 @@ regs_reset :
 
 \\ emit_p_add : emit an add instruction (parser dispatch)
 emit_p_add rd ra rb :
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         \\ GPU sm90: FADD
         emit_fadd rd ra rb
     \\ HOST ARM64: ADD
@@ -2763,22 +2737,19 @@ emit_p_add rd ra rb :
 
 \\ emit_p_sub : emit a subtract instruction
 emit_p_sub rd ra rb :
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_fadd rd ra rb       \\ TODO: FADD with NEG on src2
     emit_sub_reg rd ra rb
 
 \\ emit_p_mul : emit a multiply instruction
 emit_p_mul rd ra rb :
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_fmul rd ra rb
     emit_mul_reg rd ra rb
 
 \\ emit_p_div : emit a divide instruction
 emit_p_div rd ra rb :
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         \\ GPU: rcp = 1/rb, then rd = ra * rcp
         rcp alloc_freg
         emit_rcp rcp rb
@@ -2787,15 +2758,13 @@ emit_p_div rd ra rb :
 
 \\ emit_p_mov_imm : load an immediate value into a register
 emit_p_mov_imm rd imm :
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         gpu_emit_mov_imm rd imm
     emit_mov64 rd imm
 
 \\ emit_p_mov_reg : register-to-register move
 emit_p_mov_reg rd rs :
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         \\ GPU: MOV via IMAD idiom
         emit_imad rd rs RZ RZ
     emit_mov rd rs
@@ -2805,8 +2774,7 @@ emit_p_mov_reg rd rs :
 \\ ============================================================================
 
 emit_p_load rd base offset width :
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_ldg rd base
     if== width 8
         emit_ldrb rd base offset
@@ -2818,8 +2786,7 @@ emit_p_load rd base offset width :
         emit_ldr rd base offset
 
 emit_p_store rs base offset width :
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_stg base rs
     if== width 8
         emit_strb rs base offset
@@ -3113,11 +3080,9 @@ parse_regread :
         if== t2 3
             regnum parse_int_token
             rd alloc_rreg
-            _et → 64 emit_target_v
-            if== _et 1
+            if== emit_target 1
                 emit_mov rd regnum
-            _et → 64 emit_target_v
-            if== _et 0
+            if== emit_target 0
                 emit_p_s2r rd regnum
             rd
         if== t2 5
@@ -3128,8 +3093,7 @@ parse_regread :
             did dict_lookup ptr len
             if>= did 0
                 sr_id → 32 dict_reg_ids did * 4
-                _et → 64 emit_target_v
-                if== _et 0
+                if== emit_target 0
                     emit_p_s2r rd sr_id
                 rd
             rd
@@ -3137,8 +3101,7 @@ parse_regread :
     if== t 3
         regnum parse_int_token
         rd alloc_rreg
-        _et → 64 emit_target_v
-        if== _et 0
+        if== emit_target 0
             emit_p_s2r rd regnum
         rd
     if== t 5
@@ -3163,8 +3126,7 @@ parse_regwrite :
         if== t2 3
             regnum parse_int_token
             val_reg parse_expr
-            _et → 64 emit_target_v
-            if== _et 1
+            if== emit_target 1
                 emit_mov regnum val_reg
             emit_p_mov_reg regnum val_reg
         if== t2 5
@@ -3175,14 +3137,12 @@ parse_regwrite :
             did dict_lookup ptr len
             if>= did 0
                 sr_id → 32 dict_reg_ids did * 4
-                _et → 64 emit_target_v
-                if== _et 1
+                if== emit_target 1
                     emit_mov sr_id val_reg
                 emit_p_mov_reg sr_id val_reg
     regnum parse_int_token
     val_reg parse_expr
-    _et → 64 emit_target_v
-    if== _et 1
+    if== emit_target 1
         emit_mov regnum val_reg
     emit_p_mov_reg regnum val_reg
 
@@ -3389,8 +3349,7 @@ parse_stmt :
 
     if== t 34
         consume
-        _et → 64 emit_target_v
-        if== _et 0
+        if== emit_target 0
             emit_p_exit_gpu
         emit_p_ret_host
 
@@ -3412,8 +3371,7 @@ parse_stmt :
     \\ TOK_RETURN (21)
     if== t 21
         consume
-        _et → 64 emit_target_v
-        if== _et 0
+        if== emit_target 0
             emit_p_exit_gpu
         emit_p_ret_host
 
@@ -3525,11 +3483,9 @@ label_find name_ptr name_len :
     -1
 
 parse_continue_stmt :
-    _bd → 64 branch_depth_v
-    if== _bd 0
+    if== branch_depth 0
         0
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_p_bra 0
     arm64_emit32 0x14000000
 
@@ -3602,8 +3558,7 @@ parse_param :
     ← 32 kparam_lens pidx * 4 name_len
     ← 32 kparam_types pidx * 4 param_type
     rd alloc_rdreg
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         param_offset 528 + pidx * 8
         emit_uldc rd 0 param_offset
     sym_add name_ptr name_len 6 rd
@@ -3674,8 +3629,7 @@ parse_3op_and :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_lop3_and rd a b
     emit_and_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3687,8 +3641,7 @@ parse_3op_or :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_lop3_or rd a b
     emit_orr_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3700,8 +3653,7 @@ parse_3op_xor :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_lop3_xor rd a b
     emit_eor_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3713,8 +3665,7 @@ parse_3op_shl :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_shf_r rd a b
     emit_lsl_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3726,8 +3677,7 @@ parse_3op_shr :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_shf_r rd a b
     emit_lsr_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3795,9 +3745,7 @@ parse_ident_stmt :
         parse_inline_label ptr len
         1
     \\ Put token back
-    _tp → 64 tok_pos_v
-    _tp _tp - 1
-    ← 64 tok_pos_v _tp
+    tok_pos tok_pos - 1
 
     \\ Check for mem_load 8 (7 chars)
     if== len 7
@@ -4115,8 +4063,7 @@ parse_for :
 
     push_branch loop_reg end_reg step_reg
 
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         p alloc_preg
         emit_p_isetp p loop_reg end_reg
         emit_p_bra_predicated p 0
@@ -4130,8 +4077,7 @@ parse_for_end :
 
     emit_p_add loop_reg loop_reg step_reg
 
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_p_bra 0
     arm64_emit32 0x14000000
 
@@ -4144,8 +4090,7 @@ parse_each :
     ctaid_reg alloc_rreg
     gidx_reg alloc_rreg
 
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_p_s2r tid_reg 0x21
         emit_p_s2r ctaid_reg 0x25
 
@@ -4212,8 +4157,7 @@ parse_conditional :
     a parse_expr
     b parse_expr
 
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         p alloc_preg
         if== cmp_type 0
             emit_p_isetp p a b
@@ -4258,50 +4202,37 @@ parse_shared :
 
     total size * elem_size
 
-    _nsh → 64 n_shared_v
-    sidx _nsh
+    sidx n_shared
     ← 32 shm_sizes sidx * 4 total
 
     rd alloc_rdreg
     sym_add name_ptr name_len 5 rd
 
-    _nsh → 64 n_shared_v
-    _nsh _nsh + 1
-    ← 64 n_shared_v _nsh
-    _st → 64 shmem_total_v
-    _st _st + total
-    ← 64 shmem_total_v _st
+    n_shared n_shared + 1
+    shmem_total shmem_total + total
 
 \\ ============================================================================
 \\ Branch stack operations
 \\ ============================================================================
 
 push_branch loop_reg end_reg step_reg :
-    _bd → 64 branch_depth_v
-    idx _bd * 16
+    idx branch_depth * 16
     ← 32 branch_stack idx loop_reg
     ← 32 branch_stack idx + 4 end_reg
     ← 32 branch_stack idx + 8 step_reg
-    _bd → 64 branch_depth_v
-    _bd _bd + 1
-    ← 64 branch_depth_v _bd
+    branch_depth branch_depth + 1
 
 pop_branch_reg :
-    _bd → 64 branch_depth_v
-    _bd _bd - 1
-    ← 64 branch_depth_v _bd
-    _bd → 64 branch_depth_v
-    idx _bd * 16
+    branch_depth branch_depth - 1
+    idx branch_depth * 16
     → 32 branch_stack idx
 
 pop_branch_end :
-    _bd → 64 branch_depth_v
-    idx _bd * 16
+    idx branch_depth * 16
     → 32 branch_stack idx + 4
 
 pop_branch_step :
-    _bd → 64 branch_depth_v
-    idx _bd * 16
+    idx branch_depth * 16
     → 32 branch_stack idx + 8
 
 \\ ============================================================================
@@ -4313,12 +4244,11 @@ parse_body :
     t peek_type
     if== t 2
         new_indent peek_length
-        _bi → 64 body_indent_v
-        old_indent _bi
-        ← 64 body_indent_v new_indent
+        old_indent body_indent
+        body_indent new_indent
         consume
         parse_body_loop old_indent
-        ← 64 body_indent_v old_indent
+        body_indent old_indent
 
 parse_body_loop old_indent :
     t peek_type
@@ -4330,8 +4260,7 @@ parse_body_loop old_indent :
         t2 peek_type
         if== t2 2
             ind peek_length
-            _bi → 64 body_indent_v
-            if< ind _bi
+            if< ind body_indent
                 0
             consume
             parse_stmt
@@ -4352,19 +4281,17 @@ parse_composition :
 
     sym_reset
     regs_reset
-    ← 64 n_shared_v 0
-    ← 64 shmem_total_v 0
-    ← 64 branch_depth_v 0
+    n_shared 0
+    shmem_total 0
+    branch_depth 0
 
     arg_count 0
     parse_comp_args arg_count
 
     expect 72
 
-    _nc → 64 n_comps_v
-    cidx _nc
-    _tp → 64 tok_pos_v
-    ← 32 comp_tokprologues cidx * 4 _tp
+    cidx n_comps
+    ← 32 comp_tokprologues cidx * 4 tok_pos
     ← 32 comp_arg_counts cidx * 4 arg_count
     clen name_len
     if>= clen 32
@@ -4373,14 +4300,11 @@ parse_composition :
         b → 8 name_ptr j
         ← 8 comp_names cidx * 32 + j b
     ← 32 comp_lens cidx * 4 name_len
-    _nc → 64 n_comps_v
-    _nc _nc + 1
-    ← 64 n_comps_v _nc
+    n_comps n_comps + 1
 
     parse_body
 
-    _et → 64 emit_target_v
-    if== _et 0
+    if== emit_target 0
         emit_p_exit_gpu
     emit_p_ret_host
 
@@ -4394,8 +4318,7 @@ parse_comp_args count :
         len peek_length
         consume
 
-        _et → 64 emit_target_v
-        if== _et 0
+        if== emit_target 0
             reg alloc_rdreg
         reg count
 
@@ -4425,19 +4348,19 @@ parse_file :
 
     if== t 35
         consume
-        ← 64 emit_target_v 1
+        emit_target 1
         parse_composition
-        ← 64 emit_target_v 0
+        emit_target 0
         parse_file
 
     if== t 5
-        ← 64 emit_target_v 0
+        emit_target 0
         parse_composition
         parse_file
 
     if== t 11
         consume
-        ← 64 emit_target_v 0
+        emit_target 0
         parse_composition
         parse_file
 
@@ -4455,9 +4378,7 @@ parse_file :
             sym_add name_ptr name_len 1 rd
             parse_file
         \\ Not a constant decl, put token back
-        _tp → 64 tok_pos_v
-        _tp _tp - 1
-        ← 64 tok_pos_v _tp
+        tok_pos tok_pos - 1
 
     \\ TOK_CONSTANT at file scope
     if== t 96
@@ -4722,12 +4643,11 @@ buf elf_SN_shared_v 8
 \\ ---- Sub-composition: emit .shstrtab section names ----
 elf_emit_shstrtab kernel_name kernel_nlen :
     _cp → 64 cubin_pos_v
-    ← 64 elf_shstrtab_off_v _cp
+    elf_shstrtab_off _cp
     cb_emit 0
 
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_SN_shstrtab_v _cp - _eso
+    elf_SN_shstrtab _cp - elf_shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 104
@@ -4740,8 +4660,7 @@ elf_emit_shstrtab kernel_name kernel_nlen :
     cb_emit 0
 
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_SN_strtab_v _cp - _eso
+    elf_SN_strtab _cp - elf_shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 116
@@ -4752,8 +4671,7 @@ elf_emit_shstrtab kernel_name kernel_nlen :
     cb_emit 0
 
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_SN_symtab_v _cp - _eso
+    elf_SN_symtab _cp - elf_shstrtab_off
     cb_emit 46
     cb_emit 115
     cb_emit 121
@@ -4764,8 +4682,7 @@ elf_emit_shstrtab kernel_name kernel_nlen :
     cb_emit 0
 
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_SN_nvinfo_v _cp - _eso
+    elf_SN_nvinfo _cp - elf_shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4777,8 +4694,7 @@ elf_emit_shstrtab kernel_name kernel_nlen :
     cb_emit 0
 
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_SN_nvinfo_k_v _cp - _eso
+    elf_SN_nvinfo_k _cp - elf_shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4792,8 +4708,7 @@ elf_emit_shstrtab kernel_name kernel_nlen :
     cb_emit 0
 
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_SN_text_v _cp - _eso
+    elf_SN_text _cp - elf_shstrtab_off
     cb_emit 46
     cb_emit 116
     cb_emit 101
@@ -4804,8 +4719,7 @@ elf_emit_shstrtab kernel_name kernel_nlen :
     cb_emit 0
 
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_SN_const0_v _cp - _eso
+    elf_SN_const0 _cp - elf_shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4824,8 +4738,7 @@ elf_emit_shstrtab kernel_name kernel_nlen :
     cb_emit 0
 
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_SN_shared_v _cp - _eso
+    elf_SN_shared _cp - elf_shstrtab_off
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4851,58 +4764,49 @@ elf_emit_shstrtab kernel_name kernel_nlen :
 
     calign 4
     _cp → 64 cubin_pos_v
-    _eso → 64 elf_shstrtab_off_v
-    ← 64 elf_shstrtab_size_v _cp - _eso
+    elf_shstrtab_size _cp - elf_shstrtab_off
 
 \\ ---- Sub-composition: emit .strtab + .symtab ----
 elf_emit_strtab_symtab kernel_name kernel_nlen :
     _cp → 64 cubin_pos_v
-    ← 64 elf_strtab_off_v _cp
+    elf_strtab_off _cp
     cb_emit 0
     cb_emit 0
     _cp → 64 cubin_pos_v
-    _eto → 64 elf_strtab_off_v
-    ← 64 strsym_kernel_v _cp - _eto
+    strsym_kernel _cp - elf_strtab_off
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
     _cp → 64 cubin_pos_v
-    _eto → 64 elf_strtab_off_v
-    ← 64 elf_strtab_size_v _cp - _eto
+    elf_strtab_size _cp - elf_strtab_off
 
     calign 8
     _cp → 64 cubin_pos_v
-    ← 64 elf_symtab_off_v _cp
+    elf_symtab_off _cp
     sym64_emit 0 0 0 0 0 0
     sym64_emit 0 3 0 5 0 0
     sym64_emit 0 3 0 8 0 0
     _cp → 64 cubin_pos_v
-    ← 64 elf_sym_kernel_off_v _cp
-    _sk → 64 strsym_kernel_v
-    sym64_emit _sk 18 16 5 0 0
+    elf_sym_kernel_off _cp
+    sym64_emit strsym_kernel 18 16 5 0 0
     _cp → 64 cubin_pos_v
-    _eyo → 64 elf_symtab_off_v
-    ← 64 elf_symtab_size_v _cp - _eyo
+    elf_symtab_size _cp - elf_symtab_off
 
 \\ ---- Sub-composition: emit .nv.info (global attrs) ----
 elf_emit_nvinfo reg_count :
     calign 4
-    _cp → 64 cubin_pos_v
-    ← 64 elf_nvinfo_off_v _cp
+    elf_nvinfo_off cubin_pos
     reg_val reg_count + 1
     if< reg_val 8
         reg_val 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
     nvi_sval_emit 0 3 EIATTR_FRAME_SIZE NVI_FMT_U32
     nvi_sval_emit 0 3 EIATTR_MIN_STACK_SIZE NVI_FMT_U32
-    _cp → 64 cubin_pos_v
-    _eno → 64 elf_nvinfo_off_v
-    ← 64 elf_nvinfo_size_v _cp - _eno
+    elf_nvinfo_size cubin_pos - elf_nvinfo_off
 
 \\ ---- Sub-composition: emit .nv.info.<kernel> (per-kernel attrs) ----
 elf_emit_nvinfo_k n_kparams smem_size code_size :
     calign 4
-    _cp → 64 cubin_pos_v
-    ← 64 elf_nvinfo_k_off_v _cp
+    elf_nvinfo_k_off cubin_pos
     nvi_u32_emit 128 EIATTR_CUDA_API_VERSION NVI_FMT_U32
 
     for pi 0 n_kparams 1
@@ -4927,8 +4831,7 @@ elf_emit_nvinfo_k n_kparams smem_size code_size :
     cb_emit 255
     cb_emit 0
 
-    _gc → 64 gpu_cooperative_v
-    if== _gc 1
+    if== gpu_cooperative 1
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_MASK_REGIDS
         cw_emit 16
@@ -4939,31 +4842,28 @@ elf_emit_nvinfo_k n_kparams smem_size code_size :
 
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_INSTR_OFFSETS
-        _gsc → 64 gridsync_count_v
-        cw_emit (_gsc * 4)
-        for gi 0 _gsc 1
+        cw_emit (gridsync_count * 4)
+        for gi 0 gridsync_count 1
             gs_off → 32 (gridsync_offsets + gi * 4)
             cd_emit gs_off
         endfor
 
     cb_emit 4
     cb_emit EIATTR_EXIT_INSTR_OFFSETS
-    _ec → 64 exit_count_v
-    if> _ec 0
-        cw_emit (_ec * 4)
-        for ei 0 _ec 1
+    if> exit_count 0
+        cw_emit (exit_count * 4)
+        for ei 0 exit_count 1
             ex_off → 32 (exit_offsets + ei * 4)
             cd_emit ex_off
         endfor
-    if== _ec 0
+    if== exit_count 0
         cw_emit 4
         cd_emit code_size - 16
 
-    ← 64 elf_param_bytes_v n_kparams * 8
+    elf_param_bytes n_kparams * 8
     cb_emit 3
     cb_emit EIATTR_CBANK_PARAM_SIZE
-    _ep → 64 elf_param_bytes_v
-    cw_emit _ep
+    cw_emit elf_param_bytes
 
     cb_emit 4
     cb_emit EIATTR_PARAM_CBANK
@@ -4983,15 +4883,12 @@ elf_emit_nvinfo_k n_kparams smem_size code_size :
         cw_emit 4
         cd_emit smem_size
 
-    _cp → 64 cubin_pos_v
-    _eko → 64 elf_nvinfo_k_off_v
-    ← 64 elf_nvinfo_k_size_v _cp - _eko
+    elf_nvinfo_k_size cubin_pos - elf_nvinfo_k_off
 
 \\ ---- Sub-composition: emit .text + .nv.constant0 ----
 elf_emit_text_const0 code_buf code_size :
     calign 128
-    _cp → 64 cubin_pos_v
-    ← 64 elf_text_off_v _cp
+    elf_text_off cubin_pos
 
     if== code_size 0
         for zb 0 48 1
@@ -5003,79 +4900,43 @@ elf_emit_text_const0 code_buf code_size :
             cb_emit byte
         endfor
 
-    _cp → 64 cubin_pos_v
-    _eto → 64 elf_text_off_v
-    ← 64 elf_text_size_v _cp - _eto
-    _ets → 64 elf_text_size_v
-    _eko → 64 elf_sym_kernel_off_v
-    elf_put_u64 _ets (_eko + 16)
+    elf_text_size cubin_pos - elf_text_off
+    elf_put_u64 elf_text_size (elf_sym_kernel_off + 16)
 
     calign 4
-    _cp → 64 cubin_pos_v
-    ← 64 elf_const0_off_v _cp
-    _ep → 64 elf_param_bytes_v
-    const0_total 528 + _ep
+    elf_const0_off cubin_pos
+    const0_total 528 + elf_param_bytes
     for c0i 0 const0_total 1
         cb_emit 0
     endfor
-    _cp → 64 cubin_pos_v
-    _eco → 64 elf_const0_off_v
-    ← 64 elf_const0_size_v _cp - _eco
+    elf_const0_size cubin_pos - elf_const0_off
 
 \\ ---- Sub-composition: emit section headers + patch ELF header ----
 elf_emit_shdrs smem_size :
     calign 64
-    _cp → 64 cubin_pos_v
-    ← 64 elf_shdrs_off_v _cp
-
-    \\ Load all section metadata into locals for shdr calls
-    _sn1 → 64 elf_SN_shstrtab_v
-    _sn2 → 64 elf_SN_strtab_v
-    _sn3 → 64 elf_SN_symtab_v
-    _sn4 → 64 elf_SN_nvinfo_v
-    _sn5 → 64 elf_SN_text_v
-    _sn6 → 64 elf_SN_nvinfo_k_v
-    _sn7 → 64 elf_SN_shared_v
-    _sn8 → 64 elf_SN_const0_v
-    _o1 → 64 elf_shstrtab_off_v
-    _s1 → 64 elf_shstrtab_size_v
-    _o2 → 64 elf_strtab_off_v
-    _s2 → 64 elf_strtab_size_v
-    _o3 → 64 elf_symtab_off_v
-    _s3 → 64 elf_symtab_size_v
+    elf_shdrs_off cubin_pos
 
     shdr64_a 0 0 0 0 0
     shdr64_b 0 0 0 0 0
-    shdr64_a _sn1 SHT_STRTAB 0 0 _o1
-    shdr64_b _s1 0 0 1 0
-    shdr64_a _sn2 SHT_STRTAB 0 0 _o2
-    shdr64_b _s2 0 0 1 0
-    shdr64_a _sn3 SHT_SYMTAB 0 0 _o3
-    shdr64_b _s3 2 3 8 24
-
-    _o4 → 64 elf_nvinfo_off_v
-    _s4 → 64 elf_nvinfo_size_v
-    _o5 → 64 elf_text_off_v
-    _s5 → 64 elf_text_size_v
-    _o6 → 64 elf_nvinfo_k_off_v
-    _s6 → 64 elf_nvinfo_k_size_v
-    _o7 → 64 elf_const0_off_v
-    _s7 → 64 elf_const0_size_v
-
-    shdr64_a _sn4 SHT_LOPROC 0 0 _o4
-    shdr64_b _s4 3 0 4 0
-    shdr64_a _sn5 SHT_PROGBITS 6 0 _o5
-    shdr64_b _s5 3 3 128 0
-    shdr64_a _sn6 SHT_LOPROC SHF_INFO_LINK 0 _o6
-    shdr64_b _s6 3 5 4 0
-    shdr64_a _sn7 SHT_NOBITS 3 0 _o7
+    shdr64_a elf_SN_shstrtab SHT_STRTAB 0 0 elf_shstrtab_off
+    shdr64_b elf_shstrtab_size 0 0 1 0
+    shdr64_a elf_SN_strtab SHT_STRTAB 0 0 elf_strtab_off
+    shdr64_b elf_strtab_size 0 0 1 0
+    shdr64_a elf_SN_symtab SHT_SYMTAB 0 0 elf_symtab_off
+    shdr64_b elf_symtab_size 2 3 8 24
+    shdr64_a elf_SN_nvinfo SHT_LOPROC 0 0 elf_nvinfo_off
+    shdr64_b elf_nvinfo_size 3 0 4 0
+    shdr64_a elf_SN_text SHT_PROGBITS 6 0 elf_text_off
+    shdr64_b elf_text_size 3 3 128 0
+    shdr64_a elf_SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 elf_nvinfo_k_off
+    shdr64_b elf_nvinfo_k_size 3 5 4 0
+    shdr64_a elf_SN_shared SHT_NOBITS 3 0 elf_const0_off
     shdr64_b smem_size 0 0 16 0
-    shdr64_a _sn8 SHT_PROGBITS 66 0 _o7
-    shdr64_b _s7 0 5 4 0
+    shdr64_a elf_SN_const0 SHT_PROGBITS 66 0 elf_const0_off
+    shdr64_b elf_const0_size 0 5 4 0
 
     elf_put_u64 0 32
-    _eso → 64 elf_shdrs_off_v
-    elf_put_u64 _eso 40
+    elf_put_u64 elf_shdrs_off 40
     elf_put_u16 0 54
     elf_put_u16 0 56
     elf_put_u16 9 60
@@ -5100,7 +4961,7 @@ elf_save path :
     trap fd SYS_OPENAT -100 path 577 420
 
     written 0
-    remaining → 64 cubin_pos_v
+    remaining cubin_pos
     loop_write:
         if<= remaining 0
             goto done_write
@@ -5128,9 +4989,9 @@ elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count s
 \\ ============================================================
 
 elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
-    ← 64 gpu_cooperative_v 0
-    ← 64 gridsync_count_v 0
-    ← 64 exit_count_v 0
+    gpu_cooperative 0
+    gridsync_count 0
+    exit_count 0
     elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path
 
@@ -5143,7 +5004,7 @@ elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count 
 \\ Uses cubin_buf/cubin_pos as output buffer (same as GPU ELF writer).
 
 elf_build_arm64 code_buf code_size :
-    ← 64 cubin_pos_v 0
+    cubin_pos 0
 
     \\ ELF header (64 bytes)
     \\ e_ident: 7f 45 4c 46 02 01 01 00 (ELF64 LE SYSV)
