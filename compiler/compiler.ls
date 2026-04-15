@@ -2730,8 +2730,17 @@ walk_top_level :
         emit_exit
         nr → 64 scratch_idx_v
         ← 64 cur_reg_count_v nr + 8
-    \\ Host epilogue: ADD SP,SP,#512; LDP FP,LR; RET.
+    \\ Host epilogue.
+    \\ First: if there's a value on the vstack, move it to X0 so the
+    \\ caller can read the return value after BL.
     if== is_host 1
+        _vsp → 64 vstack_sp_v
+        if> _vsp 0
+            ret_reg vpop
+            if!= ret_reg 0
+                \\ MOV X0, Xret_reg = ORR X0, XZR, Xret_reg
+                _movw 0xAA0003E0 | (ret_reg << 16)
+                arm64_emit32 _movw
         emit_a64_add_imm 31 31 512
         emit_a64_ldp_fp_lr
         emit_a64_ret
