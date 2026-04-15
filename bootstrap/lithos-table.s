@@ -2366,8 +2366,19 @@ parse_mem_store:
     mov     x29, sp
     add     x19, x19, #TOK_STRIDE_SZ   // skip '←'
 
-    bl      parse_expr              // width
+    // Width is part of the STR opcode, not a runtime value.  Parse
+    // it as an int literal directly to avoid wasting a register.
+    ldr     w0, [x19]
+    cmp     w0, #TOK_INT
+    b.ne    .Lhs_width_expr
+    bl      parse_int_literal
+    add     x19, x19, #TOK_STRIDE_SZ
+    mov     w4, #0                  // sentinel: width consumed, no reg
+    b       .Lhs_addr
+.Lhs_width_expr:
+    bl      parse_expr              // fallback
     mov     w4, w0
+.Lhs_addr:
     stp     x4, xzr, [sp, #-16]!
     bl      parse_expr              // addr (base, possibly with +offset inline)
     mov     w5, w0
@@ -2420,8 +2431,21 @@ parse_mem_load:
     mov     x29, sp
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
 
-    bl      parse_expr              // width (often a literal — temp)
-    mov     w4, w0
+    // Width is almost always an int literal (8/16/32/64) — it's part
+    // of the LDR opcode, not a runtime value.  Parse it directly as
+    // an int literal and advance past it, rather than calling
+    // parse_expr (which would waste a register on a constant we
+    // never use).
+    ldr     w0, [x19]
+    cmp     w0, #TOK_INT
+    b.ne    .Lhl_width_expr
+    bl      parse_int_literal       // x0 = width value (not used)
+    add     x19, x19, #TOK_STRIDE_SZ   // advance past the int token
+    b       .Lhl_addr
+.Lhl_width_expr:
+    bl      parse_expr              // fallback: width as expr (rare)
+
+.Lhl_addr:
     bl      parse_expr              // addr
     mov     w5, w0
 
@@ -2434,27 +2458,22 @@ parse_mem_load:
     mov     w2, #0
     bl      emit_ldr_imm
 
-    // The width and addr temps (w4, w5) are dead now that the LDR is
-    // in the code stream.  Compact the result down to w4's slot and
-    // free everything above, so each `name → W addr` only consumes a
-    // single register slot from the caller's pool.  Without this every
-    // load wasted 2 regs and `walk_top_level` exhausted the allocator
-    // before its body ran.
+    // The addr temp (w5) is dead now.  Compact the result down to w5's
+    // slot if w5 is a temp (above reg_floor), so each load only
+    // consumes one register slot from the caller.
     adrp    x0, reg_floor
     add     x0, x0, :lo12:reg_floor
     ldr     w7, [x0]
-    cmp     w4, w7
-    b.lt    1f                      // w4 is a binding, leave alone
-    cmp     w4, w6
+    cmp     w5, w7
+    b.lt    1f                      // w5 is a binding, leave alone
+    cmp     w5, w6
     b.eq    1f                      // already compact
-    // emit MOV Xw4, Xw6
-    mov     w0, w4
+    mov     w0, w5
     mov     w1, w6
     bl      emit_mov_reg
-    // free everything above w4 (releases w5 and w6's slot)
-    add     w0, w4, #1
+    add     w0, w5, #1
     bl      free_reg
-    mov     w6, w4                  // result is now in w4
+    mov     w6, w5
 1:  ldp     x29, x30, [sp], #16
     mov     w0, w6
     ret
@@ -3811,8 +3830,10 @@ parse_atom:
 
 .La_load:
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
-    // Save width literal value before parse_atom consumes the token.
-    // Width is always an INT literal (8, 32, or 64).
+    // Width is an int literal that becomes part of the LDR opcode.
+    // Parse it directly into ls_load_width without allocating a
+    // register.  Without this, every `name → W addr` binding wasted
+    // one register on the literal width value.
     ldr     w0, [x19]
     cmp     w0, #TOK_INT
     b.ne    1f
@@ -3832,9 +3853,12 @@ parse_atom:
 2:  adrp    x0, ls_load_width
     add     x0, x0, :lo12:ls_load_width
     str     w3, [x0]
-1:
-    bl      parse_atom                  // width (8, 16, 32, 64)
+    add     x19, x19, #TOK_STRIDE_SZ   // advance past width token
+    mov     w4, #0                      // sentinel: width is in ls_load_width
+    b       .La_load_post_width
+1:  bl      parse_atom                  // width (non-literal: rare)
     mov     w4, w0                      // width register
+.La_load_post_width:
     bl      parse_expr                  // address/base expression
     mov     w5, w0                      // base register
     // Check for offset operand (token on same line, not an operator)
