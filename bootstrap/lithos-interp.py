@@ -508,6 +508,15 @@ class Interp:
             else:
                 args.append(self.parse_expr())
 
+        # Top-level entry (no active caller frame): pull remaining params
+        # from X0.. — matches wirth's _start trampoline which loads argc
+        # into X0 and argv into X1 before branching to main.  Without this,
+        # `main argc argv :` sees argc=0 and instantly goto'es main_exit_err.
+        if not self.frames:
+            while len(args) < len(params):
+                i = len(args)
+                args.append(self.regs[i] if i < 32 else 0)
+
         while len(args) < len(params):
             args.append(0)
 
