@@ -1466,67 +1466,39 @@ handle_composition:
     b.gt    parse_error
 .Lcomp_arg_ok:
 
-    // Register arg as param with register = arg index (X0-X7)
-    mov     w1, #KIND_PARAM
-    mov     w2, w8
+    // Allocate a slot for this parameter, emit STR X<argidx>, [SP, #slot]
+    // so the param survives any subsequent BL, then register the
+    // param with KIND_LOCAL_SLOT and the slot offset.  After this,
+    // a parameter reference is indistinguishable from a binding
+    // reference — both go through the slot-load path in parse_atom.
+    sub     sp, sp, #32
+    str     x19, [sp, #0]               // save current name token pos
+    str     x8,  [sp, #8]               // save arg index
+    bl      alloc_slot                  // w0 = slot offset
+    str     x0,  [sp, #16]              // save slot offset
+    ldr     x8,  [sp, #8]               // restore arg index
+    // Emit STR X<argidx>, [SP, #slot]
+    mov     w0, w8                      // Rt = arg register (X0..X7)
+    mov     w1, #31                     // Rn = SP
+    ldr     w2, [sp, #16]               // offset = slot
+    bl      emit_str_imm
+    // Register as KIND_LOCAL_SLOT
+    ldr     x19, [sp, #0]               // restore x19 to name token
+    mov     w1, #KIND_LOCAL_SLOT
+    ldr     w2, [sp, #16]               // slot offset
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
-    add     x19, x19, #TOK_STRIDE_SZ
+    ldr     x8, [sp, #8]                // restore arg index
+    add     sp, sp, #32
+
+    add     x19, x19, #TOK_STRIDE_SZ    // skip param name
     add     w8, w8, #1
     cmp     w8, #8
     b.lt    .Lcomp_args
 .Lcomp_args_done:
     add     x19, x19, #TOK_STRIDE_SZ   // skip ':'
-
-    // Move parameters out of X0..X7 (caller-saved) into freshly
-    // allocated bindings (X9..) so they survive any subsequent BL.
-    // Without this, every function with parameters loses them as
-    // soon as the body makes its first call — `copy_bytes(buf, len)`
-    // turning into `copy_bytes(garbage, len)` after one emit_byte.
-    cbz     w8, .Lcomp_no_param_move
-    mov     w9, #0                      // arg index iterator
-.Lcomp_pmove_loop:
-    cmp     w9, w8
-    b.ge    .Lcomp_no_param_move
-    // Find the param's sym entry: it's at sym_count - argc + w9.
-    // Equivalently, sym_count - argc + w9 = sym_count - (argc - w9).
-    adrp    x0, ls_sym_count
-    add     x0, x0, :lo12:ls_sym_count
-    ldr     w1, [x0]                    // current sym_count
-    sub     w2, w8, w9
-    sub     w2, w1, w2                  // index of the w9-th param
-    adrp    x3, ls_sym_table
-    add     x3, x3, :lo12:ls_sym_table
-    mov     w4, #SYM_SIZE
-    madd    x3, x2, x4, x3              // &sym_table[index]
-    // Allocate a fresh register and emit MOV new, Xw9
-    stp     x3, x9, [sp, #-16]!
-    stp     x8, xzr, [sp, #-16]!
-    bl      alloc_reg                   // w0 = new reg
-    ldp     x8, xzr, [sp], #16
-    ldp     x3, x9, [sp], #16
-    mov     w5, w0                      // new reg
-    mov     w0, w5                      // dest = new reg
-    mov     w1, w9                      // src = Xw9 (the arg reg)
-    stp     x3, x5, [sp, #-16]!
-    stp     x8, x9, [sp, #-16]!
-    bl      emit_mov_reg
-    ldp     x8, x9, [sp], #16
-    ldp     x3, x5, [sp], #16
-    // Update sym entry to point to the new register and bump reg_floor
-    str     w5, [x3, #SYM_REG]
-    adrp    x0, reg_floor
-    add     x0, x0, :lo12:reg_floor
-    ldr     w1, [x0]
-    add     w2, w5, #1
-    cmp     w2, w1
-    b.le    1f
-    str     w2, [x0]
-1:  add     w9, w9, #1
-    b       .Lcomp_pmove_loop
-.Lcomp_no_param_move:
 
     // Parse body
     bl      skip_newlines
@@ -2954,6 +2926,27 @@ parse_return_compose:
     bl      emit_mov_reg
 
 .Lret_emit:
+    // Emit ADD SP, SP, #<aligned frame_size> before restoring FP/LR.
+    // The final frame_size isn't known until the composition ends, so
+    // we patch a placeholder the same way handle_composition's
+    // prologue patches its SUB.  But `return` can appear mid-body,
+    // and at that point the function hasn't finished parsing — so the
+    // SAFE thing is to emit an ADD with the CURRENT frame_size, then
+    // rely on the fact that bindings below this point may add more
+    // slots (and thus the actual SP may be lower than frame_size at
+    // the end).  For now, assume returns are at the tail of the body
+    // so the current frame_size is final.
+    adrp    x0, frame_size
+    add     x0, x0, :lo12:frame_size
+    ldr     w4, [x0]
+    add     w4, w4, #15
+    and     w4, w4, #-16
+    and     w7, w4, #0xFFF
+    lsl     w7, w7, #10
+    movz    w0, #0x03FF                 // (SP<<5) | SP
+    movk    w0, #0x9100, lsl #16
+    orr     w0, w0, w7
+    bl      emit32
     MOVI32  w0, 0xA8C17BFD         // LDP X29, X30, [SP], #16
     bl      emit32
     bl      emit_ret_inst
@@ -2961,6 +2954,17 @@ parse_return_compose:
     ret
 
 .Lret_void:
+    adrp    x0, frame_size
+    add     x0, x0, :lo12:frame_size
+    ldr     w4, [x0]
+    add     w4, w4, #15
+    and     w4, w4, #-16
+    and     w7, w4, #0xFFF
+    lsl     w7, w7, #10
+    movz    w0, #0x03FF
+    movk    w0, #0x9100, lsl #16
+    orr     w0, w0, w7
+    bl      emit32
     MOVI32  w0, 0xA8C17BFD
     bl      emit32
     bl      emit_ret_inst
