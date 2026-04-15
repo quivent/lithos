@@ -1410,6 +1410,10 @@ handle_composition:
     adrp    x0, frame_size
     add     x0, x0, :lo12:frame_size
     str     wzr, [x0]
+    // Reset the return-patch table for this composition.
+    adrp    x0, return_patch_count
+    add     x0, x0, :lo12:return_patch_count
+    str     wzr, [x0]
 
     // Increment scope
     adrp    x0, scope_depth
@@ -1533,6 +1537,26 @@ handle_composition:
     lsl     w7, w7, #10
     orr     w6, w6, w7
     str     w6, [x5]
+
+    // Patch every return's ADD SP placeholder with the same imm12.
+    adrp    x8, return_patch_count
+    add     x8, x8, :lo12:return_patch_count
+    ldr     w9, [x8]                    // count
+    cbz     w9, .Lcomp_ret_patches_done
+    adrp    x10, return_patches
+    add     x10, x10, :lo12:return_patches
+    mov     w11, #0
+.Lcomp_ret_patch_loop:
+    cmp     w11, w9
+    b.ge    .Lcomp_ret_patches_done
+    ldr     x12, [x10, w11, uxtw #3]    // placeholder addr
+    ldr     w13, [x12]                  // current encoding (0x910003FF)
+    orr     w13, w13, w7                // OR imm12 in
+    str     w13, [x12]
+    add     w11, w11, #1
+    b       .Lcomp_ret_patch_loop
+.Lcomp_ret_patches_done:
+
     // Emit ADD SP, SP, #frame_size  (0x91000000 | (imm12<<10) | Rn=31<<5 | Rd=31)
     and     w7, w4, #0xFFF
     lsl     w7, w7, #10
@@ -2939,45 +2963,27 @@ parse_return_compose:
     bl      emit_mov_reg
 
 .Lret_emit:
-    // Emit ADD SP, SP, #<aligned frame_size> before restoring FP/LR.
-    // The final frame_size isn't known until the composition ends, so
-    // we patch a placeholder the same way handle_composition's
-    // prologue patches its SUB.  But `return` can appear mid-body,
-    // and at that point the function hasn't finished parsing — so the
-    // SAFE thing is to emit an ADD with the CURRENT frame_size, then
-    // rely on the fact that bindings below this point may add more
-    // slots (and thus the actual SP may be lower than frame_size at
-    // the end).  For now, assume returns are at the tail of the body
-    // so the current frame_size is final.
-    adrp    x0, frame_size
-    add     x0, x0, :lo12:frame_size
-    ldr     w4, [x0]
-    add     w4, w4, #15
-    and     w4, w4, #-16
-    and     w7, w4, #0xFFF
-    lsl     w7, w7, #10
-    movz    w0, #0x03FF                 // (SP<<5) | SP
-    movk    w0, #0x9100, lsl #16
-    orr     w0, w0, w7
-    bl      emit32
-    MOVI32  w0, 0xA8C17BFD         // LDP X29, X30, [SP], #16
-    bl      emit32
-    bl      emit_ret_inst
-    ldp     x29, x30, [sp], #16
-    ret
-
 .Lret_void:
-    adrp    x0, frame_size
-    add     x0, x0, :lo12:frame_size
-    ldr     w4, [x0]
-    add     w4, w4, #15
-    and     w4, w4, #-16
-    and     w7, w4, #0xFFF
-    lsl     w7, w7, #10
-    movz    w0, #0x03FF
-    movk    w0, #0x9100, lsl #16
-    orr     w0, w0, w7
+    // Emit ADD SP, SP, #0 placeholder, record its address in the
+    // return_patches table, then LDP + RET.  The composition's
+    // epilogue patches every placeholder with the final aligned
+    // frame_size.  This is necessary because mid-body `return`
+    // statements don't know how many more bindings the function
+    // will add after them.
+    bl      emit_cur                    // x0 = address of next-emitted insn
+    // Append to return_patches table
+    adrp    x1, return_patch_count
+    add     x1, x1, :lo12:return_patch_count
+    ldr     w2, [x1]
+    adrp    x3, return_patches
+    add     x3, x3, :lo12:return_patches
+    str     x0, [x3, w2, uxtw #3]       // return_patches[count] = addr
+    add     w2, w2, #1
+    str     w2, [x1]
+    // Emit the placeholder: ADD SP, SP, #0  (0x910003FF)
+    MOVI32  w0, 0x910003FF
     bl      emit32
+    // LDP X29, X30, [SP], #16
     MOVI32  w0, 0xA8C17BFD
     bl      emit32
     bl      emit_ret_inst
@@ -4550,6 +4556,14 @@ frame_size: .space 4
 // placeholder instruction emitted in the prologue.  Patched at the
 // epilogue with the final frame_size.
 frame_patch_ptr: .space 8
+    .align 3
+// return_patches — addresses of ADD SP, SP, #0 placeholders emitted
+// by early returns inside the current composition.  Each one needs
+// to be patched with the final frame_size.  Fixed-size array; 64
+// early returns per function is plenty.
+.equ MAX_RET_PATCHES, 64
+return_patches: .space (8 * MAX_RET_PATCHES)
+return_patch_count: .space 4
     .align 3
 emit_ptr:   .space 8
     .align 3
