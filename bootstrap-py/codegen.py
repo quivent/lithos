@@ -202,9 +202,15 @@ class RegisterAllocator:
         raw = self.next_spill_slot * 8
         return (raw + 15) & ~15
 
+    _temp_counter: int = 0
+
     def temp(self) -> int:
-        """Allocate an anonymous temporary register."""
-        name = f"__tmp_{id(object())}"
+        """Allocate an anonymous temporary register.
+        Uses a monotonic counter — id(object()) returned duplicate IDs because
+        Python immediately GC'd the new object, giving all temps the same name
+        and therefore the same register."""
+        RegisterAllocator._temp_counter += 1
+        name = f"__tmp_{RegisterAllocator._temp_counter}"
         return self.alloc(name)
 
     def free_temps(self) -> None:
