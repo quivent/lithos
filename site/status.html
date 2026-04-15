@@ -94,16 +94,16 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
 <div class="hero">
   <h1>Where We Stand</h1>
   <p class="sub">Target: <span class="target">Qwen 3.5 27B</span> &mdash; 64 hybrid layers, GPTQ W4A16, GH200</p>
-  <p class="milestone">First opcodes executed on GH200 &mdash; 255/256 correct outputs</p>
+  <p class="milestone">Emitter API produces opcodes that execute on GPU &mdash; v0.2</p>
 </div>
 
 <!-- ==================== OVERVIEW CARDS ==================== -->
 <div class="overview">
   <div class="ov-card">
-    <h3>Opcode Execution</h3>
+    <h3>Emitter API</h3>
     <div class="bar"><div class="fill green" style="width:100%"></div></div>
-    <div class="pct done">Proven</div>
-    <div class="note">6 SM90 opcodes &rarr; 96 bytes &rarr; GH200 SM &rarr; correct output. No NVIDIA compiler.</div>
+    <div class="pct done">Verified</div>
+    <div class="note">emit_s2r/ldc/imad_imm/stg produce byte-exact reference opcodes. 255/256 correct on GH200.</div>
   </div>
   <div class="ov-card">
     <h3>Bootstrap</h3>
@@ -130,10 +130,16 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
     <div class="note">Stage-1 runs (no segfault). BSS fixed. Output generation next.</div>
   </div>
   <div class="ov-card">
+    <h3>Codegen</h3>
+    <div class="bar"><div class="fill partial" style="width:50%"></div></div>
+    <div class="pct partial">WIP</div>
+    <div class="note">Register allocator picks R0/R1 which crash on SM90. Fix needed for full compilation.</div>
+  </div>
+  <div class="ov-card">
     <h3>First Token</h3>
-    <div class="bar"><div class="fill partial" style="width:15%"></div></div>
+    <div class="bar"><div class="fill partial" style="width:20%"></div></div>
     <div class="pct blocked">Blocked</div>
-    <div class="note">Opcode path proven. Needs full kernel compile + inference pipeline.</div>
+    <div class="note">Emitter proven. Needs codegen fix + inference pipeline.</div>
   </div>
 </div>
 
@@ -144,20 +150,20 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
   <ol>
     <li><s>Build bootstrap on Linux</s> &mdash; &#10003; 127KB ARM64 binary</li>
     <li><s>Compile compiler.ls &rarr; lithos-stage1</s> &mdash; &#10003; 48KB ARM64 ELF</li>
-    <li><s>Execute opcodes on GPU</s> &mdash; &#10003; 255/256 correct outputs on GH200</li>
+    <li><s>Raw opcodes execute on GPU</s> &mdash; &#10003; v0.1-first-opcode</li>
+    <li><s>Emitter API produces valid opcodes</s> &mdash; &#10003; v0.2-emitter-api, byte-exact reference match</li>
   </ol>
   <h3>Immediate (no GPU needed)</h3>
   <ol>
-    <li>Fix all opcode encodings in emitter (agent completed &mdash; merging)</li>
-    <li>Compile inference kernel through emitter API (not hand-copied bytes)</li>
+    <li>Fix codegen register allocator (avoid R0/R1 per SM90 convention)</li>
     <li>Fix stage-1 output generation (runs but doesn't write ELF)</li>
     <li>Self-host: stage-1 compiles compiler.ls &rarr; stage-2</li>
   </ol>
   <h3>On GH200 (needs GPU)</h3>
   <ol>
-    <li>Test compiler-emitted opcodes on hardware</li>
+    <li>Test full compilation pipeline: .ls &rarr; cubin &rarr; execute</li>
     <li>Test lithos runtime path (QMD + SPD + pushbuffer + doorbell)</li>
-    <li>Compile + execute full inference kernel (gemv.ls)</li>
+    <li>Compile + execute full inference kernel (gemv.ls, 186 lines)</li>
     <li>First token through Qwen 3.5 27B</li>
   </ol>
 </div>
@@ -260,7 +266,7 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
 </pre>
 </section>
 
-<p class="timestamp">Last updated: 2026-04-15 &mdash; first opcodes executed on GH200</p>
+<p class="timestamp">Last updated: 2026-04-15 &mdash; v0.2-emitter-api: lithos-emitted opcodes execute on GPU</p>
 
 </div>
 </body>

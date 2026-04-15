@@ -4,12 +4,16 @@
 
 ---
 
-## Milestone: first opcodes executed on GPU
+## Milestone: Lithos emitter API produces opcodes that execute on GPU
 
-Lithos-emitted SM90 opcodes ran on a GH200 480GB GPU (Compute 9.0, driver 580.105.08). 256 threads each computed `float(threadIdx.x)` and wrote to global memory. 255/256 non-zero outputs confirmed. No NVIDIA compiler in the instruction path — lithos compiles directly to opcode.
+**`v0.2-emitter-api`** — Opcodes emitted through the compiler's emitter functions (`emit_s2r`, `emit_i2f`, `emit_ldc`, `emit_imad_imm`, `emit_stg`, `emit_exit`) executed correctly on a GH200 480GB GPU. 255/256 threads wrote `float(threadIdx.x)` to global memory. Every instruction byte matches the NVIDIA reference encoding byte-exact.
+
+**Previous:** `v0.1-first-opcode` — Hand-copied reference opcode bytes executed on silicon, proving the cubin/execution path works.
+
+**New:** `v0.2-emitter-api` — The compiler's emitter **functions** produce correct opcodes from Python API calls. This is the last verification needed before full compilation from .ls source.
 
 ```
-6 instructions (S2R, I2F, LDC, IMAD, STG, EXIT) → 96 bytes → cubin ELF → cuModuleLoadData → GPU
+Python API (emit_s2r, emit_ldc, ...) → 96 bytes → cubin ELF → GH200 SM → correct output ✓
 ```
 
 **Execution path proven end-to-end:**
@@ -41,13 +45,15 @@ BOOTSTRAP-PY    [██████░░] Python bootstrapper: 11/11 runtime, 1
 ### Linux / GH200
 ```
 GPU BACKEND     [████████] emit-gpu.ls: 40+ SM90 opcodes, ctrl words, grid-sync
+EMITTER API     [████████] VERIFIED — emitter functions produce correct opcodes
 RUNTIME         [████████] all .ls written, SPD+5-part pushbuffer implemented
-OPCODE EXEC     [████████] PROVEN — 6 opcodes executed on GH200, correct output
+OPCODE EXEC     [████████] PROVEN — emitter-emitted kernel executed on GH200
 GSP HARDENING   [████████] ~40 crash/brick bugs fixed, emergency reset, watchdog
 HARDWARE        [██████░░] QMD/SPD probe-verified, GSP 8/9 gates, FSP step 7 TODO
+CODEGEN         [████░░░░] register allocator picks bad registers (R0/R1 issue)
 SELF-HOST       [████░░░░] stage-1 runs (no segfault), output generation WIP
-FIRST KERNEL    [██░░░░░░] opcode execution proven, compiler-emitted kernel next
-FIRST TOKEN     [░░░░░░░░] blocked on full kernel compilation + inference pipeline
+FIRST KERNEL    [██████░░] emitter proven, codegen allocator is the blocker
+FIRST TOKEN     [░░░░░░░░] blocked on codegen fix + inference pipeline
 ```
 
 ### macOS / Apple Silicon
@@ -105,14 +111,14 @@ Lithos controls everything above the line. Below the line is either NVIDIA's dri
 ## Next steps
 
 ### Immediate (no GPU needed)
-1. **Fix opcode encodings** — make emit_sm90.py produce reference-matching bytes for all opcodes (agent working on this)
-2. **Compile inference kernel through emitter API** — not hand-copied reference bytes
-3. **Fix stage-1 output generation** — bootstrap compiles compiler.ls, stage-1 runs but doesn't write output (ELF writer codegen issue)
+1. **Fix codegen register allocator** — avoid R0/R1, reserve them per SM90 convention (frame pointer, etc). This is the last blocker for compiling .ls source to working cubins.
+2. **Fix stage-1 output generation** — bootstrap compiles compiler.ls, stage-1 runs but doesn't write output
+3. **Self-host** — stage-1 compiles compiler.ls → stage-2, compare binaries
 
 ### On GH200 (needs GPU)
-4. **Test compiler-emitted opcodes** — run a kernel where every instruction was produced by the emitter, not copied from a reference
+4. **Test compiler-pipeline kernel** — .ls source → lexer → parser → codegen → emitter → cubin → execute
 5. **Test lithos runtime path** — QMD + SPD + pushbuffer + doorbell, bypassing CUDA API entirely
-6. **Compile and run full inference kernel** — gemv.ls or elementwise.ls through the compiler pipeline
+6. **Compile and run full inference kernel** — gemv.ls (186 lines GPTQ W4A16 GEMV)
 7. **First token** — forward pass through Qwen 3.5 27B
 8. **Full inference** — autoregressive generation, EOS detection, streaming output
 
