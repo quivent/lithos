@@ -2263,12 +2263,69 @@ handle_ident_stmt:
 .Lhi_label:
     // Label definition: "name:" — record current code address as symbol
     bl      emit_cur
+    mov     x22, x0                 // save label address for patching
     mov     w2, w0                  // code address
     mov     w1, #KIND_COMP          // labels use KIND_COMP (goto targets)
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
+
+    // Patch any forward gotos that target this label.  Same logic as
+    // handle_label.  Without this, forward `goto name` to a `name:`
+    // label leaves the placeholder B (0x14000000) in place, which
+    // decodes as B.#0 — a branch to itself.
+    adrp    x8, ls_n_fwd_gotos
+    add     x8, x8, :lo12:ls_n_fwd_gotos
+    ldr     w9, [x8]
+    cbz     w9, .Lhi_label_no_patches
+    adrp    x10, ls_fwd_gotos
+    add     x10, x10, :lo12:ls_fwd_gotos
+    mov     w11, #0
+    ldr     w12, [x19, #4]          // label name source offset
+    ldr     w13, [x19, #8]          // label name length
+    cmp     w13, #32
+    b.lt    .Lhi_label_len_ok
+    mov     w13, #32
+.Lhi_label_len_ok:
+    add     x14, x28, x12           // source + offset
+.Lhi_label_scan:
+    cmp     w11, w9
+    b.ge    .Lhi_label_no_patches
+    mov     x15, #40
+    mul     x15, x11, x15
+    add     x15, x10, x15           // &fwd_gotos[i]
+    ldr     w16, [x15, #36]
+    cmp     w16, w13
+    b.ne    .Lhi_label_next
+    mov     w17, #0
+.Lhi_label_cmp:
+    cmp     w17, w13
+    b.ge    .Lhi_label_match
+    ldrb    w20, [x14, x17]
+    ldrb    w21, [x15, x17]
+    cmp     w20, w21
+    b.ne    .Lhi_label_next
+    add     w17, w17, #1
+    b       .Lhi_label_cmp
+.Lhi_label_match:
+    ldr     w17, [x15, #32]         // source offset in code_buf
+    adrp    x20, ls_code_buf
+    add     x20, x20, :lo12:ls_code_buf
+    add     x20, x20, x17
+    sub     x21, x22, x20           // label_addr - source_addr
+    asr     x21, x21, #2
+    and     w21, w21, #0x3FFFFFF
+    mov     w2, #0x14000000
+    movk    w2, #0x1400, lsl #16
+    orr     w2, w2, w21
+    str     w2, [x20]
+    str     wzr, [x15, #36]         // invalidate entry
+.Lhi_label_next:
+    add     w11, w11, #1
+    b       .Lhi_label_scan
+.Lhi_label_no_patches:
+
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
     add     x19, x19, #TOK_STRIDE_SZ   // skip ':'
     ldp     x29, x30, [sp], #16
