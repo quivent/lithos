@@ -498,31 +498,13 @@ drv_lithos_pipeline:
     str     x22, [x24, #-8]!
     str     x22, [x24, #-8]!     // data-len
 
-    // Compute BSS size from symbol table
-    adrp    x0, ls_sym_count
-    add     x0, x0, :lo12:ls_sym_count
-    ldr     w1, [x0]             // w1 = sym_count
-    adrp    x2, ls_sym_table
-    add     x2, x2, :lo12:ls_sym_table
-    mov     x3, #0               // x3 = bss_total
-    mov     x4, #0               // x4 = index
-.Lbss_scan:
-    cmp     w4, w1
-    b.ge    .Lbss_done
-    // Each sym entry: [name_off:4][name_len:4][kind:4][reg/value:4][depth:4][pad:4] = 24 bytes
-    // kind at offset 8 (SYM_KIND), buf size at offset 12 (SYM_REG)
-    mov     x5, #24
-    mul     x5, x4, x5
-    add     x5, x2, x5           // x5 = &sym_table[i]
-    ldr     w6, [x5, #8]         // kind
-    cmp     w6, #3                // KIND_BUF = 3
-    b.ne    .Lbss_next
-    ldr     w7, [x5, #12]        // value = buf size
-    add     x3, x3, x7
-.Lbss_next:
-    add     w4, w4, #1
-    b       .Lbss_scan
-.Lbss_done:
+    // BSS size is the running total kept in ls_bss_offset, which
+    // parse_buf_decl advances on every `buf NAME SIZE` declaration.
+    // (The sym table's SYM_REG slot holds each buf's *offset*, not its
+    // size, so walking the sym table here is wrong — use the counter.)
+    adrp    x0, ls_bss_offset
+    add     x0, x0, :lo12:ls_bss_offset
+    ldr     x3, [x0]             // x3 = bss_total
     // Align BSS to 16 bytes
     add     x3, x3, #15
     bic     x3, x3, #15

@@ -2163,21 +2163,24 @@ handle_ident_stmt:
     ret
 
 // ------------------------------------------------------------
-// .Lhi_reassign_slot — KIND_LOCAL_SLOT reassignment.
-//   `name expr`  →  parse expr, STR result, [SP, #slot]
-//   `name op rest` → parse `name op rest` as a full expression,
-//                     then STR into slot
+// .Lhi_reassign_slot — KIND_LOCAL_SLOT statement.
+//   `name`           → bare read (implicit return): LDR X0, [SP, #slot]
+//   `name op rest`   → parse as full expression, STR into slot
+//   `name expr`      → parse RHS (skipping name), STR into slot
 // ------------------------------------------------------------
 .Lhi_reassign_slot:
     ldr     w5, [x0, #SYM_REG]     // w5 = slot offset
-    // Peek at the token after the name to decide between the two
-    // patterns.  An operator means "parse name + rest" as a whole
-    // expression (so the old value is re-read); anything else means
-    // skip the name and parse the RHS.
+    // Peek at the token after the name to decide which pattern.
     add     x4, x19, #TOK_STRIDE_SZ
     cmp     x4, x27
-    b.hs    .Lhi_reassign_slot_skip
+    b.hs    .Lhi_reassign_slot_bare
     ldr     w0, [x4]
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Lhi_reassign_slot_bare
+    cmp     w0, #TOK_EOF
+    b.eq    .Lhi_reassign_slot_bare
+    cmp     w0, #TOK_INDENT
+    b.eq    .Lhi_reassign_slot_bare
     cmp     w0, #TOK_PLUS
     b.eq    .Lhi_reassign_slot_full
     cmp     w0, #TOK_MINUS
@@ -2196,8 +2199,7 @@ handle_ident_stmt:
     b.eq    .Lhi_reassign_slot_full
     cmp     w0, #TOK_SHR
     b.eq    .Lhi_reassign_slot_full
-.Lhi_reassign_slot_skip:
-    // "name expr" — skip past name, parse RHS
+    // anything else — reassign with RHS starting after the name
     add     x19, x19, #TOK_STRIDE_SZ
 .Lhi_reassign_slot_full:
     // Parse the expression (from current x19).  For the _full path
@@ -2210,6 +2212,17 @@ handle_ident_stmt:
     mov     w1, #31                 // Rn = SP
     mov     w2, w5                  // offset
     bl      emit_str_imm
+    ldp     x29, x30, [sp], #16
+    ret
+
+.Lhi_reassign_slot_bare:
+    // Bare read: emit LDR X0, [SP, #slot] — puts the value in X0
+    // as an implicit return value.
+    mov     w0, #0                  // Rt = X0
+    mov     w1, #31                 // Rn = SP
+    mov     w2, w5                  // offset
+    bl      emit_ldr_imm
+    add     x19, x19, #TOK_STRIDE_SZ   // skip the name
     ldp     x29, x30, [sp], #16
     ret
 

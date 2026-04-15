@@ -501,7 +501,9 @@ emit_mul_reg build/lithos-table.o
 emit_nop build/lithos-table.o
 emit_orr_reg build/lithos-table.o
 emit_ptr build/lithos-table.o
+emit_restore_bindings build/lithos-table.o
 emit_ret_inst build/lithos-table.o
+emit_save_bindings build/lithos-table.o
 emit_sdiv_reg build/lithos-table.o
 emit_str_imm build/lithos-table.o
 emit_str_reg build/lithos-table.o
