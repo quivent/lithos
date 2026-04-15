@@ -332,7 +332,11 @@ class Interp:
                 self.die("expected width after →")
             width = int(self.tok_text(wt))
             self.tk += 1
-            base = self.parse_primary()
+            # Parse the address as a full shift-expression so
+            # `→ 32 tokens + i * 12` reads from (tokens + i*12).  If a bare
+            # offset atom (INT/IDENT) still follows, keep the two-operand
+            # form `→ W base offset` working too.
+            base = self.parse_shift()
             addr = base
             nx = self.ty()
             if nx in (TOK_INT, TOK_IDENT):
@@ -368,13 +372,16 @@ class Interp:
                 if base is None: return 0
                 return self.mem_read(m(base + idx), 8)
 
+            # Locals / globals / consts / bufs shadow compositions.
+            v = self.lookup(name)
+            if v is not None:
+                return v
+
             # Composition call?
             if name in self.compositions:
                 return self.call_compo(name, atom_mode=True)
 
-            v = self.lookup(name)
-            if v is None: return 0  # tolerance
-            return v
+            return 0  # tolerance for unknown ident
 
         # tolerance for unexpected
         return 0
@@ -565,6 +572,9 @@ class Interp:
                 text = '<unk>'
             print(f"TRACE match_keyword({text!r}, len={args[2] if len(args)>=3 else '?'}) -> {ret} (explicit={explicit_return})", file=_sys.stderr)
             _sys.stderr.flush()
+        if name == 'comp_find' and os.environ.get('LITHOS_TRACE_CF'):
+            import sys as _sys
+            print(f"TRACE comp_find -> {ret} explicit={explicit_return}", file=_sys.stderr); _sys.stderr.flush()
         return ret
     def exec_loop(self, body_indent):
         """Execute statements at body_indent until dedent."""
@@ -834,6 +844,16 @@ class Interp:
         if t[0] in (TOK_IDENT, TOK_BUF, TOK_CONST, TOK_VAR, TOK_LABEL):
             return self.exec_ident_stmt()
 
+        # Bare expression as a statement — e.g. `comp_find`'s tail
+        # `label cf_miss; -1` or `match_keyword`'s trailing `tok_type` read.
+        # Lithos convention: last expression of a body is the return value,
+        # so evaluate and surface it.  Publish to X0 as well so a wirth-
+        # compiled binary would see the same value in its return register.
+        if t[0] in EXPR_STARTERS:
+            v = self.parse_expr()
+            self.regs[0] = m(v)
+            return v
+
         # Unknown — skip to newline
         while self.ty() not in (TOK_NEWLINE, TOK_EOF):
             self.tk += 1
@@ -844,15 +864,18 @@ class Interp:
         name = self.tok_text(t)
         self.tk += 1
 
+        # Locals shadow compositions.  compiler.ls names an accumulator
+        # `tok_type` inside match_keyword / classify_number that collides
+        # with the top-level `tok_type` token accessor — binding must win
+        # or those functions misdispatch every use of the local.
+        if self.frames and name in self.frames[-1]:
+            return self.do_assign_local(name)
+
         # Known composition → call
         if name in self.compositions:
             r = self.call_compo(name, atom_mode=False)
             self.regs[0] = r
             return r
-
-        # Known local/param → reassignment (possibly short-form)
-        if self.frames and name in self.frames[-1]:
-            return self.do_assign_local(name)
         # Known global → reassignment
         if name in self.globals:
             return self.do_assign_global(name)
@@ -1263,6 +1286,95 @@ class Interp:
                 py_flags = [os.O_RDONLY, os.O_WRONLY, os.O_RDWR, 0][flags_v & 3]
                 if flags_v & 0x200: py_flags |= os.O_CREAT
                 if flags_v & 0x400: py_flags |= os.O_TRUNC
+                mode = x3 & 0o7777 if x3 else 0o644
+                real_fd = os.open(path, py_flags, mode)
+                fake = self.next_fake_fd
+                self.next_fake_fd += 1
+                self.open_fds[fake] = real_fd
+                self.regs[0] = fake; return fake
+            except OSError:
+                self.regs[0] = -1; return -1
+
+        # Linux arm64 syscall numbers — map to the same handlers as above
+        # so compositions written for the GH200 host run without platform
+        # patching.  Kept separate from the Darwin branches because the
+        # number spaces collide (e.g. close = 6 on Darwin, 57 on Linux).
+        if num == 93:   # Linux exit_group
+            raise ExitProgram(x0 & 0xFF)
+        if num == 64:   # Linux write
+            fd = x0; buf = x1; count = x2
+            if count > 0 and buf < len(self.mem):
+                try:
+                    n = os.write(_resolve_fd(fd) if sx(fd) >= 100 else fd, bytes(self.mem[buf:buf+count]))
+                    self.regs[0] = n; return n
+                except OSError:
+                    self.regs[0] = -1; return -1
+            self.regs[0] = 0; return 0
+        if num == 63:   # Linux read
+            try:
+                rfd = _resolve_fd(x0)
+                if rfd < 0:
+                    self.regs[0] = -1; return -1
+                data = os.read(rfd, x2)
+                self.mem[x1:x1+len(data)] = data
+                self.regs[0] = len(data); return len(data)
+            except OSError:
+                self.regs[0] = -1; return -1
+        if num == 57:   # Linux close
+            try:
+                rfd = _resolve_fd(x0)
+                if rfd < 0:
+                    self.regs[0] = -1; return -1
+                os.close(rfd)
+                fv = sx(x0)
+                if fv >= 100 and fv in self.open_fds: del self.open_fds[fv]
+                self.regs[0] = 0; return 0
+            except OSError:
+                self.regs[0] = -1; return -1
+        if num == 222:  # Linux mmap
+            length = x1
+            rfd = _resolve_fd(x4)
+            if rfd < 0:
+                self.regs[0] = 0; return 0
+            try:
+                os.lseek(rfd, x5, 0)
+                data = os.read(rfd, length)
+                alloc = max((length + 7) & ~7, 8)
+                base = self.mem_top
+                if base + alloc > len(self.mem):
+                    self.regs[0] = 0; return 0
+                self.mem[base:base+len(data)] = data
+                self.mem_top += alloc
+                self.regs[0] = base
+                self.regs[1] = len(data)
+                return base
+            except OSError:
+                self.regs[0] = 0; return 0
+        if num == 62:   # Linux lseek
+            try:
+                rfd = _resolve_fd(x0)
+                if rfd < 0:
+                    self.regs[0] = -1; return -1
+                r = os.lseek(rfd, sx(x1), x2)
+                self.regs[0] = r; return r
+            except OSError:
+                self.regs[0] = -1; return -1
+        if num in (215, 226):  # Linux munmap, mprotect
+            self.regs[0] = 0; return 0
+        if num == 214:  # Linux brk
+            self.regs[0] = self.mem_top; return self.mem_top
+        if num == 56:   # Linux openat: x0=dirfd, x1=path, x2=flags, x3=mode
+            path_bytes = bytearray()
+            p = x1
+            while p < len(self.mem) and self.mem[p] != 0:
+                path_bytes.append(self.mem[p]); p += 1
+            path = bytes(path_bytes).decode(errors='replace')
+            flags_v = x2 & 0xFFFFFFFF
+            try:
+                py_flags = [os.O_RDONLY, os.O_WRONLY, os.O_RDWR, 0][flags_v & 3]
+                # Linux: O_CREAT=0x40, O_TRUNC=0x200 (577 = 1|0x40|0x200)
+                if flags_v & 0x40:  py_flags |= os.O_CREAT
+                if flags_v & 0x200: py_flags |= os.O_TRUNC
                 mode = x3 & 0o7777 if x3 else 0o644
                 real_fd = os.open(path, py_flags, mode)
                 fake = self.next_fake_fd

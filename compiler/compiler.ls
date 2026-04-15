@@ -30,11 +30,15 @@ buf lex_src_v 8
 
 emit_token type offset length :
     tc → 32 token_count_buf
-    idx tc * 3
+    \\ Each token is three 32-bit fields (type, offset, length) = 12 bytes.
+    \\ `← 32` is byte-addressed, so stride must be 12, not 3 — otherwise the
+    \\ three stores overlap in a 4-byte window and clobber each other as
+    \\ soon as any offset/length exceeds one byte.
+    idx tc * 12
     ← 32 tokens + idx type
-    idx1 idx + 1
+    idx1 idx + 4
     ← 32 tokens + idx1 offset
-    idx2 idx + 2
+    idx2 idx + 8
     ← 32 tokens + idx2 length
     ← 32 token_count_buf (tc + 1)
 
@@ -151,7 +155,9 @@ scan_to_eol src pos end :
 \\ Keyword matching — returns token type (IDENT=5 if no keyword matches)
 
 match_keyword src offset length :
-    tok_type 5
+    \\ Local was `tok_type` but that name is also the top-level token
+    \\ accessor composition; reads/writes were misdispatched as calls.
+    kw_type 5
 
     if== length 2
         b0 → 8 (src + offset)
@@ -159,7 +165,7 @@ match_keyword src offset length :
         \\ "if" -> IF (13)
         if== b0 105
             if== b1 102
-                tok_type 13
+                kw_type 13
                 return
 
     if== length 3
@@ -170,7 +176,7 @@ match_keyword src offset length :
         if== b0 102
             if== b1 111
                 if== b2 114
-                    tok_type 16
+                    kw_type 16
                     return
 
     if== length 4
@@ -183,21 +189,21 @@ match_keyword src offset length :
             if== b1 97
                 if== b2 99
                     if== b3 104
-                        tok_type 18
+                        kw_type 18
                         return
         \\ "exit" -> EXIT (34)
         if== b0 101
             if== b1 120
                 if== b2 105
                     if== b3 116
-                        tok_type 34
+                        kw_type 34
                         return
         \\ "host" -> HOST (35)
         if== b0 104
             if== b1 111
                 if== b2 115
                     if== b3 116
-                        tok_type 35
+                        kw_type 35
                         return
 
     if== length 5
@@ -212,7 +218,7 @@ match_keyword src offset length :
                 if== b2 98
                     if== b3 101
                         if== b4 108
-                            tok_type 33
+                            kw_type 33
                             return
 
     if== length 6
@@ -229,7 +235,7 @@ match_keyword src offset length :
                     if== b3 105
                         if== b4 100
                             if== b5 101
-                                tok_type 19
+                                kw_type 19
                                 return
         \\ "endfor" -> ENDFOR (17)
         if== b0 101
@@ -238,7 +244,7 @@ match_keyword src offset length :
                     if== b3 102
                         if== b4 111
                             if== b5 114
-                                tok_type 17
+                                kw_type 17
                                 return
 
     if== length 8
@@ -259,27 +265,29 @@ match_keyword src offset length :
                             if== b5 97
                                 if== b6 110
                                     if== b7 116
-                                        tok_type 96
+                                        kw_type 96
                                         return
 
-    tok_type
+    return kw_type
 
 \\ Number type classification — INT (3) vs FLOAT (4) by presence of '.'
 
 classify_number src offset length :
-    tok_type 3
+    \\ `tok_type` collides with the token-accessor composition; use a
+    \\ non-colliding name for the local accumulator.
+    num_type 3
     i 0
     label cn_loop
     if>= i length
         goto cn_done
     c → 8 (src + offset + i)
     if== c 46
-        tok_type 4
+        num_type 4
         goto cn_done
     i i + 1
     goto cn_loop
     label cn_done
-    tok_type
+    return num_type
 
 \\ Multi-character operator tables
 
@@ -591,8 +599,11 @@ lex src src_len :
     label lex_done
     emit_token 0 pos 0
 
-\\ Top-level entry used by the driver.
+\\ Top-level entry used by the driver.  Publishes the source base pointer
+\\ in lex_src_v so downstream readers (sym_find, comp_find, parse_int_tok,
+\\ walk_top_level) can resolve token offsets back to source bytes.
 lithos_lex src src_len :
+    ← 64 lex_src_v src
     lex src src_len
 
 \\ SECTION 2 — SASS OPCODE EMITTERS (sm_90a). See docs/encoding/*.md.
@@ -1547,19 +1558,21 @@ buf cur_n_kparams_v   8    \\ number of kernel params
 buf cur_reg_count_v   8    \\ highest register index used
 buf cur_smem_v        8    \\ shared memory size
 
-\\ Token accessors — one token = 3 consecutive u32 words.
+\\ Token accessors — one token = 12 bytes (three 32-bit fields).
+\\ emit_token writes at byte offsets {idx, idx+4, idx+8}, so reads must use
+\\ the same byte stride.
 
 tok_type i :
-    t → 32 tokens + i * 3
-    t
+    t → 32 tokens + i * 12
+    return t
 
 tok_offset i :
-    o → 32 tokens + (i * 3) + 1
-    o
+    o → 32 tokens + (i * 12) + 4
+    return o
 
 tok_length i :
-    l → 32 tokens + (i * 3) + 2
-    l
+    l → 32 tokens + (i * 12) + 8
+    return l
 
 \\ Symbol table helpers
 
