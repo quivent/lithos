@@ -592,9 +592,13 @@ class Interp:
                     continue
                 if self.toks[self.tk][2] < body_indent:
                     break
-                # Check if this is a continuation line (starts with binary op)
+                # Check if this is a continuation line (starts with binary op).
+                # `-` and `+` are excluded because they also start unary
+                # expressions — a line like `    -1` is a standalone
+                # statement (bare negative literal), not `last - 1`.
                 nxt_ty = self.toks[self.tk+1][0] if self.tk + 1 < len(self.toks) else TOK_EOF
-                if nxt_ty in OP_TOKENS:
+                CONTINUATION_OPS = OP_TOKENS - {TOK_PLUS, TOK_MINUS}
+                if nxt_ty in CONTINUATION_OPS:
                     self.tk += 1
                     last = self._eval_op_chain(last)
                     continue
@@ -1504,6 +1508,20 @@ class Interp:
             if t[0] in (TOK_CONST, TOK_BUF, TOK_VAR):
                 self.exec_stmt()
                 continue
+            # Forth-style constant: `INT constant NAME` at file scope.
+            # compiler.ls uses this for all the syscall numbers; without
+            # it they resolve to 0 and `trap fd SYS_OPENAT ...` falls
+            # back to whatever X8 still held from the prior syscall.
+            if t[0] == TOK_INT and self.tk + 2 < len(self.toks):
+                nt = self.toks[self.tk+1]
+                nt2 = self.toks[self.tk+2]
+                if nt[0] == TOK_IDENT and self.tok_text(nt) == 'constant' and \
+                   nt2[0] == TOK_IDENT:
+                    val = self.parse_int(t)
+                    name = self.tok_text(nt2)
+                    self.consts[name] = val
+                    self.tk += 3
+                    continue
             if t[0] == TOK_IDENT:
                 # Could be composition header (skip) or shorthand const
                 # Look ahead: if `NAME INT NEWLINE`, it's shorthand const
