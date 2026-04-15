@@ -1700,6 +1700,20 @@ buf pending_op_v           8   \\ token type of pending binary op, 0=none
 \\ Emit target: 0 = GPU (SASS), 1 = ARM64 (host).
 buf emit_target_v      8
 
+\\ Label table — defined labels inside the current composition.
+\\ Each entry: 32 bytes name, 8 bytes code offset (in arm64_buf).
+\\ Lookup on `goto NAME`; defined by `label NAME` or `NAME:`.
+buf label_tab_v     4096    \\ 128 entries * 40 bytes
+buf label_count_v      8
+
+\\ Forward-goto fixup table — B placeholders awaiting a label.
+\\ Each entry: 32 bytes name, 8 bytes site offset (in arm64_buf).
+\\ When `label NAME` (or `NAME:`) is seen, we scan this table,
+\\ patch each matching site's placeholder B with the real offset,
+\\ and invalidate the entry.
+buf goto_fix_v      4096    \\ 128 entries * 40 bytes
+buf goto_fix_count_v   8
+
 \\ Current kernel metadata — populated by walk_top_level for each kernel.
 \\ NOTE: only ONE kernel's metadata is stored at a time. With multiple
 \\ kernels, only the LAST one's metadata survives — matching the fact that
@@ -2032,6 +2046,7 @@ walk_collect :
 bind_args comp_idx :
     sym_reset
     reg_reset
+    label_reset
     \\ For each arg, allocate a frame slot and emit STUR Xi, [FP, #-slot]
     \\ to spill the argument register onto the frame.  ARM64 calling
     \\ convention: first 8 args in X0..X7.  sym_add records the NEGATIVE
@@ -2400,6 +2415,146 @@ parse_int_tok offset length :
         val 0 - val
     val
 
+\\ Label / goto helpers.
+
+\\ Reset the per-composition label and forward-goto tables.
+label_reset :
+    ← 64 label_count_v 0
+    ← 64 goto_fix_count_v 0
+
+\\ Add a defined label: record (name_off, name_len, code_off) in label_tab_v.
+\\ src is lex_src_v (already published).  code_off is the current arm64_pos_v.
+label_add name_off name_len :
+    src → 64 lex_src_v
+    n → 64 label_count_v
+    base label_tab_v + n * 40
+    \\ Copy up to 32 bytes of the name.
+    clen name_len
+    if> clen 32
+        clen 32
+    i 0
+    label la_copy
+    if>= i clen
+        goto la_copy_done
+    b → 8 src + name_off + i
+    ← 8 base + i b
+    i i + 1
+    goto la_copy
+    label la_copy_done
+    \\ Pad remaining name bytes with 0.
+    label la_pad
+    if>= i 32
+        goto la_pad_done
+    ← 8 base + i 0
+    i i + 1
+    goto la_pad
+    label la_pad_done
+    \\ Store length at +32 and code offset at +36.
+    ← 32 base + 32 clen
+    pos → 64 arm64_pos_v
+    ← 32 base + 36 pos
+    ← 64 label_count_v n + 1
+
+\\ Look up a label by name.  Returns the code offset in arm64_buf, or -1.
+label_lookup name_off name_len :
+    src → 64 lex_src_v
+    n → 64 label_count_v
+    i 0
+    label ll_loop
+    if>= i n
+        goto ll_miss
+    base label_tab_v + i * 40
+    stored_len → 32 base + 32
+    if== stored_len name_len
+        match 1
+        j 0
+        label ll_cmp
+        if>= j name_len
+            goto ll_cmp_done
+        a → 8 src + name_off + j
+        b → 8 base + j
+        if!= a b
+            match 0
+            goto ll_cmp_done
+        j j + 1
+        goto ll_cmp
+        label ll_cmp_done
+        if== match 1
+            off → 32 base + 36
+            return off
+    i i + 1
+    goto ll_loop
+    label ll_miss
+    return -1
+
+\\ Record a forward goto: the site of a placeholder B in arm64_buf
+\\ along with the target label's name.  Patched when the label is
+\\ later defined via label_add + goto_fix_patch.
+goto_fix_add name_off name_len site :
+    src → 64 lex_src_v
+    n → 64 goto_fix_count_v
+    base goto_fix_v + n * 40
+    clen name_len
+    if> clen 32
+        clen 32
+    i 0
+    label gfa_copy
+    if>= i clen
+        goto gfa_copy_done
+    b → 8 src + name_off + i
+    ← 8 base + i b
+    i i + 1
+    goto gfa_copy
+    label gfa_copy_done
+    label gfa_pad
+    if>= i 32
+        goto gfa_pad_done
+    ← 8 base + i 0
+    i i + 1
+    goto gfa_pad
+    label gfa_pad_done
+    ← 32 base + 32 clen
+    ← 32 base + 36 site
+    ← 64 goto_fix_count_v n + 1
+
+\\ Patch every forward-goto entry whose name matches the newly-defined
+\\ label.  target_off is the label's arm64_buf offset.
+goto_fix_patch name_off name_len target_off :
+    src → 64 lex_src_v
+    n → 64 goto_fix_count_v
+    i 0
+    label gfp_loop
+    if>= i n
+        return 0
+    base goto_fix_v + i * 40
+    stored_len → 32 base + 32
+    if== stored_len name_len
+        match 1
+        j 0
+        label gfp_cmp
+        if>= j name_len
+            goto gfp_cmp_done
+        a → 8 src + name_off + j
+        b → 8 base + j
+        if!= a b
+            match 0
+            goto gfp_cmp_done
+        j j + 1
+        goto gfp_cmp
+        label gfp_cmp_done
+        if== match 1
+            site → 32 base + 36
+            \\ Compute signed 26-bit displacement (in instructions).
+            disp target_off - site
+            disp_i disp / 4
+            disp_m disp_i & 0x3FFFFFF
+            insn 0x14000000 | disp_m
+            ← 32 arm64_buf + site insn
+            \\ Invalidate the entry so it can't match again.
+            ← 32 base + 32 0
+    i i + 1
+    goto gfp_loop
+
 \\ Main body walker — single left-to-right pass over the body tokens.
 
 walk_body body_start body_end :
@@ -2514,6 +2669,22 @@ walk_body body_start body_end :
         walk_if_kw
         goto wb_loop
 
+    \\ `label NAME` — record the current code offset and patch any
+    \\ forward gotos targeting this label.
+    if== t 33
+        ← 64 walk_pos_v p + 1
+        _np → 64 walk_pos_v
+        _nt tok_type _np
+        if== _nt 5
+            _loff tok_offset _np
+            _llen tok_length _np
+            _pos → 64 arm64_pos_v
+            label_add _loff _llen
+            goto_fix_patch _loff _llen _pos
+            ← 64 walk_pos_v _np + 1
+        ← 64 stmt_start_v 0
+        goto wb_loop
+
     \\ Identifier: binding target, arg lookup, composition reference, or
     \\ pseudo-primitive.
     if== t 5
@@ -2537,6 +2708,33 @@ walk_body body_start body_end :
                                 arm64_emit32 0xD4000001
                             ← 64 stmt_start_v 0
                             goto wb_loop
+            \\ Builtin: `goto NAME` — back-patch or forward-fixup.
+            if== tb0 103
+                if== tb1 111
+                    if== tb2 116
+                        if== tb3 111
+                            \\ Next token must be the label name IDENT.
+                            _gnp → 64 walk_pos_v
+                            _gnt tok_type _gnp
+                            if== _gnt 5
+                                _gnoff tok_offset _gnp
+                                _gnlen tok_length _gnp
+                                ← 64 walk_pos_v _gnp + 1
+                                _tgt label_lookup _gnoff _gnlen
+                                _site → 64 arm64_pos_v
+                                if>= _tgt 0
+                                    \\ Backward goto — compute displacement now.
+                                    _gdisp _tgt - _site
+                                    _gdi _gdisp / 4
+                                    _gdm _gdi & 0x3FFFFFF
+                                    _ginsn 0x14000000 | _gdm
+                                    arm64_emit32 _ginsn
+                                else
+                                    \\ Forward goto — placeholder, record for patching.
+                                    arm64_emit32 0x14000000
+                                    goto_fix_add _gnoff _gnlen _site
+                                ← 64 stmt_start_v 0
+                                goto wb_loop
         slot sym_find off len
         if> slot 0
             \\ Known symbol (slot > 0).  At statement start it's a reassignment
