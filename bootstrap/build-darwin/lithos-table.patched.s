@@ -2352,7 +2352,12 @@ emit_save_bindings:
     adrp x0, reg_floor@PAGE
     add     x0, x0, reg_floor@PAGEOFF
     ldr     w0, [x0]
-    mov     w1, #REG_FIRST
+    // Cap at REG_LAST + 1 so we never push X28 (BSS_BASE) or X29 (FP).
+    mov     w2, #(REG_LAST + 1)
+    cmp     w0, w2
+    b.le    1f
+    mov     w0, w2
+1:  mov     w1, #REG_FIRST
     cmp     w1, w0
     b.ge    .Lesb_done
 .Lesb_loop:
@@ -2396,7 +2401,13 @@ emit_restore_bindings:
     adrp x0, reg_floor@PAGE
     add     x0, x0, reg_floor@PAGEOFF
     ldr     w0, [x0]                   // w0 = reg_floor
-    mov     w1, #REG_FIRST
+    // Cap at REG_LAST + 1 so we don't try to pop X28/X29.  Must
+    // match the cap in emit_save_bindings.
+    mov     w2, #(REG_LAST + 1)
+    cmp     w0, w2
+    b.le    2f
+    mov     w0, w2
+2:  mov     w1, #REG_FIRST
     cmp     w1, w0
     b.ge    .Lerb_done
     // Determine highest pair start.  If (reg_floor - REG_FIRST) is odd,
@@ -2625,17 +2636,15 @@ parse_mem_store:
 .globl parse_mem_load
 handle_load:
 parse_mem_load:
-    // Stash addr + result register in x19/x20, both saved by the STP
-    // at the top of the frame so emit_* scratch usage below can't
-    // clobber them.  Previously the code saved addr in w5 and result
-    // in w6 — but emit_ldr_imm uses w3-w5 as its own scratch, so w5
-    // came back as the encoded LDR opcode, the subsequent "compact"
-    // path read that as a register number, and free_reg got poisoned
-    // with a value like 0xF94000xx.  Every → memory-load statement
-    // was silently wrecking the register allocator.
+    // x19 is the bootstrap's token pointer (TOKP) — must not be used
+    // to hold local state.  Instead spill addr/result onto the host
+    // stack around emit_ldr_imm, which uses w3-w5 as its own scratch
+    // and would otherwise corrupt them.  Previously the code kept
+    // addr in w5 and result in w6, so the LDR opcode word
+    // (e.g. 0xF94000xx) leaked into w5 and the "compact" path read
+    // it as a register number, poisoning free_reg.
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
-    stp     x19, x20, [sp, #-16]!
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
 
     // Width is almost always an int literal (8/16/32/64) — it's part
@@ -2659,17 +2668,17 @@ parse_mem_load:
     stp     x4, xzr, [sp, #-16]!
     bl      parse_expr              // addr
     ldp     x4, xzr, [sp], #16
-    mov     w19, w0                 // addr reg — callee-saved, survives BLs
+    mov     w5, w0                  // addr reg (spilled below around emits)
 
-    // alloc_reg needs the width preserved as well.
-    stp     x4, xzr, [sp, #-16]!
+    // alloc_reg needs the width and addr preserved.
+    stp     x4, x5, [sp, #-16]!
     bl      alloc_reg
-    ldp     x4, xzr, [sp], #16
-    mov     w20, w0                 // result reg — also callee-saved
+    ldp     x4, x5, [sp], #16
+    mov     w6, w0                  // result reg
 
-    // Emit width-appropriate LDR.  For now offset is always 0.
-    // w19/w20 survive every emit_* call because emit_* only touches
-    // w0..w16; the allocator uses x19/x20 as preserved slots.
+    // Emit width-appropriate LDR.  w5 (addr) and w6 (result) must
+    // survive any BL that uses them as scratch; push/pop around
+    // emit_ldr_imm which clobbers w3-w5.
     cmp     x4, #8
     b.eq    .Lhl_ldrb
     cmp     x4, #16
@@ -2677,57 +2686,67 @@ parse_mem_load:
     cmp     x4, #32
     b.eq    .Lhl_ldrw
     // 64-bit: LDR Xresult, [Xaddr, #0]
-    mov     w0, w20
-    mov     w1, w19
+    stp     x5, x6, [sp, #-16]!
+    mov     w0, w6
+    mov     w1, w5
     mov     w2, #0
     bl      emit_ldr_imm
+    ldp     x5, x6, [sp], #16
     b       .Lhl_after_emit
 .Lhl_ldrb:
-    // LDRB Wresult, [Xaddr] = 0x39400000 | (Rn<<5) | Rt
-    lsl     w7, w19, #5
-    orr     w0, w20, w7
+    // LDRB Wresult, [Xaddr] = 0x39400000 | (Rn<<5) | Rt.
+    // emit32 clobbers w0-w2; w5/w6 survive, but push/pop anyway so
+    // future changes to emit32 can't silently break us.
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
     movz    w8, #0x0000
     movk    w8, #0x3940, lsl #16
     orr     w0, w0, w8
+    stp     x5, x6, [sp, #-16]!
     bl      emit32
+    ldp     x5, x6, [sp], #16
     b       .Lhl_after_emit
 .Lhl_ldrh:
-    // LDRH Wresult, [Xaddr] = 0x79400000 | (Rn<<5) | Rt
-    lsl     w7, w19, #5
-    orr     w0, w20, w7
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
     movz    w8, #0x0000
     movk    w8, #0x7940, lsl #16
     orr     w0, w0, w8
+    stp     x5, x6, [sp, #-16]!
     bl      emit32
+    ldp     x5, x6, [sp], #16
     b       .Lhl_after_emit
 .Lhl_ldrw:
-    // LDR Wresult, [Xaddr] = 0xB9400000 | (Rn<<5) | Rt
-    lsl     w7, w19, #5
-    orr     w0, w20, w7
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
     movz    w8, #0x0000
     movk    w8, #0xB940, lsl #16
     orr     w0, w0, w8
+    stp     x5, x6, [sp, #-16]!
     bl      emit32
+    ldp     x5, x6, [sp], #16
 .Lhl_after_emit:
 
-    // The addr temp (w19) is dead now.  Compact the result down to
-    // addr's slot if addr is a temp (above reg_floor), so each load
-    // only consumes one register slot from the caller.
+    // The addr temp (w5) is dead now.  Compact the result down to
+    // addr's slot if addr is a temp (above reg_floor).
     adrp x0, reg_floor@PAGE
     add     x0, x0, reg_floor@PAGEOFF
     ldr     w7, [x0]
-    cmp     w19, w7
+    cmp     w5, w7
     b.lt    1f                      // addr is a binding, leave alone
-    cmp     w19, w20
+    cmp     w5, w6
     b.eq    1f                      // already compact
-    mov     w0, w19
-    mov     w1, w20
+    stp     x5, x6, [sp, #-16]!
+    mov     w0, w5
+    mov     w1, w6
     bl      emit_mov_reg
-    add     w0, w20, #1
+    ldp     x5, x6, [sp], #16
+    stp     x5, x6, [sp, #-16]!
+    add     w0, w6, #1
     bl      free_reg
-    mov     w20, w19
-1:  mov     w0, w20
-    ldp     x19, x20, [sp], #16
+    ldp     x5, x6, [sp], #16
+    mov     w6, w5
+1:  mov     w0, w6
     ldp     x29, x30, [sp], #16
     ret
 
