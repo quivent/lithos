@@ -749,40 +749,43 @@ emit_brk imm16 :
 \\ ============================================================
 
 arm64_mark :
-    pos arm64_pos
+    pos → 64 arm64_pos_v
 
 arm64_patch_bcond mark_pos :
-    offset arm64_pos - mark_pos
+    ap → 64 arm64_pos_v
+    offset ap - mark_pos
     imm19 ((offset / 4) & 0x7FFFF) << 5
     old → 32 arm64_buf + mark_pos
     ← 32 arm64_buf + mark_pos old | imm19
 
 arm64_patch_b mark_pos :
-    offset arm64_pos - mark_pos
+    ap → 64 arm64_pos_v
+    offset ap - mark_pos
     imm26 (offset / 4) & 0x3FFFFFF
     old → 32 arm64_buf + mark_pos
     ← 32 arm64_buf + mark_pos old | imm26
 
 arm64_patch_cbz mark_pos :
-    offset arm64_pos - mark_pos
+    ap → 64 arm64_pos_v
+    offset ap - mark_pos
     imm19 ((offset / 4) & 0x7FFFF) << 5
     old → 32 arm64_buf + mark_pos
     ← 32 arm64_buf + mark_pos old | imm19
 
 emit_bcond_fwd cond :
-    mark arm64_pos
+    mark → 64 arm64_pos_v
     emit_bcond cond 0
 
 emit_b_fwd :
-    mark arm64_pos
+    mark → 64 arm64_pos_v
     emit_b 0
 
 emit_cbz_fwd rt :
-    mark arm64_pos
+    mark → 64 arm64_pos_v
     emit_cbz rt 0
 
 emit_cbnz_fwd rt :
-    mark arm64_pos
+    mark → 64 arm64_pos_v
     emit_cbnz rt 0
 
 \\ ============================================================
@@ -3412,12 +3415,16 @@ parse_goto :
     lidx label_find ptr len
     if>= lidx 0
         target → 32 label_offsets lidx * 4
-        if== emit_target 0
-            offset target - gpu_pos
+        _et → 64 emit_target_v
+        if== _et 0
+            _gp → 64 gpu_pos_v
+            offset target - _gp
             emit_bra offset
-        offset target - arm64_pos
+        _ap → 64 arm64_pos_v
+        offset target - _ap
             emit_b offset
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_bra 0
     emit_b 0
 
@@ -3433,9 +3440,12 @@ parse_label_decl :
         b → 8 ptr j
         ← 8 label_names lidx * 32 + j b
     ← 32 label_lens lidx * 4 len
-    if== emit_target 0
-        ← 32 label_offsets lidx * 4 gpu_pos
-    ← 32 label_offsets lidx * 4 arm64_pos
+    _et → 64 emit_target_v
+    if== _et 0
+        _gp → 64 gpu_pos_v
+        ← 32 label_offsets lidx * 4 _gp
+    _ap → 64 arm64_pos_v
+    ← 32 label_offsets lidx * 4 _ap
     n_labels n_labels + 1
 
 parse_inline_label ptr len :
@@ -3447,9 +3457,12 @@ parse_inline_label ptr len :
         b → 8 ptr j
         ← 8 label_names lidx * 32 + j b
     ← 32 label_lens lidx * 4 len
-    if== emit_target 0
-        ← 32 label_offsets lidx * 4 gpu_pos
-    ← 32 label_offsets lidx * 4 arm64_pos
+    _et → 64 emit_target_v
+    if== _et 0
+        _gp → 64 gpu_pos_v
+        ← 32 label_offsets lidx * 4 _gp
+    _ap → 64 arm64_pos_v
+    ← 32 label_offsets lidx * 4 _ap
     n_labels n_labels + 1
 
 label_find name_ptr name_len :
@@ -5179,21 +5192,29 @@ main argc argv :
     lithos_parse tokens tc src_base
 
     \\ Step 4: Build ELF output — choose GPU or host based on what was emitted
-    if> gpu_pos 0
+    _gp → 64 gpu_pos_v
+    if> _gp 0
         goto main_gpu
-    if> arm64_pos 0
+    _ap → 64 arm64_pos_v
+    if> _ap 0
         goto main_arm64
     goto main_exit_ok
 
-    \\ GPU output — build cubin (elf_build takes 7 params, all globals)
+    \\ GPU output — build cubin
     label main_gpu
-    elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size
+    _gp → 64 gpu_pos_v
+    _mr → 64 max_reg_v
+    _gs → 64 gpu_shmem_size_v
+    _nk → 64 gpu_n_kparams_v
+    _nl → 64 li_name_len_v
+    elf_build li_name_buf _nl gpu_buf _gp _nk _mr _gs
     elf_save out_path
     goto main_exit_ok
 
     \\ Host output — wrap in ARM64 ELF
     label main_arm64
-    elf_build_arm64 arm64_buf arm64_pos
+    _ap → 64 arm64_pos_v
+    elf_build_arm64 arm64_buf _ap
     elf_save out_path
 
     label main_exit_ok
