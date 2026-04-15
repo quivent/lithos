@@ -4987,40 +4987,52 @@ elf_build_arm64 code_buf code_size :
 \\ ============================================================
 
 \\ mmap_file — open, get size via lseek, mmap, close fd
+\\ Returns base in X6, size in X7 (caller reads via ↑ $6, ↑ $7).
 \\ Returns base pointer and file size.
 host mmap_file path :
+    \\ Use X6/X7 for saved values (below REG_FIRST=9, safe from spills).
+    \\ X7 = saved path, X6 = saved fd, X5 = saved file_size
+    \\ (syscalls only use X0-X5 as args + X8 for number, so X6/X7 survive)
+
     \\ openat(AT_FDCWD, path, O_RDONLY, 0)
+    ↓ $7 path
     ↓ $8 56
     ↓ $0 -100
-    ↓ $1 path
+    ↓ $1 $7
     ↓ $2 0
     ↓ $3 0
     trap
-    fd ↑ $0
+    ↓ $6 $0
 
     \\ lseek(fd, 0, SEEK_END)
     ↓ $8 62
-    ↓ $0 fd
+    ↓ $0 $6
     ↓ $1 0
     ↓ $2 2
     trap
-    file_size ↑ $0
+    ↓ $5 $0
 
     \\ mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0)
+    \\ Save file_size (X5) to X7 before mmap clobbers it (path no longer needed)
+    ↓ $7 $5
     ↓ $8 222
     ↓ $0 0
-    ↓ $1 file_size
+    ↓ $1 $5
     ↓ $2 1
     ↓ $3 2
-    ↓ $4 fd
+    ↓ $4 $6
     ↓ $5 0
     trap
-    base ↑ $0
+
+    \\ Save mmap result (X0) to X6 before close clobbers X0
+    \\ file_size already in X7
+    ↓ $6 $0
 
     \\ close(fd)
     ↓ $8 57
-    ↓ $0 fd
+    ↓ $0 $4
     trap
+    \\ On return: X6 = base pointer, X7 = file size
 
 \\ write_file — open (create/trunc), write buffer, close
 host write_file path buf buf_len :
@@ -5092,8 +5104,10 @@ main argc argv :
     src_path → 64 argv 8          \\ argv[1]
     out_path → 64 argv 16         \\ argv[2]
 
-    \\ Step 1: mmap the source file
-    src_base src_size mmap_file src_path
+    \\ Step 1: mmap the source file (returns base in X6, size in X7)
+    mmap_file src_path
+    src_base ↑ $6
+    src_size ↑ $7
 
     \\ Step 2: Lex the source
     lithos_lex src_base src_size

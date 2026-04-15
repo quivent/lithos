@@ -1273,6 +1273,10 @@ handle_composition:
     mov     w5, #REG_FIRST
 1:  str     w5, [x0]               // reg_floor = min(next_reg, REG_FIRST)
     str     w5, [x1]               // next_reg = reg_floor
+    // Reset spill count — new composition has its own stack frame
+    adrp    x0, spill_count
+    add     x0, x0, :lo12:spill_count
+    str     wzr, [x0]
 
     // Increment scope
     adrp    x0, scope_depth
@@ -3265,6 +3269,28 @@ parse_atom:
 
 .La_load:
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
+    // Save width literal value before parse_atom consumes the token.
+    // Width is always an INT literal (8, 32, or 64).
+    ldr     w0, [x19]
+    cmp     w0, #TOK_INT
+    b.ne    1f
+    ldr     w1, [x19, #4]              // source offset
+    ldr     w2, [x19, #8]              // token length
+    // Quick decimal parse for 1-2 digit widths
+    ldrb    w3, [x28, x1]              // first digit
+    sub     w3, w3, #'0'
+    cmp     w2, #1
+    b.eq    2f
+    mov     w4, #10
+    mul     w3, w3, w4
+    add     w1, w1, #1
+    ldrb    w4, [x28, x1]
+    sub     w4, w4, #'0'
+    add     w3, w3, w4
+2:  adrp    x0, ls_load_width
+    add     x0, x0, :lo12:ls_load_width
+    str     w3, [x0]
+1:
     bl      parse_atom                  // width (8, 16, 32, 64)
     mov     w4, w0                      // width register
     bl      parse_expr                  // address/base expression
@@ -3281,7 +3307,7 @@ parse_atom:
     b.eq    .La_load_simple
     cmp     w0, #TOK_INDENT
     b.eq    .La_load_simple
-    // Has offset — parse it and emit indexed load: LDRB Wd, [Xbase, Xoff]
+    // Has offset — parse it and emit width-aware indexed load
     stp     w4, w5, [sp, #-16]!
     bl      parse_atom                  // offset
     ldp     w4, w5, [sp], #16
@@ -3292,8 +3318,36 @@ parse_atom:
     lsl     w2, w5, #5                  // Rn (base)
     orr     w0, w7, w1
     orr     w0, w0, w2
+    // Select opcode by width stored in w4 (register containing width literal).
+    // The width was parsed as an integer literal → MOV Xw4, #width.
+    // We saved the width VALUE before alloc_reg in the parse_atom call.
+    // Actually, w4 is the register number. We need to recover the width.
+    // Trick: the .La_load code parsed width via parse_atom which for an
+    // INT literal emits MOV Xreg, #imm and returns the register in w0.
+    // We saved w0→w4. But we can't read the register value at compile time.
+    //
+    // Simpler: read the width token directly BEFORE calling parse_atom.
+    // But we already consumed it. So we save the literal value separately.
+    // For now, use the saved width literal from ls_load_width (set below).
+    adrp    x3, ls_load_width
+    add     x3, x3, :lo12:ls_load_width
+    ldr     w3, [x3]
+    cmp     w3, #64
+    b.eq    .La_load_off_64
+    cmp     w3, #32
+    b.eq    .La_load_off_32
+    // Default: 8-bit (LDRB)
     movz    w3, #0x6800
     movk    w3, #0x3860, lsl #16        // LDRB Wd, [Xn, Xm]
+    b       .La_load_off_emit
+.La_load_off_64:
+    movz    w3, #0x6800
+    movk    w3, #0xF860, lsl #16        // LDR Xd, [Xn, Xm]
+    b       .La_load_off_emit
+.La_load_off_32:
+    movz    w3, #0x6800
+    movk    w3, #0xB860, lsl #16        // LDR Wd, [Xn, Xm]
+.La_load_off_emit:
     orr     w0, w0, w3
     bl      emit32
     mov     w0, w7
