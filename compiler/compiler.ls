@@ -177,7 +177,7 @@ const SYS_BRK       214
 \\ 1MB buffer for ARM64 machine code.
 
 buf arm64_buf 1048576
-var arm64_pos 0
+buf arm64_pos_v 8
 
 arm64_emit32 val :
     \\ Write a 32-bit little-endian word at current position and advance by 4.
@@ -967,8 +967,8 @@ emit_stxr rs rt rn :
 \\ ============================================================
 
 buf gpu_buf 524288
-var gpu_pos 0
-var max_reg 0
+buf gpu_pos_v 8
+buf max_reg_v 8
 
 track_rd rd :
     max_reg max rd max_reg
@@ -977,10 +977,10 @@ track_rd rd :
 \\ COOPERATIVE GRID-SYNC STATE
 \\ ============================================================
 
-var gpu_cooperative 0
+buf gpu_cooperative_v 8
 
 buf gridsync_offsets 1024
-var gridsync_count 0
+buf gridsync_count_v 8
 
 record_gridsync :
     if>= gridsync_count 256
@@ -989,7 +989,7 @@ record_gridsync :
     gridsync_count + 1
 
 buf exit_offsets 1024
-var exit_count 0
+buf exit_count_v 8
 
 record_exit :
     if>= exit_count 256
@@ -1625,8 +1625,8 @@ emit_warp_reduce acc tmp :
 \\ COOPERATIVE GRID-SYNC
 \\ ============================================================
 
-var _gs_r 4
-var _gs_p 0
+buf _gs_r_v 8
+buf _gs_p_v 8
 
 gs_rreg :
     r _gs_r
@@ -1698,39 +1698,39 @@ total_kparams n_data_params :
 
 \\ TODO: bump to 335544320 (320MB) for full 64-layer megakernel
 buf cubin_buf 4194304
-var cubin_pos 0
-var gpu_shmem_size 0
-var gpu_n_kparams 0
+buf cubin_pos_v 8
+buf gpu_shmem_size_v 8
+buf gpu_n_kparams_v 8
 
 buf li_name_buf 64
-var li_name_len 0
+buf li_name_len_v 8
 
-var shstrtab_off 0
-var shstrtab_size 0
-var strtab_off 0
-var strtab_size 0
-var strsym_kernel 0
-var symtab_off 0
-var symtab_size 0
-var sym_kernel_off 0
-var nvinfo_off 0
-var nvinfo_size 0
-var nvinfo_k_off 0
-var nvinfo_k_size 0
-var text_off 0
-var text_size 0
-var const0_off 0
-var const0_size 0
-var shdrs_off 0
+buf shstrtab_off_v 8
+buf shstrtab_size_v 8
+buf strtab_off_v 8
+buf strtab_size_v 8
+buf strsym_kernel_v 8
+buf symtab_off_v 8
+buf symtab_size_v 8
+buf sym_kernel_off_v 8
+buf nvinfo_off_v 8
+buf nvinfo_size_v 8
+buf nvinfo_k_off_v 8
+buf nvinfo_k_size_v 8
+buf text_off_v 8
+buf text_size_v 8
+buf const0_off_v 8
+buf const0_size_v 8
+buf shdrs_off_v 8
 
-var SN_shstrtab 0
-var SN_strtab 0
-var SN_symtab 0
-var SN_nvinfo 0
-var SN_nvinfo_k 0
-var SN_text 0
-var SN_const0 0
-var SN_shared 0
+buf SN_shstrtab_v 8
+buf SN_strtab_v 8
+buf SN_symtab_v 8
+buf SN_nvinfo_v 8
+buf SN_nvinfo_k_v 8
+buf SN_text_v 8
+buf SN_const0_v 8
+buf SN_shared_v 8
 
 cubin_emit_byte b :
     ← 8 cubin_buf + cubin_pos b
@@ -2424,13 +2424,13 @@ lithos_lex src src_len :
 \\ Parser state — global variables
 \\ ============================================================================
 
-var tok_pos 0
-var tok_total 0
-var src_buf 0
-var emit_target 0          \\ 0 = GPU (sm90), 1 = HOST (ARM64)
-var body_indent 0
-var comp_depth 0
-var error_count 0
+buf tok_pos_v 8
+buf tok_total_v 8
+buf src_buf_v 8
+buf emit_target_v 8        \\ 0 = GPU (sm90), 1 = HOST (ARM64)
+buf body_indent_v 8
+buf comp_depth_v 8
+buf error_count_v 8
 
 \\ ============================================================================
 \\ Symbol table
@@ -2440,17 +2440,17 @@ buf sym_names 16384
 buf sym_lens 1024
 buf sym_kinds 1024
 buf sym_regs 1024
-var n_syms 0
+buf n_syms_v 8
 
 \\ ============================================================================
 \\ Register allocators
 \\ ============================================================================
 
-var next_freg 0
-var next_rreg 4
-var next_rdreg 4
-var next_preg 0
-var next_host_reg 9
+buf next_freg_v 8
+buf next_rreg_v 8
+buf next_rdreg_v 8
+buf next_preg_v 8
+buf next_host_reg_v 8
 
 \\ ============================================================================
 \\ Shared memory tracking
@@ -2458,15 +2458,15 @@ var next_host_reg 9
 
 buf shm_names 2048
 buf shm_sizes 32
-var n_shared 0
-var shmem_total 0
+buf n_shared_v 8
+buf shmem_total_v 8
 
 \\ ============================================================================
 \\ Loop / branch tracking
 \\ ============================================================================
 
 buf branch_stack 2048
-var branch_depth 0
+buf branch_depth_v 8
 
 \\ ============================================================================
 \\ Composition table
@@ -2476,7 +2476,7 @@ buf comp_names 16384
 buf comp_lens 1024
 buf comp_tokprologues 1024
 buf comp_arg_counts 1024
-var n_comps 0
+buf n_comps_v 8
 
 \\ ============================================================================
 \\ Token stream access
@@ -4370,18 +4370,18 @@ parse_file :
 \\ ============================================================================
 
 parser_init tokens_ptr total source :
-    tok_pos 0
-    tok_total total
-    src_buf source
-    emit_target 0
-    body_indent 0
-    comp_depth 0
-    error_count 0
-    n_syms 0
-    n_comps 0
-    n_shared 0
-    shmem_total 0
-    branch_depth 0
+    ← 64 tok_pos_v 0
+    ← 64 tok_total_v total
+    ← 64 src_buf_v source
+    ← 64 emit_target_v 0
+    ← 64 body_indent_v 0
+    ← 64 comp_depth_v 0
+    ← 64 error_count_v 0
+    ← 64 n_syms_v 0
+    ← 64 n_comps_v 0
+    ← 64 n_shared_v 0
+    ← 64 shmem_total_v 0
+    ← 64 branch_depth_v 0
     n_labels 0
     n_kparams 0
     regs_reset
@@ -4586,33 +4586,33 @@ nvi_sval_emit val sym_idx attr fmt :
 \\ ============================================================
 
 \\ Globals for section offsets/sizes (shared between sub-compositions)
-var elf_shstrtab_off 0
-var elf_shstrtab_size 0
-var elf_strtab_off 0
-var elf_strtab_size 0
-var elf_symtab_off 0
-var elf_symtab_size 0
-var elf_nvinfo_off 0
-var elf_nvinfo_size 0
-var elf_nvinfo_k_off 0
-var elf_nvinfo_k_size 0
-var elf_text_off 0
-var elf_text_size 0
-var elf_const0_off 0
-var elf_const0_size 0
-var elf_shdrs_off 0
-var elf_sym_kernel_off 0
-var elf_param_bytes 0
+buf elf_shstrtab_off_v 8
+buf elf_shstrtab_size_v 8
+buf elf_strtab_off_v 8
+buf elf_strtab_size_v 8
+buf elf_symtab_off_v 8
+buf elf_symtab_size_v 8
+buf elf_nvinfo_off_v 8
+buf elf_nvinfo_size_v 8
+buf elf_nvinfo_k_off_v 8
+buf elf_nvinfo_k_size_v 8
+buf elf_text_off_v 8
+buf elf_text_size_v 8
+buf elf_const0_off_v 8
+buf elf_const0_size_v 8
+buf elf_shdrs_off_v 8
+buf elf_sym_kernel_off_v 8
+buf elf_param_bytes_v 8
 
 \\ Section name offsets within .shstrtab
-var elf_SN_shstrtab 0
-var elf_SN_strtab 0
-var elf_SN_symtab 0
-var elf_SN_nvinfo 0
-var elf_SN_nvinfo_k 0
-var elf_SN_text 0
-var elf_SN_const0 0
-var elf_SN_shared 0
+buf elf_SN_shstrtab_v 8
+buf elf_SN_strtab_v 8
+buf elf_SN_symtab_v 8
+buf elf_SN_nvinfo_v 8
+buf elf_SN_nvinfo_k_v 8
+buf elf_SN_text_v 8
+buf elf_SN_const0_v 8
+buf elf_SN_shared_v 8
 
 \\ ---- Sub-composition: emit .shstrtab section names ----
 elf_emit_shstrtab kernel_name kernel_nlen :
