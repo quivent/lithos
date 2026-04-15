@@ -443,8 +443,8 @@ reset_regs:
 .Lreset_fill:
     cbz     w3, .Lreset_fill_done
     stp     x0, x3, [sp, #-16]!
-    // Emit: LDR X<REG_FIRST>, [SP], #16
-    mov     w0, #0x0FE0
+    // Emit: LDR X<REG_FIRST>, [SP], #16  (post-index 0x07E0, not pre 0x0FE0)
+    mov     w0, #0x07E0
     movk    w0, #0xF841, lsl #16
     add     w0, w0, #REG_FIRST
     bl      emit32
