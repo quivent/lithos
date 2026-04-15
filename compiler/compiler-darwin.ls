@@ -185,6 +185,11 @@ const SYS_BRK       12
 buf arm64_buf 1048576
 var arm64_pos 0
 
+\\ mmap_file writes its two outputs here, for bootstraps without
+\\ multi-return support.
+var mmap_base 0
+var mmap_size 0
+
 arm64_emit32 val :
     \\ Write a 32-bit little-endian word at current position and advance by 4.
     ← 32 arm64_buf + arm64_pos val
@@ -994,20 +999,10 @@ record_gridsync :
     ← 32 gridsync_offsets + gridsync_count * 4 gpu_pos
     gridsync_count + 1
 
-buf exit_offsets 1024
-var exit_count 0
-
-record_exit :
-    if>= exit_count 256
-        \\ silently clamp at 256 sites
-    ← 32 exit_offsets + exit_count * 4 gpu_pos
-    exit_count + 1
-
 gpu_reset :
     gpu_pos 0
     max_reg 0
     gridsync_count 0
-    exit_count 0
     gpu_cooperative 0
 
 \\ ============================================================
@@ -1573,7 +1568,6 @@ emit_bra_pred byte_offset pred :
     sinst iword_masked ctrl_bra
 
 emit_exit :
-    record_exit
     sinst 0x000000000000794D ctrl_exit
 
 \\ ============================================================
@@ -1789,11 +1783,13 @@ EIATTR_COOP_GROUP_MASK_REGIDS   0x29
 \\ ============================================================================
 
 emit_token type offset length :
-    idx token_count * 3
+    \\ Each token is 12 bytes: type (u32) + offset (u32) + length (u32).
+    \\ Use byte offsets since `← 32 addr val` stores at byte address.
+    idx token_count * 12
     ← 32 tokens + idx type
-    idx1 idx + 1
+    idx1 idx + 4
     ← 32 tokens + idx1 offset
-    idx2 idx + 2
+    idx2 idx + 8
     ← 32 tokens + idx2 length
     token_count token_count + 1
 
@@ -1897,7 +1893,7 @@ match_keyword src offset length :
         b1 src [ offset + 1 ]
         if b0 == 111 & b1 == 114         \\ 'or'
             tok_type 5
-            return
+            return tok_type
 
     if length == 3
         b0 src [ offset ]
@@ -1905,28 +1901,28 @@ match_keyword src offset length :
         b2 src [ offset + 2 ]
         if b0 == 102 & b1 == 111 & b2 == 114
             tok_type 16
-            return
+            return tok_type
         if b0 == 118 & b1 == 97 & b2 == 114
             tok_type 23
-            return
+            return tok_type
         if b0 == 98 & b1 == 117 & b2 == 102
             tok_type 24
-            return
+            return tok_type
         if b0 == 102 & b1 == 51 & b2 == 50
             tok_type 40
-            return
+            return tok_type
         if b0 == 117 & b1 == 51 & b2 == 50
             tok_type 41
-            return
+            return tok_type
         if b0 == 115 & b1 == 51 & b2 == 50
             tok_type 42
-            return
+            return tok_type
         if b0 == 102 & b1 == 49 & b2 == 54
             tok_type 43
-            return
+            return tok_type
         if b0 == 112 & b1 == 116 & b2 == 114
             tok_type 44
-            return
+            return tok_type
 
     if length == 4
         b0 src [ offset ]
@@ -1935,29 +1931,29 @@ match_keyword src offset length :
         b3 src [ offset + 3 ]
         if b0 == 101 & b1 == 97 & b2 == 99 & b3 == 104
             tok_type 18
-            return
+            return tok_type
         if b0 == 101 & b1 == 108 & b2 == 115 & b3 == 101
             tok_type 14
-            return
+            return tok_type
         if b0 == 101 & b1 == 108 & b2 == 105 & b3 == 102
             tok_type 15
-            return
+            return tok_type
         if b0 == 118 & b1 == 111 & b2 == 105 & b3 == 100
             tok_type 45
-            return
+            return tok_type
         if b0 == 98 & b1 == 105 & b2 == 110 & b3 == 100
             tok_type 27
-            return
+            return tok_type
         if b0 == 101 & b1 == 120 & b2 == 105 & b3 == 116
             tok_type 34
-            return
+            return tok_type
         if b0 == 104 & b1 == 111 & b2 == 115 & b3 == 116
             tok_type 35
-            return
+            return tok_type
         \\ 'goto' -> 93
         if b0 == 103 & b1 == 111 & b2 == 116 & b3 == 111
             tok_type 93
-            return
+            return tok_type
 
     if length == 5
         b0 src [ offset ]
@@ -1967,19 +1963,19 @@ match_keyword src offset length :
         b4 src [ offset + 4 ]
         if b0 == 112 & b1 == 97 & b2 == 114 & b3 == 97 & b4 == 109
             tok_type 12
-            return
+            return tok_type
         if b0 == 119 & b1 == 104 & b2 == 105 & b3 == 108 & b4 == 101
             tok_type 20
-            return
+            return tok_type
         if b0 == 99 & b1 == 111 & b2 == 110 & b3 == 115 & b4 == 116
             tok_type 22
-            return
+            return tok_type
         if b0 == 108 & b1 == 97 & b2 == 121 & b3 == 101 & b4 == 114
             tok_type 26
-            return
+            return tok_type
         if b0 == 108 & b1 == 97 & b2 == 98 & b3 == 101 & b4 == 108
             tok_type 33
-            return
+            return tok_type
 
     if length == 6
         b0 src [ offset ]
@@ -1990,22 +1986,22 @@ match_keyword src offset length :
         b5 src [ offset + 5 ]
         if b0 == 107 & b1 == 101 & b2 == 114 & b3 == 110 & b4 == 101 & b5 == 108
             tok_type 11
-            return
+            return tok_type
         if b0 == 115 & b1 == 116 & b2 == 114 & b3 == 105 & b4 == 100 & b5 == 101
             tok_type 19
-            return
+            return tok_type
         if b0 == 114 & b1 == 101 & b2 == 116 & b3 == 117 & b4 == 114 & b5 == 110
             tok_type 21
-            return
+            return tok_type
         if b0 == 119 & b1 == 101 & b2 == 105 & b3 == 103 & b4 == 104 & b5 == 116
             tok_type 25
-            return
+            return tok_type
         if b0 == 115 & b1 == 104 & b2 == 97 & b3 == 114 & b4 == 101 & b5 == 100
             tok_type 31
-            return
+            return tok_type
         if b0 == 101 & b1 == 110 & b2 == 100 & b3 == 102 & b4 == 111 & b5 == 114
             tok_type 17
-            return
+            return tok_type
 
     if length == 7
         b0 src [ offset ]
@@ -2018,7 +2014,7 @@ match_keyword src offset length :
             b6 src [ offset + 6 ]
             if b2 == 110 & b3 == 116 & b4 == 105 & b5 == 109 & b6 == 101
                 tok_type 28
-                return
+                return tok_type
         if b0 == 98 & b1 == 97
             b2 src [ offset + 2 ]
             b3 src [ offset + 3 ]
@@ -2027,7 +2023,7 @@ match_keyword src offset length :
             b6 src [ offset + 6 ]
             if b2 == 114 & b3 == 114 & b4 == 105 & b5 == 101 & b6 == 114
                 tok_type 32
-                return
+                return tok_type
         if b0 == 112 & b1 == 114
             b2 src [ offset + 2 ]
             b3 src [ offset + 3 ]
@@ -2036,7 +2032,7 @@ match_keyword src offset length :
             b6 src [ offset + 6 ]
             if b2 == 111 & b3 == 106 & b4 == 101 & b5 == 99 & b6 == 116
                 tok_type 30
-                return
+                return tok_type
         \\ 'trap' -> 94
         if b0 == 115 & b1 == 121
             b2 src [ offset + 2 ]
@@ -2046,7 +2042,7 @@ match_keyword src offset length :
             b6 src [ offset + 6 ]
             if b2 == 115 & b3 == 99 & b4 == 97 & b5 == 108 & b6 == 108
                 tok_type 94
-                return
+                return tok_type
 
     if length == 8
         b0 src [ offset ]
@@ -2060,7 +2056,7 @@ match_keyword src offset length :
             b7 src [ offset + 7 ]
             if b2 == 109 & b3 == 112 & b4 == 108 & b5 == 97 & b6 == 116 & b7 == 101
                 tok_type 29
-                return
+                return tok_type
         \\ 'constant' -> 96
         if b0 == 99 & b1 == 111
             b2 src [ offset + 2 ]
@@ -2071,7 +2067,7 @@ match_keyword src offset length :
             b7 src [ offset + 7 ]
             if b2 == 110 & b3 == 115 & b4 == 116 & b5 == 97 & b6 == 110 & b7 == 116
                 tok_type 96
-                return
+                return tok_type
         \\ 'continue' -> 95
         if b0 == 99 & b1 == 111
             b2 src [ offset + 2 ]
@@ -2082,11 +2078,12 @@ match_keyword src offset length :
             b7 src [ offset + 7 ]
             if b2 == 110 & b3 == 116 & b4 == 105 & b5 == 110 & b6 == 117 & b7 == 101
                 tok_type 95
-                return
+                return tok_type
 
 \\ ============================================================================
 \\ Number type classification
 \\ ============================================================================
+    return tok_type
 
 classify_number src offset length :
     tok_type 3
@@ -2431,15 +2428,15 @@ var n_comps 0
 \\ ============================================================================
 
 peek_type :
-    idx tok_pos * 3
+    idx tok_pos * 12
     → 32 tokens idx
 
 peek_offset :
-    idx tok_pos * 3 + 1
+    idx tok_pos * 12 + 4
     → 32 tokens idx
 
 peek_length :
-    idx tok_pos * 3 + 2
+    idx tok_pos * 12 + 8
     → 32 tokens idx
 
 consume :
@@ -2462,9 +2459,11 @@ skip_newlines :
     if== t 1
         consume
         skip_newlines
+        return 0
     if== t 2
         consume
         skip_newlines
+        return 0
 
 tok_text_ptr :
     off peek_offset
@@ -3434,11 +3433,11 @@ parse_trap_stmt :
 parse_trap_args idx :
     t peek_type
     if== t 1
-        idx
+        return idx
     if== t 0
-        idx
+        return idx
     if>= idx 6
-        idx
+        return idx
     val parse_expr
     emit_p_mov_reg idx val
     parse_trap_args idx + 1
@@ -3652,6 +3651,7 @@ parse_ident_stmt :
                     if== c3 112
                         consume
                         emit_p_svc
+                        return 1
 
     \\ Check for conditional keywords: if==, if>=, if<, if!=, if>, if<=
     if>= len 3
@@ -3660,6 +3660,7 @@ parse_ident_stmt :
         if== c0 105
             if== c1 102
                 parse_conditional
+                return 1
 
     \\ Check for inline label (ident followed by TOK_COLON)
     consume
@@ -3667,7 +3668,7 @@ parse_ident_stmt :
     if== nt_check 72
         consume
         parse_inline_label ptr len
-        1
+        return 1
     \\ Put token back
     tok_pos tok_pos - 1
 
@@ -3681,7 +3682,7 @@ parse_ident_stmt :
                 if== c6 56
                     consume
                     parse_mem_load 8
-                    1
+                    return 1
 
     \\ Check for mem_load 16/32/64 (8 chars)
     if== len 8
@@ -3695,15 +3696,15 @@ parse_ident_stmt :
                 if== c6 49
                     if== c7 54
                         parse_mem_load 16
-                        1
+                        return 1
                 if== c6 51
                     if== c7 50
                         parse_mem_load 32
-                        1
+                        return 1
                 if== c6 54
                     if== c7 52
                         parse_mem_load 64
-                        1
+                        return 1
 
     \\ Check for mem_store 8 (8 chars)
     if== len 8
@@ -3715,7 +3716,7 @@ parse_ident_stmt :
                 if== c7 56
                     consume
                     parse_mem_store 8
-                    1
+                    return 1
 
     \\ Check for mem_store 16/32/64 (9 chars)
     if== len 9
@@ -3729,15 +3730,15 @@ parse_ident_stmt :
                 if== c7 49
                     if== c8 54
                         parse_mem_store 16
-                        1
+                        return 1
                 if== c7 51
                     if== c8 50
                         parse_mem_store 32
-                        1
+                        return 1
                 if== c7 54
                     if== c8 52
                         parse_mem_store 64
-                        1
+                        return 1
 
     \\ Check for mem_load 64_idx / mem_load 32_idx (12 chars)
     if== len 12
@@ -3751,9 +3752,11 @@ parse_ident_stmt :
                 if== c7 54
                     if== c8 52
                         parse_mem_load_idx 64
+                        return 1
                 if== c7 51
                     if== c8 50
                         parse_mem_load_idx 32
+                        return 1
 
     \\ Check for mem_store 8_at (11 chars)
     if== len 11
@@ -3763,7 +3766,7 @@ parse_ident_stmt :
             if== c8 97
                 consume
                 parse_mem_store_at
-                1
+                return 1
 
     \\ Check for 3-operand ops
     if== len 3
@@ -3775,43 +3778,43 @@ parse_ident_stmt :
                 if== c2 100
                     consume
                     parse_3op_and
-                    1
+                    return 1
         if== c0 115
             if== c1 104
                 if== c2 108
                     consume
                     parse_3op_shl
-                    1
+                    return 1
         if== c0 115
             if== c1 104
                 if== c2 114
                     consume
                     parse_3op_shr
-                    1
+                    return 1
         if== c0 109
             if== c1 117
                 if== c2 108
                     consume
                     parse_3op_mul
-                    1
+                    return 1
         if== c0 97
             if== c1 100
                 if== c2 100
                     consume
                     parse_3op_add
-                    1
+                    return 1
         if== c0 115
             if== c1 117
                 if== c2 98
                     consume
                     parse_3op_sub
-                    1
+                    return 1
         if== c0 120
             if== c1 111
                 if== c2 114
                     consume
                     parse_3op_xor
-                    1
+                    return 1
 
     if== len 2
         c0 → 8 ptr 0
@@ -3820,7 +3823,7 @@ parse_ident_stmt :
             if== c1 114
                 consume
                 parse_3op_or
-                1
+                return 1
 
     \\ Look up in symbol table
     idx sym_find ptr len
@@ -3832,7 +3835,7 @@ parse_ident_stmt :
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            1
+            return 1
 
         if== nt 67
             consume
@@ -3848,44 +3851,44 @@ parse_ident_stmt :
             addr alloc_rreg
             emit_p_add addr base offset_reg
             emit_p_store val addr 0 32
-            1
+            return 1
 
         nt2 peek_type
         if== nt2 80
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            1
+            return 1
         if== nt2 84
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            1
+            return 1
         if== nt2 85
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            1
+            return 1
         if== nt2 86
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            1
+            return 1
         if== nt2 87
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            1
+            return 1
         if== nt2 90
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            1
+            return 1
 
         val parse_expr
         reg sym_reg idx
         emit_p_mov_reg reg val
-        1
+        return 1
 
     \\ New variable assignment
     consume
@@ -3895,76 +3898,77 @@ parse_ident_stmt :
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 84
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 85
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 86
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 87
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 3
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 5
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 88
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 89
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 90
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     if== nt 91
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        1
+        return 1
     skip_to_eol
     0
 
 skip_to_eol :
     t peek_type
     if== t 0
-        0
+        return 0
     if== t 1
         consume
+        return 0
     consume
     skip_to_eol
 
@@ -4235,7 +4239,7 @@ parse_composition :
 parse_comp_args count :
     t peek_type
     if== t 72
-        count
+        return count
 
     if== t 5
         ptr tok_text_ptr
@@ -4250,6 +4254,7 @@ parse_comp_args count :
         count count + 1
 
         parse_comp_args count
+        return count
 
     count
 
@@ -4260,15 +4265,17 @@ parse_comp_args count :
 parse_file :
     t peek_type
     if== t 0
-        0
+        return 0
 
     if== t 1
         consume
         parse_file
+        return 0
 
     if== t 2
         consume
         parse_file
+        return 0
 
     if== t 35
         consume
@@ -4276,17 +4283,20 @@ parse_file :
         parse_composition
         emit_target 0
         parse_file
+        return 0
 
     if== t 5
         emit_target 0
         parse_composition
         parse_file
+        return 0
 
     if== t 11
         consume
         emit_target 0
         parse_composition
         parse_file
+        return 0
 
     \\ Forth-style: VALUE constant NAME (at file scope)
     if== t 3
@@ -4301,6 +4311,7 @@ parse_file :
             emit_p_mov_imm rd val
             sym_add name_ptr name_len 1 rd
             parse_file
+            return 0
         \\ Not a constant decl, put token back
         tok_pos tok_pos - 1
 
@@ -4309,7 +4320,9 @@ parse_file :
         consume
         parse_constant_decl
         parse_file
+        return 0
 
+    \\ Unknown top-level token — skip and continue
     consume
     parse_file
 
@@ -4484,14 +4497,12 @@ elf_write_header :
 \\ SECTION HEADER EMIT
 \\ ============================================================
 
-shdr64_a sh_name sh_type sh_flags sh_addr sh_offset :
+shdr64_emit sh_name sh_type sh_flags sh_addr sh_offset sh_size sh_link sh_info sh_addralign sh_entsize :
     cd_emit sh_name
     cd_emit sh_type
     cq_emit sh_flags
     cq_emit sh_addr
     cq_emit sh_offset
-
-shdr64_b sh_size sh_link sh_info sh_addralign sh_entsize :
     cq_emit sh_size
     cd_emit sh_link
     cd_emit sh_info
@@ -4531,7 +4542,7 @@ nvi_sval_emit val sym_idx attr fmt :
 \\ elf_build — Build complete 9-section GPU ELF
 \\ ============================================================
 
-elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size :
+elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt :
 
     elf_init
     elf_write_header
@@ -4673,7 +4684,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     \\ .nv.info (section 4)
     calign 4
     nvinfo_off cubin_pos
-    reg_val reg_count + 1
+    reg_val reg_count
     if< reg_val 8
         reg_val 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
@@ -4708,7 +4719,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 255
     cb_emit 0
 
-    if== gpu_cooperative 1
+    if== elf_cooperative 1
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_MASK_REGIDS
         cw_emit 16
@@ -4719,23 +4730,16 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
 
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_INSTR_OFFSETS
-        cw_emit (gridsync_count * 4)
-        for gi 0 gridsync_count 1
-            gs_off → 32 (gridsync_offsets + gi * 4)
+        cw_emit (gridsync_cnt * 4)
+        for gi 0 gridsync_cnt 1
+            gs_off → 32 (gridsync_off_ptr + gi * 4)
             cd_emit gs_off
         endfor
 
     cb_emit 4
     cb_emit EIATTR_EXIT_INSTR_OFFSETS
-    if> exit_count 0
-        cw_emit (exit_count * 4)
-        for ei 0 exit_count 1
-            ex_off → 32 (exit_offsets + ei * 4)
-            cd_emit ex_off
-        endfor
-    if== exit_count 0
-        cw_emit 4
-        cd_emit code_size - 16
+    cw_emit 4
+    cd_emit 256
 
     param_bytes n_kparams * 8
     cb_emit 3
@@ -4792,24 +4796,15 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     calign 64
     shdrs_off cubin_pos
 
-    shdr64_a 0 0 0 0 0
-    shdr64_b 0 0 0 0 0
-    shdr64_a SN_shstrtab SHT_STRTAB 0 0 shstrtab_off
-    shdr64_b shstrtab_size 0 0 1 0
-    shdr64_a SN_strtab SHT_STRTAB 0 0 strtab_off
-    shdr64_b strtab_size 0 0 1 0
-    shdr64_a SN_symtab SHT_SYMTAB 0 0 symtab_off
-    shdr64_b symtab_size 2 3 8 24
-    shdr64_a SN_nvinfo SHT_LOPROC 0 0 nvinfo_off
-    shdr64_b nvinfo_size 3 0 4 0
-    shdr64_a SN_text SHT_PROGBITS 6 0 text_off
-    shdr64_b text_size 3 3 128 0
-    shdr64_a SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off
-    shdr64_b nvinfo_k_size 3 5 4 0
-    shdr64_a SN_shared SHT_NOBITS 3 0 const0_off
-    shdr64_b smem_size 0 0 16 0
-    shdr64_a SN_const0 SHT_PROGBITS 66 0 const0_off
-    shdr64_b const0_size 0 5 4 0
+    shdr64_emit 0 0 0 0 0 0 0 0 0 0
+    shdr64_emit SN_shstrtab SHT_STRTAB 0 0 shstrtab_off shstrtab_size 0 0 1 0
+    shdr64_emit SN_strtab SHT_STRTAB 0 0 strtab_off strtab_size 0 0 1 0
+    shdr64_emit SN_symtab SHT_SYMTAB 0 0 symtab_off symtab_size 2 3 8 24
+    shdr64_emit SN_nvinfo SHT_LOPROC 0 0 nvinfo_off nvinfo_size 3 0 4 0
+    shdr64_emit SN_text SHT_PROGBITS 6 0 text_off text_size 3 3 128 0
+    shdr64_emit SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off nvinfo_k_size 3 5 4 0
+    shdr64_emit SN_shared SHT_NOBITS 3 0 const0_off smem_size 0 0 16 0
+    shdr64_emit SN_const0 SHT_PROGBITS 66 0 const0_off const0_size 0 5 4 0
 
     \\ Patch ELF header
     elf_put_u64 0 32
@@ -4846,19 +4841,16 @@ elf_save path :
 \\ elf_write_cubin — Convenience: build ELF and write to file
 \\ ============================================================
 
-elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
+elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt out_path :
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt
     elf_save out_path
 
 \\ ============================================================
-\\ elf_write_simple — Non-cooperative kernel (clears cooperative/gridsync state)
+\\ elf_write_simple — Non-cooperative kernel
 \\ ============================================================
 
 elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
-    gpu_cooperative 0
-    gridsync_count 0
-    exit_count 0
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size 0 0 0
     elf_save out_path
 
 
@@ -4952,8 +4944,9 @@ elf_build_arm64 code_buf code_size :
 \\ Host trap helpers for main
 \\ ============================================================
 
-\\ mmap_file — open, get size via lseek, mmap, close fd
-\\ Returns base pointer and file size.
+\\ mmap_file — open, get size via lseek, mmap, close fd.
+\\ Stores base pointer in global mmap_base and file size in mmap_size.
+\\ Bootstraps that don't support multi-return read these globals directly.
 host mmap_file path :
     \\ openat(AT_FDCWD, path, O_RDONLY, 0)
     ↓ $16 463
@@ -4971,6 +4964,7 @@ host mmap_file path :
     ↓ $2 2
     trap
     file_size ↑ $0
+    mmap_size file_size
 
     \\ mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0)
     ↓ $16 197
@@ -4982,11 +4976,15 @@ host mmap_file path :
     ↓ $5 0
     trap
     base ↑ $0
+    mmap_base base
 
     \\ close(fd)
     ↓ $16 6
     ↓ $0 fd
     trap
+
+    \\ Return base in X0 for single-return callers.
+    ↓ $0 base
 
 \\ write_file — open (create/trunc), write buffer, close
 host write_file path buf buf_len :
@@ -5058,8 +5056,10 @@ host lithos_main argc argv :
     src_path → 64 argv 8          \\ argv[1]
     out_path → 64 argv 16         \\ argv[2]
 
-    \\ Step 1: mmap the source file
-    src_base src_size mmap_file src_path
+    \\ Step 1: mmap the source file (writes mmap_base, mmap_size globals)
+    mmap_file src_path
+    src_base mmap_base
+    src_size mmap_size
 
     \\ Step 2: Lex the source
     lithos_lex src_base src_size
@@ -5075,7 +5075,7 @@ host lithos_main argc argv :
     \\ Choose based on what was emitted
     if> gpu_pos 0
         \\ GPU output — build cubin
-        elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size
+        elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size gpu_cooperative gridsync_offsets gridsync_count
         elf_save out_path
     if> arm64_pos 0
         \\ Host output — wrap in ARM64 ELF
