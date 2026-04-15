@@ -1640,6 +1640,7 @@ buf comp_arg_count_v 256      \\ u32 arg count
 buf comp_body_start_v 256     \\ u32 token index of first body token
 buf comp_body_end_v   256     \\ u32 token index one past last body token
 buf comp_is_host_v    256     \\ u32 0=GPU, 1=ARM64
+buf comp_code_off_v   256     \\ u32 byte offset in arm64_buf where code starts
 buf comp_count_v       8
 
 \\ Symbol table for current kernel: arg name → register (up to 32 entries).
@@ -2706,6 +2707,12 @@ walk_top_level :
         ← 64 cur_kernel_nlen_v kn_len
         ← 64 cur_n_kparams_v kn_argc
         ← 64 cur_smem_v 0
+
+    \\ Record this composition's code offset in arm64_buf BEFORE
+    \\ emitting anything, so callers can compute BL distances.
+    if== is_host 1
+        _code_off → 64 arm64_pos_v
+        ← 32 comp_code_off_v + i * 4 _code_off
 
     \\ Host prologue: STP FP,LR; MOV FP,SP; SUB SP,SP,#512 (frame).
     \\ Bindings live at [FP, #-8], [FP, #-16], etc.
