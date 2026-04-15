@@ -181,11 +181,12 @@ buf arm64_pos_v 8
 
 arm64_emit32 val :
     \\ Write a 32-bit little-endian word at current position and advance by 4.
-    ← 32 arm64_buf + arm64_pos val
-    arm64_pos arm64_pos + 4
+    ap → 64 arm64_pos_v
+    ← 32 arm64_buf + ap val
+    ← 64 arm64_pos_v ap + 4
 
 arm64_reset :
-    arm64_pos 0
+    ← 64 arm64_pos_v 0
 
 \\ ============================================================
 \\ REGISTER CONSTANTS
@@ -971,7 +972,9 @@ buf gpu_pos_v 8
 buf max_reg_v 8
 
 track_rd rd :
-    max_reg max rd max_reg
+    mr → 64 max_reg_v
+    mr max rd mr
+    ← 64 max_reg_v mr
 
 \\ ============================================================
 \\ COOPERATIVE GRID-SYNC STATE
@@ -983,34 +986,39 @@ buf gridsync_offsets 1024
 buf gridsync_count_v 8
 
 record_gridsync :
-    if>= gridsync_count 256
+    gc → 64 gridsync_count_v
+    if>= gc 256
         \\ silently clamp at 256 sites
-    ← 32 gridsync_offsets + gridsync_count * 4 gpu_pos
-    gridsync_count + 1
+    gp → 64 gpu_pos_v
+    ← 32 gridsync_offsets + gc * 4 gp
+    ← 64 gridsync_count_v gc + 1
 
 buf exit_offsets 1024
 buf exit_count_v 8
 
 record_exit :
-    if>= exit_count 256
+    ec → 64 exit_count_v
+    if>= ec 256
         \\ silently clamp at 256 sites
-    ← 32 exit_offsets + exit_count * 4 gpu_pos
-    exit_count + 1
+    gp → 64 gpu_pos_v
+    ← 32 exit_offsets + ec * 4 gp
+    ← 64 exit_count_v ec + 1
 
 gpu_reset :
-    gpu_pos 0
-    max_reg 0
-    gridsync_count 0
-    exit_count 0
-    gpu_cooperative 0
+    ← 64 gpu_pos_v 0
+    ← 64 max_reg_v 0
+    ← 64 gridsync_count_v 0
+    ← 64 exit_count_v 0
+    ← 64 gpu_cooperative_v 0
 
 \\ ============================================================
 \\ RAW BYTE EMITTERS
 \\ ============================================================
 
 gpu_emit_byte b :
-    ← 8 gpu_buf + gpu_pos b
-    gpu_pos + 1
+    gp → 64 gpu_pos_v
+    ← 8 gpu_buf + gp b
+    ← 64 gpu_pos_v gp + 1
 
 gpu_emit_u32 val :
     gpu_emit_byte val & 0xFF

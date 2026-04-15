@@ -431,9 +431,8 @@ class SM90Emitter:
 
     def emit_iadd3(self, rd: int, rs1: int, rs2: int, rs3: int) -> None:
         """IADD3 Rd, Rs1, Rs2, Rs3 -- 3-input integer add.
-        Rs3 in ctrl[7:0] (4-operand format).
-        Note: uses opcode 0x7C10 per emit-gpu.ls."""
-        iword = 0x7C10 | (self._track_rd(rd) << 16) | (rs1 << 24) | (rs2 << 32)
+        Rs3 in ctrl[7:0] (4-operand format)."""
+        iword = OP_IADD3 | (self._track_rd(rd) << 16) | (rs1 << 24) | (rs2 << 32)
         ctrl = make_ctrl(1, 1, 7, 7, 0, 0, rs3)
         self._sinst(iword, ctrl)
 
@@ -620,9 +619,12 @@ class SM90Emitter:
         self._sinst(iword, _ctrl_s2r(sr_id))
 
     def emit_mov_imm(self, rd: int, imm32: int) -> None:
-        """MOV Rd, imm32 -- move 32-bit immediate into register."""
-        iword = OP_MOV_IMM | (self._track_rd(rd) << 16) | (imm32 << 32)
-        self._sinst(iword, _ctrl_nop())
+        """MOV Rd, imm32 -- load 32-bit immediate into register.
+        Implemented as IADD3.IMM Rd, RZ, imm32, RZ (0 + imm + 0 = imm).
+        MOV_IMM (0x7802) appears invalid on SM90a; IADD3_IMM is the safe path."""
+        RZ = 0xFF
+        iword = OP_IADD3_IMM | (self._track_rd(rd) << 16) | (RZ << 24) | ((imm32 & 0xFFFFFFFF) << 32)
+        self._sinst(iword, make_ctrl(2, 0, 7, 7, 0, 0, RZ))
 
     # ===========================================================
     # CONVERSION
