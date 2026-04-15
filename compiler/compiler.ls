@@ -904,6 +904,17 @@ emit_exit :
 \\ 32-bit single-precision FP forms are used throughout.
 
 \\ ============================================================
+\\ arm64_emit32 — CORE 4-BYTE INSTRUCTION EMITTER
+\\ ============================================================
+\\ Writes val little-endian into arm64_buf at arm64_pos_v and
+\\ advances arm64_pos_v by 4.
+
+arm64_emit32 val :
+    _ap → 64 arm64_pos_v
+    ← 32 arm64_buf + _ap val
+    ← 64 arm64_pos_v _ap + 4
+
+\\ ============================================================
 \\ FLOATING-POINT (FP32 — Sd, Sn, Sm)
 \\ ============================================================
 
@@ -2782,6 +2793,79 @@ buf src_path_v 8
 buf out_path_v 8
 buf src_base_v 8
 buf src_size_v 8
+
+\\ ============================================================
+\\ mmap_file — open, lseek to size, mmap, close fd
+\\ Returns base in X6, size in X7 (caller reads via ↑ $6, ↑ $7).
+\\ ============================================================
+
+host mmap_file path :
+    \\ openat(AT_FDCWD, path, O_RDONLY, 0)
+    ↓ $7 path
+    ↓ $8 56
+    ↓ $0 -100
+    ↓ $1 $7
+    ↓ $2 0
+    ↓ $3 0
+    trap
+    ↓ $6 $0
+    \\ lseek(fd, 0, SEEK_END)
+    ↓ $8 62
+    ↓ $0 $6
+    ↓ $1 0
+    ↓ $2 2
+    trap
+    ↓ $5 $0
+    \\ mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0)
+    ↓ $7 $5
+    ↓ $8 222
+    ↓ $0 0
+    ↓ $1 $5
+    ↓ $2 1
+    ↓ $3 2
+    ↓ $4 $6
+    ↓ $5 0
+    trap
+    ↓ $6 $0
+    \\ close(fd)
+    ↓ $8 57
+    ↓ $0 $4
+    trap
+
+\\ ============================================================
+\\ write_file — open (create/trunc), write buffer, close
+\\ ============================================================
+
+host write_file path buf buf_len :
+    \\ openat(AT_FDCWD, path, O_WRONLY|O_CREAT|O_TRUNC, 0755)
+    ↓ $8 56
+    ↓ $0 -100
+    ↓ $1 path
+    ↓ $2 577
+    ↓ $3 493
+    trap
+    fd ↑ $0
+    written 0
+    remaining buf_len
+    wf_loop:
+        if<= remaining 0
+            goto wf_done
+        ↓ $8 64
+        ↓ $0 fd
+        ↓ $1 buf + written
+        ↓ $2 remaining
+        trap
+        n ↑ $0
+        if<= n 0
+            goto wf_done
+        written written + n
+        remaining remaining - n
+        goto wf_loop
+    wf_done:
+    \\ close(fd)
+    ↓ $8 57
+    ↓ $0 fd
+    trap
 
 host main argc argv :
     \\ Validate argument count.
