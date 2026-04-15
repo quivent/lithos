@@ -119,6 +119,11 @@
 .equ KIND_BUF,       3
 .equ KIND_COMP,      4
 .equ KIND_CONST,     6
+// KIND_LOCAL_SLOT — binding stored on the current composition's frame.
+// SYM_REG holds the positive offset from SP (set up by the prologue's
+// SUB SP, SP, #frame_size).  Read via LDR Xt, [SP, #slot]; written
+// via STR Xt, [SP, #slot].
+.equ KIND_LOCAL_SLOT, 7
 
 .equ MAX_SYMS,      1024
 .equ MAX_PATCH,     64
@@ -342,15 +347,17 @@ sym_pop_scope:
 
 // alloc_slot ( -- slot_offset )
 // Reserve 8 bytes on the current composition's frame and return the
-// positive offset from X29 (frame pointer).  Read site emits
-// LDR Xt, [X29, -slot]; write site emits STR Xt, [X29, -slot].
+// (positive) offset from SP after the prologue's SUB SP, SP,
+// #frame_size.  First slot = 0, next = 8, ...  The prologue's
+// SUB amount is the *final* frame_size, so slot N is at [SP, #N].
 alloc_slot:
     adrp    x0, frame_size
     add     x0, x0, :lo12:frame_size
     ldr     w1, [x0]
+    mov     w2, w1                      // return the CURRENT frame_size
     add     w1, w1, #8
     str     w1, [x0]
-    mov     w0, w1                      // slot offset = new frame_size
+    mov     w0, w2
     ret
 
 alloc_reg:
@@ -1537,11 +1544,14 @@ handle_composition:
     // Patch the prologue's SUB SP, SP, #0 placeholder with the final
     // frame_size, and emit a matching ADD SP, SP, #frame_size here
     // so the stack is restored before the LDP/RET.  frame_size is
-    // always a multiple of 8 and (for now) less than 4096, so it
-    // fits in a single imm12 without the lsl-12 form.
+    // always a multiple of 8; ARM64 requires SP to be 16-byte aligned
+    // on memory access, so we round it up to a multiple of 16 before
+    // encoding.
     adrp    x0, frame_size
     add     x0, x0, :lo12:frame_size
     ldr     w4, [x0]                    // w4 = frame_size
+    add     w4, w4, #15
+    and     w4, w4, #-16                // round up to 16
     // Patch placeholder: at *frame_patch_ptr, OR (w4 << 10) into imm12
     adrp    x0, frame_patch_ptr
     add     x0, x0, :lo12:frame_patch_ptr
@@ -2065,6 +2075,8 @@ handle_ident_stmt:
     b.eq    .Lhi_reassign
     cmp     w1, #KIND_PARAM
     b.eq    .Lhi_reassign
+    cmp     w1, #KIND_LOCAL_SLOT
+    b.eq    .Lhi_reassign_slot
 
 .Lhi_truly_unknown:
     // Peek at next token
@@ -2178,6 +2190,57 @@ handle_ident_stmt:
     ldp     x29, x30, [sp], #16
     ret
 
+// ------------------------------------------------------------
+// .Lhi_reassign_slot — KIND_LOCAL_SLOT reassignment.
+//   `name expr`  →  parse expr, STR result, [SP, #slot]
+//   `name op rest` → parse `name op rest` as a full expression,
+//                     then STR into slot
+// ------------------------------------------------------------
+.Lhi_reassign_slot:
+    ldr     w5, [x0, #SYM_REG]     // w5 = slot offset
+    // Peek at the token after the name to decide between the two
+    // patterns.  An operator means "parse name + rest" as a whole
+    // expression (so the old value is re-read); anything else means
+    // skip the name and parse the RHS.
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lhi_reassign_slot_skip
+    ldr     w0, [x4]
+    cmp     w0, #TOK_PLUS
+    b.eq    .Lhi_reassign_slot_full
+    cmp     w0, #TOK_MINUS
+    b.eq    .Lhi_reassign_slot_full
+    cmp     w0, #TOK_STAR
+    b.eq    .Lhi_reassign_slot_full
+    cmp     w0, #TOK_SLASH
+    b.eq    .Lhi_reassign_slot_full
+    cmp     w0, #TOK_AMP
+    b.eq    .Lhi_reassign_slot_full
+    cmp     w0, #TOK_PIPE
+    b.eq    .Lhi_reassign_slot_full
+    cmp     w0, #TOK_CARET
+    b.eq    .Lhi_reassign_slot_full
+    cmp     w0, #TOK_SHL
+    b.eq    .Lhi_reassign_slot_full
+    cmp     w0, #TOK_SHR
+    b.eq    .Lhi_reassign_slot_full
+.Lhi_reassign_slot_skip:
+    // "name expr" — skip past name, parse RHS
+    add     x19, x19, #TOK_STRIDE_SZ
+.Lhi_reassign_slot_full:
+    // Parse the expression (from current x19).  For the _full path
+    // x19 still points at the name, so parse_expr re-reads the old
+    // value via LDR from the slot.
+    stp     x5, xzr, [sp, #-16]!
+    bl      parse_expr
+    ldp     x5, xzr, [sp], #16
+    // Emit STR Xresult, [SP, #slot]
+    mov     w1, #31                 // Rn = SP
+    mov     w2, w5                  // offset
+    bl      emit_str_imm
+    ldp     x29, x30, [sp], #16
+    ret
+
 .Lhi_comp_call:
     bl      handle_call
     ldp     x29, x30, [sp], #16
@@ -2209,7 +2272,8 @@ handle_ident_stmt:
 
 // ============================================================
 // handle_binding — name expr
-//   Evaluate expression, register name → result register
+//   Evaluate expression, store result into a fresh stack slot,
+//   record the binding as KIND_LOCAL_SLOT with the slot offset.
 // ============================================================
 .globl parse_binding_compose
 handle_binding:
@@ -2221,68 +2285,39 @@ parse_binding_compose:
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
 
     bl      parse_expr              // result reg in w0
-    mov     w4, w0
+    mov     w4, w0                  // w4 = result reg (may be X0..X27)
 
-    // If parse_expr returned an arg/return register (X0..X8), MOV
-    // the value into a fresh allocator slot so consecutive call
-    // bindings don't share X0.
-    cmp     w4, #REG_FIRST
-    b.ge    .Lbind_no_x0_move
-    // Save x19 explicitly (parse_expr-clobbered position) and w4
-    // (current binding reg = X0..X7) before allocating.
+    // Allocate a fresh stack slot for this binding.
+    bl      alloc_slot              // w0 = slot offset (positive, from SP)
+    // Save slot and result reg across emit_str_imm (which clobbers
+    // w3..w5) and the rest of the function's volatile-reg use.
     sub     sp, sp, #16
-    str     x19, [sp, #0]
-    str     w4, [sp, #8]
-    bl      alloc_reg
-    mov     w5, w0
-    ldr     x19, [sp, #0]
-    ldr     w4, [sp, #8]
-    add     sp, sp, #16
-    // Emit MOV Xfresh, Xw4
-    sub     sp, sp, #16
-    str     x19, [sp, #0]
-    str     w5, [sp, #8]
-    mov     w0, w5
-    mov     w1, w4
-    bl      emit_mov_reg
-    ldr     x19, [sp, #0]
-    ldr     w5, [sp, #8]
-    add     sp, sp, #16
-    mov     w4, w5
-.Lbind_no_x0_move:
+    str     x0, [sp, #0]            // [sp+0] = slot offset
+    str     x4, [sp, #8]            // [sp+8] = result reg
 
-    // Save post-expr position, restore x19 to name for sym_add
-    ldr     x5, [sp]
-    str     x19, [sp]
-    mov     x19, x5
+    // Emit STR Xw4, [SP, #slot]
+    mov     w0, w4                  // Rt = result reg
+    mov     w1, #31                 // Rn = SP
+    ldr     w2, [sp, #0]            // offset in bytes
+    bl      emit_str_imm
 
-    mov     w1, #KIND_LOCAL_REG
-    mov     w2, w4
+    // Restore x19 to name token and register the binding.
+    // Post-expr position saved at [sp+16] (= original [sp] after our sub).
+    ldr     x6, [sp, #16]           // x6 = name token ptr
+    str     x19, [sp, #16]          // stash post-expr pos in its place
+    mov     x19, x6
+    mov     w1, #KIND_LOCAL_SLOT
+    ldr     w2, [sp, #0]            // SYM_REG = slot offset (fresh read)
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
+    add     sp, sp, #16             // drop slot/reg scratch frame
 
-    // Raise reg_floor to protect this binding's register from being recycled
-    // by future reset_regs calls. Only raise if w4 is in the allocated range
-    // (not a param register X0-X8).
-    cmp     w4, #REG_FIRST
-    b.lt    .Lbind_no_floor
-    adrp    x5, reg_floor
-    add     x5, x5, :lo12:reg_floor
-    ldr     w6, [x5]
-    add     w7, w4, #1              // new floor = binding_reg + 1
-    cmp     w7, w6
-    b.le    .Lbind_no_floor         // don't lower the floor
-    str     w7, [x5]
-    // Also update next_reg so future allocs start above this
-    adrp    x5, next_reg
-    add     x5, x5, :lo12:next_reg
-    str     w7, [x5]
-.Lbind_no_floor:
-
-    ldr     x19, [sp], #16         // restore post-expr position
-    mov     w0, #1                 // return 1 = binding (don't reset regs)
+    ldr     x19, [sp], #16          // restore post-expr position
+    mov     w0, #1                  // return 1 = binding (skip reset_regs
+                                    // for now; harmless since we just used
+                                    // alloc_slot, not alloc_reg)
     ldp     x29, x30, [sp], #16
     ret
 
@@ -3842,6 +3877,24 @@ parse_atom:
     ldr     w1, [x0, #SYM_KIND]
     cmp     w1, #KIND_COMP
     b.eq    .La_ident_unknown       // dispatch as expression-level call
+    // KIND_LOCAL_SLOT — emit LDR Xtemp, [SP, #slot] into a fresh temp.
+    cmp     w1, #KIND_LOCAL_SLOT
+    b.ne    .La_ident_not_slot
+    add     x19, x19, #TOK_STRIDE_SZ
+    sub     sp, sp, #16
+    str     x0, [sp]                // [sp+0] = sym entry pointer
+    bl      alloc_reg               // w0 = fresh temp reg
+    str     x0, [sp, #8]            // [sp+8] = fresh reg number
+    ldr     x0, [sp]                // reload sym entry
+    ldr     w2, [x0, #SYM_REG]      // w2 = slot offset
+    ldr     x0, [sp, #8]            // w0 = fresh reg (Rt)
+    mov     w1, #31                 // Rn = SP
+    bl      emit_ldr_imm
+    ldr     x0, [sp, #8]            // return fresh reg
+    add     sp, sp, #16
+    ldp     x29, x30, [sp], #16
+    ret
+.La_ident_not_slot:
     // Check if it's a buf — emit ADD Xresult, X28 (BSS_BASE), #offset
     cmp     w1, #KIND_BUF
     b.ne    .La_ident_reg
