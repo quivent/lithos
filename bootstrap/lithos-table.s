@@ -347,17 +347,19 @@ sym_pop_scope:
 
 // alloc_slot ( -- slot_offset )
 // Reserve 8 bytes on the current composition's frame and return the
-// (positive) offset from SP after the prologue's SUB SP, SP,
-// #frame_size.  First slot = 0, next = 8, ...  The prologue's
-// SUB amount is the *final* frame_size, so slot N is at [SP, #N].
+// (positive) distance FROM FP (X29) to the slot.  The slot is
+// accessed as [X29, #-slot] via STUR/LDUR with signed 9-bit offset.
+// First slot returns 8 (first slot at [FP, #-8]), second returns 16,
+// etc.  FP is stable for the life of the function (SP may shift
+// during expression evaluation, but FP does not), so FP-relative
+// slots are immune to evaluator push/pops.
 alloc_slot:
     adrp    x0, frame_size
     add     x0, x0, :lo12:frame_size
     ldr     w1, [x0]
-    mov     w2, w1                      // return the CURRENT frame_size
-    add     w1, w1, #8
+    add     w1, w1, #8                  // advance first
     str     w1, [x0]
-    mov     w0, w2
+    mov     w0, w1                      // return the NEW frame_size = slot distance
     ret
 
 alloc_reg:
@@ -712,6 +714,31 @@ emit_str_imm:
     orr     w5, w0, w4
     orr     w5, w5, w3
     ORRIMM  w5, 0xF9000000, w16
+    mov     w0, w5
+    b       emit32
+
+// emit_stur_imm — STUR Xt, [Xn, #simm9]  (unscaled, signed 9-bit offset)
+// w0=Rt, w1=Rn, w2=signed 9-bit offset (treated as raw bit pattern)
+// Encoding: 0xF8000000 | ((simm9 & 0x1FF) << 12) | (Rn << 5) | Rt
+emit_stur_imm:
+    and     w3, w2, #0x1FF
+    lsl     w3, w3, #12
+    lsl     w4, w1, #5
+    orr     w5, w0, w4
+    orr     w5, w5, w3
+    ORRIMM  w5, 0xF8000000, w16
+    mov     w0, w5
+    b       emit32
+
+// emit_ldur_imm — LDUR Xt, [Xn, #simm9]
+// Encoding: 0xF8400000 | ((simm9 & 0x1FF) << 12) | (Rn << 5) | Rt
+emit_ldur_imm:
+    and     w3, w2, #0x1FF
+    lsl     w3, w3, #12
+    lsl     w4, w1, #5
+    orr     w5, w0, w4
+    orr     w5, w5, w3
+    ORRIMM  w5, 0xF8400000, w16
     mov     w0, w5
     b       emit32
 
@@ -1470,31 +1497,31 @@ handle_composition:
     b.gt    parse_error
 .Lcomp_arg_ok:
 
-    // Allocate a slot for this parameter, emit STR X<argidx>, [SP, #slot]
+    // Allocate a slot for this parameter, emit STUR X<argidx>, [X29, #-slot]
     // so the param survives any subsequent BL, then register the
-    // param with KIND_LOCAL_SLOT and the slot offset.  After this,
-    // a parameter reference is indistinguishable from a binding
-    // reference — both go through the slot-load path in parse_atom.
+    // param with KIND_LOCAL_SLOT and the slot distance.  FP-relative
+    // access is stable across evaluator push/pops.
     sub     sp, sp, #32
     str     x19, [sp, #0]               // save current name token pos
     str     x8,  [sp, #8]               // save arg index
-    bl      alloc_slot                  // w0 = slot offset
-    str     x0,  [sp, #16]              // save slot offset
-    ldr     x8,  [sp, #8]               // restore arg index
-    // Emit STR X<argidx>, [SP, #slot]
+    bl      alloc_slot                  // w0 = slot distance (positive, from FP)
+    str     x0,  [sp, #16]
+    ldr     x8,  [sp, #8]
+    // Emit STUR X<argidx>, [X29, #-slot]
     mov     w0, w8                      // Rt = arg register (X0..X7)
-    mov     w1, #31                     // Rn = SP
-    ldr     w2, [sp, #16]               // offset = slot
-    bl      emit_str_imm
+    mov     w1, #29                     // Rn = FP
+    ldr     w2, [sp, #16]
+    neg     w2, w2                      // -slot
+    bl      emit_stur_imm
     // Register as KIND_LOCAL_SLOT
-    ldr     x19, [sp, #0]               // restore x19 to name token
+    ldr     x19, [sp, #0]
     mov     w1, #KIND_LOCAL_SLOT
-    ldr     w2, [sp, #16]               // slot offset
+    ldr     w2, [sp, #16]
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
-    ldr     x8, [sp, #8]                // restore arg index
+    ldr     x8, [sp, #8]
     add     sp, sp, #32
 
     add     x19, x19, #TOK_STRIDE_SZ    // skip param name
@@ -2228,24 +2255,24 @@ handle_ident_stmt:
 .Lhi_reassign_slot_full:
     // Parse the expression (from current x19).  For the _full path
     // x19 still points at the name, so parse_expr re-reads the old
-    // value via LDR from the slot.
+    // value via LDUR from the slot.
     stp     x5, xzr, [sp, #-16]!
     bl      parse_expr
     ldp     x5, xzr, [sp], #16
-    // Emit STR Xresult, [SP, #slot]
-    mov     w1, #31                 // Rn = SP
-    mov     w2, w5                  // offset
-    bl      emit_str_imm
+    // Emit STUR Xresult, [X29, #-slot]
+    mov     w1, #29                 // Rn = FP
+    neg     w2, w5                  // -slot
+    bl      emit_stur_imm
     ldp     x29, x30, [sp], #16
     ret
 
 .Lhi_reassign_slot_bare:
-    // Bare read: emit LDR X0, [SP, #slot] — puts the value in X0
+    // Bare read: emit LDUR X0, [X29, #-slot] — puts the value in X0
     // as an implicit return value.
     mov     w0, #0                  // Rt = X0
-    mov     w1, #31                 // Rn = SP
-    mov     w2, w5                  // offset
-    bl      emit_ldr_imm
+    mov     w1, #29                 // Rn = FP
+    neg     w2, w5                  // -slot
+    bl      emit_ldur_imm
     add     x19, x19, #TOK_STRIDE_SZ   // skip the name
     ldp     x29, x30, [sp], #16
     ret
@@ -2354,18 +2381,18 @@ parse_binding_compose:
     mov     w4, w0                  // w4 = result reg (may be X0..X27)
 
     // Allocate a fresh stack slot for this binding.
-    bl      alloc_slot              // w0 = slot offset (positive, from SP)
-    // Save slot and result reg across emit_str_imm (which clobbers
-    // w3..w5) and the rest of the function's volatile-reg use.
+    bl      alloc_slot              // w0 = slot distance from FP (positive)
+    // Save slot and result reg across emit_stur_imm.
     sub     sp, sp, #16
-    str     x0, [sp, #0]            // [sp+0] = slot offset
+    str     x0, [sp, #0]            // [sp+0] = slot distance
     str     x4, [sp, #8]            // [sp+8] = result reg
 
-    // Emit STR Xw4, [SP, #slot]
+    // Emit STUR Xw4, [X29, #-slot]  (FP-relative, signed 9-bit offset)
     mov     w0, w4                  // Rt = result reg
-    mov     w1, #31                 // Rn = SP
-    ldr     w2, [sp, #0]            // offset in bytes
-    bl      emit_str_imm
+    mov     w1, #29                 // Rn = FP (X29)
+    ldr     w2, [sp, #0]            // slot distance
+    neg     w2, w2                  // -slot
+    bl      emit_stur_imm
 
     // Restore x19 to name token and register the binding.
     // Post-expr position saved at [sp+16] (= original [sp] after our sub).
@@ -2373,7 +2400,7 @@ parse_binding_compose:
     str     x19, [sp, #16]          // stash post-expr pos in its place
     mov     x19, x6
     mov     w1, #KIND_LOCAL_SLOT
-    ldr     w2, [sp, #0]            // SYM_REG = slot offset (fresh read)
+    ldr     w2, [sp, #0]            // SYM_REG = slot distance (positive)
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
@@ -3352,6 +3379,29 @@ handle_for:
     mov     x1, #0
     bl      emit_b_cond
 
+    // Save reg_floor and raise it to protect loop state regs from calls
+    // inside the body.  Use [sp+32] — [sp+0..31] is already allocated for
+    // loop-var / start / end / step regs and the two emit-position slots.
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    ldr     w1, [x0]
+    str     w1, [sp, #32]
+
+    ldr     w10, [sp, #0]               // loop var reg
+    ldr     w11, [sp, #4]               // start reg
+    ldr     w12, [sp, #8]               // end reg
+    ldr     w13, [sp, #12]              // step reg
+    cmp     w11, w10
+    csel    w10, w11, w10, gt
+    cmp     w12, w10
+    csel    w10, w12, w10, gt
+    cmp     w13, w10
+    csel    w10, w13, w10, gt
+    add     w10, w10, #1                // max + 1
+    cmp     w10, w1
+    csel    w10, w10, w1, gt            // max(new_floor, old_floor)
+    str     w10, [x0]
+
     // Parse body
     bl      skip_newlines
     mov     w9, #4
@@ -3361,6 +3411,12 @@ handle_for:
     ldr     w9, [x19, #8]
     cbz     w9, 1f              // indent 0 = column 0 = no body
 1:  bl      parse_body
+
+    // Restore reg_floor
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    ldr     w1, [sp, #32]
+    str     w1, [x0]
 
     // ADD Xi, Xi, Xstep
     ldr     w10, [sp, #0]
@@ -3957,7 +4013,8 @@ parse_atom:
     ldr     w1, [x0, #SYM_KIND]
     cmp     w1, #KIND_COMP
     b.eq    .La_ident_unknown       // dispatch as expression-level call
-    // KIND_LOCAL_SLOT — emit LDR Xtemp, [SP, #slot] into a fresh temp.
+    // KIND_LOCAL_SLOT — emit LDUR Xtemp, [X29, #-slot] into a fresh temp.
+    // FP-relative access, immune to SP-shifts from expression eval.
     cmp     w1, #KIND_LOCAL_SLOT
     b.ne    .La_ident_not_slot
     add     x19, x19, #TOK_STRIDE_SZ
@@ -3966,10 +4023,11 @@ parse_atom:
     bl      alloc_reg               // w0 = fresh temp reg
     str     x0, [sp, #8]            // [sp+8] = fresh reg number
     ldr     x0, [sp]                // reload sym entry
-    ldr     w2, [x0, #SYM_REG]      // w2 = slot offset
+    ldr     w2, [x0, #SYM_REG]      // w2 = slot distance from FP (positive)
+    neg     w2, w2                  // -slot
     ldr     x0, [sp, #8]            // w0 = fresh reg (Rt)
-    mov     w1, #31                 // Rn = SP
-    bl      emit_ldr_imm
+    mov     w1, #29                 // Rn = FP (X29)
+    bl      emit_ldur_imm
     ldr     x0, [sp, #8]            // return fresh reg
     add     sp, sp, #16
     ldp     x29, x30, [sp], #16
