@@ -180,6 +180,23 @@ match_keyword src offset length :
                     kw_type 16
                     return
 
+    if== length 3
+        b0 → 8 (src + offset)
+        b1 → 8 (src + offset + 1)
+        b2 → 8 (src + offset + 2)
+        \\ "buf" -> BUF (98)
+        if== b0 98
+            if== b1 117
+                if== b2 102
+                    kw_type 98
+                    return
+        \\ "var" -> VAR (99) — treated like IDENT for now
+        if== b0 118
+            if== b1 97
+                if== b2 114
+                    kw_type 99
+                    return
+
     if== length 4
         b0 → 8 (src + offset)
         b1 → 8 (src + offset + 1)
@@ -206,6 +223,20 @@ match_keyword src offset length :
                     if== b3 116
                         kw_type 35
                         return
+        \\ "goto" -> GOTO (100)
+        if== b0 103
+            if== b1 111
+                if== b2 116
+                    if== b3 111
+                        kw_type 100
+                        return
+        \\ "else" -> ELSE (101)
+        if== b0 101
+            if== b1 108
+                if== b2 115
+                    if== b3 101
+                        kw_type 101
+                        return
 
     if== length 5
         b0 → 8 (src + offset)
@@ -229,6 +260,15 @@ match_keyword src offset length :
         b3 → 8 (src + offset + 3)
         b4 → 8 (src + offset + 4)
         b5 → 8 (src + offset + 5)
+        \\ "return" -> RETURN (102)
+        if== b0 114
+            if== b1 101
+                if== b2 116
+                    if== b3 117
+                        if== b4 114
+                            if== b5 110
+                                kw_type 102
+                                return
         \\ "stride" -> STRIDE (19)
         if== b0 115
             if== b1 116
@@ -246,6 +286,15 @@ match_keyword src offset length :
                         if== b4 111
                             if== b5 114
                                 kw_type 17
+                                return
+        \\ "kernel" -> KERNEL (11)
+        if== b0 107
+            if== b1 101
+                if== b2 114
+                    if== b3 110
+                        if== b4 101
+                            if== b5 108
+                                kw_type 11
                                 return
 
     if== length 8
@@ -834,6 +883,31 @@ emit_a64_sdiv rd ra rb :
     val 0x9AC00C00 | (rb << 16) | (ra << 5) | rd
     arm64_emit32 val
 
+\\ AND Xd, Xn, Xm  = 0x8A000000 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_and rd ra rb :
+    val 0x8A000000 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
+
+\\ ORR Xd, Xn, Xm  = 0xAA000000 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_orr rd ra rb :
+    val 0xAA000000 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
+
+\\ EOR Xd, Xn, Xm  = 0xCA000000 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_eor rd ra rb :
+    val 0xCA000000 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
+
+\\ LSLV Xd, Xn, Xm = 0x9AC02000 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_lsl rd ra rb :
+    val 0x9AC02000 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
+
+\\ LSRV Xd, Xn, Xm = 0x9AC02400 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_lsr rd ra rb :
+    val 0x9AC02400 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
+
 \\ BRANCHES
 
 \\ RET  (return via X30/LR)
@@ -908,6 +982,66 @@ emit_a64_mov_fp_sp :
 \\ LDP X29, X30, [SP], #16  — function epilogue pop
 emit_a64_ldp_fp_lr :
     arm64_emit32 0xA8C17BFD
+
+\\ LDR Xt, [Xn]   — 64-bit load with zero offset.
+emit_a64_ldr64 rt rn :
+    val 0xF9400000 | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ LDR Wt, [Xn]   — 32-bit load, zero-extended.
+emit_a64_ldr32 rt rn :
+    val 0xB9400000 | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ LDRH Wt, [Xn]  — 16-bit load, zero-extended.
+emit_a64_ldrh rt rn :
+    val 0x79400000 | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ LDRB Wt, [Xn]  — 8-bit load, zero-extended.
+emit_a64_ldrb rt rn :
+    val 0x39400000 | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ STR Xt, [Xn]   — 64-bit store.
+emit_a64_str64 rt rn :
+    val 0xF9000000 | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ STR Wt, [Xn]   — 32-bit store.
+emit_a64_str32 rt rn :
+    val 0xB9000000 | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ STRH Wt, [Xn]  — 16-bit store.
+emit_a64_strh rt rn :
+    val 0x79000000 | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ STRB Wt, [Xn]  — 8-bit store.
+emit_a64_strb rt rn :
+    val 0x39000000 | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ MOV Xd, Xs  = ORR Xd, XZR, Xs
+emit_a64_mov_reg rd rs :
+    val 0xAA0003E0 | (rs << 16) | rd
+    arm64_emit32 val
+
+\\ CMP Xn, Xm  = SUBS XZR, Xn, Xm, shift=0
+emit_a64_cmp_reg ra rb :
+    val 0xEB00001F | (rb << 16) | (ra << 5)
+    arm64_emit32 val
+
+\\ B.<cond> #0  — placeholder conditional branch (site patched later).
+\\ cond: 0=EQ 1=NE 10=GE 11=LT 12=GT 13=LE
+emit_a64_bcond_ph cond :
+    val 0x54000000 | cond
+    arm64_emit32 val
+
+\\ B #0  — unconditional placeholder branch.
+emit_a64_b_ph :
+    arm64_emit32 0x14000000
 
 \\ SYSTEM
 
@@ -1716,10 +1850,39 @@ buf walk_pos_v         8
 buf stmt_start_v           8
 buf pending_bind_off_v     8
 buf pending_bind_len_v     8
-buf pending_op_v           8   \\ token type of pending binary op, 0=none
+buf pending_lo_op_v        8   \\ pending +/- (low prec), 0=none
+buf pending_hi_op_v        8   \\ pending */÷/&/|/^/<</>  (high prec), 0=none
+buf last_was_atom_v        8   \\ 1 = previous token pushed an atom
+
+\\ Pending memory op: width (8/16/32/64) of an in-flight `→` or `←`.
+\\ When `→ W` is parsed we set pending_load = W; the next expression on
+\\ vstack becomes the address.  At newline we pop the address, emit LDR,
+\\ push the loaded value.  pending_store works the same way except at
+\\ newline we pop value then address and emit STR.  Cleared on commit.
+buf pending_load_v   8
+buf pending_store_v  8
 
 \\ Emit target: 0 = GPU (SASS), 1 = ARM64 (host).
 buf emit_target_v      8
+
+\\ Buffer (top-level `buf NAME SIZE`) table — indexes into the ARM64 BSS
+\\ segment.  The _start stub puts BSS base (0x500000) in X28; a buf
+\\ reference emits `MOV tmp, #off; ADD dst, X28, tmp` to produce the
+\\ runtime address.  Populated by buf_collect before walk_top_level.
+buf buf_name_off_v  512        \\ u32 source offset of buf name
+buf buf_name_len_v  512        \\ u32 length of buf name
+buf buf_off_v       512        \\ u32 byte offset from X28
+buf buf_count_v       8
+buf buf_next_off_v    8
+
+\\ `if==` / `if!=` / `if</>/`if<=` / `if>=` fixup stack.  Each entry is
+\\ (indent, branch_site).  When we see an INDENT token whose value is
+\\ <= the frame's indent, the body ended: patch the placeholder branch
+\\ at branch_site to the current arm64_pos and pop the frame.
+buf if_stack_indent_v 512
+buf if_stack_site_v   512
+buf if_stack_depth_v    8
+buf current_indent_v    8
 
 \\ Label table — defined labels inside the current composition.
 \\ Each entry: 32 bytes name, 8 bytes code offset (in arm64_buf).
@@ -1859,13 +2022,143 @@ comp_find name_off name_len :
     label cf_miss
     -1
 
+\\ Buffer table helpers — top-level `buf NAME SIZE` declarations.
+
+\\ buf_collect — scan the token stream for `buf NAME SIZE` at column 0
+\\ and assign each buf a monotonic offset from X28 (BSS base).  Must run
+\\ after lex and before walk_top_level so IDENT references in walk_body
+\\ can resolve global buf names.
+buf_collect :
+    ← 64 buf_count_v 0
+    ← 64 buf_next_off_v 0
+    tc → 32 token_count_buf
+    i 0
+    label bc_loop
+    if>= i tc
+        goto bc_done
+    t tok_type i
+    if== t 0
+        goto bc_done
+    \\ Only recognize `buf ... ...` that starts a top-level line
+    \\ (preceded by INDENT with value 0).
+    if!= t 2
+        i i + 1
+        goto bc_loop
+    ind tok_length i
+    if!= ind 0
+        i i + 1
+        goto bc_loop
+    ni i + 1
+    if>= ni tc
+        goto bc_done
+    nt tok_type ni
+    if!= nt 5
+        i ni
+        goto bc_loop
+    noff tok_offset ni
+    nlen tok_length ni
+    if!= nlen 3
+        i ni
+        goto bc_loop
+    src → 64 lex_src_v
+    b0 → 8 src + noff
+    b1 → 8 src + noff + 1
+    b2 → 8 src + noff + 2
+    if!= b0 98
+        i ni
+        goto bc_loop
+    if!= b1 117
+        i ni
+        goto bc_loop
+    if!= b2 102
+        i ni
+        goto bc_loop
+    \\ Next token: buf name (IDENT).
+    j ni + 1
+    if>= j tc
+        goto bc_done
+    jt tok_type j
+    if!= jt 5
+        i j
+        goto bc_loop
+    bname_off tok_offset j
+    bname_len tok_length j
+    \\ Next token: size literal (INT).
+    k j + 1
+    if>= k tc
+        goto bc_done
+    kt tok_type k
+    if!= kt 3
+        i k
+        goto bc_loop
+    soff tok_offset k
+    slen tok_length k
+    size parse_int_tok soff slen
+    \\ 8-byte align so 64-bit LDR/STR work from these addresses.
+    _off → 64 buf_next_off_v
+    _aligned (_off + 7) & 0xFFFFFFF8
+    _bc → 64 buf_count_v
+    ← 32 buf_name_off_v + _bc * 4 bname_off
+    ← 32 buf_name_len_v + _bc * 4 bname_len
+    ← 32 buf_off_v + _bc * 4 _aligned
+    ← 64 buf_next_off_v _aligned + size
+    ← 64 buf_count_v _bc + 1
+    i k + 1
+    goto bc_loop
+    label bc_done
+    0
+
+\\ buf_find — look up a buf by name.  Returns offset from X28, or -1 if
+\\ the name isn't a declared buf.
+buf_find name_off name_len :
+    src → 64 lex_src_v
+    n → 64 buf_count_v
+    i 0
+    label bfd_loop
+    if>= i n
+        goto bfd_miss
+    blen → 32 buf_name_len_v + i * 4
+    if== blen name_len
+        boff → 32 buf_name_off_v + i * 4
+        match 1
+        j 0
+        label bfd_cmp
+        if>= j blen
+            goto bfd_cmp_done
+        a → 8 src + boff + j
+        b → 8 src + name_off + j
+        if!= a b
+            match 0
+            goto bfd_cmp_done
+        j j + 1
+        goto bfd_cmp
+        label bfd_cmp_done
+        if== match 1
+            off → 32 buf_off_v + i * 4
+            return off
+    i i + 1
+    goto bfd_loop
+    label bfd_miss
+    return -1
+
+\\ Emit a buf-address computation: tmp = MOV #buf_off; dst = X28 + tmp.
+\\ Returns the destination scratch register holding the runtime address.
+emit_buf_addr buf_off :
+    _tmp alloc_scratch
+    emit_a64_mov_imm _tmp buf_off
+    _dst alloc_scratch
+    emit_a64_add _dst 28 _tmp
+    return _dst
+
 \\ Register allocator (bump) and virtual stack
 
 reg_reset :
-    \\ Reset scratch rotation and value stack for a new composition body.
     ← 64 scratch_idx_v 0
     ← 64 vstack_sp_v 0
     ← 64 frame_slot_v 8
+    ← 64 pending_lo_op_v 0
+    ← 64 pending_hi_op_v 0
+    ← 64 last_was_atom_v 0
 
 \\ alloc_scratch — rotating scratch registers X9..X14 for expression
 \\ evaluation.  Never spills.  Returns the register number (9-14).
@@ -1906,41 +2199,304 @@ vpop :
     r → 32 vstack_v + sp * 4
     r
 
-\\ Push a value and, if there's a pending infix operator, apply it to
-\\ (previous top, this value) before pushing the result.  Called
-\\ whenever the walker encounters an atom (integer literal, ident
-\\ reference, buf address, reg-read result) inside an expression.
-\\
-\\ Left-to-right, no precedence: `a + b * c` becomes `((a+b)*c)`.
-\\ compiler.ls uses single-op expressions almost everywhere, so the
-\\ LTR behavior is fine in practice.
-vpush_with_op reg :
-    op → 64 pending_op_v
-    if== op 0
-        vpush reg
+\\ Apply a pending hi-prec op (*// & | ^ << >>). Pops two, emits, pushes.
+op_apply_hi :
+    _op → 64 pending_hi_op_v
+    if== _op 0
         return 0
-    \\ Apply the pending op to (stack_top, reg).
-    lhs vpop
-    rd alloc_reg
+    rb vpop
+    ra vpop
+    rd alloc_scratch
     et → 64 emit_target_v
-    \\ +
-    if== op 50
-        if== et 1
-            emit_a64_add rd lhs reg
-    \\ -
-    if== op 51
-        if== et 1
-            emit_a64_sub rd lhs reg
-    \\ *
-    if== op 52
-        if== et 1
-            emit_a64_mul rd lhs reg
-    \\ /
-    if== op 53
-        if== et 1
-            emit_a64_sdiv rd lhs reg
-    ← 64 pending_op_v 0
+    if== et 1
+        if== _op 52
+            emit_a64_mul rd ra rb
+        if== _op 53
+            emit_a64_sdiv rd ra rb
+        if== _op 61
+            emit_a64_and rd ra rb
+        if== _op 62
+            emit_a64_orr rd ra rb
+        if== _op 63
+            emit_a64_eor rd ra rb
+        if== _op 64
+            emit_a64_lsl rd ra rb
+        if== _op 65
+            emit_a64_lsr rd ra rb
+        \\ Comparison ops: CMP + CSET (CSINC Xd, XZR, XZR, !cond).
+        \\ == (55) != (56) < (57) > (58) <= (59) >= (60)
+        if== _op 55
+            emit_a64_cmp_reg ra rb
+            arm64_emit32 0x9A9F17E0 | rd
+        if== _op 56
+            emit_a64_cmp_reg ra rb
+            arm64_emit32 0x9A9F07E0 | rd
+        if== _op 57
+            emit_a64_cmp_reg ra rb
+            arm64_emit32 0x9A9FA7E0 | rd
+        if== _op 58
+            emit_a64_cmp_reg ra rb
+            arm64_emit32 0x9A9FC7E0 | rd
+        if== _op 59
+            emit_a64_cmp_reg ra rb
+            arm64_emit32 0x9A9FD7E0 | rd
+        if== _op 60
+            emit_a64_cmp_reg ra rb
+            arm64_emit32 0x9A9F97E0 | rd
     vpush rd
+    ← 64 pending_hi_op_v 0
+
+\\ Apply a pending lo-prec op (+/-). Pops two, emits, pushes.
+op_apply_lo :
+    _op → 64 pending_lo_op_v
+    if== _op 0
+        return 0
+    rb vpop
+    ra vpop
+    rd alloc_scratch
+    et → 64 emit_target_v
+    if== et 1
+        if== _op 50
+            emit_a64_add rd ra rb
+        if== _op 51
+            emit_a64_sub rd ra rb
+    vpush rd
+    ← 64 pending_lo_op_v 0
+
+\\ Flush all pending ops: hi first, then lo.
+op_flush :
+    op_apply_hi
+    op_apply_lo
+
+\\ Push an atom onto vstack with expression-boundary detection.
+\\ Two atoms in a row (no operator between them) means the previous
+\\ expression is complete — flush pending ops before pushing.
+vpush_with_op reg :
+    _lwa → 64 last_was_atom_v
+    if== _lwa 1
+        _phi → 64 pending_hi_op_v
+        _plo → 64 pending_lo_op_v
+        if> _phi 0
+            op_flush
+        else
+            if> _plo 0
+                op_flush
+    vpush reg
+    ← 64 last_was_atom_v 1
+
+\\ Handle an infix operator token. Hi-prec ops (*/÷ & | ^ << >>)
+\\ defer below existing lo-prec. Lo-prec ops (+/-) flush any pending
+\\ hi first, then any pending lo, before recording themselves.
+wb_set_op op_type :
+    ← 64 last_was_atom_v 0
+    \\ Hi-prec: 52 53 61 62 63 64 65
+    is_hi 0
+    if== op_type 52
+        is_hi 1
+    if== op_type 53
+        is_hi 1
+    if== op_type 61
+        is_hi 1
+    if== op_type 62
+        is_hi 1
+    if== op_type 63
+        is_hi 1
+    if== op_type 64
+        is_hi 1
+    if== op_type 65
+        is_hi 1
+    if== op_type 55
+        is_hi 1
+    if== op_type 56
+        is_hi 1
+    if== op_type 57
+        is_hi 1
+    if== op_type 58
+        is_hi 1
+    if== op_type 59
+        is_hi 1
+    if== op_type 60
+        is_hi 1
+    if== is_hi 1
+        op_apply_hi
+        ← 64 pending_hi_op_v op_type
+        return 0
+    \\ Lo-prec: 50 51
+    op_apply_hi
+    op_apply_lo
+    ← 64 pending_lo_op_v op_type
+
+\\ wb_emit_return — evaluate optional return expression, MOV to X0, emit epilogue.
+wb_emit_return :
+    _rtp → 64 walk_pos_v
+    _rtt tok_type _rtp
+    _rtr alloc_scratch
+    et → 64 emit_target_v
+    if== _rtt 3
+        _rto tok_offset _rtp
+        _rtl tok_length _rtp
+        _rtv parse_int_tok _rto _rtl
+        if== et 1
+            emit_a64_mov_imm _rtr _rtv
+            emit_a64_mov_reg 0 _rtr
+        ← 64 walk_pos_v _rtp + 1
+    else
+        if== _rtt 5
+            _rto tok_offset _rtp
+            _rtl tok_length _rtp
+            _rts sym_find _rto _rtl
+            if> _rts 0
+                if== et 1
+                    emit_a64_ldur _rtr 29 (0 - _rts)
+                    emit_a64_mov_reg 0 _rtr
+            ← 64 walk_pos_v _rtp + 1
+    if== et 1
+        emit_a64_add_imm 31 31 512
+        emit_a64_ldp_fp_lr
+        emit_a64_ret
+
+\\ wb_eval_one_atom — read one atom from the token stream into a scratch
+\\ register.  Handles INT literals and IDENT (sym lookup).  Advances walk_pos.
+wb_eval_one_atom rd :
+    _p → 64 walk_pos_v
+    _t tok_type _p
+    _off tok_offset _p
+    _len tok_length _p
+    et → 64 emit_target_v
+    if== _t 3
+        _v parse_int_tok _off _len
+        if== et 1
+            emit_a64_mov_imm rd _v
+        ← 64 walk_pos_v _p + 1
+    else
+        if== _t 5
+            _s sym_find _off _len
+            if> _s 0
+                if== et 1
+                    emit_a64_ldur rd 29 (0 - _s)
+            else
+                if== et 1
+                    emit_a64_mov_imm rd 0
+            ← 64 walk_pos_v _p + 1
+
+\\ wb_parse_cond — extract ARM64 condition code from the if-token text.
+\\ "if==" → 0 (EQ), "if!=" → 1 (NE), "if>" → 12 (GT), "if<" → 11 (LT),
+\\ "if>=" → 10 (GE), "if<=" → 13 (LE).
+wb_parse_cond tok_pos :
+    _off tok_offset tok_pos
+    _len tok_length tok_pos
+    _src → 64 lex_src_v
+    _c0 → 8 _src + _off + 2
+    _cond 0
+    if>= _len 4
+        _c1 → 8 _src + _off + 3
+        if== _c1 61
+            if== _c0 61
+                _cond 0
+                return _cond
+            else
+                if== _c0 33
+                    _cond 1
+                    return _cond
+                else
+                    if== _c0 62
+                        _cond 10
+                        return _cond
+                    else
+                        if== _c0 60
+                            _cond 13
+                            return _cond
+    if== _c0 62
+        _cond 12
+    else
+        if== _c0 60
+            _cond 11
+    return _cond
+
+\\ wb_emit_if — emit CMP + B.cond for an ARM64 `if` statement.
+wb_emit_if tok_pos :
+    _cond wb_parse_cond tok_pos
+    _icond _cond ^ 1
+    ← 64 walk_pos_v tok_pos + 1
+    _op1 alloc_scratch
+    _op2 alloc_scratch
+    wb_eval_one_atom _op1
+    wb_eval_one_atom _op2
+    emit_a64_cmp_reg _op1 _op2
+    _bsite → 64 arm64_pos_v
+    emit_a64_bcond_ph _icond
+    _ci → 64 current_indent_v
+    _body_ind _ci + 4
+    _isd → 64 if_stack_depth_v
+    ← 32 if_stack_indent_v + _isd * 4 _body_ind
+    ← 32 if_stack_site_v + _isd * 4 _bsite
+    ← 64 if_stack_depth_v _isd + 1
+
+\\ wb_emit_regread — handler for ↑ $N. Returns the scratch register.
+wb_emit_regread :
+    _rp → 64 walk_pos_v
+    _rt tok_type _rp
+    _rn 0
+    if== _rt 97
+        ← 64 walk_pos_v _rp + 1
+        _rp2 → 64 walk_pos_v
+        _rt2 tok_type _rp2
+        if== _rt2 3
+            _ro tok_offset _rp2
+            _rl tok_length _rp2
+            _rn parse_int_tok _ro _rl
+            ← 64 walk_pos_v _rp2 + 1
+    _rd alloc_scratch
+    et → 64 emit_target_v
+    if== et 1
+        emit_a64_mov_reg _rd _rn
+    return _rd
+
+\\ wb_emit_regwrite — handler for ↓ $N val.
+\\ Separate composition to avoid consecutive-if interp bug.
+wb_emit_regwrite :
+    _dwp → 64 walk_pos_v
+    _dwt tok_type _dwp
+    _drn 0
+    if== _dwt 97
+        ← 64 walk_pos_v _dwp + 1
+        _dwp2 → 64 walk_pos_v
+        _dwt2 tok_type _dwp2
+        if== _dwt2 3
+            _dro tok_offset _dwp2
+            _drl tok_length _dwp2
+            _drn parse_int_tok _dro _drl
+            ← 64 walk_pos_v _dwp2 + 1
+    _dvp → 64 walk_pos_v
+    _dvt tok_type _dvp
+    et → 64 emit_target_v
+    if== _dvt 3
+        _dvo tok_offset _dvp
+        _dvl tok_length _dvp
+        _dval parse_int_tok _dvo _dvl
+        ← 64 walk_pos_v _dvp + 1
+        if== et 1
+            _dtmp alloc_scratch
+            emit_a64_mov_imm _dtmp _dval
+            emit_a64_mov_reg _drn _dtmp
+    else
+        if== _dvt 5
+            _dvo tok_offset _dvp
+            _dvl tok_length _dvp
+            ← 64 walk_pos_v _dvp + 1
+            _src → 64 lex_src_v
+            _dc → 8 _src + _dvo
+            if== _dc 36
+                _dsn parse_int_tok (_dvo + 1) (_dvl - 1)
+                if== et 1
+                    emit_a64_mov_reg _drn _dsn
+            else
+                _dslot sym_find _dvo _dvl
+                if> _dslot 0
+                    if== et 1
+                        _dtmp alloc_scratch
+                        emit_a64_ldur _dtmp 29 (0 - _dslot)
+                        emit_a64_mov_reg _drn _dtmp
 
 \\ Phase 1 — Scan for top-level compositions.
 \\ A composition header is:  IDENT (IDENT*) COLON NEWLINE
@@ -2074,6 +2630,10 @@ bind_args comp_idx :
     sym_reset
     reg_reset
     label_reset
+    ← 64 if_stack_depth_v 0
+    ← 64 current_indent_v 0
+    ← 64 pending_load_v 0
+    ← 64 pending_store_v 0
     \\ For each arg, allocate a frame slot and emit STUR Xi, [FP, #-slot]
     \\ to spill the argument register onto the frame.  ARM64 calling
     \\ convention: first 8 args in X0..X7.  sym_add records the NEGATIVE
@@ -2148,6 +2708,48 @@ emit_primitive t :
             emit_fdiv rd ra rb rd
         if== et 1
             emit_a64_sdiv rd ra rb
+        vpush rd
+        return 1
+
+    \\ Bitwise: & | ^ << >>  — ARM64 only (GPU path leaves operands).
+    if== t 61
+        rb vpop
+        ra vpop
+        rd alloc_reg
+        if== et 1
+            emit_a64_and rd ra rb
+        vpush rd
+        return 1
+    if== t 62
+        rb vpop
+        ra vpop
+        rd alloc_reg
+        if== et 1
+            emit_a64_orr rd ra rb
+        vpush rd
+        return 1
+    if== t 63
+        rb vpop
+        ra vpop
+        rd alloc_reg
+        if== et 1
+            emit_a64_eor rd ra rb
+        vpush rd
+        return 1
+    if== t 64
+        rb vpop
+        ra vpop
+        rd alloc_reg
+        if== et 1
+            emit_a64_lsl rd ra rb
+        vpush rd
+        return 1
+    if== t 65
+        rb vpop
+        ra vpop
+        rd alloc_reg
+        if== et 1
+            emit_a64_lsr rd ra rb
         vpush rd
         return 1
 
@@ -2639,7 +3241,40 @@ walk_body body_start body_end :
     \\ Bindings are stack-resident: new → alloc_slot + STUR;
     \\ reassignment → STUR into existing slot.
     if== t 1
-        ← 64 pending_op_v 0
+        op_flush
+        ← 64 last_was_atom_v 0
+        \\ Flush pending memory op: store pops val+addr, load pops addr
+        \\ and pushes the loaded value (which feeds any pending binding).
+        _et_mo → 64 emit_target_v
+        _pst → 64 pending_store_v
+        if> _pst 0
+            if== _et_mo 1
+                _sv vpop
+                _sa vpop
+                if== _pst 64
+                    emit_a64_str64 _sv _sa
+                if== _pst 32
+                    emit_a64_str32 _sv _sa
+                if== _pst 16
+                    emit_a64_strh _sv _sa
+                if== _pst 8
+                    emit_a64_strb _sv _sa
+            ← 64 pending_store_v 0
+        _pld → 64 pending_load_v
+        if> _pld 0
+            if== _et_mo 1
+                _la vpop
+                _lr alloc_scratch
+                if== _pld 64
+                    emit_a64_ldr64 _lr _la
+                if== _pld 32
+                    emit_a64_ldr32 _lr _la
+                if== _pld 16
+                    emit_a64_ldrh _lr _la
+                if== _pld 8
+                    emit_a64_ldrb _lr _la
+                vpush _lr
+            ← 64 pending_load_v 0
         _pbl → 64 pending_bind_len_v
         if> _pbl 0
             _pbo → 64 pending_bind_off_v
@@ -2666,6 +3301,29 @@ walk_body body_start body_end :
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 2
+        \\ Indent: update current_indent and patch any if-frames whose
+        \\ recorded body-indent has been exited.
+        _ind tok_length p
+        ← 64 current_indent_v _ind
+        _et_ind → 64 emit_target_v
+        if== _et_ind 1
+            label wb_if_pop
+            _depth → 64 if_stack_depth_v
+            if<= _depth 0
+                goto wb_if_pop_done
+            _top _depth - 1
+            _fi → 32 if_stack_indent_v + _top * 4
+            if>= _fi _ind
+                _fs → 32 if_stack_site_v + _top * 4
+                _here → 64 arm64_pos_v
+                _delta _here - _fs
+                _d19 (_delta / 4) & 0x7FFFF
+                _old → 32 arm64_buf + _fs
+                _new (_old & 0xFF00001F) | (_d19 << 5)
+                ← 32 arm64_buf + _fs _new
+                ← 64 if_stack_depth_v _top
+                goto wb_if_pop
+            label wb_if_pop_done
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 0
@@ -2714,7 +3372,51 @@ walk_body body_start body_end :
         ← 64 walk_pos_v p + 1
         goto wb_loop
 
-    \\ Keywords: for / each / stride / if — minimal stubs.
+    \\ → W addr  — memory load.  Set pending_load = W; walk_body
+    \\ evaluates the address expression normally; newline flushes.
+    if== t 36
+        ← 64 stmt_start_v 0
+        _lp → 64 walk_pos_v
+        _lt tok_type _lp
+        if== _lt 3
+            _lo tok_offset _lp
+            _ll tok_length _lp
+            _lw parse_int_tok _lo _ll
+            ← 64 pending_load_v _lw
+            ← 64 walk_pos_v _lp + 1
+        goto wb_loop
+
+    \\ ← W addr val  — memory store.  Set pending_store = W; walk_body
+    \\ evaluates addr then val; newline pops val, addr and emits STR.
+    if== t 37
+        ← 64 stmt_start_v 0
+        _sp → 64 walk_pos_v
+        _st tok_type _sp
+        if== _st 3
+            _so tok_offset _sp
+            _sl tok_length _sp
+            _sw parse_int_tok _so _sl
+            ← 64 pending_store_v _sw
+            ← 64 walk_pos_v _sp + 1
+        goto wb_loop
+
+    \\ ↑ $N  — register read.  ARM64: MOV Xd, XN.
+    if== t 38
+        ← 64 stmt_start_v 0
+        ← 64 walk_pos_v p + 1
+        _rd wb_emit_regread
+        vpush_with_op _rd
+        goto wb_loop
+
+    \\ ↓ $N val  — register write.  ARM64: evaluate val, MOV XN, Xval.
+    \\ Delegated to wb_emit_regwrite to avoid consecutive-if interp bug.
+    if== t 39
+        ← 64 stmt_start_v 0
+        ← 64 walk_pos_v p + 1
+        wb_emit_regwrite
+        goto wb_loop
+
+    \\ Keywords: for / each / stride — minimal stubs (GPU only).
     if== t 16
         walk_for_kw
         goto wb_loop
@@ -2757,8 +3459,19 @@ walk_body body_start body_end :
     if== t 19
         walk_stride_kw
         goto wb_loop
+
+    \\ `if` keyword — ARM64 conditional branch.
+    \\ Parses the condition suffix (==, !=, >=, <, >, <=) embedded in the
+    \\ if token text, evaluates two operands, emits CMP + B.cond placeholder,
+    \\ and pushes a fixup entry onto the if_stack.  The INDENT handler
+    \\ patches the branch when the body's indent is exited.
     if== t 13
-        walk_if_kw
+        et → 64 emit_target_v
+        if== et 0
+            walk_if_kw
+            goto wb_loop
+        wb_emit_if p
+        ← 64 stmt_start_v 0
         goto wb_loop
 
     \\ `label NAME` — record the current code offset and patch any
@@ -2775,6 +3488,85 @@ walk_body body_start body_end :
             goto_fix_patch _loff _llen _pos
             ← 64 walk_pos_v _np + 1
         ← 64 stmt_start_v 0
+        goto wb_loop
+
+    \\ `return expr` — MOV X0, result; branch past body to epilogue.
+    \\ For simplicity, we set the value on X0 and jump to the epilogue
+    \\ by emitting B to a label that will be at the epilogue site.
+    if== t 102
+        ← 64 walk_pos_v p + 1
+        wb_emit_return
+        ← 64 stmt_start_v 0
+        goto wb_loop
+
+    \\ `goto NAME` as keyword token (100).
+    if== t 100
+        ← 64 walk_pos_v p + 1
+        _gnp → 64 walk_pos_v
+        _gnt tok_type _gnp
+        if== _gnt 5
+            _gnoff tok_offset _gnp
+            _gnlen tok_length _gnp
+            ← 64 walk_pos_v _gnp + 1
+            _tgt label_lookup _gnoff _gnlen
+            _site → 64 arm64_pos_v
+            et → 64 emit_target_v
+            if== et 1
+                if>= _tgt 0
+                    _gdisp _tgt - _site
+                    _gdi _gdisp / 4
+                    _gdm _gdi & 0x3FFFFFF
+                    _ginsn 0x14000000 | _gdm
+                    arm64_emit32 _ginsn
+                else
+                    arm64_emit32 0x14000000
+                    goto_fix_add _gnoff _gnlen _site
+        ← 64 stmt_start_v 0
+        goto wb_loop
+
+    \\ `else` — emit unconditional B placeholder (to skip else body),
+    \\ then patch the preceding if's conditional branch to land here.
+    if== t 101
+        et → 64 emit_target_v
+        if== et 1
+            \\ Save site of B placeholder (will skip else body).
+            _esite → 64 arm64_pos_v
+            emit_a64_b_ph
+            \\ Patch the if's B.cond to jump HERE (past the B placeholder).
+            _depth → 64 if_stack_depth_v
+            if> _depth 0
+                _top _depth - 1
+                _fs → 32 if_stack_site_v + _top * 4
+                _here → 64 arm64_pos_v
+                _delta _here - _fs
+                _d19 (_delta / 4) & 0x7FFFF
+                _old → 32 arm64_buf + _fs
+                _new (_old & 0xFF00001F) | (_d19 << 5)
+                ← 32 arm64_buf + _fs _new
+                \\ Replace the if-stack entry with the else's B placeholder.
+                ← 32 if_stack_site_v + _top * 4 _esite
+        ← 64 walk_pos_v p + 1
+        ← 64 stmt_start_v 0
+        goto wb_loop
+
+    \\ `buf NAME SIZE` at body level — skip (already handled by buf_collect).
+    if== t 98
+        label wb_skip_buf
+        _bp → 64 walk_pos_v
+        _bt tok_type _bp
+        if== _bt 1
+            goto wb_buf_done
+        if== _bt 0
+            goto wb_buf_done
+        ← 64 walk_pos_v _bp + 1
+        goto wb_skip_buf
+        label wb_buf_done
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+
+    \\ `var` — skip (not used in ARM64 path).
+    if== t 99
+        ← 64 walk_pos_v p + 1
         goto wb_loop
 
     \\ Identifier: binding target, arg lookup, composition reference, or
@@ -2800,33 +3592,6 @@ walk_body body_start body_end :
                                 arm64_emit32 0xD4000001
                             ← 64 stmt_start_v 0
                             goto wb_loop
-            \\ Builtin: `goto NAME` — back-patch or forward-fixup.
-            if== tb0 103
-                if== tb1 111
-                    if== tb2 116
-                        if== tb3 111
-                            \\ Next token must be the label name IDENT.
-                            _gnp → 64 walk_pos_v
-                            _gnt tok_type _gnp
-                            if== _gnt 5
-                                _gnoff tok_offset _gnp
-                                _gnlen tok_length _gnp
-                                ← 64 walk_pos_v _gnp + 1
-                                _tgt label_lookup _gnoff _gnlen
-                                _site → 64 arm64_pos_v
-                                if>= _tgt 0
-                                    \\ Backward goto — compute displacement now.
-                                    _gdisp _tgt - _site
-                                    _gdi _gdisp / 4
-                                    _gdm _gdi & 0x3FFFFFF
-                                    _ginsn 0x14000000 | _gdm
-                                    arm64_emit32 _ginsn
-                                else
-                                    \\ Forward goto — placeholder, record for patching.
-                                    arm64_emit32 0x14000000
-                                    goto_fix_add _gnoff _gnlen _site
-                                ← 64 stmt_start_v 0
-                                goto wb_loop
         slot sym_find off len
         if> slot 0
             \\ Known symbol (slot > 0).  At statement start it's a reassignment
@@ -2961,33 +3726,110 @@ walk_body body_start body_end :
             ← 64 pending_bind_len_v len
             ← 64 stmt_start_v 0
             goto wb_loop
-        \\ Unknown identifier mid-expression — treat as placeholder.
-        rd alloc_reg
-        vpush rd
+        \\ Check buf table — buf names resolve to BSS addresses (X28 + offset).
+        boff buf_find off len
+        if>= boff 0
+            ← 64 stmt_start_v 0
+            et → 64 emit_target_v
+            if== et 1
+                _ba emit_buf_addr boff
+                vpush_with_op _ba
+            goto wb_loop
+        \\ Unknown identifier mid-expression — placeholder zero.
+        ← 64 stmt_start_v 0
+        rd alloc_scratch
+        et → 64 emit_target_v
+        if== et 1
+            emit_a64_mov_imm rd 0
+        vpush_with_op rd
         goto wb_loop
 
-    \\ Infix binary operator?  Stash as pending op; vpush_with_op will
-    \\ apply it when the right operand gets pushed.  This lets the
-    \\ stack machine handle infix Lithos syntax (`a + b`, `idx * 12`)
-    \\ without needing precedence.
+    \\ Infix binary operators — dispatch through wb_set_op which handles
+    \\ two-level precedence: */÷ & | ^ << >> are high, +/- are low.
     if== t 50
         ← 64 stmt_start_v 0
-        ← 64 pending_op_v 50
+        wb_set_op 50
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 51
         ← 64 stmt_start_v 0
-        ← 64 pending_op_v 51
+        wb_set_op 51
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 52
         ← 64 stmt_start_v 0
-        ← 64 pending_op_v 52
+        wb_set_op 52
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 53
         ← 64 stmt_start_v 0
-        ← 64 pending_op_v 53
+        wb_set_op 53
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 61
+        ← 64 stmt_start_v 0
+        wb_set_op 61
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 62
+        ← 64 stmt_start_v 0
+        wb_set_op 62
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 63
+        ← 64 stmt_start_v 0
+        wb_set_op 63
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 64
+        ← 64 stmt_start_v 0
+        wb_set_op 64
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 65
+        ← 64 stmt_start_v 0
+        wb_set_op 65
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+
+    \\ Comparison operators as expressions (produce 0/1).
+    \\ CMP + CSET: CSINC Xd, XZR, XZR, !cond
+    if== t 55
+        ← 64 stmt_start_v 0
+        wb_set_op 55
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 56
+        ← 64 stmt_start_v 0
+        wb_set_op 56
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 57
+        ← 64 stmt_start_v 0
+        wb_set_op 57
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 58
+        ← 64 stmt_start_v 0
+        wb_set_op 58
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 59
+        ← 64 stmt_start_v 0
+        wb_set_op 59
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 60
+        ← 64 stmt_start_v 0
+        wb_set_op 60
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+
+    \\ LPAREN/RPAREN — transparent grouping, consume and continue.
+    if== t 69
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 70
         ← 64 walk_pos_v p + 1
         goto wb_loop
 
@@ -3118,6 +3960,7 @@ consume_operands n :
 
 walk_top_level :
     walk_collect
+    buf_collect
     ← 64 bl_fixup_count_v 0
     n → 64 comp_count_v
     i 0
