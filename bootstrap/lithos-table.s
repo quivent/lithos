@@ -1908,10 +1908,23 @@ parse_binding_compose:
     ldr     w3, [x3]
     bl      sym_add
 
-    // NOTE: we do NOT raise reg_floor here. Instead, parse_body
-    // skips reset_regs after binding statements (w0=1 flag).
-    // This prevents register recycling for bindings without
-    // exhausting the register window in large compositions.
+    // Raise reg_floor to protect this binding's register from being recycled
+    // by future reset_regs calls. Only raise if w4 is in the allocated range
+    // (not a param register X0-X8).
+    cmp     w4, #REG_FIRST
+    b.lt    .Lbind_no_floor
+    adrp    x5, reg_floor
+    add     x5, x5, :lo12:reg_floor
+    ldr     w6, [x5]
+    add     w7, w4, #1              // new floor = binding_reg + 1
+    cmp     w7, w6
+    b.le    .Lbind_no_floor         // don't lower the floor
+    str     w7, [x5]
+    // Also update next_reg so future allocs start above this
+    adrp    x5, next_reg
+    add     x5, x5, :lo12:next_reg
+    str     w7, [x5]
+.Lbind_no_floor:
 
     ldr     x19, [sp], #16         // restore post-expr position
     mov     w0, #1                 // return 1 = binding (don't reset regs)

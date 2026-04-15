@@ -431,9 +431,16 @@ class SM90Emitter:
 
     def emit_iadd3(self, rd: int, rs1: int, rs2: int, rs3: int) -> None:
         """IADD3 Rd, Rs1, Rs2, Rs3 -- 3-input integer add.
-        Rs3 in ctrl[7:0] (4-operand format)."""
-        iword = OP_IADD3 | (self._track_rd(rd) << 16) | (rs1 << 24) | (rs2 << 32)
-        ctrl = make_ctrl(1, 1, 7, 7, 0, 0, rs3)
+
+        Opcode 0x7C10 (NOT 0x7210 as the OP_IADD3 constant suggests).
+        extra41 = 0x0ff1e0XX where XX = Rs3 (and 0x0ff1e0 sets
+        predicate sources to PT/NOT-PT and disables complement bits).
+
+        Verified against kernels/embed.cubin: iw=0x0000000402047c10
+        cw=0x000fca000ff1e0ff produces `IADD3 R4, P0, R2, UR4, RZ`."""
+        iword = 0x7C10 | (self._track_rd(rd) << 16) | (rs1 << 24) | (rs2 << 32)
+        extra41 = 0x0FF1E000 | (rs3 & 0xFF)
+        ctrl = make_ctrl(2, 0, 7, 7, 0, 0, extra41)
         self._sinst(iword, ctrl)
 
     # ===========================================================
