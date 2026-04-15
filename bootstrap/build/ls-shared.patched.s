@@ -6,6 +6,7 @@
 .global ls_data_pos
 .global ls_elf_buf
 .global ls_elf_pos
+.global ls_last_comp_addr
 .global ls_source_buf_ptr
 .global ls_source_len
 .global ls_sym_count
@@ -54,7 +55,7 @@
 .equ LS_CODE_BUF_SIZE,   1048576          // 1 MB
 .equ LS_TOKEN_BUF_SIZE,  1048572          // 87381 × 12 B (lexer cap)
 .equ LS_SYM_ENTRY_SIZE,  48
-.equ LS_SYM_MAX,         512
+.equ LS_SYM_MAX,         1024
 .equ LS_SYM_TABLE_SIZE,  (LS_SYM_ENTRY_SIZE * LS_SYM_MAX)   // 24 576
 .equ LS_COMP_ENTRY_SIZE, 48
 .equ LS_COMP_MAX,        256
@@ -93,6 +94,9 @@ ls_source_len:      .quad 0           // total source bytes
 
 .globl ls_data_pos
 ls_data_pos:        .quad 0           // byte offset into ls_data_buf
+
+.globl ls_last_comp_addr
+ls_last_comp_addr:  .quad 0           // code offset of last composition (entry point)
 
 // ------------------------------------------------------------
 // .bss — the big shared buffers
