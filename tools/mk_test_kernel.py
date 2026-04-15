@@ -47,8 +47,9 @@ raw(0x0000000000057919, 0x000e2e0000002100)
 # [1] I2F.F32.U32 R5, R5 (exact copy from reference)
 raw(0x0000000500057245, 0x000fca0000201400)
 
-# [2] LDC R2, c[0x0][0x210] — load output ptr from cbuf0 param area
-e.emit_ldc(2, 0, 0x210)
+# [2] LDC R2, c[0x2][0x84] — load output ptr from cbuf2 (where CUDA puts params)
+# Reference: i=0x00008400ff027b82 c=0x000e220000000a00
+raw(0x00008400ff027b82, 0x000e220000000a00)
 
 # [3] IMAD R2, R5, 0x4, R2 — use the immediate form like NVIDIA does
 # Reference IMAD.IMM: opcode 0x7825, imm in bits[53:32]
