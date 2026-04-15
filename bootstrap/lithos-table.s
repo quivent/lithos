@@ -3228,14 +3228,16 @@ parse_atom:
     ldr     w0, [x5, #SYM_KIND]
     cmp     w0, #KIND_COMP
     b.ne    .La_call_nop
-    // Emit BL to composition
-    ldr     w1, [x5, #SYM_REG]     // code address
+    // Emit BL to composition (use same pattern as handle_call)
+    ldr     w0, [x5, #SYM_REG]     // code address
     bl      emit_cur
-    sub     w1, w1, w0
-    asr     w1, w1, #2
-    and     w1, w1, #0x3FFFFFF
-    movk    w1, #0x9400, lsl #16
-    mov     w0, w1
+    mov     x1, x0                  // x1 = current emit_ptr
+    ldr     w0, [x5, #SYM_REG]     // re-load target (emit_cur clobbered x0)
+    sub     x2, x0, x1             // offset = target - current
+    asr     x2, x2, #2
+    and     w2, w2, #0x3FFFFFF
+    ORRIMM  w2, 0x94000000, w16
+    mov     w0, w2
     bl      emit32
     b       .La_call_done
 .La_call_nop:

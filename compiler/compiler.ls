@@ -152,7 +152,7 @@
 \\ ============================================================================
 
 buf tokens 262144
-var token_count 0
+buf token_count_buf 8
 
 const SYS_READ      63
 const SYS_WRITE     64
@@ -1783,13 +1783,14 @@ EIATTR_COOP_GROUP_MASK_REGIDS   0x29
 \\ ============================================================================
 
 emit_token type offset length :
-    idx token_count * 3
+    tc → 32 token_count_buf
+    idx tc * 3
     ← 32 tokens + idx type
     idx1 idx + 1
     ← 32 tokens + idx1 offset
     idx2 idx + 2
     ← 32 tokens + idx2 length
-    token_count token_count + 1
+    ← 32 token_count_buf tc + 1
 
 \\ ============================================================================
 \\ Character classification
@@ -2169,7 +2170,7 @@ lex_match_e2 b1 b2 :
 
 lex src src_len :
     pos 0
-    token_count 0
+    ← 32 token_count_buf 0
     lp 1
 
     label lex_loop
@@ -5166,7 +5167,8 @@ main argc argv :
     lithos_lex src_base src_size
 
     \\ Step 3: Parse and emit machine code
-    lithos_parse tokens token_count src_base
+    tc → 32 token_count_buf
+    lithos_parse tokens tc src_base
 
     \\ Step 4: Build ELF output — choose GPU or host based on what was emitted
     if> gpu_pos 0
