@@ -1072,8 +1072,18 @@ parse_tokens:
     str     w1, [x0]
     bl      reset_regs
 
+    // Reset forward-BL-patch table count for this compilation.
+    adrp    x0, bl_patch_count
+    add     x0, x0, :lo12:bl_patch_count
+    str     wzr, [x0]
+
     // Main loop — the table-driven core
     bl      parse_toplevel
+
+    // Resolve any forward composition references that were left as
+    // BL #0 placeholders.  Walks bl_patches[]; for each, sym_lookup
+    // the recorded name and patch the BL with the real offset.
+    bl      resolve_fwd_bls
 
     // Sync ls_code_pos
     adrp    x0, ls_code_buf
@@ -2573,6 +2583,19 @@ handle_call:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
 
+    // Stash the name token's source offset, length, and TYPE.  Only
+    // record forward-BL patches for IDENT tokens (type 5) — keyword
+    // tokens like ENDFOR/ELSE that get routed here through the
+    // keyword-as-ident fallback should just emit NOP, since they
+    // will never resolve to a composition.
+    sub     sp, sp, #16
+    ldr     w0, [x19, #0]              // token type
+    str     w0, [sp, #8]
+    ldr     w0, [x19, #4]              // name_off
+    str     w0, [sp, #0]
+    ldr     w0, [x19, #8]              // name_len
+    str     w0, [sp, #4]
+
     bl      sym_lookup
     mov     x5, x0
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
@@ -2606,10 +2629,11 @@ handle_call:
 
 .Lcall_emit:
     cbz     x5, .Lcall_unknown
+    ldr     w0, [x5, #SYM_KIND]
+    cmp     w0, #KIND_COMP
+    b.ne    .Lcall_unknown
     // Save caller-live binding registers [REG_FIRST, reg_floor) onto
     // the target program's stack before BL, then restore after.
-    // Bindings live below reg_floor and would otherwise be clobbered
-    // by the callee, which starts its allocator fresh at REG_FIRST.
     stp     x5, xzr, [sp, #-16]!
     bl      emit_save_bindings
     ldp     x5, xzr, [sp], #16
@@ -2624,11 +2648,28 @@ handle_call:
     mov     w0, w2
     bl      emit32
     bl      emit_restore_bindings
+    add     sp, sp, #16                // discard saved name info
     ldp     x29, x30, [sp], #16
     ret
 
 .Lcall_unknown:
+    // Either a forward composition reference, or a keyword we don't
+    // handle (e.g. ENDFOR).  Only record forward-BL patches for IDENT
+    // tokens; keywords just become NOPs.
+    ldr     w0, [sp, #8]               // token type
+    cmp     w0, #TOK_IDENT
+    b.ne    .Lcall_just_nop
+    bl      emit_save_bindings
+    ldr     w0, [sp, #0]               // name_off
+    ldr     w1, [sp, #4]               // name_len
+    bl      record_fwd_bl_patch
+    bl      emit_restore_bindings
+    add     sp, sp, #16
+    ldp     x29, x30, [sp], #16
+    ret
+.Lcall_just_nop:
     bl      emit_nop
+    add     sp, sp, #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -4126,6 +4167,15 @@ parse_atom:
     // Composition call inside expression — parse ONE argument only.
     // Statement-level calls use handle_call (greedy, until newline).
     // Expression-level calls are "func arg" — single arg, result in X0.
+    // Stash the name token's offset/length AND type for forward-BL
+    // recording.  Only IDENT-typed names get recorded; keywords get NOP.
+    sub     sp, sp, #16
+    ldr     w0, [x19, #0]
+    str     w0, [sp, #8]            // token type
+    ldr     w0, [x19, #4]
+    str     w0, [sp, #0]
+    ldr     w0, [x19, #8]
+    str     w0, [sp, #4]
     bl      sym_lookup
     mov     x5, x0                  // sym entry (or NULL)
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
@@ -4217,18 +4267,14 @@ parse_atom:
 .La_call_no_arg:
     // No argument — bare call
 .La_call_emit:
-    cbz     x5, .La_call_nop        // symbol not found
+    cbz     x5, .La_call_fwd        // symbol not yet defined → forward ref
     ldr     w0, [x5, #SYM_KIND]
     cmp     w0, #KIND_COMP
-    b.ne    .La_call_nop
-    // Save caller's binding registers around the call — same as
-    // handle_call.  Without this, expression-level invocations
-    // (e.g. `c → 8 (src + pos)` followed by `pos scan_number ...`)
-    // clobber the caller's locals.
+    b.ne    .La_call_fwd
+    // Known composition — save caller's binding registers around the call.
     stp     x5, xzr, [sp, #-16]!
     bl      emit_save_bindings
     ldp     x5, xzr, [sp], #16
-    // Emit BL to composition (use same pattern as handle_call)
     ldr     w0, [x5, #SYM_REG]     // code address
     bl      emit_cur
     mov     x1, x0                  // x1 = current emit_ptr
@@ -4241,13 +4287,140 @@ parse_atom:
     bl      emit32
     bl      emit_restore_bindings
     b       .La_call_done
-.La_call_nop:
-    // Unknown composition — emit NOP
-    mov     w0, #0x201F
-    movk    w0, #0xD503, lsl #16
-    bl      emit32
+.La_call_fwd:
+    // Forward reference (or unknown).  Record only if IDENT type;
+    // keywords just become NOPs.
+    ldr     w0, [sp, #8]               // token type
+    cmp     w0, #TOK_IDENT
+    b.ne    .La_call_just_nop
+    bl      emit_save_bindings
+    ldr     w0, [sp, #0]
+    ldr     w1, [sp, #4]
+    bl      record_fwd_bl_patch
+    bl      emit_restore_bindings
+    b       .La_call_done
+.La_call_just_nop:
+    bl      emit_nop
 .La_call_done:
+    add     sp, sp, #16
     mov     w0, #0                  // result assumed in X0
+    ldp     x29, x30, [sp], #16
+    ret
+
+// record_fwd_bl_patch ( w0=name_off w1=name_len -- )
+// Emit a BL #0 placeholder and append (name_off, name_len, site) to
+// bl_patches for later resolution by resolve_fwd_bls.
+record_fwd_bl_patch:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    sub     sp, sp, #16
+    str     x0, [sp, #0]                // save name_off
+    str     x1, [sp, #8]                // save name_len
+    // Emit BL #0 placeholder = 0x94000000
+    mov     w0, #0x0000
+    movk    w0, #0x9400, lsl #16
+    bl      emit32
+    // Get site address (one before current emit_ptr)
+    bl      emit_cur
+    sub     x9, x0, #4                  // site = emit_ptr - 4
+    // Append to bl_patches
+    adrp    x10, bl_patch_count
+    add     x10, x10, :lo12:bl_patch_count
+    ldr     w11, [x10]
+    cmp     w11, #MAX_BL_PATCHES
+    b.ge    .Lrfp_full
+    adrp    x12, bl_patches
+    add     x12, x12, :lo12:bl_patches
+    mov     w13, #BL_PATCH_SIZE
+    mul     x13, x11, x13
+    add     x12, x12, x13               // &bl_patches[count]
+    ldr     x0, [sp, #0]                // name_off
+    ldr     x1, [sp, #8]                // name_len
+    str     w0, [x12, #0]
+    str     w1, [x12, #4]
+    str     x9, [x12, #16]
+    add     w11, w11, #1
+    str     w11, [x10]
+.Lrfp_full:
+    add     sp, sp, #16
+    ldp     x29, x30, [sp], #16
+    ret
+
+// resolve_fwd_bls — called after parsing finishes.  Walks bl_patches;
+// for each entry, sym_lookup the name; if found and KIND_COMP, patch
+// the placeholder with the proper BL offset.
+resolve_fwd_bls:
+    stp     x29, x30, [sp, #-16]!
+    mov     x29, sp
+    adrp    x0, bl_patch_count
+    add     x0, x0, :lo12:bl_patch_count
+    ldr     w0, [x0]
+    cbz     w0, .Lrfb_done
+    mov     w1, #0                      // index
+.Lrfb_loop:
+    cmp     w1, w0
+    b.ge    .Lrfb_done
+    adrp    x2, bl_patches
+    add     x2, x2, :lo12:bl_patches
+    mov     w3, #BL_PATCH_SIZE
+    mul     x3, x1, x3
+    add     x2, x2, x3                  // &bl_patches[i]
+    // Look up the name in the sym table.  We don't have a token-pointer-
+    // based sym_lookup variant here, so do an inline scan.
+    ldr     w4, [x2, #0]                // name_off
+    ldr     w5, [x2, #4]                // name_len
+    ldr     x6, [x2, #16]               // patch site
+    // Walk ls_sym_table looking for KIND_COMP with matching name.
+    adrp    x7, ls_sym_count
+    add     x7, x7, :lo12:ls_sym_count
+    ldr     w7, [x7]
+    cbz     w7, .Lrfb_next
+    adrp    x8, ls_sym_table
+    add     x8, x8, :lo12:ls_sym_table
+    mov     w9, #0
+.Lrfb_sscan:
+    cmp     w9, w7
+    b.ge    .Lrfb_next
+    mov     w10, #SYM_SIZE
+    madd    x11, x9, x10, x8            // &sym_table[j]
+    ldr     w12, [x11, #SYM_KIND]
+    cmp     w12, #KIND_COMP
+    b.ne    .Lrfb_snext
+    ldr     w12, [x11, #SYM_NAME_LEN]
+    cmp     w12, w5
+    b.ne    .Lrfb_snext
+    ldr     w13, [x11, #SYM_NAME_OFF]
+    // Compare bytes
+    add     x14, x28, x13               // sym name ptr (src + offset)
+    add     x15, x28, x4                // patch name ptr
+    mov     w16, #0
+.Lrfb_cmp:
+    cmp     w16, w5
+    b.ge    .Lrfb_match
+    ldrb    w17, [x14, x16]
+    ldrb    w18, [x15, x16]
+    cmp     w17, w18
+    b.ne    .Lrfb_snext
+    add     w16, w16, #1
+    b       .Lrfb_cmp
+.Lrfb_match:
+    // Names match — patch the BL placeholder.
+    ldr     w17, [x11, #SYM_REG]        // target code address
+    sub     x18, x17, x6                // offset = target - site
+    asr     x18, x18, #2
+    and     w18, w18, #0x3FFFFFF
+    movz    w19, #0x0000
+    movk    w19, #0x9400, lsl #16
+    orr     w19, w19, w18
+    str     w19, [x6]
+    b       .Lrfb_next
+.Lrfb_snext:
+    add     w9, w9, #1
+    b       .Lrfb_sscan
+.Lrfb_next:
+    add     w1, w1, #1
+    b       .Lrfb_loop
+.Lrfb_done:
     ldp     x29, x30, [sp], #16
     ret
 
@@ -4679,6 +4852,18 @@ frame_patch_ptr: .space 8
 .equ MAX_RET_PATCHES, 64
 return_patches: .space (8 * MAX_RET_PATCHES)
 return_patch_count: .space 4
+    .align 3
+// Forward-BL fixup table — global across the whole compilation.
+// Each entry: 8 bytes name pointer (into source via lex_src), 4 bytes
+// name length, 4 bytes pad, 8 bytes patch site (absolute address of
+// the BL placeholder in code buffer).  After all source is parsed,
+// resolve_fwd_bls walks the symbol table and patches each entry
+// whose name now resolves to a KIND_COMP symbol.  Entries to a
+// still-unresolved name remain as NOP placeholders.
+.equ MAX_BL_PATCHES, 256
+.equ BL_PATCH_SIZE,  24    // name_off(4) + name_len(4) + pad(8) + addr(8)
+bl_patches: .space (BL_PATCH_SIZE * MAX_BL_PATCHES)
+bl_patch_count: .space 4
     .align 3
 emit_ptr:   .space 8
     .align 3
