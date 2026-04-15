@@ -1651,6 +1651,14 @@ buf comp_is_host_v    256     \\ u32 0=GPU, 1=ARM64
 buf comp_code_off_v   256     \\ u32 byte offset in arm64_buf where code starts
 buf comp_count_v       8
 
+\\ BL forward-reference fixup table.  When a composition calls another
+\\ that hasn't been emitted yet, we emit a placeholder BL #0 and record
+\\ the call site here.  After all compositions are emitted, walk_top_level
+\\ patches each placeholder with the correct offset.
+buf bl_fixup_comp_v   256     \\ u32: composition index being called
+buf bl_fixup_site_v   256     \\ u32: byte offset of the placeholder BL in arm64_buf
+buf bl_fixup_count_v    8
+
 \\ Symbol table for current kernel: arg name → register (up to 32 entries).
 buf sym_name_off_v   128
 buf sym_name_len_v   128
@@ -2693,6 +2701,7 @@ consume_operands n :
 
 walk_top_level :
     walk_collect
+    ← 64 bl_fixup_count_v 0
     n → 64 comp_count_v
     i 0
     label wtl_loop
@@ -2756,6 +2765,26 @@ walk_top_level :
     i i + 1
     goto wtl_loop
     label wtl_done
+
+    \\ Patch forward BL references.  Each fixup recorded (comp_idx, site)
+    \\ where site is the byte offset of a placeholder BL #0 in arm64_buf.
+    \\ Now that all compositions are emitted, compute the real offset and
+    \\ write the correct BL instruction.
+    fc → 64 bl_fixup_count_v
+    k 0
+    label wtl_patch
+    if>= k fc
+        goto wtl_patch_done
+    j → 32 bl_fixup_comp_v + k * 4
+    site → 32 bl_fixup_site_v + k * 4
+    target → 32 comp_code_off_v + j * 4
+    delta target - site
+    imm26 (delta >> 2) & 0x3FFFFFF
+    patch_val 0x94000000 | imm26
+    ← 32 arm64_buf + site patch_val
+    k k + 1
+    goto wtl_patch
+    label wtl_patch_done
     0
 
 \\ SECTION 7 — MAIN: argv → mmap → lex → walk → wrap → exit.
