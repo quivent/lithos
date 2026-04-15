@@ -3552,16 +3552,18 @@ parse_trap_stmt :
     sym_add result_ptr result_len 2 rd
 
 parse_trap_args idx :
+    label pta_loop
     t peek_type
     if== t 1
-        idx
+        return
     if== t 0
-        idx
+        return
     if>= idx 6
-        idx
+        return
     val parse_expr
     emit_p_mov_reg idx val
-    parse_trap_args idx + 1
+    idx idx + 1
+    goto pta_loop
 
 \\ ============================================================================
 \\ constant handler (Forth-style: VALUE constant NAME)
@@ -4385,9 +4387,10 @@ parse_composition :
     emit_p_ret_host
 
 parse_comp_args count :
+    label pca_loop
     t peek_type
     if== t 72
-        count
+        return
 
     if== t 5
         ptr tok_text_ptr
@@ -4402,9 +4405,9 @@ parse_comp_args count :
         sym_add ptr len 0 reg
         count count + 1
 
-        parse_comp_args count
+        goto pca_loop
 
-    count
+    return
 
 \\ ============================================================================
 \\ Top-level file parser
