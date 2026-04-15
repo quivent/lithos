@@ -868,6 +868,14 @@ emit_a64_add_imm rd rn imm12 :
     val 0x91000000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd
     arm64_emit32 val
 
+\\ BL #offset  — branch with link (function call).
+\\ offset is a BYTE distance from the BL instruction to the target.
+\\ ARM64 encodes imm26 = offset/4 (instruction-aligned).
+emit_a64_bl offset :
+    imm26 (offset >> 2) & 0x3FFFFFF
+    val 0x94000000 | imm26
+    arm64_emit32 val
+
 \\ STP X29, X30, [SP, #-16]!  — function prologue push
 emit_a64_stp_fp_lr :
     arm64_emit32 0xA9BF7BFD
