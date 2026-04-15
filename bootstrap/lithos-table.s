@@ -2422,10 +2422,14 @@ parse_mem_store:
 
     // Width is part of the STR opcode, not a runtime value.  Parse
     // it as an int literal directly to avoid wasting a register.
+    // Save the width value (in x8 across the parse_expr calls) so we
+    // can pick the right STR variant.
+    mov     x8, #64                 // default
     ldr     w0, [x19]
     cmp     w0, #TOK_INT
     b.ne    .Lhs_width_expr
     bl      parse_int_literal
+    mov     x8, x0                  // saved width
     add     x19, x19, #TOK_STRIDE_SZ
     mov     w4, #0                  // sentinel: width consumed, no reg
     b       .Lhs_addr
@@ -2433,12 +2437,14 @@ parse_mem_store:
     bl      parse_expr              // fallback
     mov     w4, w0
 .Lhs_addr:
-    stp     x4, xzr, [sp, #-16]!
+    stp     x4, x8, [sp, #-16]!
     bl      parse_expr              // addr (base, possibly with +offset inline)
     mov     w5, w0
-    ldp     x4, xzr, [sp], #16
+    ldp     x4, x8, [sp], #16
     stp     x4, x5, [sp, #-16]!
+    stp     x8, xzr, [sp, #-16]!
     bl      parse_expr              // value (or offset if there's a 4th operand)
+    ldp     x8, xzr, [sp], #16
     mov     w6, w0
     ldp     x4, x5, [sp], #16
     // Check for 4th operand: if present, w6 is offset and next expr is value
@@ -2453,24 +2459,67 @@ parse_mem_store:
     b.eq    .Lstore_emit
     // 4th operand exists: addr = base + offset, value = this operand
     // Emit ADD Xaddr, Xbase, Xoffset
-    stp     w4, w5, [sp, #-16]!
+    stp     x4, x5, [sp, #-16]!
+    stp     x6, x8, [sp, #-16]!
     bl      alloc_reg
+    ldp     x6, x8, [sp], #16
     mov     w7, w0              // combined addr register
     mov     w0, w7
     mov     w1, w5              // old base
     mov     w2, w6              // offset
+    stp     x7, x8, [sp, #-16]!
     bl      emit_add_reg
-    ldp     w4, w5, [sp], #16
+    ldp     x7, x8, [sp], #16
+    ldp     x4, x5, [sp], #16
     mov     w5, w7              // addr = combined
+    stp     x4, x5, [sp, #-16]!
+    stp     x8, xzr, [sp, #-16]!
     bl      parse_expr          // real value
+    ldp     x8, xzr, [sp], #16
+    ldp     x4, x5, [sp], #16
     mov     w6, w0
 
 .Lstore_emit:
-    // STR Xval, [Xaddr, #0]
+    // Emit width-appropriate STR.
+    cmp     x8, #8
+    b.eq    .Lhs_strb
+    cmp     x8, #16
+    b.eq    .Lhs_strh
+    cmp     x8, #32
+    b.eq    .Lhs_strw
+    // 64-bit STR Xval, [Xaddr, #0]
     mov     w0, w6
     mov     w1, w5
     mov     w2, #0
     bl      emit_str_imm
+    b       .Lhs_after
+.Lhs_strb:
+    // STRB Wval, [Xaddr] = 0x39000000 | (Rn<<5) | Rt
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w9, #0x0000
+    movk    w9, #0x3900, lsl #16
+    orr     w0, w0, w9
+    bl      emit32
+    b       .Lhs_after
+.Lhs_strh:
+    // STRH Wval, [Xaddr] = 0x79000000 | (Rn<<5) | Rt
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w9, #0x0000
+    movk    w9, #0x7900, lsl #16
+    orr     w0, w0, w9
+    bl      emit32
+    b       .Lhs_after
+.Lhs_strw:
+    // STR Wval, [Xaddr] = 0xB9000000 | (Rn<<5) | Rt
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w9, #0x0000
+    movk    w9, #0xB900, lsl #16
+    orr     w0, w0, w9
+    bl      emit32
+.Lhs_after:
 
     ldp     x29, x30, [sp], #16
     ret
@@ -2489,28 +2538,69 @@ parse_mem_load:
     // of the LDR opcode, not a runtime value.  Parse it directly as
     // an int literal and advance past it, rather than calling
     // parse_expr (which would waste a register on a constant we
-    // never use).
+    // never use).  Save the literal value for opcode selection.
+    mov     x4, #64                 // default width if not literal
     ldr     w0, [x19]
     cmp     w0, #TOK_INT
     b.ne    .Lhl_width_expr
-    bl      parse_int_literal       // x0 = width value (not used)
+    bl      parse_int_literal       // x0 = width value
+    mov     x4, x0                  // save width
     add     x19, x19, #TOK_STRIDE_SZ   // advance past the int token
     b       .Lhl_addr
 .Lhl_width_expr:
     bl      parse_expr              // fallback: width as expr (rare)
 
 .Lhl_addr:
+    stp     x4, xzr, [sp, #-16]!
     bl      parse_expr              // addr
+    ldp     x4, xzr, [sp], #16
     mov     w5, w0
 
+    stp     x4, x5, [sp, #-16]!
     bl      alloc_reg
+    ldp     x4, x5, [sp], #16
     mov     w6, w0
 
-    // LDR Xresult, [Xaddr, #0]
+    // Emit width-appropriate LDR.  For now offset is always 0.
+    cmp     x4, #8
+    b.eq    .Lhl_ldrb
+    cmp     x4, #16
+    b.eq    .Lhl_ldrh
+    cmp     x4, #32
+    b.eq    .Lhl_ldrw
+    // 64-bit: LDR Xresult, [Xaddr, #0]
     mov     w0, w6
     mov     w1, w5
     mov     w2, #0
     bl      emit_ldr_imm
+    b       .Lhl_after_emit
+.Lhl_ldrb:
+    // LDRB Wresult, [Xaddr] = 0x39400000 | (Rn<<5) | Rt
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w8, #0x0000
+    movk    w8, #0x3940, lsl #16
+    orr     w0, w0, w8
+    bl      emit32
+    b       .Lhl_after_emit
+.Lhl_ldrh:
+    // LDRH Wresult, [Xaddr] = 0x79400000 | (Rn<<5) | Rt
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w8, #0x0000
+    movk    w8, #0x7940, lsl #16
+    orr     w0, w0, w8
+    bl      emit32
+    b       .Lhl_after_emit
+.Lhl_ldrw:
+    // LDR Wresult, [Xaddr] = 0xB9400000 | (Rn<<5) | Rt
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w8, #0x0000
+    movk    w8, #0xB940, lsl #16
+    orr     w0, w0, w8
+    bl      emit32
+.Lhl_after_emit:
 
     // The addr temp (w5) is dead now.  Compact the result down to w5's
     // slot if w5 is a temp (above reg_floor), so each load only
@@ -3824,6 +3914,13 @@ parse_atom:
     ldr     w0, [x5, #SYM_KIND]
     cmp     w0, #KIND_COMP
     b.ne    .La_call_nop
+    // Save caller's binding registers around the call — same as
+    // handle_call.  Without this, expression-level invocations
+    // (e.g. `c → 8 (src + pos)` followed by `pos scan_number ...`)
+    // clobber the caller's locals.
+    stp     x5, xzr, [sp, #-16]!
+    bl      emit_save_bindings
+    ldp     x5, xzr, [sp], #16
     // Emit BL to composition (use same pattern as handle_call)
     ldr     w0, [x5, #SYM_REG]     // code address
     bl      emit_cur
@@ -3835,6 +3932,7 @@ parse_atom:
     ORRIMM  w2, 0x94000000, w16
     mov     w0, w2
     bl      emit32
+    bl      emit_restore_bindings
     b       .La_call_done
 .La_call_nop:
     // Unknown composition — emit NOP
@@ -3979,10 +4077,47 @@ parse_atom:
 .La_load_simple:
     bl      alloc_reg
     mov     w6, w0
+    // Select LDR variant by ls_load_width
+    adrp    x3, ls_load_width
+    add     x3, x3, :lo12:ls_load_width
+    ldr     w3, [x3]
+    cmp     w3, #8
+    b.eq    .La_load_simple_b
+    cmp     w3, #16
+    b.eq    .La_load_simple_h
+    cmp     w3, #32
+    b.eq    .La_load_simple_w
+    // 64-bit
     mov     w0, w6
     mov     w1, w5
     mov     w2, #0
     bl      emit_ldr_imm
+    b       .La_load_simple_done
+.La_load_simple_b:
+    // LDRB Wresult, [Xaddr] = 0x39400000 | (Rn<<5) | Rt
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w8, #0x0000
+    movk    w8, #0x3940, lsl #16
+    orr     w0, w0, w8
+    bl      emit32
+    b       .La_load_simple_done
+.La_load_simple_h:
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w8, #0x0000
+    movk    w8, #0x7940, lsl #16
+    orr     w0, w0, w8
+    bl      emit32
+    b       .La_load_simple_done
+.La_load_simple_w:
+    lsl     w7, w5, #5
+    orr     w0, w6, w7
+    movz    w8, #0x0000
+    movk    w8, #0xB940, lsl #16
+    orr     w0, w0, w8
+    bl      emit32
+.La_load_simple_done:
     mov     w0, w6
     ldp     x29, x30, [sp], #16
     ret
