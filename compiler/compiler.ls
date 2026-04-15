@@ -1333,10 +1333,21 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_text_const0 code_buf code_size
     elf_emit_shdrs smem_size
 
-\\ elf_save — write cubin_buf[0 .. cubin_pos_v) to `path`
+\\ elf_save — write cubin_buf[0 .. cubin_pos_v) to `path`.
+\\
+\\ Uses the explicit `↓ $N val; trap; name ↑ $0` calling convention so
+\\ it compiles under the ARM64-ASM bootstrap (whose `trap` handler is a
+\\ bare SVC — it doesn't parse the `trap name num args...` shorthand).
 
-elf_save path :
-    trap fd SYS_OPENAT -100 path 577 420
+host elf_save path :
+    \\ openat(AT_FDCWD=-100, path, O_WRONLY|O_CREAT|O_TRUNC=577, 0644)
+    ↓ $8 SYS_OPENAT
+    ↓ $0 -100
+    ↓ $1 path
+    ↓ $2 577
+    ↓ $3 420
+    trap
+    fd ↑ $0
 
     written 0
     remaining → 64 cubin_pos_v
@@ -1344,14 +1355,23 @@ elf_save path :
     if<= remaining 0
         goto ew_done
     write_ptr cubin_buf + written
-    trap n SYS_WRITE fd write_ptr remaining
+    \\ write(fd, write_ptr, remaining)
+    ↓ $8 SYS_WRITE
+    ↓ $0 fd
+    ↓ $1 write_ptr
+    ↓ $2 remaining
+    trap
+    n ↑ $0
     if<= n 0
         goto ew_done
     written written + n
     remaining remaining - n
     goto ew_loop
     label ew_done
-    trap ret SYS_CLOSE fd
+    \\ close(fd)
+    ↓ $8 SYS_CLOSE
+    ↓ $0 fd
+    trap
 
 \\ cubin_write — single entry point: build cubin and write to file
 
