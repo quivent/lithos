@@ -876,6 +876,27 @@ emit_a64_bl offset :
     val 0x94000000 | imm26
     arm64_emit32 val
 
+\\ B #offset  — unconditional branch (no link).
+\\ offset is a BYTE distance from the B instruction to the target.
+emit_a64_b offset :
+    imm26 (offset >> 2) & 0x3FFFFFF
+    val 0x14000000 | imm26
+    arm64_emit32 val
+
+\\ B.cond #offset — conditional branch.  cond is a 4-bit ARM64 condition
+\\ code (0=EQ, 1=NE, 10=GE, 11=LT, 12=GT, 13=LE).  offset is a byte
+\\ distance encoded as imm19 (offset/4).
+emit_a64_b_cond cond offset :
+    imm19 (offset >> 2) & 0x7FFFF
+    val 0x54000000 | (imm19 << 5) | (cond & 0xF)
+    arm64_emit32 val
+
+\\ CMP Xn, Xm  —  SUBS XZR, Xn, Xm.  Sets flags for later B.cond.
+\\ Encoding: 0xEB00001F | (Rm << 16) | (Rn << 5)
+emit_a64_cmp rn rm :
+    val 0xEB00001F | (rm << 16) | (rn << 5)
+    arm64_emit32 val
+
 \\ STP X29, X30, [SP, #-16]!  — function prologue push
 emit_a64_stp_fp_lr :
     arm64_emit32 0xA9BF7BFD
@@ -1714,6 +1735,12 @@ buf label_count_v      8
 buf goto_fix_v      4096    \\ 128 entries * 40 bytes
 buf goto_fix_count_v   8
 
+\\ For-loop stack — per-active-for-loop state.  Each entry: 32 bytes =
+\\ loop_top offset (8) + exit_site offset (8) + i_slot (8) + step_slot (8).
+\\ Supports up to 8 nested for-loops.
+buf for_stack_v       256
+buf for_sp_v            8
+
 \\ Current kernel metadata — populated by walk_top_level for each kernel.
 \\ NOTE: only ONE kernel's metadata is stored at a time. With multiple
 \\ kernels, only the LAST one's metadata survives — matching the fact that
@@ -2421,6 +2448,7 @@ parse_int_tok offset length :
 label_reset :
     ← 64 label_count_v 0
     ← 64 goto_fix_count_v 0
+    ← 64 for_sp_v 0
 
 \\ Add a defined label: record (name_off, name_len, code_off) in label_tab_v.
 \\ src is lex_src_v (already published).  code_off is the current arm64_pos_v.
@@ -2555,6 +2583,37 @@ goto_fix_patch name_off name_len target_off :
     i i + 1
     goto gfp_loop
 
+\\ Atom-to-register helper for the for-loop implementation.
+\\ Reads ONE token at walk_pos (int literal or ident), emits ARM64
+\\ code that leaves its value in the given register `rd`, and
+\\ advances walk_pos past it.  Returns 0 on success, nonzero on a
+\\ malformed token (caller may ignore).
+\\
+\\ For int literals, emits MOVZ/MOVK chain.  For idents, looks up
+\\ the symbol and emits LDUR from the appropriate slot (assumes
+\\ KIND_LOCAL_SLOT — the only kind the walker produces for bindings).
+load_atom_to_reg rd :
+    p → 64 walk_pos_v
+    t tok_type p
+    if== t 3
+        off tok_offset p
+        len tok_length p
+        v parse_int_tok off len
+        emit_a64_mov_imm rd v
+        ← 64 walk_pos_v p + 1
+        return 0
+    if== t 5
+        off tok_offset p
+        len tok_length p
+        slot sym_find off len
+        if!= slot -1
+            emit_a64_ldur rd 29 (0 - slot)
+        ← 64 walk_pos_v p + 1
+        return 0
+    \\ Unknown — advance and return nonzero.
+    ← 64 walk_pos_v p + 1
+    return 1
+
 \\ Main body walker — single left-to-right pass over the body tokens.
 
 walk_body body_start body_end :
@@ -2658,6 +2717,39 @@ walk_body body_start body_end :
     \\ Keywords: for / each / stride / if — minimal stubs.
     if== t 16
         walk_for_kw
+        goto wb_loop
+    if== t 17
+        \\ endfor — close the innermost for-loop.
+        et → 64 emit_target_v
+        if== et 1
+            ← 64 walk_pos_v p + 1
+            fsp → 64 for_sp_v
+            if> fsp 0
+                fsp fsp - 1
+                ← 64 for_sp_v fsp
+                base for_stack_v + fsp * 32
+                loop_top → 64 base
+                exit_site → 64 base + 8
+                i_slot → 64 base + 16
+                step_slot → 64 base + 24
+                \\ LDUR x10, [FP, #-i_slot]; LDUR x11, [FP, #-step_slot];
+                \\ ADD x10, x10, x11; STUR x10, [FP, #-i_slot]
+                emit_a64_ldur 10 29 (0 - i_slot)
+                emit_a64_ldur 11 29 (0 - step_slot)
+                emit_a64_add 10 10 11
+                emit_a64_stur 10 29 (0 - i_slot)
+                \\ B back to loop_top (current_pos - loop_top is negative).
+                back_pos → 64 arm64_pos_v
+                emit_a64_b loop_top - back_pos
+                \\ Patch the B.GE at exit_site with the displacement to
+                \\ current arm64_pos_v (one past the B).
+                patch_pos → 64 arm64_pos_v
+                disp patch_pos - exit_site
+                imm19 (disp >> 2) & 0x7FFFF
+                patched 0x54000000 | (imm19 << 5) | 10
+                ← 32 arm64_buf + exit_site patched
+            goto wb_loop
+        ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 18
         walk_each_kw
@@ -2914,14 +3006,65 @@ walk_body body_start body_end :
 \\ minimum viable sequence. A full implementation (branch patching, indent
 \\ tracking, etc.) is left as a TODO — the scalar path is what matters now.
 
+\\ for i start end step — loop with integer range.
+\\ Host implementation: allocate slots for i / end / step, initialise them,
+\\ emit loop-top compare+branch-exit, register `i` as a binding so the body
+\\ can read it.  ENDFOR handling (closing the loop) is done in walk_body
+\\ when it encounters TOK_ENDFOR (17).  Only supports scalar atoms for the
+\\ start/end/step operands (which is what compiler.ls's arm64_elf_build
+\\ uses).  GPU path is still the old placeholder.
 walk_for_kw :
     et → 64 emit_target_v
-    \\ for i start end step — consume 4 operand tokens.
-    consume_operands 4
-    \\ ISETP + @P BRA + IADD3 placeholder: emit a zero-offset self-branch.
     if== et 0
+        consume_operands 4
         emit_isetp_ge 0 RZ RZ
         emit_bra_pred 0 0
+        return 0
+
+    \\ Host path.  Expect: IDENT(i) atom(start) atom(end) atom(step).
+    p → 64 walk_pos_v
+    nt tok_type p
+    if!= nt 5
+        consume_operands 4
+        return 0
+    i_off tok_offset p
+    i_len tok_length p
+    ← 64 walk_pos_v p + 1
+
+    \\ Allocate slots for i, end, step and record `i` as a local binding.
+    i_slot alloc_slot
+    end_slot alloc_slot
+    step_slot alloc_slot
+    sym_add i_off i_len i_slot
+
+    \\ Evaluate start into x10 and STUR to i_slot.
+    load_atom_to_reg 10
+    emit_a64_stur 10 29 (0 - i_slot)
+    \\ Evaluate end into x10 and STUR to end_slot.
+    load_atom_to_reg 10
+    emit_a64_stur 10 29 (0 - end_slot)
+    \\ Evaluate step into x10 and STUR to step_slot.
+    load_atom_to_reg 10
+    emit_a64_stur 10 29 (0 - step_slot)
+
+    \\ loop_top = current arm64_pos_v.
+    loop_top → 64 arm64_pos_v
+    \\ Emit: LDUR x10, [FP, #-i_slot]; LDUR x11, [FP, #-end_slot]; CMP x10, x11;
+    \\        B.GE exit_placeholder.
+    emit_a64_ldur 10 29 (0 - i_slot)
+    emit_a64_ldur 11 29 (0 - end_slot)
+    emit_a64_cmp 10 11
+    exit_site → 64 arm64_pos_v
+    emit_a64_b_cond 10 0    \\ B.GE with placeholder displacement (cond 10 = GE)
+
+    \\ Push (loop_top, exit_site, i_slot, step_slot) onto for-stack.
+    fsp → 64 for_sp_v
+    base for_stack_v + fsp * 32
+    ← 64 base      loop_top
+    ← 64 base + 8  exit_site
+    ← 64 base + 16 i_slot
+    ← 64 base + 24 step_slot
+    ← 64 for_sp_v fsp + 1
     0
 
 walk_each_kw :
