@@ -246,7 +246,7 @@ def _ctrl_fmul() -> int:
     return make_ctrl(5, 0, 7, 7, 4, 0, 0x400000)
 
 def _ctrl_imad(rs3: int) -> int:
-    return make_ctrl(1, 1, 7, 7, 0, 0, 0x0F8E0200 | rs3)
+    return make_ctrl(6, 0, 7, 7, 0, 0, 0x078E0000 | (rs3 & 0xFF) | ((rs3 & 0xFF) << 8))
 
 def _ctrl_imad_imm(rs3: int = RZ, wait: int = 0) -> int:
     return make_ctrl(1, 1, 7, 7, wait, 0, 0x078E0000 | (rs3 & 0xFF) | ((rs3 & 0xFF) << 8))
