@@ -2420,7 +2420,7 @@ parse_mem_load:
     mov     x29, sp
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
 
-    bl      parse_expr              // width
+    bl      parse_expr              // width (often a literal — temp)
     mov     w4, w0
     bl      parse_expr              // addr
     mov     w5, w0
@@ -2434,7 +2434,29 @@ parse_mem_load:
     mov     w2, #0
     bl      emit_ldr_imm
 
-    ldp     x29, x30, [sp], #16
+    // The width and addr temps (w4, w5) are dead now that the LDR is
+    // in the code stream.  Compact the result down to w4's slot and
+    // free everything above, so each `name → W addr` only consumes a
+    // single register slot from the caller's pool.  Without this every
+    // load wasted 2 regs and `walk_top_level` exhausted the allocator
+    // before its body ran.
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    ldr     w7, [x0]
+    cmp     w4, w7
+    b.lt    1f                      // w4 is a binding, leave alone
+    cmp     w4, w6
+    b.eq    1f                      // already compact
+    // emit MOV Xw4, Xw6
+    mov     w0, w4
+    mov     w1, w6
+    bl      emit_mov_reg
+    // free everything above w4 (releases w5 and w6's slot)
+    add     w0, w4, #1
+    bl      free_reg
+    mov     w6, w4                  // result is now in w4
+1:  ldp     x29, x30, [sp], #16
+    mov     w0, w6
     ret
 
 // ============================================================
