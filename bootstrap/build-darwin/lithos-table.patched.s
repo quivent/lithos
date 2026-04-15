@@ -165,7 +165,7 @@
 .equ MAX_LOOP,      16
 .equ ARM64_NOP,     0xD503201F
 .equ ARM64_RET,     0xD65F03C0
-.equ ARM64_SVC_0,   (0xD400 << 16) | 0x0001
+.equ ARM64_SVC_0,   (0xD400 << 16) | 0x1001
 .equ REG_FIRST,     9
 .equ REG_LAST,      28
 .equ CC_EQ, 0
@@ -1115,8 +1115,23 @@ parse_toplevel:
     b.eq    .Ltop_buf
     cmp     w0, #TOK_IDENT
     b.eq    .Ltop_ident
+    // "host" and "kernel" prefixes on compositions — skip the prefix
+    cmp     w0, #TOK_HOST
+    b.eq    .Ltop_skip_prefix
+    cmp     w0, #TOK_KERNEL
+    b.eq    .Ltop_skip_prefix
 
-    // Skip unknown
+    // Any keyword 11-45 not already dispatched → treat as identifier
+    cmp     w0, #11
+    b.lt    .Ltop_skip_unknown
+    cmp     w0, #45
+    b.le    .Ltop_ident
+.Ltop_skip_unknown:
+    add     x19, x19, #TOK_STRIDE_SZ
+    b       .Ltop_loop
+.Ltop_skip_prefix:
+    // Skip "host" or "kernel" token, then re-enter the loop
+    // to parse the actual composition name
     add     x19, x19, #TOK_STRIDE_SZ
     b       .Ltop_loop
 
@@ -1198,6 +1213,9 @@ handle_var:
     bl      sym_add
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
 
+    // Same approach: parse_body skips reset after var declarations.
+.Lvar_floor_ok:
+
     // Check for initial value
     cmp     x19, x27
     b.hs    .Lvar_zero
@@ -1226,6 +1244,7 @@ handle_var:
     mov     x1, #0
     bl      emit_mov_imm64
 .Lvar_done:
+    mov     w0, #1                 // return 1 = var decl (don't reset regs)
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1500,6 +1519,10 @@ parse_body:
     b       .Lbody_newline      // process the NEWLINE (will advance + peek again)
 .Lbody_stmt:
     bl      parse_statement
+    // parse_statement returns w0: handle_binding/handle_var return 1,
+    // all others return arbitrary values. Only skip reset on exactly 1.
+    cmp     w0, #1
+    b.eq    .Lbody_loop            // binding — don't recycle its register
     bl      reset_regs
     b       .Lbody_loop
 .Lbody_done:
@@ -1929,7 +1952,13 @@ parse_binding_compose:
     ldr     w3, [x3]
     bl      sym_add
 
+    // NOTE: we do NOT raise reg_floor here. Instead, parse_body
+    // skips reset_regs after binding statements (w0=1 flag).
+    // This prevents register recycling for bindings without
+    // exhausting the register window in large compositions.
+
     ldr     x19, [sp], #16         // restore post-expr position
+    mov     w0, #1                 // return 1 = binding (don't reset regs)
     ldp     x29, x30, [sp], #16
     ret
 
