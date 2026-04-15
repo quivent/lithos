@@ -246,7 +246,10 @@ def _ctrl_fmul() -> int:
     return make_ctrl(5, 0, 7, 7, 4, 0, 0x400000)
 
 def _ctrl_imad(rs3: int) -> int:
-    return make_ctrl(6, 0, 7, 7, 0, 0, 0x078E0000 | (rs3 & 0xFF) | ((rs3 & 0xFF) << 8))
+    # extra41 = 0x078E0200 | rs3
+    # [7:0] = Rs3 register, [15:8] = 0x02 (fixed), [23:16] = 0x8e, [31:24] = 0x07
+    # Verified: IMAD R5,R7,R6,R8 → 0x078e0208, IMAD R7,R7,R6,R9 → 0x078e0209
+    return make_ctrl(6, 0, 7, 7, 0, 0, 0x078E0200 | (rs3 & 0xFF))
 
 def _ctrl_imad_imm(rs3: int = RZ, wait: int = 0) -> int:
     return make_ctrl(1, 1, 7, 7, wait, 0, 0x078E0000 | (rs3 & 0xFF) | ((rs3 & 0xFF) << 8))
@@ -628,10 +631,11 @@ class SM90Emitter:
     def emit_mov_imm(self, rd: int, imm32: int) -> None:
         """MOV Rd, imm32 -- load 32-bit immediate into register.
         Implemented as IADD3.IMM Rd, RZ, imm32, RZ (0 + imm + 0 = imm).
-        MOV_IMM (0x7802) appears invalid on SM90a; IADD3_IMM is the safe path."""
+        extra41 = 0x07FFE0FF sets predicates to PT (matches reference).
+        Verified: nvcc produces cw=0x001fca0007ffe0ff for IADD3 R5, R5, 0x100, RZ."""
         RZ = 0xFF
         iword = OP_IADD3_IMM | (self._track_rd(rd) << 16) | (RZ << 24) | ((imm32 & 0xFFFFFFFF) << 32)
-        self._sinst(iword, make_ctrl(2, 0, 7, 7, 0, 0, RZ))
+        self._sinst(iword, make_ctrl(2, 0, 7, 7, 0, 0, 0x07FFE000 | RZ))
 
     # ===========================================================
     # CONVERSION
@@ -942,9 +946,11 @@ class SM90Emitter:
         self._sinst(iword, _ctrl_shf())
 
     def emit_add_imm(self, rd: int, ra: int, imm: int) -> None:
-        """IADD3 Rd, Ra, imm, RZ -- integer add with immediate."""
+        """IADD3 Rd, Ra, imm, RZ -- integer add with immediate.
+        extra41 = 0x07FFE0FF sets Rs3=RZ and predicates to PT (reference-verified)."""
+        RZ = 0xFF
         iword = OP_IADD3_IMM | (self._track_rd(rd) << 16) | (ra << 24) | ((imm & 0xFFFFFFFF) << 32)
-        self._sinst(iword, _ctrl_imad_imm())
+        self._sinst(iword, make_ctrl(2, 0, 7, 7, 0, 0, 0x07FFE000 | RZ))
 
     def emit_load(self, rd: int, base: int, offset: int, width: int = 4) -> None:
         """LDG.E Rd, [base+offset] -- global memory load."""
