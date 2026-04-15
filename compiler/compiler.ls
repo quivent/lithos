@@ -80,24 +80,14 @@ is_newline c :
 \\ Accepts [a-zA-Z0-9_] plus a few punctuation chars used in keyword-ish tokens
 \\ (like `if==`, `if>=`, `if<`) so the whole thing is one token we dispatch on.
 scan_ident src pos end :
-    \\ Inlined alnum check to avoid the chained-call X0 collision in
-    \\ the current bootstrap.  Equivalent to:
-    \\   is_alnum c | (c == '.' | '<' | '>' | '=' | '!')
+    \\ Single big expression keeps the bootstrap allocator from
+    \\ blowing past REG_LAST on this function (was 12 bindings).
     np pos
     label si_loop
     if>= np end
         goto si_done
     c → 8 (src + np)
-    upper (c >= 65) & (c <= 90)
-    lower (c >= 97) & (c <= 122)
-    under c == 95
-    digit (c >= 48) & (c <= 57)
-    dot c == 46
-    al c == 60
-    ar c == 62
-    eq c == 61
-    bg c == 33
-    ok upper | lower | under | digit | dot | al | ar | eq | bg
+    ok ((c >= 65) & (c <= 90)) | ((c >= 97) & (c <= 122)) | (c == 95) | ((c >= 48) & (c <= 57)) | (c == 46) | (c == 60) | (c == 62) | (c == 61) | (c == 33)
     if== ok 0
         goto si_done
     np np + 1
