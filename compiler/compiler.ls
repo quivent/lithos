@@ -4321,9 +4321,10 @@ parse_body :
         ← 64 body_indent_v old_indent
 
 parse_body_loop old_indent :
+    label pbl_loop
     t peek_type
     if== t 0
-        0
+        return
 
     if== t 1
         consume
@@ -4332,14 +4333,13 @@ parse_body_loop old_indent :
             ind peek_length
             _bi → 64 body_indent_v
             if< ind _bi
-                0
+                return
             consume
             parse_stmt
-            parse_body_loop old_indent
-            0
+            goto pbl_loop
 
     parse_stmt
-    parse_body_loop old_indent
+    goto pbl_loop
 
 \\ ============================================================================
 \\ Composition parser
@@ -4411,35 +4411,36 @@ parse_comp_args count :
 \\ ============================================================================
 
 parse_file :
+    label pf_loop
     t peek_type
     if== t 0
-        0
+        return
 
     if== t 1
         consume
-        parse_file
+        goto pf_loop
 
     if== t 2
         consume
-        parse_file
+        goto pf_loop
 
     if== t 35
         consume
         ← 64 emit_target_v 1
         parse_composition
         ← 64 emit_target_v 0
-        parse_file
+        goto pf_loop
 
     if== t 5
         ← 64 emit_target_v 0
         parse_composition
-        parse_file
+        goto pf_loop
 
     if== t 11
         consume
         ← 64 emit_target_v 0
         parse_composition
-        parse_file
+        goto pf_loop
 
     \\ Forth-style: VALUE constant NAME (at file scope)
     if== t 3
@@ -4453,7 +4454,7 @@ parse_file :
             rd alloc_rreg
             emit_p_mov_imm rd val
             sym_add name_ptr name_len 1 rd
-            parse_file
+            goto pf_loop
         \\ Not a constant decl, put token back
         _tp → 64 tok_pos_v
         _tp _tp - 1
@@ -4463,10 +4464,10 @@ parse_file :
     if== t 96
         consume
         parse_constant_decl
-        parse_file
+        goto pf_loop
 
     consume
-    parse_file
+    goto pf_loop
 
 \\ ============================================================================
 \\ Parser initialization
