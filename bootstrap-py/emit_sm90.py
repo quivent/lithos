@@ -5,6 +5,45 @@ Emits raw 128-bit SASS instructions for sm_90a (GH200).
 Each instruction is 16 bytes: 8-byte instruction word (lower) + 8-byte control word (upper).
 
 Faithfully ported from compiler/emit-gpu.ls.
+
+SM90 128-bit Instruction Encoding Reference
+============================================
+
+Each instruction is 128 bits = 16 bytes, stored little-endian as two 64-bit words:
+  - Lower 64 bits: instruction word (iword)
+  - Upper 64 bits: control word (ctrl)
+
+Instruction word field layout (common across most instructions):
+  bits [15:0]   -- opcode (e.g. 0x7919 = S2R, 0x7986 = STG)
+  bits [23:16]  -- Rd (destination register), or address base for stores
+  bits [31:24]  -- Rs1 / Ra (first source register or base address register)
+  bits [39:32]  -- Rs2 / Rb (second source register), or source data for stores
+  bits [53:32]  -- immediate value (for immediate-form opcodes like IMAD.IMM 0x7825)
+  bits [63:32]  -- varies per opcode (immediate, offset, cbuf address, etc.)
+
+Control word field layout (scheduling + extra operand fields):
+  bits [40:0]   -- extra41: opaque per-instruction fields
+                   - [7:0]:   4th operand register (e.g. Rs3 for FFMA/IMAD)
+                   - [15:8]:  SR index (for S2R), LUT (for LOP3), subop (for MUFU)
+                   - [10:8]:  cbuf index (for LDC, low bits)
+                   - [31:0]:  memory descriptor / barrier fields
+  bits [44:41]  -- stall: pipeline stall cycles (0-15)
+  bits [45]     -- yield: scheduler yield hint
+  bits [48:46]  -- wbar: write barrier slot (7 = none)
+  bits [51:49]  -- rbar: read barrier slot (7 = none)
+  bits [57:52]  -- wait: wait barrier mask (6 bits)
+  bits [62:58]  -- reuse: register reuse cache flags (5 bits)
+
+Per-instruction encoding notes:
+  S2R (0x7919):  Rd at iword[23:16], SR index in ctrl extra41[15:8]
+  I2F (0x7245):  Rd at iword[23:16], Rs at iword[39:32] (NOT [31:24])
+  LDC (0x7B82):  Rd at iword[23:16], RZ at iword[31:24],
+                 byte offset at iword[47:40], cbuf index in ctrl extra41[10:8]
+  IMAD reg (0x7224):  Rd[23:16], Rs1[31:24], Rs2[39:32], Rs3 in ctrl[7:0]
+  IMAD imm (0x7825):  Rd[23:16], Rs1[31:24], imm22[53:32], Rs3 in ctrl[7:0]
+  STG (0x7986):  addr_base at iword[31:24], data_reg at iword[39:32],
+                 iword[23:16] typically 0x00 (offset field)
+  EXIT (0x794D): no register operands
 """
 
 import struct
@@ -25,6 +64,7 @@ OP_FMUL_IMM  = 0x7820
 
 # Integer arithmetic
 OP_IMAD      = 0x7224
+OP_IMAD_IMM  = 0x7825
 OP_IMAD_WIDE = 0x7225
 OP_IADD3     = 0x7210
 OP_IADD3_IMM = 0x7810
@@ -179,7 +219,7 @@ def _ctrl_nop() -> int:
     return make_ctrl(0, 0, 7, 7, 0, 0, 0)
 
 def _ctrl_s2r(sr_id: int) -> int:
-    return make_ctrl(7, 1, 1, 7, 0, 0, sr_id << 8)
+    return make_ctrl(7, 1, 0, 7, 0, 0, sr_id << 8)
 
 def _ctrl_ldg() -> int:
     return make_ctrl(4, 1, 2, 7, 0, 0, 0x0C1E1900)
@@ -208,8 +248,8 @@ def _ctrl_fmul() -> int:
 def _ctrl_imad(rs3: int) -> int:
     return make_ctrl(1, 1, 7, 7, 0, 0, 0x0F8E0200 | rs3)
 
-def _ctrl_imad_imm() -> int:
-    return make_ctrl(1, 1, 7, 7, 0, 0, 0x078E00FF)
+def _ctrl_imad_imm(rs3: int = RZ, wait: int = 0) -> int:
+    return make_ctrl(1, 1, 7, 7, wait, 0, 0x078E0000 | (rs3 & 0xFF) | ((rs3 & 0xFF) << 8))
 
 def _ctrl_isetp() -> int:
     return make_ctrl(13, 0, 7, 7, 0, 0, 0x0BF06070)
@@ -223,8 +263,8 @@ def _ctrl_exit() -> int:
 def _ctrl_uldc() -> int:
     return make_ctrl(1, 1, 7, 7, 0, 0, 0x0A00)
 
-def _ctrl_ldc() -> int:
-    return make_ctrl(7, 1, 1, 7, 0, 0, 0x0800)
+def _ctrl_ldc(cbuf: int = 0) -> int:
+    return make_ctrl(1, 1, 0, 7, 0, 0, 0x0800 | (cbuf << 8))
 
 def _ctrl_shfl() -> int:
     return make_ctrl(14, 0, 3, 7, 0, 0, 0x000E0000)
@@ -242,7 +282,7 @@ def _ctrl_shf() -> int:
     return make_ctrl(1, 0, 7, 7, 0, 0, 0)
 
 def _ctrl_i2f() -> int:
-    return make_ctrl(5, 0, 7, 7, 4, 0, 0x00201400)
+    return make_ctrl(5, 0, 7, 7, 0, 0, 0x00201400)
 
 def _ctrl_f2i() -> int:
     return make_ctrl(2, 1, 0, 7, 4, 0, 0x0020F100)
@@ -373,6 +413,22 @@ class SM90Emitter:
         iword = OP_IMAD | (self._track_rd(rd) << 16) | (rs1 << 24) | (rs2 << 32)
         self._sinst(iword, _ctrl_imad(rs3))
 
+    def emit_imad_imm(self, rd: int, rs1: int, imm: int, rs3: int,
+                      wait: int = 1) -> None:
+        """IMAD Rd, Rs1, imm, Rs3 -- integer multiply-add with 22-bit immediate.
+
+        Encoding (opcode 0x7825 -- distinct from register form 0x7224):
+          iword[23:16] = Rd
+          iword[31:24] = Rs1
+          iword[53:32] = 22-bit unsigned immediate
+          ctrl extra41[7:0] = Rs3 (accumulator register)
+          ctrl extra41[15:8] = Rs3 (duplicated)
+          ctrl extra41[31:16] = 0x078e (IMAD modifier flags)
+        """
+        iword = (OP_IMAD_IMM | (self._track_rd(rd) << 16)
+                 | (rs1 << 24) | ((imm & 0x3FFFFF) << 32))
+        self._sinst(iword, _ctrl_imad_imm(rs3, wait))
+
     def emit_iadd3(self, rd: int, rs1: int, rs2: int, rs3: int) -> None:
         """IADD3 Rd, Rs1, Rs2, Rs3 -- 3-input integer add.
         Rs3 in ctrl[7:0] (4-operand format).
@@ -416,16 +472,28 @@ class SM90Emitter:
         self._sinst(iword, _ctrl_sts())
 
     def emit_ldc(self, rd: int, cbuf: int, offset: int) -> None:
-        """LDC Rd, c[cbuf][offset] -- load from constant bank to GPR."""
+        """LDC Rd, c[cbuf][offset] -- load from constant bank to GPR.
+
+        Encoding:
+          iword[23:16] = Rd
+          iword[31:24] = RZ (0xFF)
+          iword[47:40] = byte offset (8-bit field)
+          ctrl extra41[10:8] = cbuf index
+          ctrl extra41[11] = base LDC flag (always set)
+        """
         iword = (OP_LDC | (self._track_rd(rd) << 16) | (RZ << 24)
-                 | (offset << 32) | (cbuf << 48))
-        self._sinst(iword, CTRL_LDC)
+                 | (offset << 40))
+        self._sinst(iword, _ctrl_ldc(cbuf))
 
     def emit_uldc(self, rd: int, cbuf: int, offset: int) -> None:
-        """ULDC URn, c[cbuf][offset] -- uniform load from constant bank."""
+        """ULDC URn, c[cbuf][offset] -- uniform load from constant bank.
+
+        Uses same cbuf address encoding as LDC: offset at iword[47:40],
+        cbuf index in ctrl extra41[10:8].
+        """
         iword = (OP_ULDC | (self._track_rd(rd) << 16) | (RZ << 24)
-                 | (offset << 32) | (cbuf << 48))
-        self._sinst(iword, CTRL_ULDC)
+                 | (offset << 40))
+        self._sinst(iword, make_ctrl(1, 1, 7, 7, 0, 0, 0x0A00 | (cbuf << 8)))
 
     # ===========================================================
     # ATOMICS / REDUCTIONS

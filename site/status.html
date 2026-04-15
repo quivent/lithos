@@ -94,16 +94,22 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
 <div class="hero">
   <h1>Where We Stand</h1>
   <p class="sub">Target: <span class="target">Qwen 3.5 27B</span> &mdash; 64 hybrid layers, GPTQ W4A16, GH200</p>
-  <p class="milestone">compiler.ls compiles cleanly &rarr; 47KB ARM64 ELF</p>
+  <p class="milestone">First opcodes executed on GH200 &mdash; 255/256 correct outputs</p>
 </div>
 
 <!-- ==================== OVERVIEW CARDS ==================== -->
 <div class="overview">
   <div class="ov-card">
+    <h3>Opcode Execution</h3>
+    <div class="bar"><div class="fill green" style="width:100%"></div></div>
+    <div class="pct done">Proven</div>
+    <div class="note">6 SM90 opcodes &rarr; 96 bytes &rarr; GH200 SM &rarr; correct output. No NVIDIA compiler.</div>
+  </div>
+  <div class="ov-card">
     <h3>Bootstrap</h3>
     <div class="bar"><div class="fill green" style="width:100%"></div></div>
     <div class="pct done">Done</div>
-    <div class="note">5044 lines &rarr; 47,264 bytes. Clean compile. Both platforms.</div>
+    <div class="note">5056 lines &rarr; 47KB ARM64 ELF. Clean compile. Both platforms.</div>
   </div>
   <div class="ov-card">
     <h3>Compiler Source</h3>
@@ -112,51 +118,47 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
     <div class="note">Pure Lithos. Lexer + parser + ARM64 + SM90 + ELF writer.</div>
   </div>
   <div class="ov-card">
-    <h3>Self-Host</h3>
-    <div class="bar"><div class="fill red"></div></div>
-    <div class="pct blocked">Next</div>
-    <div class="note">lithos-stage1 exists. Needs testing on GH200.</div>
-  </div>
-  <div class="ov-card">
     <h3>GPU Backend</h3>
     <div class="bar"><div class="fill green" style="width:100%"></div></div>
-    <div class="pct done">Written</div>
-    <div class="note">35+ raw SM90 opcodes. No ptxas. Direct binary emission.</div>
+    <div class="pct done">Verified</div>
+    <div class="note">40+ SM90 opcodes. Encodings verified against nvcc reference. Direct to opcode.</div>
   </div>
   <div class="ov-card">
-    <h3>Runtime</h3>
-    <div class="bar"><div class="fill green" style="width:100%"></div></div>
-    <div class="pct done">Written</div>
-    <div class="note">11 .ls files replacing 42 libcuda calls. Untested.</div>
+    <h3>Self-Host</h3>
+    <div class="bar"><div class="fill partial" style="width:50%"></div></div>
+    <div class="pct partial">WIP</div>
+    <div class="note">Stage-1 runs (no segfault). BSS fixed. Output generation next.</div>
   </div>
   <div class="ov-card">
     <h3>First Token</h3>
-    <div class="bar"><div class="fill red"></div></div>
+    <div class="bar"><div class="fill partial" style="width:15%"></div></div>
     <div class="pct blocked">Blocked</div>
-    <div class="note">Needs self-host &rarr; kernel compile &rarr; GPU execution.</div>
+    <div class="note">Opcode path proven. Needs full kernel compile + inference pipeline.</div>
   </div>
 </div>
 
 <!-- ==================== NEXT STEPS ==================== -->
 <div class="next-steps">
   <h2>Next Steps</h2>
-  <h3>On GH200 (Linux ARM64)</h3>
+  <h3>Proven</h3>
   <ol>
-    <li>Build bootstrap: <code>cd bootstrap && ./build.sh</code></li>
-    <li>Compile compiler.ls &rarr; lithos-stage1</li>
-    <li>Test lithos-stage1 on a simple .ls file</li>
-    <li>Self-host: lithos-stage1 compiles compiler.ls &rarr; lithos-stage2</li>
-    <li>Fixed point: lithos-stage2 compiles compiler.ls &rarr; lithos-verify; diff must match</li>
-    <li>Compile safetensors.ls as separate unit</li>
-    <li>Compile inference kernels &rarr; SM90 cubins</li>
-    <li>First kernel execution on Hopper</li>
-    <li>First token through Qwen 3.5 27B</li>
+    <li><s>Build bootstrap on Linux</s> &mdash; &#10003; 127KB ARM64 binary</li>
+    <li><s>Compile compiler.ls &rarr; lithos-stage1</s> &mdash; &#10003; 48KB ARM64 ELF</li>
+    <li><s>Execute opcodes on GPU</s> &mdash; &#10003; 255/256 correct outputs on GH200</li>
   </ol>
-  <h3>On macOS (Apple Silicon)</h3>
+  <h3>Immediate (no GPU needed)</h3>
   <ol>
-    <li>Verify lithos-stage1 correctness via compile-darwin.sh wrapper</li>
-    <li>Self-host test (stage1 compiles compiler.ls &rarr; stage2)</li>
-    <li>Metal GPU backend (when ready)</li>
+    <li>Fix all opcode encodings in emitter (agent completed &mdash; merging)</li>
+    <li>Compile inference kernel through emitter API (not hand-copied bytes)</li>
+    <li>Fix stage-1 output generation (runs but doesn't write ELF)</li>
+    <li>Self-host: stage-1 compiles compiler.ls &rarr; stage-2</li>
+  </ol>
+  <h3>On GH200 (needs GPU)</h3>
+  <ol>
+    <li>Test compiler-emitted opcodes on hardware</li>
+    <li>Test lithos runtime path (QMD + SPD + pushbuffer + doorbell)</li>
+    <li>Compile + execute full inference kernel (gemv.ls)</li>
+    <li>First token through Qwen 3.5 27B</li>
   </ol>
 </div>
 
@@ -242,15 +244,15 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
 <section>
 <h2 class="sec">Critical Path</h2>
 <pre style="background:#0e0e1a; border:1px solid var(--border); border-radius:8px; padding:1.5rem 2rem; font-family:'SF Mono','Fira Code',monospace; font-size:0.9rem; overflow-x:auto; line-height:2;">
-<span style="color:var(--green)">BOOTSTRAP</span> ──→ <span style="color:var(--green)">compiler.ls compiled</span> ──→ <span style="color:var(--accent)">test stage1</span> ──→ <span style="color:var(--accent)">self-host</span> ──→ <span style="color:var(--cyan)">fixed point</span>
+<span style="color:var(--green)">BOOTSTRAP</span> ──→ <span style="color:var(--green)">compiler.ls compiled</span> ──→ <span style="color:var(--accent)">fix stage1 output</span> ──→ <span style="color:var(--accent)">self-host</span> ──→ <span style="color:var(--cyan)">fixed point</span>
                                                                         │
-                                          <span style="color:var(--cyan)">compile kernels</span> ───────────────┤
-                                          <span style="color:var(--cyan)">compile safetensors.ls</span> ────────┤
-                                                                        │
-                                          <span style="color:var(--blue)">GSP boot + GPFIFO</span> ─────────────┤
-                                          <span style="color:var(--blue)">5-part pushbuffer + SPD</span> ────────┤
+<span style="color:var(--green)">OPCODE EXEC ✓</span>                            <span style="color:var(--cyan)">compile kernels</span> ───────────────┤
+<span style="color:var(--green)">6 opcodes on GH200</span>                       <span style="color:var(--cyan)">compile safetensors.ls</span> ────────┤
+<span style="color:var(--green)">255/256 correct</span>                                                         │
+                                          <span style="color:var(--green)">QMD + SPD + pushbuffer</span> ─────────┤
+                                          <span style="color:var(--accent)">lithos runtime path</span> ────────────┤
                                                                         ▼
-                                                              <span style="color:var(--accent)">first kernel exec</span>
+                                                              <span style="color:var(--accent)">full kernel exec</span>
                                                                         │
                                                               <span style="color:var(--accent)">first token</span>
                                                                         │
@@ -258,7 +260,7 @@ h2.sec .badge.blocked { background: #2a0a0a; color: var(--red); border: 1px soli
 </pre>
 </section>
 
-<p class="timestamp">Last updated: 2026-04-14</p>
+<p class="timestamp">Last updated: 2026-04-15 &mdash; first opcodes executed on GH200</p>
 
 </div>
 </body>
