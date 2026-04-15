@@ -2938,8 +2938,11 @@ parse_expr:
     ldr     w6, [sp], #16
     ldp     w4, w5, [sp], #16
 
-    // Reuse left if scratch
-    cmp     w4, #REG_FIRST
+    // Reuse left only if it's a free temporary (>= reg_floor)
+    adrp    x8, reg_floor
+    add     x8, x8, :lo12:reg_floor
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Lcmp_alloc
     mov     w7, w4
     b       .Lcmp_reclaim
@@ -3041,7 +3044,10 @@ parse_bitwise:
     bl      parse_shift
     ldp     w4, w5, [sp], #16
     mov     w6, w0
-    cmp     w4, #REG_FIRST
+    adrp    x8, reg_floor
+    add     x8, x8, :lo12:reg_floor
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Lbit_alloc
     mov     w7, w4
     b       .Lbit_emit
@@ -3103,7 +3109,10 @@ parse_shift:
     bl      parse_additive
     ldp     w4, w5, [sp], #16
     mov     w6, w0
-    cmp     w4, #REG_FIRST
+    adrp    x8, reg_floor
+    add     x8, x8, :lo12:reg_floor
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Lshift_alloc
     mov     w7, w4
     b       .Lshift_emit
@@ -3157,7 +3166,12 @@ parse_additive:
     bl      parse_multiplicative
     ldp     w4, w5, [sp], #16
     mov     w6, w0
-    cmp     w4, #REG_FIRST
+    // Same rule as parse_multiplicative: only reuse w4 if it is a free
+    // temporary (>= reg_floor), not a live binding's register.
+    adrp    x8, reg_floor
+    add     x8, x8, :lo12:reg_floor
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Ladd_alloc
     mov     w7, w4
     b       .Ladd_emit
@@ -3211,7 +3225,14 @@ parse_multiplicative:
     bl      parse_atom
     ldp     w4, w5, [sp], #16
     mov     w6, w0
-    cmp     w4, #REG_FIRST
+    // Reuse w4 (left operand) as destination ONLY if it is a free
+    // temporary — i.e. >= reg_floor.  Regs below reg_floor belong to
+    // live bindings (handle_binding raised the floor to protect them),
+    // and overwriting them here would clobber the source variable.
+    adrp    x8, reg_floor
+    add     x8, x8, :lo12:reg_floor
+    ldr     w8, [x8]
+    cmp     w4, w8
     b.lt    .Lmul_alloc
     mov     w7, w4
     b       .Lmul_emit
