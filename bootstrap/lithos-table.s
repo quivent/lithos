@@ -511,17 +511,23 @@ emit_movk_imm16:
 // emit_mov_imm64 — load full 64-bit immediate into Xd
 //   w0 = dest reg, x1 = imm64
 emit_mov_imm64:
+    // x19 is saved here and restored on exit, so use it to stash the
+    // destination register.  The previous code used w3 for this, but
+    // emit_movk_imm16 uses w3 as its own scratch for the shift field —
+    // every call after the first would overwrite the saved dest, and
+    // later `mov w0, w3` lines would pass a garbage Rd whose high bits
+    // OR'd into the encoding and corrupted the hw (shift) field.
     stp     x30, x19, [sp, #-16]!
     stp     x0, x1, [sp, #-16]!
     and     w2, w1, #0xFFFF
-    mov     w3, w0
+    mov     w19, w0                 // w19 = dest reg (survives BL calls)
     mov     w1, w2
     bl      emit_mov_imm16
     ldp     x0, x1, [sp]
     lsr     x4, x1, #16
     and     w1, w4, #0xFFFF
     cbz     w1, .Lm64_c32
-    mov     w0, w3
+    mov     w0, w19
     mov     w2, #16
     bl      emit_movk_imm16
     ldp     x0, x1, [sp]
@@ -529,7 +535,7 @@ emit_mov_imm64:
     lsr     x4, x1, #32
     and     w1, w4, #0xFFFF
     cbz     w1, .Lm64_c48
-    mov     w0, w3
+    mov     w0, w19
     mov     w2, #32
     bl      emit_movk_imm16
     ldp     x0, x1, [sp]
@@ -537,7 +543,7 @@ emit_mov_imm64:
     lsr     x4, x1, #48
     and     w1, w4, #0xFFFF
     cbz     w1, .Lm64_done
-    mov     w0, w3
+    mov     w0, w19
     mov     w2, #48
     bl      emit_movk_imm16
 .Lm64_done:
