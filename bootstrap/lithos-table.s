@@ -3550,13 +3550,20 @@ parse_atom:
     ldp     x2, xzr, [sp], #16
     // Emit: ADD Xresult, X28, #(offset & 0xFFF)
     // ARM64 ADD imm encoding: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd
-    and     w5, w2, #0xFFF
-    lsl     w5, w5, #10
+    // imm12 lives at bits 21:10, so bits 6..11 of imm12 land in the
+    // upper-16 region that `movk #0x9100, lsl #16` would otherwise
+    // overwrite.  Fold those bits into the movk constant.
+    and     w5, w2, #0xFFF          // w5 = imm12 (low 12 bits of offset)
+    and     w7, w5, #0x3F           // w7 = imm12[5:0]   → encoded bits 15:10
+    lsr     w8, w5, #6              // w8 = imm12[11:6]  → encoded bits 21:16
+    lsl     w7, w7, #10
     mov     w6, #28
     lsl     w6, w6, #5
-    orr     w0, w4, w5
-    orr     w0, w0, w6
-    movk    w0, #0x9100, lsl #16
+    orr     w0, w4, w7              // Rd | (low_imm << 10)
+    orr     w0, w0, w6              // | (Rn << 5)
+    movz    w9, #0x9100
+    orr     w9, w9, w8              // 0x9100 | high_imm[5:0]
+    orr     w0, w0, w9, lsl #16
     stp     x2, x4, [sp, #-16]!    // save offset and result reg
     bl      emit32
     ldp     x2, x4, [sp], #16
@@ -3564,11 +3571,15 @@ parse_atom:
     lsr     w5, w2, #12
     cbz     w5, .La_buf_done
     and     w5, w5, #0xFFF
-    lsl     w5, w5, #10             // imm12 << 10
+    and     w7, w5, #0x3F
+    lsr     w8, w5, #6
+    lsl     w7, w7, #10
     lsl     w6, w4, #5              // Rn=Xresult
-    orr     w0, w4, w5
+    orr     w0, w4, w7
     orr     w0, w0, w6
-    movk    w0, #0x9140, lsl #16    // ADD (imm, LSL #12): sh=1 (bit 22)
+    movz    w9, #0x9140             // ADD (imm, LSL #12): sh=1 (bit 22)
+    orr     w9, w9, w8
+    orr     w0, w0, w9, lsl #16
     bl      emit32
 .La_buf_done:
     mov     w0, w4                  // return result register
