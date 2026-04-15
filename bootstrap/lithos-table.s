@@ -352,14 +352,23 @@ alloc_reg:
     ret
 
 .Lalloc_spill:
-    // All physical registers exhausted. Spill the oldest (REG_FIRST)
-    // into the TARGET program's stack, then recycle that register.
-    // Emit: STR X<REG_FIRST>, [SP, #-16]!  (pre-index push)
+    // All physical registers above reg_floor are exhausted.  Spill the
+    // register at reg_floor (the first *temporary* slot — not a live
+    // binding) into the TARGET program's stack, and recycle it.
+    //
+    // Spilling REG_FIRST instead is wrong: if handle_binding raised
+    // reg_floor above REG_FIRST, then REG_FIRST holds a live binding
+    // value that must not be clobbered.  reg_floor is always the
+    // highest reg that is *not* a protected binding, so it's safe to
+    // spill and reuse.
     stp     x29, x30, [sp, #-16]!
+    adrp    x2, reg_floor
+    add     x2, x2, :lo12:reg_floor
+    ldr     w2, [x2]
     // ARM64 encoding: STR Xt, [SP, #-16]! = 0xF81F0FE0 | Rt
     mov     w0, #0x0FE0
     movk    w0, #0xF81F, lsl #16
-    add     w0, w0, #REG_FIRST
+    add     w0, w0, w2                  // Rt = reg_floor
     bl      emit32
     // Increment spill count
     adrp    x0, spill_count
@@ -368,9 +377,10 @@ alloc_reg:
     add     w1, w1, #1
     str     w1, [x0]
     ldp     x29, x30, [sp], #16
-    // Return REG_FIRST as the recycled register
-    // (caller will overwrite its contents — the old value is on target stack)
-    mov     w0, #REG_FIRST
+    // Return reg_floor as the recycled register
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    ldr     w0, [x0]
     ret
 
 free_reg:
@@ -386,15 +396,19 @@ free_reg:
     add     x2, x2, :lo12:spill_count
     ldr     w3, [x2]
     cbz     w3, .Lfree_done
-    // Emit LDR X<REG_FIRST>, [SP], #16 for each spilled register (LIFO)
+    // Emit LDR X<reg_floor>, [SP], #16 for each spilled register (LIFO).
+    // Must match .Lalloc_spill which pushed reg_floor, not REG_FIRST.
 .Lfree_fill_loop:
     cbz     w3, .Lfree_fill_done
     // ARM64 encoding: LDR Xt, [SP], #16 = 0xF8410FE0 | Rt
     stp     w0, w3, [sp, #-16]!
     stp     x1, x2, [sp, #-16]!
+    adrp    x4, reg_floor
+    add     x4, x4, :lo12:reg_floor
+    ldr     w4, [x4]
     mov     w0, #0x0FE0
     movk    w0, #0xF841, lsl #16
-    add     w0, w0, #REG_FIRST
+    add     w0, w0, w4                 // Rt = reg_floor
     bl      emit32
     ldp     x1, x2, [sp], #16
     ldp     w0, w3, [sp], #16
