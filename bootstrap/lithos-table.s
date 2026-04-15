@@ -1049,6 +1049,9 @@ parse_toplevel:
     b.eq    .Ltop_skip_prefix
     cmp     w0, #TOK_KERNEL
     b.eq    .Ltop_skip_prefix
+    // Forth-style constant declaration:  INT  IDENT("constant")  IDENT(NAME)
+    cmp     w0, #TOK_INT
+    b.eq    .Ltop_maybe_forth_const
 
     // Any keyword 11-45 not already dispatched → treat as identifier
     cmp     w0, #11
@@ -1056,6 +1059,50 @@ parse_toplevel:
     cmp     w0, #45
     b.le    .Ltop_ident
 .Ltop_skip_unknown:
+    add     x19, x19, #TOK_STRIDE_SZ
+    b       .Ltop_loop
+
+.Ltop_maybe_forth_const:
+    // Need next two tokens: IDENT("constant"), IDENT(NAME).
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Ltop_skip_unknown
+    ldr     w5, [x4]
+    cmp     w5, #TOK_IDENT
+    b.ne    .Ltop_skip_unknown
+    // Length must be 8 ("constant" is 8 chars).
+    ldr     w5, [x4, #8]
+    cmp     w5, #8
+    b.ne    .Ltop_skip_unknown
+    // Compare source bytes to "constant".
+    ldr     w5, [x4, #4]            // source offset
+    add     x5, x28, x5
+    ldr     x6, [x5]                // 8 bytes starting at the ident
+    movz    x7, #0x6f63
+    movk    x7, #0x736e, lsl #16
+    movk    x7, #0x6174, lsl #32
+    movk    x7, #0x746e, lsl #48
+    cmp     x6, x7
+    b.ne    .Ltop_skip_unknown
+    // Third token must be IDENT (the name we're defining).
+    add     x4, x4, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Ltop_skip_unknown
+    ldr     w5, [x4]
+    cmp     w5, #TOK_IDENT
+    b.ne    .Ltop_skip_unknown
+    // Parse the int literal at x19.
+    stp     x4, xzr, [sp, #-16]!
+    bl      parse_int_literal
+    ldp     x4, xzr, [sp], #16
+    mov     w6, w0                  // const value
+    // sym_add reads name from x19 — point it at the NAME token.
+    mov     x19, x4
+    mov     w1, #KIND_CONST
+    mov     w2, w6
+    mov     w3, #0
+    bl      sym_add
+    // Advance past INT, "constant", NAME.
     add     x19, x19, #TOK_STRIDE_SZ
     b       .Ltop_loop
 .Ltop_skip_prefix:
