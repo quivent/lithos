@@ -1663,7 +1663,92 @@ parse_statement:
     ldp     x29, x30, [sp], #16
     ret
 .Ls_trap:
+    add     x19, x19, #TOK_STRIDE_SZ                    // skip 'trap'
+    // Two forms:
+    //   `trap`                   — bare SVC, caller has set X8 / X0..X7.
+    //   `trap NAME NUM args...`  — expand to:
+    //                                MOV X8, <num>
+    //                                MOV X0..X7, <args>
+    //                                SVC #0
+    //                                MOV <name_reg>, X0
+    //                              and add NAME as a local symbol.
+    cmp     x19, x27
+    b.hs    .Ls_trap_bare
+    ldr     w0, [x19]
+    cmp     w0, #TOK_IDENT
+    b.ne    .Ls_trap_bare
+    // Forth-style trap:  NAME NUM args...
+    str     x19, [sp, #-16]!                             // [sp] = NAME tok
+    add     x19, x19, #TOK_STRIDE_SZ                    // past NAME
+    bl      parse_expr                                   // w0 = num_reg
+    mov     w1, w0
+    mov     w0, #8                                       // dest = X8
+    bl      emit_mov_reg
+    mov     w4, #0                                       // arg idx
+.Ls_trap_arg_loop:
+    cmp     x19, x27
+    b.hs    .Ls_trap_svc
+    ldr     w0, [x19]
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Ls_trap_svc
+    cmp     w0, #TOK_EOF
+    b.eq    .Ls_trap_svc
+    cmp     w0, #TOK_INDENT
+    b.eq    .Ls_trap_svc
+    cmp     w4, #8
+    b.ge    .Ls_trap_svc
+    str     x4, [sp, #-16]!                              // save arg idx
+    bl      parse_expr
+    ldr     x4, [sp], #16
+    mov     w1, w0                                       // arg reg
+    mov     w0, w4                                       // dest = X<arg idx>
+    str     x4, [sp, #-16]!
+    bl      emit_mov_reg
+    ldr     x4, [sp], #16
+    add     w4, w4, #1
+    b       .Ls_trap_arg_loop
+.Ls_trap_svc:
+    bl      emit_svc                                     // SVC #0
+    // Bind NAME to X0 as a new local-register symbol.
+    bl      alloc_reg
+    mov     w5, w0                                       // name_reg
+    mov     w1, #0                                       // src = X0
+    mov     w0, w5                                       // dest = name_reg
+    bl      emit_mov_reg
+    ldr     x19, [sp], #16                               // restore NAME tok
+    mov     w1, #KIND_VAR
+    mov     w2, w5
+    adrp    x3, scope_depth
+    add     x3, x3, :lo12:scope_depth
+    ldr     w3, [x3]
+    bl      sym_add
+    add     x19, x19, #TOK_STRIDE_SZ                    // past NAME
+    // Skip back past remaining args & num — x19 currently at NAME;
+    // but the arg-loop already advanced past them before we restored.
+    // Re-scan the line to EOL so the parser is positioned at NEWLINE.
+    // Actually the arg-loop left x19 PAST the last arg already; we
+    // just need to leave x19 at the original post-trap position so
+    // the NAME advance above is correct.  Arg loop already consumed
+    // through NEWLINE-peek; saved NAME pos is before everything, so
+    // after restoring x19 = NAME_pos and adding one stride, x19 sits
+    // at NUM.  That's wrong — the caller expects x19 at NEWLINE.
+    // Quick recovery: spin forward until NEWLINE/EOF/INDENT.
+.Ls_trap_eol:
+    cmp     x19, x27
+    b.hs    .Ls_trap_done
+    ldr     w0, [x19]
+    cmp     w0, #TOK_NEWLINE
+    b.eq    .Ls_trap_done
+    cmp     w0, #TOK_EOF
+    b.eq    .Ls_trap_done
+    cmp     w0, #TOK_INDENT
+    b.eq    .Ls_trap_done
     add     x19, x19, #TOK_STRIDE_SZ
+    b       .Ls_trap_eol
+.Ls_trap_done:
+    ldp     x29, x30, [sp], #16
+    ret
+.Ls_trap_bare:
     bl      emit_svc
     ldp     x29, x30, [sp], #16
     ret
