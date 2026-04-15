@@ -2129,15 +2129,38 @@ emit_reg_read :
     1
 
 emit_reg_write :
+    \\ ↓ $N val   →   MOV X<N>, #imm   (for host target)
+    \\ Tokens after the ↓: $ (97), int N, int val (or ident).
+    et → 64 emit_target_v
     p → 64 walk_pos_v
-    t tok_type p
-    if== t 97
+    rn 0
+    \\ Skip past the $ token (always 1 byte, type 97).
+    rt tok_type p
+    if== rt 97
         ← 64 walk_pos_v p + 1
+    \\ Now read the register number (int token).
+    p1 → 64 walk_pos_v
+    nt1 tok_type p1
+    if== nt1 3
+        roff tok_offset p1
+        rlen tok_length p1
+        rn parse_int_tok roff rlen
+        ← 64 walk_pos_v p1 + 1
+    \\ Now read the value (int token or skip ident).
     p2 → 64 walk_pos_v
-    nt tok_type p2
-    if== nt 3
+    nt2 tok_type p2
+    iv 0
+    if== nt2 3
+        ioff tok_offset p2
+        ilen tok_length p2
+        iv parse_int_tok ioff ilen
         ← 64 walk_pos_v p2 + 1
-    vpop
+        if== et 1
+            \\ MOVZ X<rn>, #(iv & 0xFFFF), LSL #0
+            mov_word 0xD2800000 | ((iv & 0xFFFF) << 5) | rn
+            arm64_emit32 mov_word
+    if== nt2 5
+        ← 64 walk_pos_v p2 + 1
     1
 
 \\ Tiny numeric parser for literal tokens (no fractional/exp support).
@@ -2227,6 +2250,21 @@ walk_body body_start body_end :
         off tok_offset p
         len tok_length p
         ← 64 walk_pos_v p + 1
+        \\ Builtin: `trap` → SVC #0 on host.
+        if== len 4
+            src → 64 lex_src_v
+            tb0 → 8 src + off
+            tb1 → 8 src + off + 1
+            tb2 → 8 src + off + 2
+            tb3 → 8 src + off + 3
+            if== tb0 116
+                if== tb1 114
+                    if== tb2 97
+                        if== tb3 112
+                            et → 64 emit_target_v
+                            if== et 1
+                                arm64_emit32 0xD4000001
+                            goto wb_loop
         r sym_find off len
         if>= r 0
             vpush r
