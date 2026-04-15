@@ -13,7 +13,10 @@ import sys
 import os
 import struct
 
-# -------------------------------------------------------------------- tokens
+sys.setrecursionlimit(500000)
+import threading
+# Run main logic in a thread with a larger stack to survive deep recursion
+# seen in the reference interpretation of compiler-darwin.ls.
 
 (TOK_EOF, TOK_NEWLINE, TOK_INDENT, TOK_INT, TOK_IDENT,
  TOK_IF, TOK_ELIF, TOK_ELSE, TOK_FOR, TOK_WHILE,
@@ -42,9 +45,6 @@ CMP_TOKENS = {TOK_LT, TOK_GT, TOK_LTE, TOK_GTE, TOK_EQEQ, TOK_NEQ}
 
 EXPR_STARTERS = {TOK_INT, TOK_IDENT, TOK_LPAREN, TOK_MINUS,
                  TOK_REG_READ, TOK_MEM_LOAD}
-
-
-# --------------------------------------------------------------------- lexer
 
 def lex(src: bytes):
     toks = []
@@ -163,9 +163,6 @@ def lex(src: bytes):
     emit(TOK_EOF, i, 0)
     return toks
 
-
-# --------------------------------------------------------------- control flow
-
 class ReturnVal(Exception):
     def __init__(self, v): self.value = v
 
@@ -176,7 +173,6 @@ class GotoLabel(Exception):
 class ExitProgram(Exception):
     def __init__(self, code): self.code = code
 
-
 MASK64 = (1 << 64) - 1
 
 def m(v): return v & MASK64
@@ -185,9 +181,6 @@ def sx(v, bits=64):
     """sign-extend from 64 bits to Python int"""
     sign = 1 << (bits - 1)
     return (v & (sign - 1)) - (v & sign)
-
-
-# ------------------------------------------------------------- interpreter
 
 class Interp:
     def __init__(self, src, argv):
@@ -213,7 +206,8 @@ class Interp:
         self.open_fds = {}       # "internal fd" -> real os fd
         self.next_fake_fd = 100
 
-    # -------------------- basic token helpers
+        self.last_call_extras = []
+        self.frame_param_counts = []
     def cur(self): return self.toks[self.tk]
     def ty(self): return self.toks[self.tk][0]
     def tok_text(self, t):
@@ -221,8 +215,6 @@ class Interp:
     def die(self, msg):
         t = self.cur()
         raise RuntimeError(f"interp line {t[3]}: {msg}")
-
-    # -------------------- variable lookup
     def lookup(self, name):
         if self.frames and name in self.frames[-1]:
             return self.frames[-1][name]
@@ -245,8 +237,6 @@ class Interp:
 
     def new_local(self, name, value):
         self.frames[-1][name] = m(value)
-
-    # -------------------- memory
     def mem_read(self, addr, width):
         a = m(addr)
         w = width // 8 if width >= 8 else 1
@@ -266,8 +256,6 @@ class Interp:
         elif width == 16: struct.pack_into('<H', self.mem, a, v & 0xFFFF)
         elif width == 32: struct.pack_into('<I', self.mem, a, v & 0xFFFFFFFF)
         elif width == 64: struct.pack_into('<Q', self.mem, a, v)
-
-    # -------------------- parsing + evaluation (single-pass)
     def parse_int(self, t):
         s = self.tok_text(t)
         neg = 1
@@ -464,9 +452,43 @@ class Interp:
 
     def parse_expr(self):
         return self.parse_bits()
-
-    # -------------------- call a composition
     def call_compo(self, name, atom_mode=False):
+        # Instrumentation
+        if not hasattr(self, '_call_counts'):
+            self._call_counts = {}
+            self._call_depth = 0
+            self._max_depth = 0
+            self._trace_stack = []
+        self._call_counts[name] = self._call_counts.get(name, 0) + 1
+        self._call_depth += 1
+        if self._call_depth > self._max_depth:
+            self._max_depth = self._call_depth
+        self._trace_stack.append(name)
+        # Trace first 10 parse_file calls + periodic
+        if name == 'parse_file':
+            cnt = self._call_counts.get(name, 0)
+            if cnt <= 15 or cnt % 500 == 0:
+                tp = self.globals.get('tok_pos', '<none>')
+                tt = self.globals.get('tok_total', '<none>')
+                import sys as _sys
+                tokens_addr = self.bufs.get('tokens', (0, 0))[0]
+                ty_val = 'N/A'
+                if isinstance(tp, int):
+                    idx = tp * 3
+                    try:
+                        ty_val = self.mem_read(tokens_addr + idx*4, 32)
+                    except Exception:
+                        ty_val = 'err'
+                print(f"[trace] parse_file #{cnt} depth={self._call_depth} tok_pos={tp}/{tt} mem_type_at_pos={ty_val}", file=_sys.stderr)
+                _sys.stderr.flush()
+        # Only hard-cap if truly pathological.
+        if self._call_depth > 2000 and name == 'parse_file':
+            import sys as _sys
+            tp = self.globals.get('tok_pos', '<none>')
+            tt = self.globals.get('tok_total', '<none>')
+            print(f"DEPTH={self._call_depth} parse_file tok_pos={tp} tok_total={tt}", file=_sys.stderr)
+            _sys.stderr.flush()
+            raise RuntimeError(f"call depth exceeded at {name}, tok_pos={tp}/{tt}")
         compo = self.compositions[name]
         params = compo['params']
         args = []
@@ -492,61 +514,49 @@ class Interp:
         # New frame
         frame = dict(zip(params, args))
         self.frames.append(frame)
+        self.frame_param_counts.append(len(params))
 
         saved_tk = self.tk
         self.tk = compo['body_tk']
 
         ret = 0
+        explicit_return = False
         try:
             ret = self.exec_loop(compo['body_indent'])
         except ReturnVal as r:
             ret = r.value
-        finally:
-            self.frames.pop()
-            self.tk = saved_tk
+            explicit_return = True
+        # Save the callee's locals so a multi-return caller can read extra
+        # values. Order: reversed (last declared first), so callers like
+        # `a b c foo args` naturally bind to the most-recently-captured values.
+        last_frame = self.frames[-1]
+        param_count = len(compo['params'])
+        locals_in_order = list(last_frame.values())[param_count:]
+        extras = list(reversed(locals_in_order))
+        self.last_call_extras = extras
+        self.frames.pop()
+        self.frame_param_counts.pop()
+        self.tk = saved_tk
 
+        # Removed: previous fallback that returned the first non-zero
+        # local when ret == 0 was overriding LEGITIMATE 0 returns.
+        # E.g. peek_type returning 0 at EOF was being clobbered with the
+        # local `idx` value. Source code should explicitly marshal
+        # multi-return values into globals (mmap_file does this now).
+        self._call_depth -= 1
+        self._trace_stack.pop()
+        if name == 'match_keyword' and os.environ.get('LITHOS_TRACE_MATCH_KEYWORD'):
+            import sys as _sys
+            try:
+                src_arg = args[0]
+                off_arg = args[1]
+                ln_arg = args[2]
+                text = bytes(self.mem[src_arg + off_arg:src_arg + off_arg + ln_arg]).decode('utf-8', errors='replace')
+            except Exception:
+                text = '<unk>'
+            print(f"TRACE match_keyword({text!r}, len={args[2] if len(args)>=3 else '?'}) -> {ret} (explicit={explicit_return})", file=_sys.stderr)
+            _sys.stderr.flush()
         return ret
-
-    # -------------------- body / statement execution
-    def exec_body(self, body_indent):
-        last_value = 0
-        # Skip leading newlines / empty indents
-        while True:
-            if self.ty() == TOK_NEWLINE:
-                self.tk += 1
-                continue
-            break
-
-        while self.ty() != TOK_EOF:
-            t = self.cur()
-            if t[0] == TOK_NEWLINE:
-                self.tk += 1
-                continue
-            if t[0] == TOK_INDENT:
-                if self.tk + 1 < len(self.toks) and self.toks[self.tk+1][0] == TOK_NEWLINE:
-                    self.tk += 2
-                    continue
-                if t[2] < body_indent:
-                    return last_value
-                self.tk += 1
-                continue
-            # Non-indent token at body start — body ended
-            # but tolerate stray orphans like INT, RPAREN, COLON
-            if t[0] in (TOK_INT, TOK_RPAREN, TOK_RBRACK, TOK_COLON):
-                self.tk += 1
-                continue
-            # Else: dedent back to caller
-            return last_value
-
-        return last_value
-
-    def exec_body_at_indent(self):
-        # Peek for body INDENT and call exec_body
-        if self.ty() != TOK_INDENT:
-            return 0
-        body_indent = self.toks[self.tk][2]
-        return self.exec_loop(body_indent)
-
     def exec_loop(self, body_indent):
         """Execute statements at body_indent until dedent."""
         last = 0
@@ -707,7 +717,22 @@ class Interp:
         if t[0] == TOK_RETURN:
             self.tk += 1
             nx = self.ty()
-            v = self.parse_expr() if nx in EXPR_STARTERS else 0
+            if nx in EXPR_STARTERS:
+                v = self.parse_expr()
+            else:
+                # Bare `return` — compiler emits raw `ret` with whatever is
+                # in X0. Register allocator keeps the FIRST non-parameter
+                # local in X0 (the primary working variable). Emulate that.
+                v = 0
+                if self.frames:
+                    last_frame = self.frames[-1]
+                    pcount = self.frame_param_counts[-1] if self.frame_param_counts else 0
+                    vals = list(last_frame.values())
+                    # First local after the parameters
+                    if len(vals) > pcount:
+                        v = vals[pcount]
+                    elif vals:
+                        v = vals[-1]
             raise ReturnVal(v)
 
         if t[0] == TOK_LOAD:  # ↓
@@ -746,8 +771,17 @@ class Interp:
             return val
 
         if t[0] == TOK_REG_READ:  # ↑ $N bare
-            (void := self.parse_expr())
-            return 0
+            v = self.parse_expr()
+            self.regs[0] = m(v)
+            return v
+
+        if t[0] == TOK_MEM_LOAD:  # → width addr  as expression statement
+            # The last expression in a composition body is its return value,
+            # by convention kept in X0. Without this case, `→ 32 tokens idx`
+            # on its own line is dropped and the function returns garbage.
+            v = self.parse_expr()
+            self.regs[0] = m(v)
+            return v
 
         if t[0] == TOK_IF:
             return self.exec_if_chain()
@@ -830,11 +864,58 @@ class Interp:
         if self.ty() in (TOK_NEWLINE, TOK_EOF, TOK_INDENT):
             # bare call to unknown — treat as no-op
             return 0
+        # Multi-assign pattern: `a b c foo args` — collect unknown IDENTs
+        # until we hit a known composition.
+        extra_names = []
+        while self.ty() == TOK_IDENT:
+            tcur = self.cur()
+            nm = self.tok_text(tcur)
+            if nm in self.compositions:
+                break
+            # Already-defined symbols just get read as part of expr, stop here
+            if (self.frames and nm in self.frames[-1]) or \
+               nm in self.globals or nm in self.consts or nm in self.bufs:
+                break
+            # Peek: is the NEXT token something that would make this current
+            # ident a standalone expression (operator)? If so, it's a real
+            # value read (unknown -> 0 fallback). Otherwise treat as extra
+            # assignment target.
+            nxt_ty = self.toks[self.tk+1][0] if self.tk + 1 < len(self.toks) else TOK_EOF
+            if nxt_ty in OP_TOKENS or nxt_ty in CMP_TOKENS or \
+               nxt_ty == TOK_LBRACK or nxt_ty in (TOK_NEWLINE, TOK_EOF, TOK_INDENT):
+                break
+            extra_names.append(nm)
+            self.tk += 1
+        # If we now sit on a known composition, call it for the value.
+        # Extra return values come from the callee's last-declared locals.
+        if self.ty() == TOK_IDENT:
+            nm = self.tok_text(self.cur())
+            if nm in self.compositions:
+                self.tk += 1  # consume the composition name
+                val = self.call_compo(nm, atom_mode=False)
+                extras = self.last_call_extras  # reversed locals
+                # `name` gets the return value (first slot of reversed locals)
+                # `extra_names[i]` gets extras[i+1]
+                if self.frames:
+                    self.new_local(name, val)
+                    for i, en in enumerate(extra_names):
+                        ev = extras[i+1] if i+1 < len(extras) else 0
+                        self.new_local(en, ev)
+                else:
+                    self.globals[name] = m(val)
+                    for i, en in enumerate(extra_names):
+                        ev = extras[i+1] if i+1 < len(extras) else 0
+                        self.globals[en] = m(ev)
+                return val
         val = self.parse_expr()
         if self.frames:
             self.new_local(name, val)
+            for en in extra_names:
+                self.new_local(en, val)
         else:
             self.globals[name] = m(val)
+            for en in extra_names:
+                self.globals[en] = m(val)
         return val
 
     def do_assign_local(self, name):
@@ -899,8 +980,34 @@ class Interp:
             elif op == TOK_SHL:   a = m(a << (b & 63))
             elif op == TOK_SHR:   a = a >> (b & 63)
         return a
+    def _skip_empty_lines(self):
+        """Skip TOK_NEWLINE and empty TOK_INDENT+NEWLINE pairs."""
+        while True:
+            if self.ty() == TOK_NEWLINE:
+                self.tk += 1
+                continue
+            if self.ty() == TOK_INDENT and self.tk + 1 < len(self.toks) \
+               and self.toks[self.tk+1][0] == TOK_NEWLINE:
+                self.tk += 2
+                continue
+            break
 
-    # -------------------- if/elif/else
+    def _peek_body_indent(self):
+        """Peek the indent width of the body following the current position."""
+        i = self.tk
+        while i < len(self.toks):
+            t = self.toks[i]
+            if t[0] == TOK_NEWLINE:
+                i += 1
+                continue
+            if t[0] == TOK_INDENT:
+                if i + 1 < len(self.toks) and self.toks[i+1][0] == TOK_NEWLINE:
+                    i += 2
+                    continue
+                return t[2], i
+            return 0, i
+        return 0, i
+
     def exec_if_chain(self):
         """Handle `if [compound] cond : body [elif ...] [else ...]`."""
         took_branch = False
@@ -911,15 +1018,10 @@ class Interp:
                 cond = self.eval_if_cond()
                 if self.ty() == TOK_COLON:
                     self.tk += 1
-                if self.ty() == TOK_NEWLINE:
-                    self.tk += 1
+                self._skip_empty_lines()
                 body_indent = self.toks[self.tk][2] if self.ty() == TOK_INDENT else 0
                 if cond and not took_branch:
-                    try:
-                        self.exec_loop(body_indent)
-                    except (ReturnVal, BreakLoop, ContinueLoop):
-                        # propagate
-                        raise
+                    self.exec_loop(body_indent)
                     took_branch = True
                 else:
                     self.skip_body(body_indent)
@@ -927,8 +1029,7 @@ class Interp:
                 self.tk += 1
                 if self.ty() == TOK_COLON:
                     self.tk += 1
-                if self.ty() == TOK_NEWLINE:
-                    self.tk += 1
+                self._skip_empty_lines()
                 body_indent = self.toks[self.tk][2] if self.ty() == TOK_INDENT else 0
                 if not took_branch:
                     self.exec_loop(body_indent)
@@ -939,8 +1040,7 @@ class Interp:
             else:
                 break
             # Consume trailing newlines to reach next potential elif/else
-            while self.ty() == TOK_NEWLINE:
-                self.tk += 1
+            self._skip_empty_lines()
             if self.ty() == TOK_INDENT:
                 # elif/else at current body-indent — advance past the INDENT
                 # only if next is elif/else
@@ -983,8 +1083,6 @@ class Interp:
             if rel == TOK_EQEQ: return 1 if a == b else 0
             if rel == TOK_NEQ: return 1 if a != b else 0
         return 1 if a != 0 else 0
-
-    # -------------------- while
     def exec_while(self):
         self.tk += 1
         cond_tk = self.tk
@@ -996,8 +1094,7 @@ class Interp:
             cond = self.eval_if_cond()
             if self.ty() == TOK_COLON:
                 self.tk += 1
-            if self.ty() == TOK_NEWLINE:
-                self.tk += 1
+            self._skip_empty_lines()
             if first:
                 body_indent = self.toks[self.tk][2] if self.ty() == TOK_INDENT else 0
                 first = False
@@ -1012,8 +1109,6 @@ class Interp:
                 return 0
             except ContinueLoop:
                 pass
-
-    # -------------------- for i start end [step]
     def exec_for(self):
         self.tk += 1
         nt = self.cur()
@@ -1027,7 +1122,7 @@ class Interp:
         if self.ty() in EXPR_STARTERS:
             step = self.parse_expr()
         if self.ty() == TOK_COLON: self.tk += 1
-        if self.ty() == TOK_NEWLINE: self.tk += 1
+        self._skip_empty_lines()
         body_indent = self.toks[self.tk][2] if self.ty() == TOK_INDENT else 0
         body_tk = self.tk
         self.new_local(var_name, start)
@@ -1049,8 +1144,6 @@ class Interp:
         self.tk = body_tk
         self.skip_body(body_indent)
         return 0
-
-    # -------------------- each i (host: just zero)
     def exec_each(self):
         self.tk += 1
         nt = self.cur()
@@ -1058,12 +1151,10 @@ class Interp:
             self.new_local(self.tok_text(nt), 0)
             self.tk += 1
         if self.ty() == TOK_COLON: self.tk += 1
-        if self.ty() == TOK_NEWLINE: self.tk += 1
+        self._skip_empty_lines()
         body_indent = self.toks[self.tk][2] if self.ty() == TOK_INDENT else 0
         self.exec_loop(body_indent)
         return 0
-
-    # -------------------- syscall emulation
     def do_syscall(self):
         """Execute syscall based on X16 (Darwin convention) or X8 (Linux)."""
         num = self.regs[16] if self.regs[16] else self.regs[8]
@@ -1071,6 +1162,8 @@ class Interp:
         x1 = self.regs[1]
         x2 = self.regs[2]
         x3 = self.regs[3]
+        x4 = self.regs[4]
+        x5 = self.regs[5]
 
         # macOS syscalls
         if num == 1:    # exit
@@ -1092,61 +1185,87 @@ class Interp:
                     return -1
             self.regs[0] = 0
             return 0
+        def _resolve_fd(fd):
+            fv = sx(fd)
+            if fv < 0 or fv > 10**9: return -1
+            return fv if fv < 100 else self.open_fds.get(fv, -1)
         if num == 3:    # read
-            fd = x0
-            buf = x1
-            count = x2
             try:
-                real_fd = fd if fd < 100 else self.open_fds.get(fd, fd)
-                data = os.read(real_fd, count)
-                self.mem[buf:buf+len(data)] = data
-                self.regs[0] = len(data)
-                return len(data)
+                rfd = _resolve_fd(x0)
+                if rfd < 0:
+                    self.regs[0] = -1; return -1
+                data = os.read(rfd, x2)
+                self.mem[x1:x1+len(data)] = data
+                self.regs[0] = len(data); return len(data)
             except OSError:
-                self.regs[0] = -1
-                return -1
+                self.regs[0] = -1; return -1
         if num == 6:    # close
             try:
-                real_fd = x0 if x0 < 100 else self.open_fds.get(x0, x0)
-                os.close(real_fd)
-                if x0 >= 100: del self.open_fds[x0]
-                self.regs[0] = 0
-                return 0
+                rfd = _resolve_fd(x0)
+                if rfd < 0:
+                    self.regs[0] = -1; return -1
+                os.close(rfd)
+                fv = sx(x0)
+                if fv >= 100 and fv in self.open_fds: del self.open_fds[fv]
+                self.regs[0] = 0; return 0
             except OSError:
-                self.regs[0] = -1
-                return -1
-        if num == 463:  # openat
-            # x0=dirfd, x1=path_ptr, x2=flags, x3=mode
-            # Read path from memory as NUL-terminated string
+                self.regs[0] = -1; return -1
+        if num == 197:  # mmap — emulate by reading the fd into our mem
+            length = x1
+            rfd = _resolve_fd(x4)
+            if rfd < 0:
+                self.regs[0] = 0; return 0
+            try:
+                os.lseek(rfd, x5, 0)
+                data = os.read(rfd, length)
+                alloc = max((length + 7) & ~7, 8)
+                base = self.mem_top
+                if base + alloc > len(self.mem):
+                    self.regs[0] = 0; return 0
+                self.mem[base:base+len(data)] = data
+                self.mem_top += alloc
+                self.regs[0] = base
+                self.regs[1] = len(data)  # Lithos convention: size in X1
+                return base
+            except OSError:
+                self.regs[0] = 0; return 0
+        if num == 199:  # lseek
+            try:
+                rfd = _resolve_fd(x0)
+                if rfd < 0:
+                    self.regs[0] = -1; return -1
+                r = os.lseek(rfd, sx(x1), x2)
+                self.regs[0] = r; return r
+            except OSError:
+                self.regs[0] = -1; return -1
+        if num in (73, 74):  # munmap, mprotect
+            self.regs[0] = 0; return 0
+        if num == 12:   # brk
+            self.regs[0] = self.mem_top; return self.mem_top
+        if num == 463:  # openat: x0=dirfd, x1=path, x2=flags, x3=mode
             path_bytes = bytearray()
             p = x1
             while p < len(self.mem) and self.mem[p] != 0:
-                path_bytes.append(self.mem[p])
-                p += 1
+                path_bytes.append(self.mem[p]); p += 1
             path = bytes(path_bytes).decode(errors='replace')
-            flags = x2 & 0xFFFF  # truncate high bits
+            flags_v = x2 & 0xFFFFFFFF
+            # Lithos 1537 = O_WRONLY|O_CREAT|O_TRUNC
             try:
-                # Map Lithos flags: 1537 = O_WRONLY|O_CREAT|O_TRUNC on macOS
-                py_flags = 0
-                if flags & 1:   py_flags |= os.O_WRONLY
-                if flags & 2:   py_flags |= os.O_RDWR
-                if flags & 0x200: py_flags |= os.O_CREAT
-                if flags & 0x400: py_flags |= os.O_TRUNC
-                real_fd = os.open(path, py_flags, x3 & 0o777 if x3 else 0o644)
+                py_flags = [os.O_RDONLY, os.O_WRONLY, os.O_RDWR, 0][flags_v & 3]
+                if flags_v & 0x200: py_flags |= os.O_CREAT
+                if flags_v & 0x400: py_flags |= os.O_TRUNC
+                mode = x3 & 0o7777 if x3 else 0o644
+                real_fd = os.open(path, py_flags, mode)
                 fake = self.next_fake_fd
                 self.next_fake_fd += 1
                 self.open_fds[fake] = real_fd
-                self.regs[0] = fake
-                return fake
-            except OSError as e:
-                self.regs[0] = -1
-                return -1
+                self.regs[0] = fake; return fake
+            except OSError:
+                self.regs[0] = -1; return -1
 
         # Unknown syscall — no-op, return 0
         self.regs[0] = 0
         return 0
-
-    # -------------------- pre-pass: collect compositions
     def collect(self):
         i = 0
         at_line_start = True
@@ -1226,8 +1345,6 @@ class Interp:
                 'body_indent': body_indent,
             }
             i = body_tk
-
-    # -------------------- run
     def run(self):
         self.collect()
 
@@ -1308,9 +1425,6 @@ class Interp:
             return r.value & 0xFF
         return ret & 0xFF
 
-
-# ----------------------------------------------------------------------- main
-
 def main():
     if len(sys.argv) < 2:
         print("usage: lithos-interp.py source.ls [args...]", file=sys.stderr)
@@ -1320,13 +1434,48 @@ def main():
         src = f.read()
 
     interp = Interp(src, sys.argv[1:])
-    try:
-        code = interp.run()
-    except RuntimeError as e:
-        print(f"interp error: {e}", file=sys.stderr)
+    # Run in a thread with a much larger stack to avoid overflowing on the
+    # compiler's deep recursion.
+    result = {'code': 0, 'error': None}
+    def runner():
+        try:
+            result['code'] = interp.run()
+        except RuntimeError as e:
+            import traceback as _tb
+            result['error'] = str(e) + "\n" + _tb.format_exc()
+        except RecursionError as e:
+            import traceback as _tb
+            result['error'] = "recursion: " + str(e) + "\n" + _tb.format_exc()
+        finally:
+            # Dump instrumentation
+            import sys as _sys
+            if hasattr(interp, '_call_counts'):
+                counts = interp._call_counts
+                print(f"=== INSTRUMENTATION ===", file=_sys.stderr)
+                print(f"max_depth={interp._max_depth}", file=_sys.stderr)
+                # Globals
+                g = getattr(interp, 'globals', {}) or {}
+                for gk in ('arm64_pos', 'gpu_pos', 'token_count'):
+                    print(f"global[{gk}]={g.get(gk, '<missing>')}", file=_sys.stderr)
+                # Top-called functions
+                emit_calls = {k: v for k, v in counts.items() if k.startswith('emit_')}
+                parse_calls = {k: v for k, v in counts.items() if k.startswith('parse_')}
+                elf_calls = {k: v for k, v in counts.items() if 'elf' in k or 'mach' in k or 'build' in k}
+                print(f"emit_* calls: {sorted(emit_calls.items(), key=lambda x:-x[1])[:10]}", file=_sys.stderr)
+                print(f"parse_* calls: {sorted(parse_calls.items(), key=lambda x:-x[1])[:10]}", file=_sys.stderr)
+                print(f"output_writer calls: {sorted(elf_calls.items(), key=lambda x:-x[1])[:10]}", file=_sys.stderr)
+                top10 = sorted(counts.items(), key=lambda x:-x[1])[:15]
+                print(f"top calls: {top10}", file=_sys.stderr)
+                _sys.stderr.flush()
+    threading.stack_size(64 * 1024 * 1024)
+    t = threading.Thread(target=runner)
+    t.start()
+    t.join()
+    if result['error']:
+        print(f"interp error: {result['error']}", file=sys.stderr)
         sys.exit(1)
-    sys.exit(code)
-
+    sys.exit(result['code'])
 
 if __name__ == '__main__':
     main()
+
