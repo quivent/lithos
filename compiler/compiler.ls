@@ -1652,8 +1652,10 @@ buf sym_count_v        8
 buf vstack_v         128
 buf vstack_sp_v        8
 
-\\ Bump register allocator for current kernel.
+\\ Scratch register rotation and frame slot allocator.
 buf next_reg_v         8
+buf scratch_idx_v      8
+buf frame_slot_v       8
 
 \\ Scan cursor used by body walker.
 buf walk_pos_v         8
