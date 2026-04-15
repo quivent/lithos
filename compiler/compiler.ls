@@ -1952,8 +1952,82 @@ emit_primitive t :
     \\ ↓ $N val  —  register write
     if== t 39
         return emit_reg_write
+    \\ [  —  array subscript (base already on vstack)
+    if== t 67
+        return emit_subscript
+    \\ =  —  assignment (LHS address on vstack)
+    if== t 54
+        return emit_assign
 
     0
+
+\\ [idx] — pop base, read index (single ident or int), compute addr = base + idx*4.
+\\ Pushes the resulting address. If followed by '=', the caller will use it for store.
+\\ Otherwise, emits LDG at that address and pushes the loaded value.
+emit_subscript :
+    ra vpop
+    p → 64 walk_pos_v
+    p p + 1
+    ← 64 walk_pos_v p
+    \\ Parse index: single ident → sym_find, or int literal → emit_mov_imm
+    it tok_type p
+    idx_reg 0
+    if== it 5
+        io tok_offset p
+        il tok_length p
+        idx_reg sym_find io il
+    if== it 3
+        io tok_offset p
+        il tok_length p
+        iv parse_int io il
+        idx_reg alloc_reg
+        emit_mov_imm idx_reg iv
+    \\ Skip ident/int, expect ']'
+    p → 64 walk_pos_v
+    p p + 1
+    ← 64 walk_pos_v p
+    rt tok_type p
+    if== rt 68
+        p p + 1
+        ← 64 walk_pos_v p
+    \\ addr = base + idx * 4
+    four alloc_reg
+    emit_mov_imm four 4
+    off alloc_reg
+    emit_imad off idx_reg four 255
+    addr alloc_reg
+    emit_iadd3 addr ra off 255
+    \\ Peek: if next is '=', push addr (store will consume). Otherwise emit LDG.
+    p → 64 walk_pos_v
+    nt tok_type p
+    if== nt 54
+        vpush addr
+        return 1
+    rd alloc_reg
+    emit_ldg rd addr
+    vpush rd
+    1
+
+\\ LHS address is already on vstack. Parse RHS expression, then store.
+emit_assign :
+    addr vpop
+    \\ walk RHS expression until NEWLINE or EOF
+    p → 64 walk_pos_v
+    end p
+    label ea_find_end
+    et tok_type end
+    if== et 0
+        goto ea_walk_rhs
+    if== et 1
+        goto ea_walk_rhs
+    end end + 1
+    goto ea_find_end
+    label ea_walk_rhs
+    walk_body p end
+    ← 64 walk_pos_v end
+    rv vpop
+    emit_stg addr rv
+    1
 
 \\ → width addr — consumes next two subexpressions from the token stream.
 \\ Rather than a mini-parser, we read width literally and then consume the
