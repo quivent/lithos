@@ -143,22 +143,16 @@
 \\ ============================================================================
 \\ ENTRY POINT — must be FIRST composition (ELF entry = start of code buffer)
 \\ ============================================================================
-\\ macOS ARM64: argc in X0, argv in X1 (passed by dyld)
-\\ X0 = argc, X1 = argv — pass directly to lithos_main
-main :
-    argc ↑ $0
-    argv ↑ $1
-    lithos_main argc argv
-    ↓ $16 1
-    ↓ $0 0
-    trap
+\\ macOS ARM64: argc in X0, argv in X1 (passed by dyld).
+\\ main/lithos_main are defined together at the bottom of this file
+\\ (flat goto/label form).  Nothing to do here at file scope.
 
 \\ ============================================================================
 \\ Lexer token buffer + syscall constants
 \\ ============================================================================
 
 buf tokens 262144
-var token_count 0
+buf token_count_buf 8
 
 const SYS_READ      3
 const SYS_WRITE     4
@@ -184,11 +178,6 @@ const SYS_BRK       12
 
 buf arm64_buf 1048576
 var arm64_pos 0
-
-\\ mmap_file writes its two outputs here, for bootstraps without
-\\ multi-return support.
-var mmap_base 0
-var mmap_size 0
 
 arm64_emit32 val :
     \\ Write a 32-bit little-endian word at current position and advance by 4.
@@ -999,10 +988,20 @@ record_gridsync :
     ← 32 gridsync_offsets + gridsync_count * 4 gpu_pos
     gridsync_count + 1
 
+buf exit_offsets 1024
+var exit_count 0
+
+record_exit :
+    if>= exit_count 256
+        \\ silently clamp at 256 sites
+    ← 32 exit_offsets + exit_count * 4 gpu_pos
+    exit_count + 1
+
 gpu_reset :
     gpu_pos 0
     max_reg 0
     gridsync_count 0
+    exit_count 0
     gpu_cooperative 0
 
 \\ ============================================================
@@ -1568,6 +1567,7 @@ emit_bra_pred byte_offset pred :
     sinst iword_masked ctrl_bra
 
 emit_exit :
+    record_exit
     sinst 0x000000000000794D ctrl_exit
 
 \\ ============================================================
@@ -1783,15 +1783,14 @@ EIATTR_COOP_GROUP_MASK_REGIDS   0x29
 \\ ============================================================================
 
 emit_token type offset length :
-    \\ Each token is 12 bytes: type (u32) + offset (u32) + length (u32).
-    \\ Use byte offsets since `← 32 addr val` stores at byte address.
-    idx token_count * 12
+    tc → 32 token_count_buf
+    idx tc * 12
     ← 32 tokens + idx type
     idx1 idx + 4
     ← 32 tokens + idx1 offset
     idx2 idx + 8
     ← 32 tokens + idx2 length
-    token_count token_count + 1
+    ← 32 token_count_buf tc + 1
 
 \\ ============================================================================
 \\ Character classification
@@ -1802,30 +1801,36 @@ is_alpha c :
     lower c >= 97 & c <= 122
     under c == 95
     result upper | lower | under
+    return result
 
 is_digit c :
     result c >= 48 & c <= 57
+    return result
 
 is_hex_digit c :
     digit c >= 48 & c <= 57
     upper c >= 65 & c <= 70
     lower c >= 97 & c <= 102
     result digit | upper | lower
+    return result
 
 is_alnum c :
     alpha is_alpha c
     digit is_digit c
     result alpha | digit
+    return result
 
 is_space c :
     sp c == 32
     tb c == 9
     result sp | tb
+    return result
 
 is_newline c :
     lf c == 10
     cr c == 13
     result lf | cr
+    return result
 
 \\ ============================================================================
 \\ Token scanning helpers
@@ -1893,7 +1898,7 @@ match_keyword src offset length :
         b1 src [ offset + 1 ]
         if b0 == 111 & b1 == 114         \\ 'or'
             tok_type 5
-            return tok_type
+            return
 
     if length == 3
         b0 src [ offset ]
@@ -1901,28 +1906,28 @@ match_keyword src offset length :
         b2 src [ offset + 2 ]
         if b0 == 102 & b1 == 111 & b2 == 114
             tok_type 16
-            return tok_type
+            return
         if b0 == 118 & b1 == 97 & b2 == 114
             tok_type 23
-            return tok_type
+            return
         if b0 == 98 & b1 == 117 & b2 == 102
             tok_type 24
-            return tok_type
+            return
         if b0 == 102 & b1 == 51 & b2 == 50
             tok_type 40
-            return tok_type
+            return
         if b0 == 117 & b1 == 51 & b2 == 50
             tok_type 41
-            return tok_type
+            return
         if b0 == 115 & b1 == 51 & b2 == 50
             tok_type 42
-            return tok_type
+            return
         if b0 == 102 & b1 == 49 & b2 == 54
             tok_type 43
-            return tok_type
+            return
         if b0 == 112 & b1 == 116 & b2 == 114
             tok_type 44
-            return tok_type
+            return
 
     if length == 4
         b0 src [ offset ]
@@ -1931,29 +1936,29 @@ match_keyword src offset length :
         b3 src [ offset + 3 ]
         if b0 == 101 & b1 == 97 & b2 == 99 & b3 == 104
             tok_type 18
-            return tok_type
+            return
         if b0 == 101 & b1 == 108 & b2 == 115 & b3 == 101
             tok_type 14
-            return tok_type
+            return
         if b0 == 101 & b1 == 108 & b2 == 105 & b3 == 102
             tok_type 15
-            return tok_type
+            return
         if b0 == 118 & b1 == 111 & b2 == 105 & b3 == 100
             tok_type 45
-            return tok_type
+            return
         if b0 == 98 & b1 == 105 & b2 == 110 & b3 == 100
             tok_type 27
-            return tok_type
+            return
         if b0 == 101 & b1 == 120 & b2 == 105 & b3 == 116
             tok_type 34
-            return tok_type
+            return
         if b0 == 104 & b1 == 111 & b2 == 115 & b3 == 116
             tok_type 35
-            return tok_type
+            return
         \\ 'goto' -> 93
         if b0 == 103 & b1 == 111 & b2 == 116 & b3 == 111
             tok_type 93
-            return tok_type
+            return
 
     if length == 5
         b0 src [ offset ]
@@ -1963,19 +1968,19 @@ match_keyword src offset length :
         b4 src [ offset + 4 ]
         if b0 == 112 & b1 == 97 & b2 == 114 & b3 == 97 & b4 == 109
             tok_type 12
-            return tok_type
+            return
         if b0 == 119 & b1 == 104 & b2 == 105 & b3 == 108 & b4 == 101
             tok_type 20
-            return tok_type
+            return
         if b0 == 99 & b1 == 111 & b2 == 110 & b3 == 115 & b4 == 116
             tok_type 22
-            return tok_type
+            return
         if b0 == 108 & b1 == 97 & b2 == 121 & b3 == 101 & b4 == 114
             tok_type 26
-            return tok_type
+            return
         if b0 == 108 & b1 == 97 & b2 == 98 & b3 == 101 & b4 == 108
             tok_type 33
-            return tok_type
+            return
 
     if length == 6
         b0 src [ offset ]
@@ -1986,22 +1991,22 @@ match_keyword src offset length :
         b5 src [ offset + 5 ]
         if b0 == 107 & b1 == 101 & b2 == 114 & b3 == 110 & b4 == 101 & b5 == 108
             tok_type 11
-            return tok_type
+            return
         if b0 == 115 & b1 == 116 & b2 == 114 & b3 == 105 & b4 == 100 & b5 == 101
             tok_type 19
-            return tok_type
+            return
         if b0 == 114 & b1 == 101 & b2 == 116 & b3 == 117 & b4 == 114 & b5 == 110
             tok_type 21
-            return tok_type
+            return
         if b0 == 119 & b1 == 101 & b2 == 105 & b3 == 103 & b4 == 104 & b5 == 116
             tok_type 25
-            return tok_type
+            return
         if b0 == 115 & b1 == 104 & b2 == 97 & b3 == 114 & b4 == 101 & b5 == 100
             tok_type 31
-            return tok_type
+            return
         if b0 == 101 & b1 == 110 & b2 == 100 & b3 == 102 & b4 == 111 & b5 == 114
             tok_type 17
-            return tok_type
+            return
 
     if length == 7
         b0 src [ offset ]
@@ -2014,7 +2019,7 @@ match_keyword src offset length :
             b6 src [ offset + 6 ]
             if b2 == 110 & b3 == 116 & b4 == 105 & b5 == 109 & b6 == 101
                 tok_type 28
-                return tok_type
+                return
         if b0 == 98 & b1 == 97
             b2 src [ offset + 2 ]
             b3 src [ offset + 3 ]
@@ -2023,7 +2028,7 @@ match_keyword src offset length :
             b6 src [ offset + 6 ]
             if b2 == 114 & b3 == 114 & b4 == 105 & b5 == 101 & b6 == 114
                 tok_type 32
-                return tok_type
+                return
         if b0 == 112 & b1 == 114
             b2 src [ offset + 2 ]
             b3 src [ offset + 3 ]
@@ -2032,7 +2037,7 @@ match_keyword src offset length :
             b6 src [ offset + 6 ]
             if b2 == 111 & b3 == 106 & b4 == 101 & b5 == 99 & b6 == 116
                 tok_type 30
-                return tok_type
+                return
         \\ 'trap' -> 94
         if b0 == 115 & b1 == 121
             b2 src [ offset + 2 ]
@@ -2042,7 +2047,7 @@ match_keyword src offset length :
             b6 src [ offset + 6 ]
             if b2 == 115 & b3 == 99 & b4 == 97 & b5 == 108 & b6 == 108
                 tok_type 94
-                return tok_type
+                return
 
     if length == 8
         b0 src [ offset ]
@@ -2056,7 +2061,7 @@ match_keyword src offset length :
             b7 src [ offset + 7 ]
             if b2 == 109 & b3 == 112 & b4 == 108 & b5 == 97 & b6 == 116 & b7 == 101
                 tok_type 29
-                return tok_type
+                return
         \\ 'constant' -> 96
         if b0 == 99 & b1 == 111
             b2 src [ offset + 2 ]
@@ -2067,7 +2072,7 @@ match_keyword src offset length :
             b7 src [ offset + 7 ]
             if b2 == 110 & b3 == 115 & b4 == 116 & b5 == 97 & b6 == 110 & b7 == 116
                 tok_type 96
-                return tok_type
+                return
         \\ 'continue' -> 95
         if b0 == 99 & b1 == 111
             b2 src [ offset + 2 ]
@@ -2080,10 +2085,11 @@ match_keyword src offset length :
                 tok_type 95
                 return tok_type
 
+    return tok_type
+
 \\ ============================================================================
 \\ Number type classification
 \\ ============================================================================
-    return tok_type
 
 classify_number src offset length :
     tok_type 3
@@ -2092,264 +2098,321 @@ classify_number src offset length :
         c src [ offset + i ]
         if c == 46
             tok_type 4
-            return
+            return tok_type
         i i + 1
+
+    return tok_type
 
 \\ ============================================================================
 \\ Main lexer
 \\ ============================================================================
 
+\\ lex_match_twochar — match 2-byte operators starting at byte `c` with
+\\ next byte `cn`.  Returns the token type, or 0 if no match.  Used by
+\\ the flat `lex` loop below so the dispatch stays 2-level nested.
+lex_match_twochar c cn :
+    tok 0
+    if== c 61
+        if== cn 61
+            tok 55
+            return tok
+    if== c 33
+        if== cn 61
+            tok 56
+            return tok
+    if== c 60
+        if== cn 61
+            tok 59
+            return tok
+        if== cn 60
+            tok 64
+            return tok
+    if== c 62
+        if== cn 61
+            tok 60
+            return tok
+        if== cn 62
+            tok 65
+            return tok
+    return tok
+
+\\ lex_match_e2 — match 0xE2-prefixed UTF-8 tokens (3-byte sequences).
+\\ Returns token type (0 = no match).
+lex_match_e2 b1 b2 :
+    tok 0
+    if== b1 0x86
+        if== b2 0x92
+            tok 80
+            return tok
+        if== b2 0x90
+            tok 81
+            return tok
+        if== b2 0x91
+            tok 82
+            return tok
+        if== b2 0x93
+            tok 83
+            return tok
+    if== b1 0x96
+        if== b2 0xB3
+            tok 76
+            return tok
+        if== b2 0xBD
+            tok 77
+            return tok
+    if== b1 0x88
+        if== b2 0x9A
+            tok 87
+            return tok
+    if== b1 0x89
+        if== b2 0x85
+            tok 88
+            return tok
+        if== b2 0xA1
+            tok 89
+            return tok
+    return tok
+
+\\ lex — flat control flow for bootstrap compatibility.
+\\ Single composition using goto/label.  Avoids nested while/if bodies
+\\ that confuse indent-based body detection in the bootstrap.
 lex src src_len :
     pos 0
-    token_count 0
-    line_start 1
+    ← 32 token_count_buf 0
+    lp 1
 
-    while pos < src_len
-        c src [ pos ]
+    label lex_loop
+    if>= pos src_len
+        goto lex_done
+    c → 8 (src + pos)
 
-        if line_start
-            indent 0
-            while pos < src_len
-                ic src [ pos ]
-                if ic == 32
-                    indent indent + 1
-                    pos pos + 1
-                elif ic == 9
-                    indent indent + 4
-                    pos pos + 1
-                else
-                    goto indent_done
-            label indent_done
-            emit_token 2 pos indent
-            line_start 0
-            if pos >= src_len
-                return
-            c src [ pos ]
-
-        if c == 10
-            emit_token 1 pos 1
-            pos pos + 1
-            line_start 1
-            if pos < src_len
-                c2 src [ pos ]
-                if c2 == 13
-                    pos pos + 1
-            continue
-
-        if c == 13
-            emit_token 1 pos 1
-            pos pos + 1
-            line_start 1
-            if pos < src_len
-                c2 src [ pos ]
-                if c2 == 10
-                    pos pos + 1
-            continue
-
-        if c == 32 | c == 9
-            pos pos + 1
-            continue
-
-        if c == 35
-            emit_token 78 pos 1
-            pos pos + 1
-            continue
-
-        if c == 92
-            if pos + 1 < src_len
-                c2 src [ pos + 1 ]
-                if c2 == 92
-                    pos scan_to_eol src pos src_len
-                    continue
-
-        digit is_digit c
-        if digit
-            start pos
-            pos scan_number src pos src_len
-            length pos - start
-            num_type classify_number src start length
-            emit_token num_type start length
-            continue
-
-        if c == 45
-            if pos + 1 < src_len
-                cnext src [ pos + 1 ]
-                ndig is_digit cnext
-                if ndig
-                    start pos
-                    pos pos + 1
-                    pos scan_number src pos src_len
-                    length pos - start
-                    num_type classify_number src start length
-                    emit_token num_type start length
-                    continue
-
-        alpha is_alpha c
-        if alpha
-            start pos
-            pos scan_ident src pos src_len
-            length pos - start
-            kw match_keyword src start length
-            emit_token kw start length
-            continue
-
-        if pos + 1 < src_len
-            cnext src [ pos + 1 ]
-            if c == 61 & cnext == 61
-                emit_token 55 pos 2
-                pos pos + 2
-                continue
-            if c == 33 & cnext == 61
-                emit_token 56 pos 2
-                pos pos + 2
-                continue
-            if c == 60 & cnext == 61
-                emit_token 59 pos 2
-                pos pos + 2
-                continue
-            if c == 62 & cnext == 61
-                emit_token 60 pos 2
-                pos pos + 2
-                continue
-            if c == 60 & cnext == 60
-                emit_token 64 pos 2
-                pos pos + 2
-                continue
-            if c == 62 & cnext == 62
-                emit_token 65 pos 2
-                pos pos + 2
-                continue
-
-        \\ Multi-byte UTF-8 tokens
-        if c == 0xE2
-            if pos + 2 < src_len
-                b1 src [ pos + 1 ]
-                b2 src [ pos + 2 ]
-                if b1 == 0x86 & b2 == 0x92
-                    emit_token 36 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x90
-                    emit_token 37 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x91
-                    emit_token 38 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x93
-                    emit_token 39 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x96 & b2 == 0xB3
-                    emit_token 76 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x96 & b2 == 0xBD
-                    emit_token 77 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x88 & b2 == 0x9A
-                    emit_token 79 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x89 & b2 == 0x85
-                    emit_token 80 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x89 & b2 == 0xA1
-                    emit_token 81 pos 3
-                    pos pos + 3
-                    continue
-        if c == 0xCE
-            if pos + 1 < src_len
-                b1 src [ pos + 1 ]
-                if b1 == 0xA3
-                    emit_token 75 pos 2
-                    pos pos + 2
-                    continue
-
-        \\ Single-character operators and punctuation
-        if c == 43
-            emit_token 50 pos 1
-            pos pos + 1
-            continue
-        if c == 45
-            emit_token 51 pos 1
-            pos pos + 1
-            continue
-        if c == 42
-            emit_token 52 pos 1
-            pos pos + 1
-            continue
-        if c == 47
-            emit_token 53 pos 1
-            pos pos + 1
-            continue
-        if c == 61
-            emit_token 54 pos 1
-            pos pos + 1
-            continue
-        if c == 60
-            emit_token 57 pos 1
-            pos pos + 1
-            continue
-        if c == 62
-            emit_token 58 pos 1
-            pos pos + 1
-            continue
-        if c == 38
-            emit_token 61 pos 1
-            pos pos + 1
-            continue
-        if c == 124
-            emit_token 62 pos 1
-            pos pos + 1
-            continue
-        if c == 94
-            emit_token 63 pos 1
-            pos pos + 1
-            continue
-        if c == 91
-            emit_token 67 pos 1
-            pos pos + 1
-            continue
-        if c == 93
-            emit_token 68 pos 1
-            pos pos + 1
-            continue
-        if c == 40
-            emit_token 69 pos 1
-            pos pos + 1
-            continue
-        if c == 41
-            emit_token 70 pos 1
-            pos pos + 1
-            continue
-        if c == 44
-            emit_token 71 pos 1
-            pos pos + 1
-            continue
-        if c == 58
-            emit_token 72 pos 1
-            pos pos + 1
-            continue
-        if c == 46
-            emit_token 73 pos 1
-            pos pos + 1
-            continue
-        if c == 64
-            emit_token 74 pos 1
-            pos pos + 1
-            continue
-        \\ $ -> TOK_DOLLAR (97)
-        if c == 36
-            emit_token 97 pos 1
-            pos pos + 1
-            continue
-
+    \\ ---- Indent at start of line ----
+    if== lp 0
+        goto lex_skip_indent
+    indent 0
+    label lex_indent_loop
+    if>= pos src_len
+        goto lex_indent_done
+    c → 8 (src + pos)
+    if== c 32
+        indent indent + 1
         pos pos + 1
+        goto lex_indent_loop
+    if== c 9
+        indent indent + 4
+        pos pos + 1
+        goto lex_indent_loop
+    label lex_indent_done
+    emit_token 2 pos indent
+    lp 0
+    if>= pos src_len
+        goto lex_done
+    c → 8 (src + pos)
+    label lex_skip_indent
 
+    \\ ---- Whitespace ----
+    if== c 32
+        pos pos + 1
+        goto lex_loop
+    if== c 9
+        pos pos + 1
+        goto lex_loop
+
+    \\ ---- Newline LF ----
+    if== c 10
+        emit_token 1 pos 1
+        pos pos + 1
+        lp 1
+        goto lex_loop
+
+    \\ ---- Newline CR ----
+    if== c 13
+        emit_token 1 pos 1
+        pos pos + 1
+        lp 1
+        goto lex_loop
+
+    \\ ---- Comment \\\\ ----
+    if== c 92
+        goto lex_try_comment
+    goto lex_not_comment
+    label lex_try_comment
+    if>= pos + 1 src_len
+        goto lex_not_comment
+    t → 8 (src + pos + 1)
+    if== t 92
+        pos scan_to_eol src pos src_len
+        goto lex_loop
+    label lex_not_comment
+
+    \\ ---- Number ----
+    t is_digit c
+    if t
+        start pos
+        pos scan_number src pos src_len
+        len pos - start
+        t classify_number src start len
+        emit_token t start len
+        goto lex_loop
+
+    \\ ---- Negative number ----
+    if== c 45
+        goto lex_try_neg
+    goto lex_not_neg
+    label lex_try_neg
+    if>= pos + 1 src_len
+        goto lex_not_neg
+    t → 8 (src + pos + 1)
+    t is_digit t
+    if== t 0
+        goto lex_not_neg
+    start pos
+    pos pos + 1
+    pos scan_number src pos src_len
+    len pos - start
+    t classify_number src start len
+    emit_token t start len
+    goto lex_loop
+    label lex_not_neg
+
+    \\ ---- Identifier / keyword ----
+    t is_alpha c
+    if t
+        start pos
+        pos scan_ident src pos src_len
+        len pos - start
+        t match_keyword src start len
+        emit_token t start len
+        goto lex_loop
+
+    \\ ---- Two-byte operators ----
+    if>= pos + 1 src_len
+        goto lex_no_twochar
+    t → 8 (src + pos + 1)
+    t lex_match_twochar c t
+    if t
+        emit_token t pos 2
+        pos pos + 2
+        goto lex_loop
+    label lex_no_twochar
+
+    \\ ---- UTF-8 multi-byte tokens ----
+    if== c 0xE2
+        goto lex_try_e2
+    if== c 0xCE
+        goto lex_try_ce
+    goto lex_no_utf8
+
+    label lex_try_e2
+    if>= pos + 2 src_len
+        goto lex_no_utf8
+    start → 8 (src + pos + 1)
+    t → 8 (src + pos + 2)
+    t lex_match_e2 start t
+    if t
+        emit_token t pos 3
+        pos pos + 3
+        goto lex_loop
+    goto lex_no_utf8
+
+    label lex_try_ce
+    if>= pos + 1 src_len
+        goto lex_no_utf8
+    t → 8 (src + pos + 1)
+    if== t 0xA3
+        emit_token 75 pos 2
+        pos pos + 2
+        goto lex_loop
+
+    label lex_no_utf8
+
+    \\ ---- Single-character operators ----
+    if== c 43
+        emit_token 50 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 42
+        emit_token 52 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 47
+        emit_token 53 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 61
+        emit_token 54 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 60
+        emit_token 57 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 62
+        emit_token 58 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 38
+        emit_token 61 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 124
+        emit_token 62 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 94
+        emit_token 63 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 91
+        emit_token 67 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 93
+        emit_token 68 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 40
+        emit_token 69 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 41
+        emit_token 70 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 44
+        emit_token 71 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 58
+        emit_token 72 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 46
+        emit_token 73 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 64
+        emit_token 74 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 36
+        emit_token 97 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 35
+        emit_token 78 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 45
+        emit_token 51 pos 1
+        pos pos + 1
+        goto lex_loop
+
+    \\ Unknown — skip
+    pos pos + 1
+    goto lex_loop
+
+    label lex_done
     emit_token 0 pos 0
 
 \\ ============================================================================
@@ -2429,15 +2492,18 @@ var n_comps 0
 
 peek_type :
     idx tok_pos * 12
-    → 32 tokens idx
+    v → 32 tokens idx
+    return v
 
 peek_offset :
     idx tok_pos * 12 + 4
-    → 32 tokens idx
+    v → 32 tokens idx
+    return v
 
 peek_length :
     idx tok_pos * 12 + 8
-    → 32 tokens idx
+    v → 32 tokens idx
+    return v
 
 consume :
     tok_pos tok_pos + 1
@@ -2459,11 +2525,9 @@ skip_newlines :
     if== t 1
         consume
         skip_newlines
-        return 0
     if== t 2
         consume
         skip_newlines
-        return 0
 
 tok_text_ptr :
     off peek_offset
@@ -3433,11 +3497,11 @@ parse_trap_stmt :
 parse_trap_args idx :
     t peek_type
     if== t 1
-        return idx
+        idx
     if== t 0
-        return idx
+        idx
     if>= idx 6
-        return idx
+        idx
     val parse_expr
     emit_p_mov_reg idx val
     parse_trap_args idx + 1
@@ -3651,7 +3715,6 @@ parse_ident_stmt :
                     if== c3 112
                         consume
                         emit_p_svc
-                        return 1
 
     \\ Check for conditional keywords: if==, if>=, if<, if!=, if>, if<=
     if>= len 3
@@ -3660,7 +3723,6 @@ parse_ident_stmt :
         if== c0 105
             if== c1 102
                 parse_conditional
-                return 1
 
     \\ Check for inline label (ident followed by TOK_COLON)
     consume
@@ -3668,7 +3730,7 @@ parse_ident_stmt :
     if== nt_check 72
         consume
         parse_inline_label ptr len
-        return 1
+        1
     \\ Put token back
     tok_pos tok_pos - 1
 
@@ -3682,7 +3744,7 @@ parse_ident_stmt :
                 if== c6 56
                     consume
                     parse_mem_load 8
-                    return 1
+                    1
 
     \\ Check for mem_load 16/32/64 (8 chars)
     if== len 8
@@ -3696,15 +3758,15 @@ parse_ident_stmt :
                 if== c6 49
                     if== c7 54
                         parse_mem_load 16
-                        return 1
+                        1
                 if== c6 51
                     if== c7 50
                         parse_mem_load 32
-                        return 1
+                        1
                 if== c6 54
                     if== c7 52
                         parse_mem_load 64
-                        return 1
+                        1
 
     \\ Check for mem_store 8 (8 chars)
     if== len 8
@@ -3716,7 +3778,7 @@ parse_ident_stmt :
                 if== c7 56
                     consume
                     parse_mem_store 8
-                    return 1
+                    1
 
     \\ Check for mem_store 16/32/64 (9 chars)
     if== len 9
@@ -3730,15 +3792,15 @@ parse_ident_stmt :
                 if== c7 49
                     if== c8 54
                         parse_mem_store 16
-                        return 1
+                        1
                 if== c7 51
                     if== c8 50
                         parse_mem_store 32
-                        return 1
+                        1
                 if== c7 54
                     if== c8 52
                         parse_mem_store 64
-                        return 1
+                        1
 
     \\ Check for mem_load 64_idx / mem_load 32_idx (12 chars)
     if== len 12
@@ -3752,11 +3814,9 @@ parse_ident_stmt :
                 if== c7 54
                     if== c8 52
                         parse_mem_load_idx 64
-                        return 1
                 if== c7 51
                     if== c8 50
                         parse_mem_load_idx 32
-                        return 1
 
     \\ Check for mem_store 8_at (11 chars)
     if== len 11
@@ -3766,7 +3826,7 @@ parse_ident_stmt :
             if== c8 97
                 consume
                 parse_mem_store_at
-                return 1
+                1
 
     \\ Check for 3-operand ops
     if== len 3
@@ -3778,43 +3838,43 @@ parse_ident_stmt :
                 if== c2 100
                     consume
                     parse_3op_and
-                    return 1
+                    1
         if== c0 115
             if== c1 104
                 if== c2 108
                     consume
                     parse_3op_shl
-                    return 1
+                    1
         if== c0 115
             if== c1 104
                 if== c2 114
                     consume
                     parse_3op_shr
-                    return 1
+                    1
         if== c0 109
             if== c1 117
                 if== c2 108
                     consume
                     parse_3op_mul
-                    return 1
+                    1
         if== c0 97
             if== c1 100
                 if== c2 100
                     consume
                     parse_3op_add
-                    return 1
+                    1
         if== c0 115
             if== c1 117
                 if== c2 98
                     consume
                     parse_3op_sub
-                    return 1
+                    1
         if== c0 120
             if== c1 111
                 if== c2 114
                     consume
                     parse_3op_xor
-                    return 1
+                    1
 
     if== len 2
         c0 → 8 ptr 0
@@ -3823,7 +3883,7 @@ parse_ident_stmt :
             if== c1 114
                 consume
                 parse_3op_or
-                return 1
+                1
 
     \\ Look up in symbol table
     idx sym_find ptr len
@@ -3835,7 +3895,7 @@ parse_ident_stmt :
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            return 1
+            1
 
         if== nt 67
             consume
@@ -3851,44 +3911,44 @@ parse_ident_stmt :
             addr alloc_rreg
             emit_p_add addr base offset_reg
             emit_p_store val addr 0 32
-            return 1
+            1
 
         nt2 peek_type
         if== nt2 80
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            return 1
+            1
         if== nt2 84
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            return 1
+            1
         if== nt2 85
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            return 1
+            1
         if== nt2 86
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            return 1
+            1
         if== nt2 87
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            return 1
+            1
         if== nt2 90
             val parse_expr
             reg sym_reg idx
             emit_p_mov_reg reg val
-            return 1
+            1
 
         val parse_expr
         reg sym_reg idx
         emit_p_mov_reg reg val
-        return 1
+        1
 
     \\ New variable assignment
     consume
@@ -3898,77 +3958,76 @@ parse_ident_stmt :
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 84
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 85
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 86
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 87
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 3
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 5
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 88
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 89
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 90
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     if== nt 91
         val parse_expr
         rd alloc_freg
         emit_p_mov_reg rd val
         sym_add ptr len 2 rd
-        return 1
+        1
     skip_to_eol
     0
 
 skip_to_eol :
     t peek_type
     if== t 0
-        return 0
+        0
     if== t 1
         consume
-        return 0
     consume
     skip_to_eol
 
@@ -4239,7 +4298,7 @@ parse_composition :
 parse_comp_args count :
     t peek_type
     if== t 72
-        return count
+        count
 
     if== t 5
         ptr tok_text_ptr
@@ -4254,7 +4313,6 @@ parse_comp_args count :
         count count + 1
 
         parse_comp_args count
-        return count
 
     count
 
@@ -4322,9 +4380,9 @@ parse_file :
         parse_file
         return 0
 
-    \\ Unknown top-level token — skip and continue
     consume
     parse_file
+    return 0
 
 \\ ============================================================================
 \\ Parser initialization
@@ -4497,12 +4555,14 @@ elf_write_header :
 \\ SECTION HEADER EMIT
 \\ ============================================================
 
-shdr64_emit sh_name sh_type sh_flags sh_addr sh_offset sh_size sh_link sh_info sh_addralign sh_entsize :
+shdr64_a sh_name sh_type sh_flags sh_addr sh_offset :
     cd_emit sh_name
     cd_emit sh_type
     cq_emit sh_flags
     cq_emit sh_addr
     cq_emit sh_offset
+
+shdr64_b sh_size sh_link sh_info sh_addralign sh_entsize :
     cq_emit sh_size
     cd_emit sh_link
     cd_emit sh_info
@@ -4542,7 +4602,7 @@ nvi_sval_emit val sym_idx attr fmt :
 \\ elf_build — Build complete 9-section GPU ELF
 \\ ============================================================
 
-elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt :
+elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size :
 
     elf_init
     elf_write_header
@@ -4684,7 +4744,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     \\ .nv.info (section 4)
     calign 4
     nvinfo_off cubin_pos
-    reg_val reg_count
+    reg_val reg_count + 1
     if< reg_val 8
         reg_val 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
@@ -4719,7 +4779,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 255
     cb_emit 0
 
-    if== elf_cooperative 1
+    if== gpu_cooperative 1
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_MASK_REGIDS
         cw_emit 16
@@ -4730,16 +4790,23 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
 
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_INSTR_OFFSETS
-        cw_emit (gridsync_cnt * 4)
-        for gi 0 gridsync_cnt 1
-            gs_off → 32 (gridsync_off_ptr + gi * 4)
+        cw_emit (gridsync_count * 4)
+        for gi 0 gridsync_count 1
+            gs_off → 32 (gridsync_offsets + gi * 4)
             cd_emit gs_off
         endfor
 
     cb_emit 4
     cb_emit EIATTR_EXIT_INSTR_OFFSETS
-    cw_emit 4
-    cd_emit 256
+    if> exit_count 0
+        cw_emit (exit_count * 4)
+        for ei 0 exit_count 1
+            ex_off → 32 (exit_offsets + ei * 4)
+            cd_emit ex_off
+        endfor
+    if== exit_count 0
+        cw_emit 4
+        cd_emit code_size - 16
 
     param_bytes n_kparams * 8
     cb_emit 3
@@ -4796,15 +4863,24 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     calign 64
     shdrs_off cubin_pos
 
-    shdr64_emit 0 0 0 0 0 0 0 0 0 0
-    shdr64_emit SN_shstrtab SHT_STRTAB 0 0 shstrtab_off shstrtab_size 0 0 1 0
-    shdr64_emit SN_strtab SHT_STRTAB 0 0 strtab_off strtab_size 0 0 1 0
-    shdr64_emit SN_symtab SHT_SYMTAB 0 0 symtab_off symtab_size 2 3 8 24
-    shdr64_emit SN_nvinfo SHT_LOPROC 0 0 nvinfo_off nvinfo_size 3 0 4 0
-    shdr64_emit SN_text SHT_PROGBITS 6 0 text_off text_size 3 3 128 0
-    shdr64_emit SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off nvinfo_k_size 3 5 4 0
-    shdr64_emit SN_shared SHT_NOBITS 3 0 const0_off smem_size 0 0 16 0
-    shdr64_emit SN_const0 SHT_PROGBITS 66 0 const0_off const0_size 0 5 4 0
+    shdr64_a 0 0 0 0 0
+    shdr64_b 0 0 0 0 0
+    shdr64_a SN_shstrtab SHT_STRTAB 0 0 shstrtab_off
+    shdr64_b shstrtab_size 0 0 1 0
+    shdr64_a SN_strtab SHT_STRTAB 0 0 strtab_off
+    shdr64_b strtab_size 0 0 1 0
+    shdr64_a SN_symtab SHT_SYMTAB 0 0 symtab_off
+    shdr64_b symtab_size 2 3 8 24
+    shdr64_a SN_nvinfo SHT_LOPROC 0 0 nvinfo_off
+    shdr64_b nvinfo_size 3 0 4 0
+    shdr64_a SN_text SHT_PROGBITS 6 0 text_off
+    shdr64_b text_size 3 3 128 0
+    shdr64_a SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off
+    shdr64_b nvinfo_k_size 3 5 4 0
+    shdr64_a SN_shared SHT_NOBITS 3 0 const0_off
+    shdr64_b smem_size 0 0 16 0
+    shdr64_a SN_const0 SHT_PROGBITS 66 0 const0_off
+    shdr64_b const0_size 0 5 4 0
 
     \\ Patch ELF header
     elf_put_u64 0 32
@@ -4841,16 +4917,19 @@ elf_save path :
 \\ elf_write_cubin — Convenience: build ELF and write to file
 \\ ============================================================
 
-elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt
+elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path
 
 \\ ============================================================
-\\ elf_write_simple — Non-cooperative kernel
+\\ elf_write_simple — Non-cooperative kernel (clears cooperative/gridsync state)
 \\ ============================================================
 
 elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size 0 0 0
+    gpu_cooperative 0
+    gridsync_count 0
+    exit_count 0
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path
 
 
@@ -4944,9 +5023,11 @@ elf_build_arm64 code_buf code_size :
 \\ Host trap helpers for main
 \\ ============================================================
 
-\\ mmap_file — open, get size via lseek, mmap, close fd.
-\\ Stores base pointer in global mmap_base and file size in mmap_size.
-\\ Bootstraps that don't support multi-return read these globals directly.
+\\ mmap_file — open, get size via lseek, mmap, close fd
+\\ Returns base pointer and file size.
+\\ mmap_file — register-based multi-return.
+\\ Returns:  $6 = base pointer,  $7 = file size.
+\\ Caller reads them back via `↑ $6` / `↑ $7`.
 host mmap_file path :
     \\ openat(AT_FDCWD, path, O_RDONLY, 0)
     ↓ $16 463
@@ -4964,7 +5045,6 @@ host mmap_file path :
     ↓ $2 2
     trap
     file_size ↑ $0
-    mmap_size file_size
 
     \\ mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0)
     ↓ $16 197
@@ -4976,15 +5056,15 @@ host mmap_file path :
     ↓ $5 0
     trap
     base ↑ $0
-    mmap_base base
+
+    \\ Publish results to $6 / $7 BEFORE close clobbers $0.
+    ↓ $6 base
+    ↓ $7 file_size
 
     \\ close(fd)
     ↓ $16 6
     ↓ $0 fd
     trap
-
-    \\ Return base in X0 for single-return callers.
-    ↓ $0 base
 
 \\ write_file — open (create/trunc), write buffer, close
 host write_file path buf buf_len :
@@ -5040,50 +5120,56 @@ host write_file path buf buf_len :
 \\   6. Write output file
 \\   7. Exit
 
-host lithos_main argc argv :
-    \\ Validate argument count (need at least source and output)
+\\ main — flat goto/label form.  argc/argv are bound directly from the
+\\ ARM64 entry-point registers ($0/$1) via the param calling convention
+\\ that wirth's trampoline sets up.
+main argc argv :
     if< argc 3
-        \\ Too few arguments — exit with error
-        ↓ $16 1
-        ↓ $0 1
-        trap
+        goto main_exit_err
 
-    \\ argv[0] = program name (skip)
-    \\ argv[1] = source file path
-    \\ argv[2] = output file path
-    \\ argv[3] = optional safetensors path
+    \\ argv[1] = source path, argv[2] = output path
+    src_path → 64 argv 8
+    out_path → 64 argv 16
 
-    src_path → 64 argv 8          \\ argv[1]
-    out_path → 64 argv 16         \\ argv[2]
-
-    \\ Step 1: mmap the source file (writes mmap_base, mmap_size globals)
+    \\ Step 1: mmap the source file.  mmap_file publishes base in $6,
+    \\ size in $7 (register-based multi-return — no stack tricks).
     mmap_file src_path
-    src_base mmap_base
-    src_size mmap_size
+    src_base ↑ $6
+    src_size ↑ $7
 
     \\ Step 2: Lex the source
     lithos_lex src_base src_size
 
-    \\ Step 3: Parse and emit machine code
-    lithos_parse tokens token_count src_base
+    \\ Step 3: Parse and emit machine code.  token_count lives in a
+    \\ memory buf so it survives composition calls.
+    tc → 32 token_count_buf
+    lithos_parse tokens tc src_base
 
-    \\ Step 4: Safetensors weights (loaded by safetensors.ls, linked separately)
-
-    \\ Step 5: Build ELF output
-    \\ For GPU kernels: wrap gpu_buf in cubin ELF
-    \\ For host code: wrap arm64_buf in ARM64 ELF
-    \\ Choose based on what was emitted
-    if> gpu_pos 0
-        \\ GPU output — build cubin
-        elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size gpu_cooperative gridsync_offsets gridsync_count
-        elf_save out_path
+    \\ Step 4: Build ELF output.  Prefer ARM64 if any host code was emitted;
+    \\ GPU cubin only when there is no host code.  gpu_pos may be non-zero
+    \\ as a side-effect of emitting the trampoline, so the host check wins.
     if> arm64_pos 0
-        \\ Host output — wrap in ARM64 ELF
-        elf_build_arm64 arm64_buf arm64_pos
-        elf_save out_path
+        goto main_arm64
+    if> gpu_pos 0
+        goto main_gpu
+    goto main_exit_ok
 
-    \\ Step 6: Exit successfully
+    label main_gpu
+    elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size
+    elf_save out_path
+    goto main_exit_ok
+
+    label main_arm64
+    elf_build_arm64 arm64_buf arm64_pos
+    elf_save out_path
+
+    label main_exit_ok
     ↓ $16 1
     ↓ $0 0
+    trap
+
+    label main_exit_err
+    ↓ $16 1
+    ↓ $0 1
     trap
 
