@@ -840,7 +840,45 @@ emit_a64_sdiv rd ra rb :
 emit_a64_ret :
     arm64_emit32 0xD65F03C0
 
-\\ MEMORY
+\\ MEMORY — stack-resident bindings
+
+\\ STUR Xt, [Xn, #simm9]  — store with signed offset (for FP-relative)
+\\ Encoding: 0xF8000000 | ((simm9 & 0x1FF) << 12) | (Rn << 5) | Rt
+emit_a64_stur rt rn simm9 :
+    imm9 simm9 & 0x1FF
+    val 0xF8000000 | (imm9 << 12) | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ LDUR Xt, [Xn, #simm9]  — load with signed offset
+\\ Encoding: 0xF8400000 | ((simm9 & 0x1FF) << 12) | (Rn << 5) | Rt
+emit_a64_ldur rt rn simm9 :
+    imm9 simm9 & 0x1FF
+    val 0xF8400000 | (imm9 << 12) | (rn << 5) | rt
+    arm64_emit32 val
+
+\\ SUB Xd, Xn, #imm12  — for frame setup (SUB SP, SP, #frame_size)
+\\ Encoding: 0xD1000000 | (imm12 << 10) | (Rn << 5) | Rd
+emit_a64_sub_imm rd rn imm12 :
+    val 0xD1000000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd
+    arm64_emit32 val
+
+\\ ADD Xd, Xn, #imm12  — for frame teardown (ADD SP, SP, #frame_size)
+\\ Encoding: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd
+emit_a64_add_imm rd rn imm12 :
+    val 0x91000000 | ((imm12 & 0xFFF) << 10) | (rn << 5) | rd
+    arm64_emit32 val
+
+\\ STP X29, X30, [SP, #-16]!  — function prologue push
+emit_a64_stp_fp_lr :
+    arm64_emit32 0xA9BF7BFD
+
+\\ MOV X29, SP  — set frame pointer
+emit_a64_mov_fp_sp :
+    arm64_emit32 0x910003FD
+
+\\ LDP X29, X30, [SP], #16  — function epilogue pop
+emit_a64_ldp_fp_lr :
+    arm64_emit32 0xA8C17BFD
 
 \\ SYSTEM
 
@@ -1762,14 +1800,34 @@ comp_find name_off name_len :
 \\ Register allocator (bump) and virtual stack
 
 reg_reset :
-    \\ Reserve R0..R3 for hardware-owned quantities; start at R4.
-    ← 64 next_reg_v 4
+    \\ Reset scratch rotation and value stack for a new composition body.
+    ← 64 scratch_idx_v 0
     ← 64 vstack_sp_v 0
+    ← 64 frame_slot_v 8
 
+\\ alloc_scratch — rotating scratch registers X9..X14 for expression
+\\ evaluation.  Never spills.  Returns the register number (9-14).
+\\ A single expression rarely needs more than 3 simultaneous scratches.
+alloc_scratch :
+    si → 64 scratch_idx_v
+    r si + 9
+    if>= r 15
+        r 9
+        si 0
+    ← 64 scratch_idx_v si + 1
+    return r
+
+\\ alloc_slot — allocate a FP-relative stack slot for a new binding.
+\\ Returns the NEGATIVE offset from FP (e.g. -8, -16, -24...).
+alloc_slot :
+    s → 64 frame_slot_v
+    ← 64 frame_slot_v s + 8
+    neg 0 - s
+    return neg
+
+\\ Legacy name — compositions that call alloc_reg get alloc_scratch.
 alloc_reg :
-    r → 64 next_reg_v
-    ← 64 next_reg_v r + 1
-    r
+    return alloc_scratch
 
 vpush reg :
     sp → 64 vstack_sp_v
@@ -1827,11 +1885,17 @@ vpush_with_op reg :
 \\ indent 0 (another header) or EOF. We record start/end in token-index units.
 
 walk_collect :
-    ← 64 emit_target_v 0
+    ← 64 emit_target_v 1
     comp_reset
     tc → 32 token_count_buf
     i 0
-    host_pending 0
+    \\ Default to HOST (ARM64) so an untagged composition like
+    \\ compiler.ls's `emit_token` is compiled as host code for
+    \\ self-hosting.  Explicit `kernel` (token 11) flips to GPU for
+    \\ the next composition; `host` (token 35) forces HOST (redundant
+    \\ now but preserves backward compatibility with files that
+    \\ always tag their host pieces).
+    host_pending 1
 
     label wc_loop
     if>= i tc
@@ -1842,9 +1906,14 @@ walk_collect :
     if== t 0
         goto wc_done
 
-    \\ HOST keyword flips the next composition to the ARM64 backend.
+    \\ HOST keyword — explicit host marker (redundant, host is default).
     if== t 35
         host_pending 1
+        i i + 1
+        goto wc_loop
+    \\ KERNEL keyword — flip the next composition to GPU SASS.
+    if== t 11
+        host_pending 0
         i i + 1
         goto wc_loop
 
@@ -1883,7 +1952,7 @@ walk_collect :
             goto wc_loop
         if== tt 1
             i i + 1
-            host_pending 0
+            host_pending 1
             goto wc_loop
         i i + 1
         goto wc_skip_line
@@ -1928,7 +1997,8 @@ walk_collect :
     label wc_body_done
     body_end i
     comp_add name_off name_len arg_count body_start body_end host_pending
-    host_pending 0
+    \\ Reset to host default for the next composition.
+    host_pending 1
     goto wc_loop
 
     label wc_done
@@ -1940,13 +2010,12 @@ walk_collect :
 bind_args comp_idx :
     sym_reset
     reg_reset
-    \\ For each arg token in the header, consume one register slot.
+    \\ For each arg, allocate a frame slot and emit STUR Xi, [FP, #-slot]
+    \\ to spill the argument register onto the frame.  ARM64 calling
+    \\ convention: first 8 args in X0..X7.  sym_add records the NEGATIVE
+    \\ FP offset so reads emit LDUR from the same slot.
     n → 32 comp_arg_count_v + comp_idx * 4
     bs → 32 comp_body_start_v + comp_idx * 4
-    \\ Arg tokens live immediately before body_start. Header layout is:
-    \\   name arg1 arg2 ... argN : NEWLINE body_start
-    \\ So arg tokens occupy the (name+1 .. name+n) slots. We recover them by
-    \\ scanning backwards from (bs - 2) through (bs - 2 - n + 1).
     if== n 0
         return 0
     first bs - 2 - n + 1
@@ -1957,8 +2026,12 @@ bind_args comp_idx :
     ti first + i
     off tok_offset ti
     len tok_length ti
-    r alloc_reg
-    sym_add off len r
+    slot alloc_slot
+    \\ Emit: STUR Xi, [X29, #slot]  (slot is negative, e.g. -8)
+    et → 64 emit_target_v
+    if== et 1
+        emit_a64_stur i 29 slot
+    sym_add off len slot
     i i + 1
     goto ba_loop
 
@@ -2327,6 +2400,8 @@ walk_body body_start body_end :
 
     \\ Statement-terminator newline: commit any pending binding or
     \\ reassignment, then reset stmt_start / pending_op.
+    \\ Bindings are stack-resident: new → alloc_slot + STUR;
+    \\ reassignment → STUR into existing slot.
     if== t 1
         ← 64 pending_op_v 0
         _pbl → 64 pending_bind_len_v
@@ -2334,15 +2409,18 @@ walk_body body_start body_end :
             _pbo → 64 pending_bind_off_v
             _existing sym_find _pbo _pbl
             rb vpop
-            if>= _existing 0
+            if!= _existing -1
+                \\ Reassignment: store result into existing slot.
                 et → 64 emit_target_v
                 if== et 1
-                    \\ Reassignment: MOV Xexisting, Xrb
-                    \\ ORR Xd, XZR, Xm = 0xAA0003E0 | (Rm<<16) | Rd
-                    movw 0xAA0003E0 | (rb << 16) | _existing
-                    arm64_emit32 movw
-            if< _existing 0
-                sym_add _pbo _pbl rb
+                    emit_a64_stur rb 29 _existing
+            if== _existing -1
+                \\ New binding: allocate a slot, store, record.
+                slot alloc_slot
+                et → 64 emit_target_v
+                if== et 1
+                    emit_a64_stur rb 29 slot
+                sym_add _pbo _pbl slot
             ← 64 pending_bind_len_v 0
         ← 64 stmt_start_v 1
         ← 64 walk_pos_v p + 1
@@ -2356,13 +2434,16 @@ walk_body body_start body_end :
             _pbo → 64 pending_bind_off_v
             _existing sym_find _pbo _pbl
             rb vpop
-            if>= _existing 0
+            if!= _existing -1
                 et → 64 emit_target_v
                 if== et 1
-                    movw 0xAA0003E0 | (rb << 16) | _existing
-                    arm64_emit32 movw
-            if< _existing 0
-                sym_add _pbo _pbl rb
+                    emit_a64_stur rb 29 _existing
+            if== _existing -1
+                slot alloc_slot
+                et → 64 emit_target_v
+                if== et 1
+                    emit_a64_stur rb 29 slot
+                sym_add _pbo _pbl slot
             ← 64 pending_bind_len_v 0
         return 0
 
@@ -2430,36 +2511,36 @@ walk_body body_start body_end :
                                 arm64_emit32 0xD4000001
                             ← 64 stmt_start_v 0
                             goto wb_loop
-        r sym_find off len
-        if>= r 0
+        slot sym_find off len
+        if!= slot -1
             \\ Known symbol.  At statement start it's a reassignment
             \\ target (stash as pending_bind; the newline handler will
-            \\ MOV the expression result into the existing reg).
-            \\ Mid-expression it's a normal read — push the reg.
+            \\ STUR the expression result into the same slot).
+            \\ Mid-expression it's a read — load from slot into scratch.
             _ss0 → 64 stmt_start_v
             if== _ss0 1
                 \\ Peek next token — if it's a structural delimiter
-                \\ (newline/eof/indent), this is a bare `i` read
-                \\ statement (returns i in X0), not a reassignment.
+                \\ (newline/eof/indent), this is a bare read, not reassign.
                 npk → 64 walk_pos_v
                 ntk tok_type npk
                 if== ntk 1
-                    ← 64 stmt_start_v 0
-                    vpush_with_op r
-                    goto wb_loop
+                    goto wb_ident_read
                 if== ntk 0
-                    ← 64 stmt_start_v 0
-                    vpush_with_op r
-                    goto wb_loop
+                    goto wb_ident_read
                 if== ntk 2
-                    ← 64 stmt_start_v 0
-                    vpush_with_op r
-                    goto wb_loop
+                    goto wb_ident_read
                 ← 64 pending_bind_off_v off
                 ← 64 pending_bind_len_v len
                 ← 64 stmt_start_v 0
                 goto wb_loop
-            vpush_with_op r
+            label wb_ident_read
+            \\ Load binding from frame slot into a scratch register.
+            ← 64 stmt_start_v 0
+            et → 64 emit_target_v
+            scratch alloc_scratch
+            if== et 1
+                emit_a64_ldur scratch 29 slot
+            vpush_with_op scratch
             goto wb_loop
         cidx comp_find off len
         if>= cidx 0
@@ -2620,6 +2701,13 @@ walk_top_level :
         ← 64 cur_n_kparams_v kn_argc
         ← 64 cur_smem_v 0
 
+    \\ Host prologue: STP FP,LR; MOV FP,SP; SUB SP,SP,#512 (frame).
+    \\ Bindings live at [FP, #-8], [FP, #-16], etc.
+    if== is_host 1
+        emit_a64_stp_fp_lr
+        emit_a64_mov_fp_sp
+        emit_a64_sub_imm 31 31 512
+
     bs → 32 comp_body_start_v + i * 4
     be → 32 comp_body_end_v + i * 4
     walk_body bs be
@@ -2627,10 +2715,12 @@ walk_top_level :
     \\ Kernel terminator.
     if== is_host 0
         emit_exit
-        \\ Record highest register index used (next_reg - 1).
-        nr → 64 next_reg_v
-        ← 64 cur_reg_count_v nr - 1
+        nr → 64 scratch_idx_v
+        ← 64 cur_reg_count_v nr + 8
+    \\ Host epilogue: ADD SP,SP,#512; LDP FP,LR; RET.
     if== is_host 1
+        emit_a64_add_imm 31 31 512
+        emit_a64_ldp_fp_lr
         emit_a64_ret
 
     i i + 1
