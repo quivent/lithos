@@ -256,6 +256,7 @@ class If:
     right: object
     body: list
     label: Optional[str] = None   # optional branch-target label (for flat if)
+    else_body: Optional[list] = None  # optional else branch
 
 @dataclass
 class Each:
@@ -290,6 +291,12 @@ class Label:
 class Goto:
     """goto name"""
     name: str
+
+@dataclass
+class Predicated:
+    """@pred stmt -- predicate-guarded instruction (e.g. @p bra label)"""
+    pred: str
+    stmt: object
 
 @dataclass
 class Barrier:
@@ -379,6 +386,13 @@ _STMT_KEYWORDS = frozenset({
     'label', 'goto', 'exit', 'return', 'trap', 'var', 'buf', 'const',
     'membar_sys', 'bar.sync', 'continue', 'host', 'kernel',
     'shfl.bfly', 'fma',
+})
+
+# Token types for keywords that can also appear as variable / parameter names
+# in expression contexts (e.g. ``weight`` used as a composition parameter).
+_KEYWORD_AS_IDENT = frozenset({
+    TT.WEIGHT, TT.LAYER, TT.BIND, TT.RUNTIME, TT.TEMPLATE, TT.PROJECT,
+    TT.HOST, TT.BARRIER,
 })
 
 
@@ -625,6 +639,13 @@ class Parser:
         tt = tok.type
         text = tok.text
 
+        # ---- Predicated instruction: @pred stmt ------------------------------
+        if tt == TT.AT:
+            self._advance()  # consume @
+            pred_tok = self._advance()  # consume predicate name
+            inner = self._parse_statement()
+            return Predicated(pred=pred_tok.text, stmt=inner)
+
         # ---- Memory store: <- width addr value ----------------------------
         if tt == TT.STORE:
             return self._parse_store_stmt()
@@ -835,6 +856,14 @@ class Parser:
                 elif nxt.type == TT.NEQ:
                     self._advance()
                     op = '!='
+                else:
+                    # Bare "if expr" — single expression as boolean condition.
+                    # Parse one expression (may contain comparisons internally).
+                    cond = self._parse_expr()
+                    # "if expr" with boolean condition — wrap as "if!= expr 0"
+                    zero = IntLit(value=0)
+                    return If(op='!=', left=cond, right=zero,
+                              body=self._parse_block(indent), label=None, else_body=None)
 
         left = self._parse_expr()
         right = self._parse_expr()
@@ -856,7 +885,39 @@ class Parser:
                 self.pos = saved  # put it back, it's part of body
 
         body = self._parse_block(indent)
-        return If(op=op, left=left, right=right, body=body, label=label)
+
+        # Check for else branch: the else keyword should appear at the same
+        # indent level as the if.  After _parse_block returns, the next
+        # meaningful tokens may be INDENT + ELSE or just ELSE.
+        else_body = None
+        saved = self.pos
+        # Skip newlines to find potential else
+        while self._peek_type() == TT.NEWLINE:
+            self._advance()
+        # Check for INDENT at the same level followed by ELSE
+        if self._peek_type() == TT.INDENT:
+            ind_tok = self._peek()
+            if ind_tok.indent == indent or (indent == 0 and ind_tok.indent <= indent):
+                saved2 = self.pos
+                self._advance()  # consume INDENT
+                if self._peek_type() == TT.ELSE:
+                    self._advance()  # consume ELSE
+                    else_body = self._parse_block(indent)
+                else:
+                    self.pos = saved2  # not an else, restore
+            else:
+                # Different indent level — not our else, restore to before
+                # newline skipping so the caller can process these tokens.
+                self.pos = saved
+        elif self._peek_type() == TT.ELSE:
+            # ELSE at column 0 (no indent token)
+            self._advance()
+            else_body = self._parse_block(indent)
+        else:
+            self.pos = saved
+
+        return If(op=op, left=left, right=right, body=body, label=label,
+                  else_body=else_body)
 
     def _parse_shared(self):
         """shared name count type"""
@@ -997,9 +1058,20 @@ class Parser:
         nxt = self._peek()
 
         # Explicit assignment: name = expr
+        # Also handles: name = func arg1 arg2 ... (RHS is a function call)
         if nxt.type == TT.EQ:
             self._advance()
             val = self._parse_expr()
+            # If more expressions follow on the same line and val is an
+            # identifier, treat it as a function call: name = func(arg1, ...)
+            if isinstance(val, Ident) and \
+               self._peek_type() not in (TT.NEWLINE, TT.EOF, TT.INDENT) and \
+               self._is_expr_start(self._peek()):
+                args = []
+                while self._peek_type() not in (TT.NEWLINE, TT.EOF, TT.INDENT) and \
+                      self._is_expr_start(self._peek()):
+                    args.append(self._parse_expr())
+                val = FuncCall(name=val.name, args=args)
             return Assignment(target=name, value=val)
 
         # Array store: name [ idx ] = value
@@ -1024,11 +1096,25 @@ class Parser:
         # If next token starts an expression, it could be:
         #   name expr              -> implicit assignment (name = expr)
         #   name expr expr ...     -> function call (name(expr, expr, ...))
+        #   name expr ^ arg        -> intrinsic call (e.g. "dest e^ arg" or "dest 2^ arg")
         # Parse the first expression, then check if more follow on the line.
         if self._is_expr_start(nxt):
             first = self._parse_expr()
-            # Check if more expression-start tokens follow on the same line
+            # Check for intrinsic pattern: first ^ arg  (e.g. e^ = exp, 2^ = exp2)
+            # The caret here is part of an intrinsic name, not a binary XOR.
             nxt2 = self._peek()
+            if nxt2.type == TT.CARET:
+                self._advance()  # consume ^
+                # Build intrinsic name from first + ^
+                if isinstance(first, Ident):
+                    intrinsic = first.name + '^'
+                elif isinstance(first, IntLit):
+                    intrinsic = str(first.value) + '^'
+                else:
+                    intrinsic = '^'
+                arg = self._parse_expr()
+                return Assignment(target=name, value=UnaryOp(op=intrinsic, operand=arg))
+            # Check if more expression-start tokens follow on the same line
             if self._is_expr_start(nxt2):
                 # Multi-argument: this is a function call
                 args = [first]
@@ -1088,30 +1174,66 @@ class Parser:
             TT.SQRT, TT.SIN, TT.COS,
             TT.SIGMA, TT.TRIANGLE, TT.NABLA, TT.INDEX,
             TT.DOLLAR,
-        )
+            TT.F32, TT.U32, TT.S32, TT.F16, TT.PTR,
+        ) or tok.type in _KEYWORD_AS_IDENT
 
     def _parse_expr(self):
         """Parse an expression.  Precedence (low to high):
-           additive:  + -
+           bitwise OR:  |
+           bitwise AND: &
+           additive:    + -
+           shift:       << >>
            multiplicative:  * /
            atom
         """
-        return self._parse_add_expr()
+        return self._parse_or_expr()
+
+    def _parse_or_expr(self):
+        left = self._parse_and_expr()
+        while self._peek().type == TT.PIPE:
+            self._advance()
+            right = self._parse_and_expr()
+            left = BinOp(op='|', left=left, right=right)
+        return left
+
+    def _parse_and_expr(self):
+        left = self._parse_add_expr()
+        while self._peek().type == TT.AMP:
+            self._advance()
+            right = self._parse_add_expr()
+            left = BinOp(op='&', left=left, right=right)
+        return left
 
     def _parse_add_expr(self):
-        left = self._parse_mul_expr()
+        left = self._parse_shift_expr()
         while True:
             tok = self._peek()
             if tok.type == TT.PLUS:
                 self._advance()
-                right = self._parse_mul_expr()
+                right = self._parse_shift_expr()
                 left = BinOp(op='+', left=left, right=right)
             elif tok.type == TT.MINUS:
                 # Disambiguate: is this subtraction or a negative literal on
                 # the next line?  Only treat as minus if on the same line.
                 self._advance()
-                right = self._parse_mul_expr()
+                right = self._parse_shift_expr()
                 left = BinOp(op='-', left=left, right=right)
+            else:
+                break
+        return left
+
+    def _parse_shift_expr(self):
+        left = self._parse_mul_expr()
+        while True:
+            tok = self._peek()
+            if tok.type == TT.SHL:
+                self._advance()
+                right = self._parse_mul_expr()
+                left = BinOp(op='<<', left=left, right=right)
+            elif tok.type == TT.SHR:
+                self._advance()
+                right = self._parse_mul_expr()
+                left = BinOp(op='>>', left=left, right=right)
             else:
                 break
         return left
@@ -1239,6 +1361,17 @@ class Parser:
         if tok.type in (TT.F32, TT.U32, TT.S32, TT.F16, TT.PTR):
             self._advance()
             return Ident(name=tok.text)
+
+        # Keywords that can appear as variable/parameter names in expressions
+        if tok.type in _KEYWORD_AS_IDENT:
+            self._advance()
+            name = tok.text
+            if self._peek_type() == TT.LBRACK:
+                self._advance()
+                idx = self._parse_expr()
+                self._expect(TT.RBRACK)
+                return ArrayIndex(base=Ident(name=name), index=idx)
+            return Ident(name=name)
 
         # If nothing matches, raise an error
         raise ParseError(f'unexpected token in expression: {tok.text!r} (type={tok.type})', tok)

@@ -2479,6 +2479,7 @@ typedef struct __attribute__((packed)) {
 static void write_macho(const char *outpath) {
     u32 pz_sz = (u32)sizeof(SEG64);
     u32 tx_sz = (u32)(sizeof(SEG64) + sizeof(SEC64));
+    u32 da_sz = (u32)(sizeof(SEG64) + sizeof(SEC64));
     u32 le_sz = (u32)sizeof(SEG64);
     u32 cf_sz = (u32)sizeof(LEDATA);
     u32 sy_sz = (u32)sizeof(SYMTAB);
@@ -2488,32 +2489,40 @@ static void write_macho(const char *outpath) {
     u32 mn_sz = (u32)sizeof(ENTRYPT);
     u32 ld_sz = 56;
 
-    u32 lc_total = pz_sz + tx_sz + le_sz + cf_sz + sy_sz + ds_sz + dl_sz + bv_sz + mn_sz + ld_sz;
-    u32 ncmds = 10;
+    u32 lc_total = pz_sz + tx_sz + da_sz + le_sz + cf_sz + sy_sz + ds_sz + dl_sz + bv_sz + mn_sz + ld_sz;
+    u32 ncmds = 11;
     u32 hdr_sz = (u32)sizeof(MH64);
     u32 lc_end = hdr_sz + lc_total;
     /* 64 bytes of slack so codesign can append LC_CODE_SIGNATURE without
      * trampling the code. */
     u32 code_off = (lc_end + 64 + 3) & ~3u;
     u32 code_len = (u32)(code_words * 4);
-    /* `buf` data trails the code within __TEXT (see the buf comment block
-     * near data_buf).  data_len is 8-byte aligned by add_buf_fixup's data_off
-     * maintenance; we re-assert here and also include it in the segment. */
-    u32 data_len = (u32)data_off;
-    u32 text_filesize = code_off + code_len + data_len;
+    /* __TEXT holds ONLY code now; `buf`/`var` data lives in the separate
+     * writable __DATA segment below. */
+    u32 text_filesize = code_off + code_len;
     u32 text_padded = (text_filesize + PAGE_SIZE_OUT - 1) & ~(u32)(PAGE_SIZE_OUT - 1);
     if (text_padded == 0) text_padded = PAGE_SIZE_OUT;
 
-    /* Resolve `buf` fixups now that we know where code and data live in the
-     * final image.  Each buf's virtual address is computed as
-     *   TEXT_VMADDR + code_off + code_len + buf_data_off
-     * and patched into the 4-instruction MOVZ/MOVK sequence recorded at
-     * parse time.  Patching code[] in place is safe because the memcpy of
-     * `code` into the output buffer happens further below. */
+    /* __DATA segment: writable (maxprot=3, initprot=3) backing for `buf`
+     * storage and top-level `var` globals.  File-resident (zero-init is still
+     * explicit — we write the initializer bytes for each `var` and zeroed
+     * bytes for `buf`).  Placed at its own page-aligned VA/file offset so the
+     * kernel maps it with R+W, avoiding SIGBUS on stores. */
+    u32 data_len = (u32)data_off;
+    u32 data_fileoff = text_padded;                      /* after __TEXT */
+    u32 data_filesize = (data_len + PAGE_SIZE_OUT - 1) & ~(u32)(PAGE_SIZE_OUT - 1);
+    if (data_len == 0) data_filesize = 0;
+    u64 data_vmaddr = (u64)TEXT_VMADDR + (u64)text_padded;
+    u64 data_vmsize = (u64)data_filesize;
+
+    /* Resolve `buf` fixups: each buf's virtual address is
+     *   data_vmaddr + buf_data_off
+     * Patched into the 4-instruction ADRP+ADD sequence (high 2 words become
+     * NOPs) recorded at parse time.  Patching code[] in place is safe because
+     * the memcpy of `code` into the output buffer happens further below. */
     for (int i = 0; i < n_buf_fixups; i++) {
         BufFixup *bf = &buf_fixups[i];
-        u64 va = (u64)TEXT_VMADDR + (u64)code_off + (u64)code_len
-               + (u64)(u32)bf->buf_data_off;
+        u64 va = data_vmaddr + (u64)(u32)bf->buf_data_off;
         int insn_file_off = code_off + bf->code_word_idx * 4;
         u64 insn_va = (u64)TEXT_VMADDR + (u64)insn_file_off;
         /* Compute page delta between insn and target via VA */
@@ -2533,11 +2542,10 @@ static void write_macho(const char *outpath) {
         code[bf->code_word_idx + 2] = nop;
         code[bf->code_word_idx + 3] = nop;
     }
-    /* Same treatment for global vars */
+    /* Same treatment for global vars: they also live in __DATA. */
     for (int i = 0; i < n_global_fixups; i++) {
         GlobalFixup *gf = &global_fixups[i];
-        u64 va = (u64)TEXT_VMADDR + (u64)code_off + (u64)code_len
-               + (u64)(u32)gf->data_off;
+        u64 va = data_vmaddr + (u64)(u32)gf->data_off;
         int insn_file_off = code_off + gf->code_word_idx * 4;
         u64 insn_va = (u64)TEXT_VMADDR + (u64)insn_file_off;
         u64 insn_page   = insn_va & ~(u64)0xFFF;
@@ -2557,7 +2565,7 @@ static void write_macho(const char *outpath) {
         code[gf->code_word_idx + 3] = nop;
     }
 
-    u32 le_off  = text_padded;
+    u32 le_off  = data_fileoff + data_filesize;
     u32 cf_data_off = le_off;
     u32 cf_data_size = 56;
     u32 symtab_off = cf_data_off + cf_data_size;
@@ -2569,7 +2577,7 @@ static void write_macho(const char *outpath) {
     u32 filesize_total = le_off + le_used;
 
     u64 text_vmaddr = TEXT_VMADDR;
-    u64 le_vmaddr   = text_vmaddr + text_padded;
+    u64 le_vmaddr   = data_vmaddr + data_vmsize;
 
     char *buf = calloc(1, filesize_total + 16);
     if (!buf) die("out of memory");
@@ -2608,6 +2616,27 @@ static void write_macho(const char *outpath) {
     sec->align = 2;
     sec->flags = S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS;
     p += tx_sz;
+
+    /* __DATA — writable segment for `buf` storage and top-level `var`
+     * globals. maxprot=3 (R+W), initprot=3. Contains one __data section so
+     * tooling (otool, dyld) recognises the contents as ordinary initialised
+     * data. */
+    SEG64 *da = (SEG64*)p;
+    da->cmd = LC_SEGMENT_64; da->cmdsize = da_sz;
+    memcpy(da->segname, "__DATA", 6);
+    da->vmaddr = data_vmaddr; da->vmsize = data_vmsize;
+    da->fileoff = data_fileoff; da->filesize = data_filesize;
+    da->maxprot = 3; da->initprot = 3;
+    da->nsects = 1;
+    SEC64 *dsec = (SEC64*)(da + 1);
+    memcpy(dsec->sectname, "__data", 6);
+    memcpy(dsec->segname, "__DATA", 6);
+    dsec->addr = data_vmaddr;
+    dsec->size = data_len;
+    dsec->offset = (data_len > 0) ? data_fileoff : 0;
+    dsec->align = 3;              /* 8-byte aligned */
+    dsec->flags = 0;              /* S_REGULAR */
+    p += da_sz;
 
     SEG64 *le = (SEG64*)p;
     le->cmd = LC_SEGMENT_64; le->cmdsize = le_sz;
@@ -2679,10 +2708,10 @@ static void write_macho(const char *outpath) {
 
     memcpy(buf + code_off, code, code_len);
     if (data_len > 0) {
-        /* Append buf data immediately after the code. Mapped R+X as part of
-         * __TEXT — see the buf-storage comment block for the read-only
-         * limitation. */
-        memcpy(buf + code_off + code_len, data_buf, data_len);
+        /* Write `buf`/`var` data into the __DATA segment's file region.
+         * Mapped R+W by the kernel (maxprot=3, initprot=3), so the compiled
+         * program can store into globals and buf memory without SIGBUS. */
+        memcpy(buf + data_fileoff, data_buf, data_len);
     }
 
     /* Empty chained fixups header */

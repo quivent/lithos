@@ -232,12 +232,14 @@ elf_write_header :
 \\ SECTION HEADER EMIT — one 64-byte ELF64 section header
 \\ ============================================================
 
-shdr64_emit sh_name sh_type sh_flags sh_addr sh_offset sh_size sh_link sh_info sh_addralign sh_entsize :
+shdr64_a sh_name sh_type sh_flags sh_addr sh_offset :
     cd_emit sh_name
     cd_emit sh_type
     cq_emit sh_flags
     cq_emit sh_addr
     cq_emit sh_offset
+
+shdr64_b sh_size sh_link sh_info sh_addralign sh_entsize :
     cq_emit sh_size
     cd_emit sh_link
     cd_emit sh_info
@@ -283,15 +285,15 @@ nvi_sval_emit val sym_idx attr fmt :
 \\ code_buf:     pointer to sm90 SASS instruction buffer
 \\ code_size:    byte length of SASS code
 \\ n_kparams:    number of kernel parameters (8-byte pointers each)
-\\ reg_count:    number of registers used by kernel
+\\ reg_count:    highest register index used by kernel
 \\ smem_size:    bytes of static shared memory (0 if none)
-\\ cooperative:  1 if cooperative kernel, 0 otherwise
-\\ gridsync_offsets: pointer to array of u32 grid-sync instruction offsets
-\\ gridsync_count:   number of grid-sync sites
+\\
+\\ Reads globals: cooperative, gridsync_offsets, gridsync_count,
+\\                exit_offsets, exit_count
 \\
 \\ After return, cubin_buf[0..cubin_pos) contains the complete ELF.
 
-elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size cooperative gridsync_offsets gridsync_count :
+elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size :
 
     \\ ---- Step 1: ELF header placeholder (64 bytes) ----
     elf_init
@@ -454,7 +456,7 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     nvinfo_off = cubin_pos
 
     \\ REGCOUNT (sym_idx=3 = kernel symbol)
-    reg_val = reg_count
+    reg_val = reg_count + 1
     if< reg_val 8
         reg_val = 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
@@ -518,11 +520,18 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
             cd_emit gs_off
         endfor
 
-    \\ EXIT_INSTR_OFFSETS: fmt=04 attr=0x1c size=4 val=0x100 (safe default)
+    \\ EXIT_INSTR_OFFSETS: emit actual EXIT byte offsets tracked during emission
     cb_emit 4
     cb_emit EIATTR_EXIT_INSTR_OFFSETS
-    cw_emit 4
-    cd_emit 256    \\ 0x100
+    if> exit_count 0
+        cw_emit (exit_count * 4)
+        for ei 0 exit_count 1
+            ex_off = load_u32 (exit_offsets + ei * 4)
+            cd_emit ex_off
+        endfor
+    if== exit_count 0
+        cw_emit 4
+        cd_emit code_size - 16
 
     \\ CBANK_PARAM_SIZE (HVAL; total param bytes)
     param_bytes = n_kparams * 8
@@ -591,32 +600,41 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     shdrs_off = cubin_pos
 
     \\ [0] NULL
-    shdr64_emit 0 0 0 0 0 0 0 0 0 0
+    shdr64_a 0 0 0 0 0
+    shdr64_b 0 0 0 0 0
 
     \\ [1] .shstrtab (SHT_STRTAB)
-    shdr64_emit SN_shstrtab SHT_STRTAB 0 0 shstrtab_off shstrtab_size 0 0 1 0
+    shdr64_a SN_shstrtab SHT_STRTAB 0 0 shstrtab_off
+    shdr64_b shstrtab_size 0 0 1 0
 
     \\ [2] .strtab (SHT_STRTAB)
-    shdr64_emit SN_strtab SHT_STRTAB 0 0 strtab_off strtab_size 0 0 1 0
+    shdr64_a SN_strtab SHT_STRTAB 0 0 strtab_off
+    shdr64_b strtab_size 0 0 1 0
 
     \\ [3] .symtab (SHT_SYMTAB, link=2=.strtab, info=3=first_global)
-    shdr64_emit SN_symtab SHT_SYMTAB 0 0 symtab_off symtab_size 2 3 8 24
+    shdr64_a SN_symtab SHT_SYMTAB 0 0 symtab_off
+    shdr64_b symtab_size 2 3 8 24
 
     \\ [4] .nv.info (SHT_LOPROC, link=3=.symtab)
-    shdr64_emit SN_nvinfo SHT_LOPROC 0 0 nvinfo_off nvinfo_size 3 0 4 0
+    shdr64_a SN_nvinfo SHT_LOPROC 0 0 nvinfo_off
+    shdr64_b nvinfo_size 3 0 4 0
 
     \\ [5] .text.<kernel> (SHT_PROGBITS, flags=ALLOC|EXECINSTR, link=3, info=3)
-    shdr64_emit SN_text SHT_PROGBITS 6 0 text_off text_size 3 3 128 0
+    shdr64_a SN_text SHT_PROGBITS 6 0 text_off
+    shdr64_b text_size 3 3 128 0
 
     \\ [6] .nv.info.<kernel> (SHT_LOPROC, flags=0x40=INFO_LINK, link=3, info=5=.text)
-    shdr64_emit SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off nvinfo_k_size 3 5 4 0
+    shdr64_a SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off
+    shdr64_b nvinfo_k_size 3 5 4 0
 
     \\ [7] .nv.shared.reserved.0 (SHT_NOBITS, flags=ALLOC|EXECINSTR)
     \\ sh_size = smem_size (NOBITS — no file content)
-    shdr64_emit SN_shared SHT_NOBITS 3 0 const0_off smem_size 0 0 16 0
+    shdr64_a SN_shared SHT_NOBITS 3 0 const0_off
+    shdr64_b smem_size 0 0 16 0
 
     \\ [8] .nv.constant0.<kernel> (SHT_PROGBITS, flags=0x42=ALLOC|INFO_LINK, info=5=.text)
-    shdr64_emit SN_const0 SHT_PROGBITS 66 0 const0_off const0_size 0 5 4 0
+    shdr64_a SN_const0 SHT_PROGBITS 66 0 const0_off
+    shdr64_b const0_size 0 5 4 0
 
     \\ ---- Step 10: Patch ELF header ----
     put_u64 0 32           \\ e_phoff = 0 (no program headers)
@@ -662,15 +680,17 @@ elf_save path :
 \\ ============================================================
 \\ One-call interface matching elf-wrap.fs write-elf.
 
-elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size cooperative gridsync_offsets gridsync_count out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size cooperative gridsync_offsets gridsync_count
+elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path
 
 \\ ============================================================
-\\ elf_write_simple — Non-cooperative kernel, no grid-sync
+\\ elf_write_simple — Non-cooperative kernel (clears cooperative/gridsync state)
 \\ ============================================================
-\\ Simplified interface for single non-cooperative kernels.
 
 elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size 0 0 0
+    cooperative 0
+    gridsync_count 0
+    exit_count 0
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path

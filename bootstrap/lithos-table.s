@@ -135,7 +135,8 @@
 // The target program uses X9-X28 freely. The parser's own X19-X28 are separate.
 // X18 is reserved on macOS but usable in the target (Linux GH200).
 .equ REG_FIRST,     9
-.equ REG_LAST,      28
+.equ REG_LAST,      27
+.equ REG_BSS_BASE,  28     // X28 reserved to hold BSS base address
 
 // Condition codes
 .equ CC_EQ, 0
@@ -180,6 +181,9 @@
 .extern ls_sym_count
 .extern ls_sym_table
 .extern ls_token_buf
+.extern ls_bss_offset
+.extern ls_fwd_gotos
+.extern ls_n_fwd_gotos
 
 // ============================================================
 // .text — all code
@@ -972,6 +976,16 @@ parse_tokens:
     add     x0, x0, :lo12:ls_sym_count
     str     wzr, [x0]
 
+    // Reset BSS allocation offset (for buf declarations)
+    adrp    x0, ls_bss_offset
+    add     x0, x0, :lo12:ls_bss_offset
+    str     xzr, [x0]
+
+    // Reset forward-goto patch table count
+    adrp    x0, ls_n_fwd_gotos
+    add     x0, x0, :lo12:ls_n_fwd_gotos
+    str     wzr, [x0]
+
     // Clear scope
     adrp    x0, scope_depth
     add     x0, x0, :lo12:scope_depth
@@ -1169,23 +1183,54 @@ handle_buf:
 parse_buf_decl:
     stp     x29, x30, [sp, #-16]!
     mov     x29, sp
+    stp     x20, x21, [sp, #-16]!
     add     x19, x19, #TOK_STRIDE_SZ   // skip 'buf'
     ldr     w0, [x19]
     cmp     w0, #TOK_IDENT
     b.ne    parse_error
+    mov     x20, x19                    // x20 = save name token pos
+    // Check if size follows the name
+    add     x21, x19, #TOK_STRIDE_SZ   // peek at next token
+    ldr     w0, [x21]
+    mov     w2, #0                      // default buf size = 0
+    cmp     w0, #TOK_INT
+    b.ne    .Lbuf_add_sym
+    // Parse the int literal to get the size value
+    mov     x19, x21                    // point x19 at the int token
+    bl      parse_int_literal           // x0 = parsed integer value
+    mov     w2, w0                      // w2 = buf size for SYM_REG
+    mov     x19, x20                    // restore x19 to name token
+.Lbuf_add_sym:
+    // Save size on stack (w2 gets clobbered by sym_add)
+    stp     x2, xzr, [sp, #-16]!
+    // Compute BSS offset: current ls_bss_offset
+    adrp    x4, ls_bss_offset
+    add     x4, x4, :lo12:ls_bss_offset
+    ldr     x5, [x4]
+    // Store BSS offset in SYM_REG instead of size.
+    mov     w2, w5
     mov     w1, #KIND_BUF
-    mov     w2, #0
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
+    // Restore size to x6
+    ldp     x6, xzr, [sp], #16
+    // Advance ls_bss_offset by buf size (aligned to 8 bytes)
+    adrp    x4, ls_bss_offset
+    add     x4, x4, :lo12:ls_bss_offset
+    ldr     x5, [x4]
+    add     x5, x5, x6
+    add     x5, x5, #7
+    and     x5, x5, #-8
+    str     x5, [x4]
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
     ldr     w0, [x19]
     cmp     w0, #TOK_INT
     b.ne    .Lbuf_no_size
-    bl      parse_int_literal
-    add     x19, x19, #TOK_STRIDE_SZ
+    add     x19, x19, #TOK_STRIDE_SZ   // skip size (already parsed)
 .Lbuf_no_size:
+    ldp     x20, x21, [sp], #16
     ldp     x29, x30, [sp], #16
     ret
 
@@ -1259,6 +1304,10 @@ handle_composition:
     mov     w5, #REG_FIRST
 1:  str     w5, [x0]               // reg_floor = min(next_reg, REG_FIRST)
     str     w5, [x1]               // next_reg = reg_floor
+    // Reset spill count — new composition has its own stack frame
+    adrp    x0, spill_count
+    add     x0, x0, :lo12:spill_count
+    str     wzr, [x0]
 
     // Increment scope
     adrp    x0, scope_depth
@@ -1271,6 +1320,10 @@ handle_composition:
     bl      emit_cur
     mov     w2, w0                  // code address
     str     x0, [sp, #16]          // save comp start address
+    // Track last composition for entry point (bottom-of-file = entry)
+    adrp    x6, ls_last_comp_addr
+    add     x6, x6, :lo12:ls_last_comp_addr
+    str     x0, [x6]
     mov     w1, #KIND_COMP
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
@@ -1324,6 +1377,9 @@ handle_composition:
     cbz     w9, .Lcomp_no_body      // indent 0 = not indented → empty body
     bl      parse_body
 .Lcomp_no_body:
+
+    // Flush any pending register spills before epilogue
+    bl      reset_regs
 
     // Emit epilogue: LDP X29, X30, [SP], #16; RET
     MOVI32  w0, 0xA8C17BFD
@@ -1626,8 +1682,65 @@ handle_ident_stmt:
     ldp     x29, x30, [sp], #16
     ret
 .Lhi_goto_fwd:
-    // Forward goto — emit NOP placeholder
-    bl      emit_nop
+    // Forward goto — record in patch table, emit B placeholder (0x14000000)
+    // x19 points at the label name token.
+    // Record: name bytes + source offset in code_buf.
+    ldr     w2, [x19, #4]           // source offset of name token
+    ldr     w3, [x19, #8]           // name length
+    // Save tokp for later
+    str     x19, [sp, #-16]!
+    // Get current emit position (code_buf offset)
+    bl      emit_cur                 // x0 = emit_ptr
+    adrp    x4, ls_code_buf
+    add     x4, x4, :lo12:ls_code_buf
+    sub     x5, x0, x4              // x5 = offset in code_buf
+    // Append to patch table
+    adrp    x6, ls_n_fwd_gotos
+    add     x6, x6, :lo12:ls_n_fwd_gotos
+    ldr     w7, [x6]
+    adrp    x8, ls_fwd_gotos
+    add     x8, x8, :lo12:ls_fwd_gotos
+    mov     x9, #40
+    mul     x9, x7, x9
+    add     x8, x8, x9              // x8 = &fwd_gotos[w7]
+    // Copy label name (up to 32 bytes)
+    ldr     x19, [sp]                // restore tokp
+    ldr     w2, [x19, #4]           // source offset
+    ldr     w3, [x19, #8]           // length
+    cmp     w3, #32
+    b.lt    1f
+    mov     w3, #32
+1:  add     x9, x28, x2             // src + offset
+    mov     w10, #0
+.Lfg_copy:
+    cmp     w10, w3
+    b.ge    .Lfg_copy_done
+    ldrb    w11, [x9, x10]
+    strb    w11, [x8, x10]
+    add     w10, w10, #1
+    b       .Lfg_copy
+.Lfg_copy_done:
+    // Pad remaining bytes with 0
+    cmp     w10, #32
+    b.ge    .Lfg_pad_done
+.Lfg_pad:
+    strb    wzr, [x8, x10]
+    add     w10, w10, #1
+    cmp     w10, #32
+    b.lt    .Lfg_pad
+.Lfg_pad_done:
+    // Store source offset at [x8 + 32]
+    str     w5, [x8, #32]
+    // Also store length at [x8 + 36]
+    str     w3, [x8, #36]
+    // Increment fwd_gotos count
+    add     w7, w7, #1
+    str     w7, [x6]
+    ldr     x19, [sp], #16
+    // Emit B with placeholder offset 0 (0x14000000)
+    mov     w0, #0x14000000
+    movk    w0, #0x1400, lsl #16
+    bl      emit32
     add     x19, x19, #TOK_STRIDE_SZ
     ldp     x29, x30, [sp], #16
     ret
@@ -1859,10 +1972,23 @@ parse_binding_compose:
     ldr     w3, [x3]
     bl      sym_add
 
-    // NOTE: we do NOT raise reg_floor here. Instead, parse_body
-    // skips reset_regs after binding statements (w0=1 flag).
-    // This prevents register recycling for bindings without
-    // exhausting the register window in large compositions.
+    // Raise reg_floor to protect this binding's register from being recycled
+    // by future reset_regs calls. Only raise if w4 is in the allocated range
+    // (not a param register X0-X8).
+    cmp     w4, #REG_FIRST
+    b.lt    .Lbind_no_floor
+    adrp    x5, reg_floor
+    add     x5, x5, :lo12:reg_floor
+    ldr     w6, [x5]
+    add     w7, w4, #1              // new floor = binding_reg + 1
+    cmp     w7, w6
+    b.le    .Lbind_no_floor         // don't lower the floor
+    str     w7, [x5]
+    // Also update next_reg so future allocs start above this
+    adrp    x5, next_reg
+    add     x5, x5, :lo12:next_reg
+    str     w7, [x5]
+.Lbind_no_floor:
 
     ldr     x19, [sp], #16         // restore post-expr position
     mov     w0, #1                 // return 1 = binding (don't reset regs)
@@ -1983,10 +2109,14 @@ parse_mem_store:
 
     bl      parse_expr              // width
     mov     w4, w0
+    stp     x4, xzr, [sp, #-16]!
     bl      parse_expr              // addr (base, possibly with +offset inline)
     mov     w5, w0
+    ldp     x4, xzr, [sp], #16
+    stp     x4, x5, [sp, #-16]!
     bl      parse_expr              // value (or offset if there's a 4th operand)
     mov     w6, w0
+    ldp     x4, x5, [sp], #16
     // Check for 4th operand: if present, w6 is offset and next expr is value
     cmp     x19, x27
     b.hs    .Lstore_emit
@@ -2124,12 +2254,76 @@ handle_label:
     b.ne    parse_error
 
     bl      emit_cur
+    str     x0, [sp, #-16]!        // save label address
     mov     w2, w0
     mov     w1, #KIND_LOCAL_REG
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
+
+    // Patch any forward gotos that target this label.
+    // Scan ls_fwd_gotos; for each entry whose name matches, emit B fix at the source offset.
+    ldr     x22, [sp]               // label address (emit_ptr absolute)
+    adrp    x8, ls_n_fwd_gotos
+    add     x8, x8, :lo12:ls_n_fwd_gotos
+    ldr     w9, [x8]                // count
+    cbz     w9, .Lhl_no_patches
+    adrp    x10, ls_fwd_gotos
+    add     x10, x10, :lo12:ls_fwd_gotos
+    mov     w11, #0                 // index
+    // Get label name info
+    ldr     w12, [x19, #4]          // name source offset
+    ldr     w13, [x19, #8]          // name length
+    cmp     w13, #32
+    b.lt    .Lhl_len_ok
+    mov     w13, #32
+.Lhl_len_ok:
+    add     x14, x28, x12           // label name ptr (src + offset)
+.Lhl_scan:
+    cmp     w11, w9
+    b.ge    .Lhl_no_patches
+    mov     x15, #40
+    mul     x15, x11, x15
+    add     x15, x10, x15           // &fwd_gotos[i]
+    // Check if name length matches
+    ldr     w16, [x15, #36]         // stored length
+    cmp     w16, w13
+    b.ne    .Lhl_next
+    // Compare name bytes
+    mov     w17, #0
+.Lhl_cmp:
+    cmp     w17, w13
+    b.ge    .Lhl_match
+    ldrb    w20, [x14, x17]
+    ldrb    w21, [x15, x17]
+    cmp     w20, w21
+    b.ne    .Lhl_next
+    add     w17, w17, #1
+    b       .Lhl_cmp
+.Lhl_match:
+    // Found matching forward goto — patch it
+    // Source offset in code_buf is at [x15 + 32]
+    ldr     w17, [x15, #32]        // source offset in code_buf
+    adrp    x20, ls_code_buf
+    add     x20, x20, :lo12:ls_code_buf
+    add     x20, x20, x17           // absolute address of the B instruction
+    // Compute offset: (label_addr - source_addr) / 4
+    sub     x21, x22, x20
+    asr     x21, x21, #2
+    and     w21, w21, #0x3FFFFFF
+    // Build B instruction: 0x14000000 | imm26
+    mov     w2, #0x14000000
+    movk    w2, #0x1400, lsl #16
+    orr     w2, w2, w21
+    str     w2, [x20]
+    // Invalidate this entry by setting length to 0 so it won't rematch
+    str     wzr, [x15, #36]
+.Lhl_next:
+    add     w11, w11, #1
+    b       .Lhl_scan
+.Lhl_no_patches:
+    add     sp, sp, #16            // discard saved label address
     add     x19, x19, #TOK_STRIDE_SZ
 
     ldp     x29, x30, [sp], #16
@@ -2298,11 +2492,28 @@ handle_if:
     bl      patch_b_cond
 .Lif_patch_done:
 
-    // Check for elif/else
+    // Check for elif/else — peek past NEWLINE + INDENT without consuming
     bl      skip_newlines
     cmp     x19, x27
     b.hs    .Lif_end
     ldr     w0, [x19]
+    // If INDENT, peek past it for elif/else but don't consume yet
+    cmp     w0, #TOK_INDENT
+    b.ne    .Lif_check_kw
+    add     x4, x19, #TOK_STRIDE_SZ
+    cmp     x4, x27
+    b.hs    .Lif_end
+    ldr     w0, [x4]
+    cmp     w0, #TOK_ELIF
+    b.eq    .Lif_skip_indent
+    cmp     w0, #TOK_ELSE
+    b.eq    .Lif_skip_indent
+    b       .Lif_end
+.Lif_skip_indent:
+    // Found elif/else after INDENT — consume the INDENT
+    add     x19, x19, #TOK_STRIDE_SZ
+    ldr     w0, [x19]
+.Lif_check_kw:
     cmp     w0, #TOK_ELIF
     b.eq    .Lif_elif
     cmp     w0, #TOK_ELSE
@@ -2979,6 +3190,8 @@ parse_atom:
     b.eq    .La_unary_math
     cmp     w0, #TOK_INDEX
     b.eq    .La_unary_math
+    cmp     w0, #TOK_DOLLAR
+    b.eq    .La_dollar
 
     // Keyword token used as variable name? Try sym_lookup.
     ldr     w1, [x19, #8]
@@ -3029,12 +3242,60 @@ parse_atom:
     ret
 
 .La_ident_lookup:
+    // Check for $N register reference (lexed as TOK_IDENT starting with '$')
+    ldr     w2, [x19, #4]           // source offset
+    ldrb    w3, [x28, x2]           // first character
+    cmp     w3, #'$'
+    b.ne    .La_ident_sym
+    // $N — call parse_dollar_reg (expects x19 on current token)
+    bl      parse_dollar_reg        // w0 = register number
+    ldp     x29, x30, [sp], #16
+    ret
+.La_ident_sym:
     bl      sym_lookup
     cbz     x0, .La_ident_unknown
     // Check if it's a composition — needs call dispatch, not register return
     ldr     w1, [x0, #SYM_KIND]
     cmp     w1, #KIND_COMP
     b.eq    .La_ident_unknown       // dispatch as expression-level call
+    // Check if it's a buf — emit ADD Xresult, X28 (BSS_BASE), #offset
+    cmp     w1, #KIND_BUF
+    b.ne    .La_ident_reg
+    // Buf: compute address as BSS_BASE + offset
+    ldr     w2, [x0, #SYM_REG]      // w2 = BSS offset
+    add     x19, x19, #TOK_STRIDE_SZ
+    // Save offset on stack; alloc_reg clobbers caller-saved regs
+    stp     x2, xzr, [sp, #-16]!
+    bl      alloc_reg               // w0 = fresh register for result
+    mov     w4, w0                  // result register
+    ldp     x2, xzr, [sp], #16
+    // Emit: ADD Xresult, X28, #(offset & 0xFFF)
+    // ARM64 ADD imm encoding: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd
+    and     w5, w2, #0xFFF
+    lsl     w5, w5, #10
+    mov     w6, #28
+    lsl     w6, w6, #5
+    orr     w0, w4, w5
+    orr     w0, w0, w6
+    movk    w0, #0x9100, lsl #16
+    stp     x2, x4, [sp, #-16]!    // save offset and result reg
+    bl      emit32
+    ldp     x2, x4, [sp], #16
+    // If offset >= 4096, emit another ADD with LSL #12
+    lsr     w5, w2, #12
+    cbz     w5, .La_buf_done
+    and     w5, w5, #0xFFF
+    lsl     w5, w5, #10             // imm12 << 10
+    lsl     w6, w4, #5              // Rn=Xresult
+    orr     w0, w4, w5
+    orr     w0, w0, w6
+    movk    w0, #0x9140, lsl #16    // ADD (imm, LSL #12): sh=1 (bit 22)
+    bl      emit32
+.La_buf_done:
+    mov     w0, w4                  // return result register
+    ldp     x29, x30, [sp], #16
+    ret
+.La_ident_reg:
     ldr     w0, [x0, #SYM_REG]
     add     x19, x19, #TOK_STRIDE_SZ
     // Check for array subscript: name[expr]
@@ -3174,14 +3435,16 @@ parse_atom:
     ldr     w0, [x5, #SYM_KIND]
     cmp     w0, #KIND_COMP
     b.ne    .La_call_nop
-    // Emit BL to composition
-    ldr     w1, [x5, #SYM_REG]     // code address
+    // Emit BL to composition (use same pattern as handle_call)
+    ldr     w0, [x5, #SYM_REG]     // code address
     bl      emit_cur
-    sub     w1, w1, w0
-    asr     w1, w1, #2
-    and     w1, w1, #0x3FFFFFF
-    movk    w1, #0x9400, lsl #16
-    mov     w0, w1
+    mov     x1, x0                  // x1 = current emit_ptr
+    ldr     w0, [x5, #SYM_REG]     // re-load target (emit_cur clobbered x0)
+    sub     x2, x0, x1             // offset = target - current
+    asr     x2, x2, #2
+    and     w2, w2, #0x3FFFFFF
+    ORRIMM  w2, 0x94000000, w16
+    mov     w0, w2
     bl      emit32
     b       .La_call_done
 .La_call_nop:
@@ -3227,8 +3490,36 @@ parse_atom:
     ldp     x29, x30, [sp], #16
     ret
 
+.La_dollar:
+    // $N — raw register reference. Returns register N as the atom value.
+    bl      parse_dollar_reg        // w0 = register number, x19 advanced
+    ldp     x29, x30, [sp], #16
+    ret
+
 .La_load:
     add     x19, x19, #TOK_STRIDE_SZ   // skip '→'
+    // Save width literal value before parse_atom consumes the token.
+    // Width is always an INT literal (8, 32, or 64).
+    ldr     w0, [x19]
+    cmp     w0, #TOK_INT
+    b.ne    1f
+    ldr     w1, [x19, #4]              // source offset
+    ldr     w2, [x19, #8]              // token length
+    // Quick decimal parse for 1-2 digit widths
+    ldrb    w3, [x28, x1]              // first digit
+    sub     w3, w3, #'0'
+    cmp     w2, #1
+    b.eq    2f
+    mov     w4, #10
+    mul     w3, w3, w4
+    add     w1, w1, #1
+    ldrb    w4, [x28, x1]
+    sub     w4, w4, #'0'
+    add     w3, w3, w4
+2:  adrp    x0, ls_load_width
+    add     x0, x0, :lo12:ls_load_width
+    str     w3, [x0]
+1:
     bl      parse_atom                  // width (8, 16, 32, 64)
     mov     w4, w0                      // width register
     bl      parse_expr                  // address/base expression
@@ -3245,7 +3536,7 @@ parse_atom:
     b.eq    .La_load_simple
     cmp     w0, #TOK_INDENT
     b.eq    .La_load_simple
-    // Has offset — parse it and emit indexed load: LDRB Wd, [Xbase, Xoff]
+    // Has offset — parse it and emit width-aware indexed load
     stp     w4, w5, [sp, #-16]!
     bl      parse_atom                  // offset
     ldp     w4, w5, [sp], #16
@@ -3256,8 +3547,36 @@ parse_atom:
     lsl     w2, w5, #5                  // Rn (base)
     orr     w0, w7, w1
     orr     w0, w0, w2
+    // Select opcode by width stored in w4 (register containing width literal).
+    // The width was parsed as an integer literal → MOV Xw4, #width.
+    // We saved the width VALUE before alloc_reg in the parse_atom call.
+    // Actually, w4 is the register number. We need to recover the width.
+    // Trick: the .La_load code parsed width via parse_atom which for an
+    // INT literal emits MOV Xreg, #imm and returns the register in w0.
+    // We saved w0→w4. But we can't read the register value at compile time.
+    //
+    // Simpler: read the width token directly BEFORE calling parse_atom.
+    // But we already consumed it. So we save the literal value separately.
+    // For now, use the saved width literal from ls_load_width (set below).
+    adrp    x3, ls_load_width
+    add     x3, x3, :lo12:ls_load_width
+    ldr     w3, [x3]
+    cmp     w3, #64
+    b.eq    .La_load_off_64
+    cmp     w3, #32
+    b.eq    .La_load_off_32
+    // Default: 8-bit (LDRB)
     movz    w3, #0x6800
     movk    w3, #0x3860, lsl #16        // LDRB Wd, [Xn, Xm]
+    b       .La_load_off_emit
+.La_load_off_64:
+    movz    w3, #0x6800
+    movk    w3, #0xF860, lsl #16        // LDR Xd, [Xn, Xm]
+    b       .La_load_off_emit
+.La_load_off_32:
+    movz    w3, #0x6800
+    movk    w3, #0xB860, lsl #16        // LDR Wd, [Xn, Xm]
+.La_load_off_emit:
     orr     w0, w0, w3
     bl      emit32
     mov     w0, w7

@@ -144,20 +144,15 @@
 \\ ENTRY POINT — must be FIRST composition (ELF entry = start of code buffer)
 \\ ============================================================================
 \\ Linux ARM64: argc at [SP], argv at SP+8
-main :
-    argc → 64 $31 0
-    argv $31 + 8
-    lithos_main argc argv
-    ↓ $8 93
-    ↓ $0 0
-    trap
+\\ prologue is at the end of the file so all compositions are defined
+\\ before the entry point (bootstrap is single-pass, no forward refs).
 
 \\ ============================================================================
 \\ Lexer token buffer + syscall constants
 \\ ============================================================================
 
 buf tokens 262144
-var token_count 0
+buf token_count_buf 8
 
 const SYS_READ      63
 const SYS_WRITE     64
@@ -182,15 +177,16 @@ const SYS_BRK       214
 \\ 1MB buffer for ARM64 machine code.
 
 buf arm64_buf 1048576
-var arm64_pos 0
+buf arm64_pos_v 8
 
 arm64_emit32 val :
     \\ Write a 32-bit little-endian word at current position and advance by 4.
-    ← 32 arm64_buf + arm64_pos val
-    arm64_pos arm64_pos + 4
+    ap → 64 arm64_pos_v
+    ← 32 arm64_buf + ap val
+    ← 64 arm64_pos_v ap + 4
 
 arm64_reset :
-    arm64_pos 0
+    ← 64 arm64_pos_v 0
 
 \\ ============================================================
 \\ REGISTER CONSTANTS
@@ -753,40 +749,43 @@ emit_brk imm16 :
 \\ ============================================================
 
 arm64_mark :
-    pos arm64_pos
+    pos → 64 arm64_pos_v
 
 arm64_patch_bcond mark_pos :
-    offset arm64_pos - mark_pos
+    ap → 64 arm64_pos_v
+    offset ap - mark_pos
     imm19 ((offset / 4) & 0x7FFFF) << 5
     old → 32 arm64_buf + mark_pos
     ← 32 arm64_buf + mark_pos old | imm19
 
 arm64_patch_b mark_pos :
-    offset arm64_pos - mark_pos
+    ap → 64 arm64_pos_v
+    offset ap - mark_pos
     imm26 (offset / 4) & 0x3FFFFFF
     old → 32 arm64_buf + mark_pos
     ← 32 arm64_buf + mark_pos old | imm26
 
 arm64_patch_cbz mark_pos :
-    offset arm64_pos - mark_pos
+    ap → 64 arm64_pos_v
+    offset ap - mark_pos
     imm19 ((offset / 4) & 0x7FFFF) << 5
     old → 32 arm64_buf + mark_pos
     ← 32 arm64_buf + mark_pos old | imm19
 
 emit_bcond_fwd cond :
-    mark arm64_pos
+    mark → 64 arm64_pos_v
     emit_bcond cond 0
 
 emit_b_fwd :
-    mark arm64_pos
+    mark → 64 arm64_pos_v
     emit_b 0
 
 emit_cbz_fwd rt :
-    mark arm64_pos
+    mark → 64 arm64_pos_v
     emit_cbz rt 0
 
 emit_cbnz_fwd rt :
-    mark arm64_pos
+    mark → 64 arm64_pos_v
     emit_cbnz rt 0
 
 \\ ============================================================
@@ -972,40 +971,57 @@ emit_stxr rs rt rn :
 \\ ============================================================
 
 buf gpu_buf 524288
-var gpu_pos 0
-var max_reg 0
+buf gpu_pos_v 8
+buf max_reg_v 8
 
 track_rd rd :
-    max_reg max rd max_reg
+    mr → 64 max_reg_v
+    mr max rd mr
+    ← 64 max_reg_v mr
 
 \\ ============================================================
 \\ COOPERATIVE GRID-SYNC STATE
 \\ ============================================================
 
-var gpu_cooperative 0
+buf gpu_cooperative_v 8
 
 buf gridsync_offsets 1024
-var gridsync_count 0
+buf gridsync_count_v 8
 
 record_gridsync :
-    if>= gridsync_count 256
+    gc → 64 gridsync_count_v
+    if>= gc 256
         \\ silently clamp at 256 sites
-    ← 32 gridsync_offsets + gridsync_count * 4 gpu_pos
-    gridsync_count + 1
+    gp → 64 gpu_pos_v
+    ← 32 gridsync_offsets + gc * 4 gp
+    ← 64 gridsync_count_v gc + 1
+
+buf exit_offsets 1024
+buf exit_count_v 8
+
+record_exit :
+    ec → 64 exit_count_v
+    if>= ec 256
+        \\ silently clamp at 256 sites
+    gp → 64 gpu_pos_v
+    ← 32 exit_offsets + ec * 4 gp
+    ← 64 exit_count_v ec + 1
 
 gpu_reset :
-    gpu_pos 0
-    max_reg 0
-    gridsync_count 0
-    gpu_cooperative 0
+    ← 64 gpu_pos_v 0
+    ← 64 max_reg_v 0
+    ← 64 gridsync_count_v 0
+    ← 64 exit_count_v 0
+    ← 64 gpu_cooperative_v 0
 
 \\ ============================================================
 \\ RAW BYTE EMITTERS
 \\ ============================================================
 
 gpu_emit_byte b :
-    ← 8 gpu_buf + gpu_pos b
-    gpu_pos + 1
+    gp → 64 gpu_pos_v
+    ← 8 gpu_buf + gp b
+    ← 64 gpu_pos_v gp + 1
 
 gpu_emit_u32 val :
     gpu_emit_byte val & 0xFF
@@ -1562,6 +1578,7 @@ emit_bra_pred byte_offset pred :
     sinst iword_masked ctrl_bra
 
 emit_exit :
+    record_exit
     sinst 0x000000000000794D ctrl_exit
 
 \\ ============================================================
@@ -1569,10 +1586,12 @@ emit_exit :
 \\ ============================================================
 
 gpu_mark :
-    gpu_pos
+    _gp → 64 gpu_pos_v
+    _gp
 
 gpu_patch saved_pos :
-    byte_offset gpu_pos - saved_pos - 16
+    _gp → 64 gpu_pos_v
+    byte_offset _gp - saved_pos - 16
     offset32 byte_offset / 4
     ← 32 gpu_buf + saved_pos + 4 offset32
 
@@ -1619,19 +1638,23 @@ emit_warp_reduce acc tmp :
 \\ COOPERATIVE GRID-SYNC
 \\ ============================================================
 
-var _gs_r 4
-var _gs_p 0
+buf _gs_r_v 8
+buf _gs_p_v 8
 
 gs_rreg :
-    r _gs_r
-    _gs_r + 1
+    _gr → 64 _gs_r_v
+    r _gr
+    _gr _gr + 1
+    ← 64 _gs_r_v _gr
 
 gs_preg :
-    p _gs_p
-    _gs_p + 1
+    _gsp → 64 _gs_p_v
+    p _gsp
+    _gsp _gsp + 1
+    ← 64 _gs_p_v _gsp
 
 emit_grid_sync ctr_reg flag_reg grid_size :
-    gpu_cooperative 1
+    ← 64 gpu_cooperative_v 1
     record_gridsync
 
     gs_old gs_rreg
@@ -1692,43 +1715,45 @@ total_kparams n_data_params :
 
 \\ TODO: bump to 335544320 (320MB) for full 64-layer megakernel
 buf cubin_buf 4194304
-var cubin_pos 0
-var gpu_shmem_size 0
-var gpu_n_kparams 0
+buf cubin_pos_v 8
+buf gpu_shmem_size_v 8
+buf gpu_n_kparams_v 8
 
 buf li_name_buf 64
-var li_name_len 0
+buf li_name_len_v 8
 
-var shstrtab_off 0
-var shstrtab_size 0
-var strtab_off 0
-var strtab_size 0
-var strsym_kernel 0
-var symtab_off 0
-var symtab_size 0
-var sym_kernel_off 0
-var nvinfo_off 0
-var nvinfo_size 0
-var nvinfo_k_off 0
-var nvinfo_k_size 0
-var text_off 0
-var text_size 0
-var const0_off 0
-var const0_size 0
-var shdrs_off 0
+buf shstrtab_off_v 8
+buf shstrtab_size_v 8
+buf strtab_off_v 8
+buf strtab_size_v 8
+buf strsym_kernel_v 8
+buf symtab_off_v 8
+buf symtab_size_v 8
+buf sym_kernel_off_v 8
+buf nvinfo_off_v 8
+buf nvinfo_size_v 8
+buf nvinfo_k_off_v 8
+buf nvinfo_k_size_v 8
+buf text_off_v 8
+buf text_size_v 8
+buf const0_off_v 8
+buf const0_size_v 8
+buf shdrs_off_v 8
 
-var SN_shstrtab 0
-var SN_strtab 0
-var SN_symtab 0
-var SN_nvinfo 0
-var SN_nvinfo_k 0
-var SN_text 0
-var SN_const0 0
-var SN_shared 0
+buf SN_shstrtab_v 8
+buf SN_strtab_v 8
+buf SN_symtab_v 8
+buf SN_nvinfo_v 8
+buf SN_nvinfo_k_v 8
+buf SN_text_v 8
+buf SN_const0_v 8
+buf SN_shared_v 8
 
 cubin_emit_byte b :
-    ← 8 cubin_buf + cubin_pos b
-    cubin_pos + 1
+    _cp → 64 cubin_pos_v
+    ← 8 cubin_buf + _cp b
+    _cp _cp + 1
+    ← 64 cubin_pos_v _cp
 
 cubin_emit_u16 val :
     cubin_emit_byte val & 0xFF
@@ -1743,7 +1768,7 @@ cubin_emit_u64 val :
     cubin_emit_u32 val >> 32
 
 cubin_reset :
-    cubin_pos 0
+    ← 64 cubin_pos_v 0
 
 \\ ============================================================
 \\ EIATTR CONSTANTS
@@ -1777,13 +1802,14 @@ EIATTR_COOP_GROUP_MASK_REGIDS   0x29
 \\ ============================================================================
 
 emit_token type offset length :
-    idx token_count * 3
+    tc → 32 token_count_buf
+    idx tc * 3
     ← 32 tokens + idx type
     idx1 idx + 1
     ← 32 tokens + idx1 offset
     idx2 idx + 2
     ← 32 tokens + idx2 length
-    token_count token_count + 1
+    ← 32 token_count_buf tc + 1
 
 \\ ============================================================================
 \\ Character classification
@@ -2087,260 +2113,317 @@ classify_number src offset length :
         i i + 1
 
 \\ ============================================================================
+\\ Lexer helper compositions (flat, max 2-level nesting)
+\\ ============================================================================
+
+\\ lex_match_twochar — match two-character operators
+\\ Returns token type (0 = no match)
+lex_match_twochar c cn :
+    tok 0
+    if== c 61
+        if== cn 61
+            tok 55
+            return
+    if== c 33
+        if== cn 61
+            tok 56
+            return
+    if== c 60
+        if== cn 61
+            tok 59
+            return
+        if== cn 60
+            tok 64
+            return
+    if== c 62
+        if== cn 61
+            tok 60
+            return
+        if== cn 62
+            tok 65
+            return
+
+\\ lex_match_e2 — match 0xE2-prefixed UTF-8 tokens (3-byte sequences)
+\\ Returns token type (0 = no match)
+lex_match_e2 b1 b2 :
+    tok 0
+    if== b1 0x86
+        if== b2 0x92
+            tok 36
+            return
+        if== b2 0x90
+            tok 37
+            return
+        if== b2 0x91
+            tok 38
+            return
+        if== b2 0x93
+            tok 39
+            return
+    if== b1 0x96
+        if== b2 0xB3
+            tok 76
+            return
+        if== b2 0xBD
+            tok 77
+            return
+    if== b1 0x88
+        if== b2 0x9A
+            tok 79
+            return
+    if== b1 0x89
+        if== b2 0x85
+            tok 80
+            return
+        if== b2 0xA1
+            tok 81
+            return
+
+\\ ============================================================================
 \\ Main lexer
 \\ ============================================================================
 
+\\ lex — flat control flow for bootstrap compatibility.
+\\ Single composition using goto/label. No sub-compositions for dispatch
+\\ (globals don't survive calls in the bootstrap).
+
 lex src src_len :
     pos 0
-    token_count 0
-    line_start 1
+    ← 32 token_count_buf 0
+    lp 1
 
-    while pos < src_len
-        c src [ pos ]
+    label lex_loop
+    if>= pos src_len
+        goto lex_done
+    c → 8 (src + pos)
 
-        if line_start
-            indent 0
-            while pos < src_len
-                ic src [ pos ]
-                if ic == 32
-                    indent indent + 1
-                    pos pos + 1
-                elif ic == 9
-                    indent indent + 4
-                    pos pos + 1
-                else
-                    goto indent_done
-            label indent_done
-            emit_token 2 pos indent
-            line_start 0
-            if pos >= src_len
-                return
-            c src [ pos ]
-
-        if c == 10
-            emit_token 1 pos 1
-            pos pos + 1
-            line_start 1
-            if pos < src_len
-                c2 src [ pos ]
-                if c2 == 13
-                    pos pos + 1
-            continue
-
-        if c == 13
-            emit_token 1 pos 1
-            pos pos + 1
-            line_start 1
-            if pos < src_len
-                c2 src [ pos ]
-                if c2 == 10
-                    pos pos + 1
-            continue
-
-        if c == 32 | c == 9
-            pos pos + 1
-            continue
-
-        if c == 35
-            emit_token 78 pos 1
-            pos pos + 1
-            continue
-
-        if c == 92
-            if pos + 1 < src_len
-                c2 src [ pos + 1 ]
-                if c2 == 92
-                    pos scan_to_eol src pos src_len
-                    continue
-
-        digit is_digit c
-        if digit
-            start pos
-            pos scan_number src pos src_len
-            length pos - start
-            num_type classify_number src start length
-            emit_token num_type start length
-            continue
-
-        if c == 45
-            if pos + 1 < src_len
-                cnext src [ pos + 1 ]
-                ndig is_digit cnext
-                if ndig
-                    start pos
-                    pos pos + 1
-                    pos scan_number src pos src_len
-                    length pos - start
-                    num_type classify_number src start length
-                    emit_token num_type start length
-                    continue
-
-        alpha is_alpha c
-        if alpha
-            start pos
-            pos scan_ident src pos src_len
-            length pos - start
-            kw match_keyword src start length
-            emit_token kw start length
-            continue
-
-        if pos + 1 < src_len
-            cnext src [ pos + 1 ]
-            if c == 61 & cnext == 61
-                emit_token 55 pos 2
-                pos pos + 2
-                continue
-            if c == 33 & cnext == 61
-                emit_token 56 pos 2
-                pos pos + 2
-                continue
-            if c == 60 & cnext == 61
-                emit_token 59 pos 2
-                pos pos + 2
-                continue
-            if c == 62 & cnext == 61
-                emit_token 60 pos 2
-                pos pos + 2
-                continue
-            if c == 60 & cnext == 60
-                emit_token 64 pos 2
-                pos pos + 2
-                continue
-            if c == 62 & cnext == 62
-                emit_token 65 pos 2
-                pos pos + 2
-                continue
-
-        \\ Multi-byte UTF-8 tokens
-        if c == 0xE2
-            if pos + 2 < src_len
-                b1 src [ pos + 1 ]
-                b2 src [ pos + 2 ]
-                if b1 == 0x86 & b2 == 0x92
-                    emit_token 36 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x90
-                    emit_token 37 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x91
-                    emit_token 38 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x93
-                    emit_token 39 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x96 & b2 == 0xB3
-                    emit_token 76 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x96 & b2 == 0xBD
-                    emit_token 77 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x88 & b2 == 0x9A
-                    emit_token 79 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x89 & b2 == 0x85
-                    emit_token 80 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x89 & b2 == 0xA1
-                    emit_token 81 pos 3
-                    pos pos + 3
-                    continue
-        if c == 0xCE
-            if pos + 1 < src_len
-                b1 src [ pos + 1 ]
-                if b1 == 0xA3
-                    emit_token 75 pos 2
-                    pos pos + 2
-                    continue
-
-        \\ Single-character operators and punctuation
-        if c == 43
-            emit_token 50 pos 1
-            pos pos + 1
-            continue
-        if c == 45
-            emit_token 51 pos 1
-            pos pos + 1
-            continue
-        if c == 42
-            emit_token 52 pos 1
-            pos pos + 1
-            continue
-        if c == 47
-            emit_token 53 pos 1
-            pos pos + 1
-            continue
-        if c == 61
-            emit_token 54 pos 1
-            pos pos + 1
-            continue
-        if c == 60
-            emit_token 57 pos 1
-            pos pos + 1
-            continue
-        if c == 62
-            emit_token 58 pos 1
-            pos pos + 1
-            continue
-        if c == 38
-            emit_token 61 pos 1
-            pos pos + 1
-            continue
-        if c == 124
-            emit_token 62 pos 1
-            pos pos + 1
-            continue
-        if c == 94
-            emit_token 63 pos 1
-            pos pos + 1
-            continue
-        if c == 91
-            emit_token 67 pos 1
-            pos pos + 1
-            continue
-        if c == 93
-            emit_token 68 pos 1
-            pos pos + 1
-            continue
-        if c == 40
-            emit_token 69 pos 1
-            pos pos + 1
-            continue
-        if c == 41
-            emit_token 70 pos 1
-            pos pos + 1
-            continue
-        if c == 44
-            emit_token 71 pos 1
-            pos pos + 1
-            continue
-        if c == 58
-            emit_token 72 pos 1
-            pos pos + 1
-            continue
-        if c == 46
-            emit_token 73 pos 1
-            pos pos + 1
-            continue
-        if c == 64
-            emit_token 74 pos 1
-            pos pos + 1
-            continue
-        \\ $ -> TOK_DOLLAR (97)
-        if c == 36
-            emit_token 97 pos 1
-            pos pos + 1
-            continue
-
+    \\ ---- Indent at start of line ----
+    if== lp 0
+        goto lex_skip_indent
+    indent 0
+    label lex_indent_loop
+    if>= pos src_len
+        goto lex_indent_done
+    c → 8 (src + pos)
+    if== c 32
+        indent indent + 1
         pos pos + 1
+        goto lex_indent_loop
+    if== c 9
+        indent indent + 4
+        pos pos + 1
+        goto lex_indent_loop
+    label lex_indent_done
+    emit_token 2 pos indent
+    lp 0
+    if>= pos src_len
+        goto lex_done
+    c → 8 (src + pos)
+    label lex_skip_indent
 
+    \\ ---- Whitespace ----
+    if== c 32
+        pos pos + 1
+        goto lex_loop
+    if== c 9
+        pos pos + 1
+        goto lex_loop
+
+    \\ ---- Newline LF ----
+    if== c 10
+        emit_token 1 pos 1
+        pos pos + 1
+        lp 1
+        goto lex_loop
+
+    \\ ---- Newline CR ----
+    if== c 13
+        emit_token 1 pos 1
+        pos pos + 1
+        lp 1
+        goto lex_loop
+
+    \\ ---- Comment \\\\ ----
+    if== c 92
+        goto lex_try_comment
+    goto lex_not_comment
+    label lex_try_comment
+    if>= pos + 1 src_len
+        goto lex_not_comment
+    t → 8 (src + pos + 1)
+    if== t 92
+        pos scan_to_eol src pos src_len
+        goto lex_loop
+    label lex_not_comment
+
+    \\ ---- Number ----
+    t is_digit c
+    if t
+        start pos
+        pos scan_number src pos src_len
+        len pos - start
+        t classify_number src start len
+        emit_token t start len
+        goto lex_loop
+
+    \\ ---- Negative number ----
+    if== c 45
+        goto lex_try_neg
+    goto lex_not_neg
+    label lex_try_neg
+    if>= pos + 1 src_len
+        goto lex_not_neg
+    t → 8 (src + pos + 1)
+    t is_digit t
+    if== t 0
+        goto lex_not_neg
+    start pos
+    pos pos + 1
+    pos scan_number src pos src_len
+    len pos - start
+    t classify_number src start len
+    emit_token t start len
+    goto lex_loop
+    label lex_not_neg
+
+    \\ ---- Identifier / keyword ----
+    t is_alpha c
+    if t
+        start pos
+        pos scan_ident src pos src_len
+        len pos - start
+        t match_keyword src start len
+        emit_token t start len
+        goto lex_loop
+
+    \\ ---- Two-byte operators ----
+    if>= pos + 1 src_len
+        goto lex_no_twochar
+    t → 8 (src + pos + 1)
+    t lex_match_twochar c t
+    if t
+        emit_token t pos 2
+        pos pos + 2
+        goto lex_loop
+    label lex_no_twochar
+
+    \\ ---- UTF-8 multi-byte tokens ----
+    if== c 0xE2
+        goto lex_try_e2
+    if== c 0xCE
+        goto lex_try_ce
+    goto lex_no_utf8
+
+    label lex_try_e2
+    if>= pos + 2 src_len
+        goto lex_no_utf8
+    start → 8 (src + pos + 1)
+    t → 8 (src + pos + 2)
+    t lex_match_e2 start t
+    if t
+        emit_token t pos 3
+        pos pos + 3
+        goto lex_loop
+    goto lex_no_utf8
+
+    label lex_try_ce
+    if>= pos + 1 src_len
+        goto lex_no_utf8
+    t → 8 (src + pos + 1)
+    if== t 0xA3
+        emit_token 75 pos 2
+        pos pos + 2
+        goto lex_loop
+
+    label lex_no_utf8
+
+    \\ ---- Single-character operators ----
+    if== c 43
+        emit_token 50 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 42
+        emit_token 52 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 47
+        emit_token 53 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 61
+        emit_token 54 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 60
+        emit_token 57 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 62
+        emit_token 58 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 38
+        emit_token 61 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 124
+        emit_token 62 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 94
+        emit_token 63 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 91
+        emit_token 67 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 93
+        emit_token 68 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 40
+        emit_token 69 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 41
+        emit_token 70 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 44
+        emit_token 71 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 58
+        emit_token 72 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 46
+        emit_token 73 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 64
+        emit_token 74 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 36
+        emit_token 97 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 35
+        emit_token 78 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 45
+        emit_token 51 pos 1
+        pos pos + 1
+        goto lex_loop
+
+    \\ Unknown — skip
+    pos pos + 1
+    goto lex_loop
+
+    label lex_done
     emit_token 0 pos 0
 
 \\ ============================================================================
@@ -2360,13 +2443,13 @@ lithos_lex src src_len :
 \\ Parser state — global variables
 \\ ============================================================================
 
-var tok_pos 0
-var tok_total 0
-var src_buf 0
-var emit_target 0          \\ 0 = GPU (sm90), 1 = HOST (ARM64)
-var body_indent 0
-var comp_depth 0
-var error_count 0
+buf tok_pos_v 8
+buf tok_total_v 8
+buf src_buf_v 8
+buf emit_target_v 8        \\ 0 = GPU (sm90), 1 = HOST (ARM64)
+buf body_indent_v 8
+buf comp_depth_v 8
+buf error_count_v 8
 
 \\ ============================================================================
 \\ Symbol table
@@ -2376,17 +2459,17 @@ buf sym_names 16384
 buf sym_lens 1024
 buf sym_kinds 1024
 buf sym_regs 1024
-var n_syms 0
+buf n_syms_v 8
 
 \\ ============================================================================
 \\ Register allocators
 \\ ============================================================================
 
-var next_freg 0
-var next_rreg 4
-var next_rdreg 4
-var next_preg 0
-var next_host_reg 9
+buf next_freg_v 8
+buf next_rreg_v 8
+buf next_rdreg_v 8
+buf next_preg_v 8
+buf next_host_reg_v 8
 
 \\ ============================================================================
 \\ Shared memory tracking
@@ -2394,15 +2477,15 @@ var next_host_reg 9
 
 buf shm_names 2048
 buf shm_sizes 32
-var n_shared 0
-var shmem_total 0
+buf n_shared_v 8
+buf shmem_total_v 8
 
 \\ ============================================================================
 \\ Loop / branch tracking
 \\ ============================================================================
 
 buf branch_stack 2048
-var branch_depth 0
+buf branch_depth_v 8
 
 \\ ============================================================================
 \\ Composition table
@@ -2410,28 +2493,33 @@ var branch_depth 0
 
 buf comp_names 16384
 buf comp_lens 1024
-buf comp_tok_starts 1024
+buf comp_tokprologues 1024
 buf comp_arg_counts 1024
-var n_comps 0
+buf n_comps_v 8
 
 \\ ============================================================================
 \\ Token stream access
 \\ ============================================================================
 
 peek_type :
-    idx tok_pos * 3
+    _tp → 64 tok_pos_v
+    idx _tp * 3
     → 32 tokens idx
 
 peek_offset :
-    idx tok_pos * 3 + 1
+    _tp → 64 tok_pos_v
+    idx _tp * 3 + 1
     → 32 tokens idx
 
 peek_length :
-    idx tok_pos * 3 + 2
+    _tp → 64 tok_pos_v
+    idx _tp * 3 + 2
     → 32 tokens idx
 
 consume :
-    tok_pos tok_pos + 1
+    _tp → 64 tok_pos_v
+    _tp _tp + 1
+    ← 64 tok_pos_v _tp
 
 expect type :
     t peek_type
@@ -2456,7 +2544,8 @@ skip_newlines :
 
 tok_text_ptr :
     off peek_offset
-    src_buf + off
+    _sb → 64 src_buf_v
+    _sb + off
 
 \\ ============================================================================
 \\ Source text comparison
@@ -2559,10 +2648,11 @@ parse_float_token :
 \\ ============================================================================
 
 sym_reset :
-    n_syms 0
+    ← 64 n_syms_v 0
 
 sym_add name_ptr name_len kind reg :
-    idx n_syms
+    _ns → 64 n_syms_v
+    idx _ns
     if>= idx 64
         idx
 
@@ -2578,10 +2668,13 @@ sym_add name_ptr name_len kind reg :
         b → 8 name_ptr j
         ← 8 sym_names dest + j b
 
-    n_syms n_syms + 1
+    _ns → 64 n_syms_v
+    _ns _ns + 1
+    ← 64 n_syms_v _ns
 
 sym_find name_ptr name_len :
-    for i 0 n_syms 1
+    _ns → 64 n_syms_v
+    for i 0 _ns 1
         slen → 32 sym_lens i * 4
         if== slen name_len
             match 1
@@ -2612,36 +2705,46 @@ sym_reg i :
 \\ ============================================================================
 
 alloc_freg :
-    r next_freg
-    next_freg next_freg + 1
+    _nf → 64 next_freg_v
+    r _nf
+    _nf _nf + 1
+    ← 64 next_freg_v _nf
     r
 
 alloc_rreg :
-    r next_rreg
-    next_rreg next_rreg + 1
+    _nr → 64 next_rreg_v
+    r _nr
+    _nr _nr + 1
+    ← 64 next_rreg_v _nr
     r
 
 alloc_rdreg :
-    r next_rdreg
-    next_rdreg next_rdreg + 1
+    _nrd → 64 next_rdreg_v
+    r _nrd
+    _nrd _nrd + 1
+    ← 64 next_rdreg_v _nrd
     r
 
 alloc_preg :
-    r next_preg
-    next_preg next_preg + 1
+    _np → 64 next_preg_v
+    r _np
+    _np _np + 1
+    ← 64 next_preg_v _np
     r
 
 alloc_host_reg :
-    r next_host_reg
-    next_host_reg next_host_reg + 1
+    _nh → 64 next_host_reg_v
+    r _nh
+    _nh _nh + 1
+    ← 64 next_host_reg_v _nh
     r
 
 regs_reset :
-    next_freg 0
-    next_rreg 4
-    next_rdreg 4
-    next_preg 0
-    next_host_reg 9
+    ← 64 next_freg_v 0
+    ← 64 next_rreg_v 4
+    ← 64 next_rdreg_v 4
+    ← 64 next_preg_v 0
+    ← 64 next_host_reg_v 9
 
 \\ ============================================================================
 \\ Backend dispatch — dual target emission
@@ -2651,7 +2754,8 @@ regs_reset :
 
 \\ emit_p_add : emit an add instruction (parser dispatch)
 emit_p_add rd ra rb :
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         \\ GPU sm90: FADD
         emit_fadd rd ra rb
     \\ HOST ARM64: ADD
@@ -2659,19 +2763,22 @@ emit_p_add rd ra rb :
 
 \\ emit_p_sub : emit a subtract instruction
 emit_p_sub rd ra rb :
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_fadd rd ra rb       \\ TODO: FADD with NEG on src2
     emit_sub_reg rd ra rb
 
 \\ emit_p_mul : emit a multiply instruction
 emit_p_mul rd ra rb :
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_fmul rd ra rb
     emit_mul_reg rd ra rb
 
 \\ emit_p_div : emit a divide instruction
 emit_p_div rd ra rb :
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         \\ GPU: rcp = 1/rb, then rd = ra * rcp
         rcp alloc_freg
         emit_rcp rcp rb
@@ -2680,13 +2787,15 @@ emit_p_div rd ra rb :
 
 \\ emit_p_mov_imm : load an immediate value into a register
 emit_p_mov_imm rd imm :
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         gpu_emit_mov_imm rd imm
     emit_mov64 rd imm
 
 \\ emit_p_mov_reg : register-to-register move
 emit_p_mov_reg rd rs :
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         \\ GPU: MOV via IMAD idiom
         emit_imad rd rs RZ RZ
     emit_mov rd rs
@@ -2696,7 +2805,8 @@ emit_p_mov_reg rd rs :
 \\ ============================================================================
 
 emit_p_load rd base offset width :
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_ldg rd base
     if== width 8
         emit_ldrb rd base offset
@@ -2708,7 +2818,8 @@ emit_p_load rd base offset width :
         emit_ldr rd base offset
 
 emit_p_store rs base offset width :
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_stg base rs
     if== width 8
         emit_strb rs base offset
@@ -3002,9 +3113,11 @@ parse_regread :
         if== t2 3
             regnum parse_int_token
             rd alloc_rreg
-            if== emit_target 1
+            _et → 64 emit_target_v
+            if== _et 1
                 emit_mov rd regnum
-            if== emit_target 0
+            _et → 64 emit_target_v
+            if== _et 0
                 emit_p_s2r rd regnum
             rd
         if== t2 5
@@ -3015,7 +3128,8 @@ parse_regread :
             did dict_lookup ptr len
             if>= did 0
                 sr_id → 32 dict_reg_ids did * 4
-                if== emit_target 0
+                _et → 64 emit_target_v
+                if== _et 0
                     emit_p_s2r rd sr_id
                 rd
             rd
@@ -3023,7 +3137,8 @@ parse_regread :
     if== t 3
         regnum parse_int_token
         rd alloc_rreg
-        if== emit_target 0
+        _et → 64 emit_target_v
+        if== _et 0
             emit_p_s2r rd regnum
         rd
     if== t 5
@@ -3048,7 +3163,8 @@ parse_regwrite :
         if== t2 3
             regnum parse_int_token
             val_reg parse_expr
-            if== emit_target 1
+            _et → 64 emit_target_v
+            if== _et 1
                 emit_mov regnum val_reg
             emit_p_mov_reg regnum val_reg
         if== t2 5
@@ -3059,12 +3175,14 @@ parse_regwrite :
             did dict_lookup ptr len
             if>= did 0
                 sr_id → 32 dict_reg_ids did * 4
-                if== emit_target 1
+                _et → 64 emit_target_v
+                if== _et 1
                     emit_mov sr_id val_reg
                 emit_p_mov_reg sr_id val_reg
     regnum parse_int_token
     val_reg parse_expr
-    if== emit_target 1
+    _et → 64 emit_target_v
+    if== _et 1
         emit_mov regnum val_reg
     emit_p_mov_reg regnum val_reg
 
@@ -3271,7 +3389,8 @@ parse_stmt :
 
     if== t 34
         consume
-        if== emit_target 0
+        _et → 64 emit_target_v
+        if== _et 0
             emit_p_exit_gpu
         emit_p_ret_host
 
@@ -3293,7 +3412,8 @@ parse_stmt :
     \\ TOK_RETURN (21)
     if== t 21
         consume
-        if== emit_target 0
+        _et → 64 emit_target_v
+        if== _et 0
             emit_p_exit_gpu
         emit_p_ret_host
 
@@ -3340,12 +3460,16 @@ parse_goto :
     lidx label_find ptr len
     if>= lidx 0
         target → 32 label_offsets lidx * 4
-        if== emit_target 0
-            offset target - gpu_pos
+        _et → 64 emit_target_v
+        if== _et 0
+            _gp → 64 gpu_pos_v
+            offset target - _gp
             emit_bra offset
-        offset target - arm64_pos
+        _ap → 64 arm64_pos_v
+        offset target - _ap
             emit_b offset
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_bra 0
     emit_b 0
 
@@ -3361,9 +3485,12 @@ parse_label_decl :
         b → 8 ptr j
         ← 8 label_names lidx * 32 + j b
     ← 32 label_lens lidx * 4 len
-    if== emit_target 0
-        ← 32 label_offsets lidx * 4 gpu_pos
-    ← 32 label_offsets lidx * 4 arm64_pos
+    _et → 64 emit_target_v
+    if== _et 0
+        _gp → 64 gpu_pos_v
+        ← 32 label_offsets lidx * 4 _gp
+    _ap → 64 arm64_pos_v
+    ← 32 label_offsets lidx * 4 _ap
     n_labels n_labels + 1
 
 parse_inline_label ptr len :
@@ -3375,9 +3502,12 @@ parse_inline_label ptr len :
         b → 8 ptr j
         ← 8 label_names lidx * 32 + j b
     ← 32 label_lens lidx * 4 len
-    if== emit_target 0
-        ← 32 label_offsets lidx * 4 gpu_pos
-    ← 32 label_offsets lidx * 4 arm64_pos
+    _et → 64 emit_target_v
+    if== _et 0
+        _gp → 64 gpu_pos_v
+        ← 32 label_offsets lidx * 4 _gp
+    _ap → 64 arm64_pos_v
+    ← 32 label_offsets lidx * 4 _ap
     n_labels n_labels + 1
 
 label_find name_ptr name_len :
@@ -3395,9 +3525,11 @@ label_find name_ptr name_len :
     -1
 
 parse_continue_stmt :
-    if== branch_depth 0
+    _bd → 64 branch_depth_v
+    if== _bd 0
         0
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_p_bra 0
     arm64_emit32 0x14000000
 
@@ -3420,16 +3552,18 @@ parse_trap_stmt :
     sym_add result_ptr result_len 2 rd
 
 parse_trap_args idx :
+    label pta_loop
     t peek_type
     if== t 1
-        idx
+        return
     if== t 0
-        idx
+        return
     if>= idx 6
-        idx
+        return
     val parse_expr
     emit_p_mov_reg idx val
-    parse_trap_args idx + 1
+    idx idx + 1
+    goto pta_loop
 
 \\ ============================================================================
 \\ constant handler (Forth-style: VALUE constant NAME)
@@ -3470,12 +3604,13 @@ parse_param :
     ← 32 kparam_lens pidx * 4 name_len
     ← 32 kparam_types pidx * 4 param_type
     rd alloc_rdreg
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         param_offset 528 + pidx * 8
         emit_uldc rd 0 param_offset
     sym_add name_ptr name_len 6 rd
     n_kparams n_kparams + 1
-    gpu_n_kparams n_kparams
+    ← 64 gpu_n_kparams_v n_kparams
 
 \\ ============================================================================
 \\ memory load/store magic identifier dispatch
@@ -3541,7 +3676,8 @@ parse_3op_and :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_lop3_and rd a b
     emit_and_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3553,7 +3689,8 @@ parse_3op_or :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_lop3_or rd a b
     emit_orr_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3565,7 +3702,8 @@ parse_3op_xor :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_lop3_xor rd a b
     emit_eor_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3577,7 +3715,8 @@ parse_3op_shl :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_shf_r rd a b
     emit_lsl_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3589,7 +3728,8 @@ parse_3op_shr :
     a parse_expr
     b parse_expr
     rd alloc_rreg
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_shf_r rd a b
     emit_lsr_reg rd a b
     sym_add dst_ptr dst_len 2 rd
@@ -3657,7 +3797,9 @@ parse_ident_stmt :
         parse_inline_label ptr len
         1
     \\ Put token back
-    tok_pos tok_pos - 1
+    _tp → 64 tok_pos_v
+    _tp _tp - 1
+    ← 64 tok_pos_v _tp
 
     \\ Check for mem_load 8 (7 chars)
     if== len 7
@@ -3975,7 +4117,8 @@ parse_for :
 
     push_branch loop_reg end_reg step_reg
 
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         p alloc_preg
         emit_p_isetp p loop_reg end_reg
         emit_p_bra_predicated p 0
@@ -3989,7 +4132,8 @@ parse_for_end :
 
     emit_p_add loop_reg loop_reg step_reg
 
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_p_bra 0
     arm64_emit32 0x14000000
 
@@ -4002,7 +4146,8 @@ parse_each :
     ctaid_reg alloc_rreg
     gidx_reg alloc_rreg
 
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_p_s2r tid_reg 0x21
         emit_p_s2r ctaid_reg 0x25
 
@@ -4069,7 +4214,8 @@ parse_conditional :
     a parse_expr
     b parse_expr
 
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         p alloc_preg
         if== cmp_type 0
             emit_p_isetp p a b
@@ -4114,37 +4260,50 @@ parse_shared :
 
     total size * elem_size
 
-    sidx n_shared
+    _nsh → 64 n_shared_v
+    sidx _nsh
     ← 32 shm_sizes sidx * 4 total
 
     rd alloc_rdreg
     sym_add name_ptr name_len 5 rd
 
-    n_shared n_shared + 1
-    shmem_total shmem_total + total
+    _nsh → 64 n_shared_v
+    _nsh _nsh + 1
+    ← 64 n_shared_v _nsh
+    _st → 64 shmem_total_v
+    _st _st + total
+    ← 64 shmem_total_v _st
 
 \\ ============================================================================
 \\ Branch stack operations
 \\ ============================================================================
 
 push_branch loop_reg end_reg step_reg :
-    idx branch_depth * 16
+    _bd → 64 branch_depth_v
+    idx _bd * 16
     ← 32 branch_stack idx loop_reg
     ← 32 branch_stack idx + 4 end_reg
     ← 32 branch_stack idx + 8 step_reg
-    branch_depth branch_depth + 1
+    _bd → 64 branch_depth_v
+    _bd _bd + 1
+    ← 64 branch_depth_v _bd
 
 pop_branch_reg :
-    branch_depth branch_depth - 1
-    idx branch_depth * 16
+    _bd → 64 branch_depth_v
+    _bd _bd - 1
+    ← 64 branch_depth_v _bd
+    _bd → 64 branch_depth_v
+    idx _bd * 16
     → 32 branch_stack idx
 
 pop_branch_end :
-    idx branch_depth * 16
+    _bd → 64 branch_depth_v
+    idx _bd * 16
     → 32 branch_stack idx + 4
 
 pop_branch_step :
-    idx branch_depth * 16
+    _bd → 64 branch_depth_v
+    idx _bd * 16
     → 32 branch_stack idx + 8
 
 \\ ============================================================================
@@ -4156,31 +4315,33 @@ parse_body :
     t peek_type
     if== t 2
         new_indent peek_length
-        old_indent body_indent
-        body_indent new_indent
+        _bi → 64 body_indent_v
+        old_indent _bi
+        ← 64 body_indent_v new_indent
         consume
         parse_body_loop old_indent
-        body_indent old_indent
+        ← 64 body_indent_v old_indent
 
 parse_body_loop old_indent :
+    label pbl_loop
     t peek_type
     if== t 0
-        0
+        return
 
     if== t 1
         consume
         t2 peek_type
         if== t2 2
             ind peek_length
-            if< ind body_indent
-                0
+            _bi → 64 body_indent_v
+            if< ind _bi
+                return
             consume
             parse_stmt
-            parse_body_loop old_indent
-            0
+            goto pbl_loop
 
     parse_stmt
-    parse_body_loop old_indent
+    goto pbl_loop
 
 \\ ============================================================================
 \\ Composition parser
@@ -4193,17 +4354,19 @@ parse_composition :
 
     sym_reset
     regs_reset
-    n_shared 0
-    shmem_total 0
-    branch_depth 0
+    ← 64 n_shared_v 0
+    ← 64 shmem_total_v 0
+    ← 64 branch_depth_v 0
 
     arg_count 0
     parse_comp_args arg_count
 
     expect 72
 
-    cidx n_comps
-    ← 32 comp_tok_starts cidx * 4 tok_pos
+    _nc → 64 n_comps_v
+    cidx _nc
+    _tp → 64 tok_pos_v
+    ← 32 comp_tokprologues cidx * 4 _tp
     ← 32 comp_arg_counts cidx * 4 arg_count
     clen name_len
     if>= clen 32
@@ -4212,69 +4375,75 @@ parse_composition :
         b → 8 name_ptr j
         ← 8 comp_names cidx * 32 + j b
     ← 32 comp_lens cidx * 4 name_len
-    n_comps n_comps + 1
+    _nc → 64 n_comps_v
+    _nc _nc + 1
+    ← 64 n_comps_v _nc
 
     parse_body
 
-    if== emit_target 0
+    _et → 64 emit_target_v
+    if== _et 0
         emit_p_exit_gpu
     emit_p_ret_host
 
 parse_comp_args count :
+    label pca_loop
     t peek_type
     if== t 72
-        count
+        return
 
     if== t 5
         ptr tok_text_ptr
         len peek_length
         consume
 
-        if== emit_target 0
+        _et → 64 emit_target_v
+        if== _et 0
             reg alloc_rdreg
         reg count
 
         sym_add ptr len 0 reg
         count count + 1
 
-        parse_comp_args count
+        goto pca_loop
 
-    count
+    return
 
 \\ ============================================================================
 \\ Top-level file parser
 \\ ============================================================================
 
 parse_file :
+    label pf_loop
     t peek_type
     if== t 0
-        0
+        return
 
     if== t 1
         consume
-        parse_file
+        goto pf_loop
 
     if== t 2
         consume
-        parse_file
+        goto pf_loop
 
     if== t 35
         consume
-        emit_target 1
+        ← 64 emit_target_v 1
         parse_composition
-        emit_target 0
-        parse_file
+        ← 64 emit_target_v 0
+        goto pf_loop
 
     if== t 5
-        emit_target 0
+        ← 64 emit_target_v 0
         parse_composition
-        parse_file
+        goto pf_loop
 
     if== t 11
         consume
-        emit_target 0
+        ← 64 emit_target_v 0
         parse_composition
-        parse_file
+        goto pf_loop
 
     \\ Forth-style: VALUE constant NAME (at file scope)
     if== t 3
@@ -4288,36 +4457,38 @@ parse_file :
             rd alloc_rreg
             emit_p_mov_imm rd val
             sym_add name_ptr name_len 1 rd
-            parse_file
+            goto pf_loop
         \\ Not a constant decl, put token back
-        tok_pos tok_pos - 1
+        _tp → 64 tok_pos_v
+        _tp _tp - 1
+        ← 64 tok_pos_v _tp
 
     \\ TOK_CONSTANT at file scope
     if== t 96
         consume
         parse_constant_decl
-        parse_file
+        goto pf_loop
 
     consume
-    parse_file
+    goto pf_loop
 
 \\ ============================================================================
 \\ Parser initialization
 \\ ============================================================================
 
 parser_init tokens_ptr total source :
-    tok_pos 0
-    tok_total total
-    src_buf source
-    emit_target 0
-    body_indent 0
-    comp_depth 0
-    error_count 0
-    n_syms 0
-    n_comps 0
-    n_shared 0
-    shmem_total 0
-    branch_depth 0
+    ← 64 tok_pos_v 0
+    ← 64 tok_total_v total
+    ← 64 src_buf_v source
+    ← 64 emit_target_v 0
+    ← 64 body_indent_v 0
+    ← 64 comp_depth_v 0
+    ← 64 error_count_v 0
+    ← 64 n_syms_v 0
+    ← 64 n_comps_v 0
+    ← 64 n_shared_v 0
+    ← 64 shmem_total_v 0
+    ← 64 branch_depth_v 0
     n_labels 0
     n_kparams 0
     regs_reset
@@ -4388,14 +4559,16 @@ cq_emit val_u64 :
 
 cpad target :
     loop_pad:
-        if>= cubin_pos target
+        _cp → 64 cubin_pos_v
+        if>= _cp target
             return
         cb_emit 0
         goto loop_pad
 
 calign n :
     mask n - 1
-    target (cubin_pos + mask) & (mask ^ 4294967295)
+    _cp → 64 cubin_pos_v
+    target (_cp + mask) & (mask ^ 4294967295)
     cpad target
 
 \\ ============================================================
@@ -4431,7 +4604,7 @@ elf_emit_str src len :
 \\ ============================================================
 
 elf_init :
-    cubin_pos 0
+    ← 64 cubin_pos_v 0
 
 \\ ============================================================
 \\ elf_write_header
@@ -4472,12 +4645,14 @@ elf_write_header :
 \\ SECTION HEADER EMIT
 \\ ============================================================
 
-shdr64_emit sh_name sh_type sh_flags sh_addr sh_offset sh_size sh_link sh_info sh_addralign sh_entsize :
+shdr64_a sh_name sh_type sh_flags sh_addr sh_offset :
     cd_emit sh_name
     cd_emit sh_type
     cq_emit sh_flags
     cq_emit sh_addr
     cq_emit sh_offset
+
+shdr64_b sh_size sh_link sh_info sh_addralign sh_entsize :
     cq_emit sh_size
     cd_emit sh_link
     cd_emit sh_info
@@ -4515,18 +4690,48 @@ nvi_sval_emit val sym_idx attr fmt :
 
 \\ ============================================================
 \\ elf_build — Build complete 9-section GPU ELF
+\\ Split into sub-compositions to stay within the bootstrap's
+\\ 20-register window. Section metadata passed via globals.
 \\ ============================================================
 
-elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt :
+\\ Globals for section offsets/sizes (shared between sub-compositions)
+buf elf_shstrtab_off_v 8
+buf elf_shstrtab_size_v 8
+buf elf_strtab_off_v 8
+buf elf_strtab_size_v 8
+buf elf_symtab_off_v 8
+buf elf_symtab_size_v 8
+buf elf_nvinfo_off_v 8
+buf elf_nvinfo_size_v 8
+buf elf_nvinfo_k_off_v 8
+buf elf_nvinfo_k_size_v 8
+buf elf_text_off_v 8
+buf elf_text_size_v 8
+buf elf_const0_off_v 8
+buf elf_const0_size_v 8
+buf elf_shdrs_off_v 8
+buf elf_sym_kernel_off_v 8
+buf elf_param_bytes_v 8
 
-    elf_init
-    elf_write_header
+\\ Section name offsets within .shstrtab
+buf elf_SN_shstrtab_v 8
+buf elf_SN_strtab_v 8
+buf elf_SN_symtab_v 8
+buf elf_SN_nvinfo_v 8
+buf elf_SN_nvinfo_k_v 8
+buf elf_SN_text_v 8
+buf elf_SN_const0_v 8
+buf elf_SN_shared_v 8
 
-    \\ .shstrtab (section 1)
-    shstrtab_off cubin_pos
+\\ ---- Sub-composition: emit .shstrtab section names ----
+elf_emit_shstrtab kernel_name kernel_nlen :
+    _cp → 64 cubin_pos_v
+    ← 64 elf_shstrtab_off_v _cp
     cb_emit 0
 
-    SN_shstrtab cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_SN_shstrtab_v _cp - _eso
     cb_emit 46
     cb_emit 115
     cb_emit 104
@@ -4538,7 +4743,9 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_strtab cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_SN_strtab_v _cp - _eso
     cb_emit 46
     cb_emit 115
     cb_emit 116
@@ -4548,7 +4755,9 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_symtab cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_SN_symtab_v _cp - _eso
     cb_emit 46
     cb_emit 115
     cb_emit 121
@@ -4558,7 +4767,9 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 98
     cb_emit 0
 
-    SN_nvinfo cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_SN_nvinfo_v _cp - _eso
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4569,7 +4780,9 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 111
     cb_emit 0
 
-    SN_nvinfo_k cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_SN_nvinfo_k_v _cp - _eso
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4582,7 +4795,9 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_text cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_SN_text_v _cp - _eso
     cb_emit 46
     cb_emit 116
     cb_emit 101
@@ -4592,7 +4807,9 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_const0 cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_SN_const0_v _cp - _eso
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4610,7 +4827,9 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
 
-    SN_shared cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_SN_shared_v _cp - _eso
     cb_emit 46
     cb_emit 110
     cb_emit 118
@@ -4635,41 +4854,59 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 0
 
     calign 4
-    shstrtab_size cubin_pos - shstrtab_off
+    _cp → 64 cubin_pos_v
+    _eso → 64 elf_shstrtab_off_v
+    ← 64 elf_shstrtab_size_v _cp - _eso
 
-    \\ .strtab (section 2)
-    strtab_off cubin_pos
+\\ ---- Sub-composition: emit .strtab + .symtab ----
+elf_emit_strtab_symtab kernel_name kernel_nlen :
+    _cp → 64 cubin_pos_v
+    ← 64 elf_strtab_off_v _cp
     cb_emit 0
     cb_emit 0
-    strsym_kernel cubin_pos - strtab_off
+    _cp → 64 cubin_pos_v
+    _eto → 64 elf_strtab_off_v
+    ← 64 strsym_kernel_v _cp - _eto
     elf_emit_str kernel_name kernel_nlen
     cb_emit 0
-    strtab_size cubin_pos - strtab_off
+    _cp → 64 cubin_pos_v
+    _eto → 64 elf_strtab_off_v
+    ← 64 elf_strtab_size_v _cp - _eto
 
-    \\ .symtab (section 3)
     calign 8
-    symtab_off cubin_pos
+    _cp → 64 cubin_pos_v
+    ← 64 elf_symtab_off_v _cp
     sym64_emit 0 0 0 0 0 0
     sym64_emit 0 3 0 5 0 0
     sym64_emit 0 3 0 8 0 0
-    sym_kernel_off cubin_pos
-    sym64_emit strsym_kernel 18 16 5 0 0
-    symtab_size cubin_pos - symtab_off
+    _cp → 64 cubin_pos_v
+    ← 64 elf_sym_kernel_off_v _cp
+    _sk → 64 strsym_kernel_v
+    sym64_emit _sk 18 16 5 0 0
+    _cp → 64 cubin_pos_v
+    _eyo → 64 elf_symtab_off_v
+    ← 64 elf_symtab_size_v _cp - _eyo
 
-    \\ .nv.info (section 4)
+\\ ---- Sub-composition: emit .nv.info (global attrs) ----
+elf_emit_nvinfo reg_count :
     calign 4
-    nvinfo_off cubin_pos
-    reg_val reg_count
+    _cp → 64 cubin_pos_v
+    ← 64 elf_nvinfo_off_v _cp
+    reg_val reg_count + 1
     if< reg_val 8
         reg_val 8
     nvi_sval_emit reg_val 3 EIATTR_REGCOUNT NVI_FMT_U32
     nvi_sval_emit 0 3 EIATTR_FRAME_SIZE NVI_FMT_U32
     nvi_sval_emit 0 3 EIATTR_MIN_STACK_SIZE NVI_FMT_U32
-    nvinfo_size cubin_pos - nvinfo_off
+    _cp → 64 cubin_pos_v
+    _eno → 64 elf_nvinfo_off_v
+    ← 64 elf_nvinfo_size_v _cp - _eno
 
-    \\ .nv.info.<kernel> (section 6)
+\\ ---- Sub-composition: emit .nv.info.<kernel> (per-kernel attrs) ----
+elf_emit_nvinfo_k n_kparams smem_size code_size :
     calign 4
-    nvinfo_k_off cubin_pos
+    _cp → 64 cubin_pos_v
+    ← 64 elf_nvinfo_k_off_v _cp
     nvi_u32_emit 128 EIATTR_CUDA_API_VERSION NVI_FMT_U32
 
     for pi 0 n_kparams 1
@@ -4694,7 +4931,8 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
     cb_emit 255
     cb_emit 0
 
-    if== elf_cooperative 1
+    _gc → 64 gpu_cooperative_v
+    if== _gc 1
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_MASK_REGIDS
         cw_emit 16
@@ -4705,27 +4943,37 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
 
         cb_emit 4
         cb_emit EIATTR_COOP_GROUP_INSTR_OFFSETS
-        cw_emit (gridsync_cnt * 4)
-        for gi 0 gridsync_cnt 1
-            gs_off → 32 (gridsync_off_ptr + gi * 4)
+        _gsc → 64 gridsync_count_v
+        cw_emit (_gsc * 4)
+        for gi 0 _gsc 1
+            gs_off → 32 (gridsync_offsets + gi * 4)
             cd_emit gs_off
         endfor
 
     cb_emit 4
     cb_emit EIATTR_EXIT_INSTR_OFFSETS
-    cw_emit 4
-    cd_emit 256
+    _ec → 64 exit_count_v
+    if> _ec 0
+        cw_emit (_ec * 4)
+        for ei 0 _ec 1
+            ex_off → 32 (exit_offsets + ei * 4)
+            cd_emit ex_off
+        endfor
+    if== _ec 0
+        cw_emit 4
+        cd_emit code_size - 16
 
-    param_bytes n_kparams * 8
+    ← 64 elf_param_bytes_v n_kparams * 8
     cb_emit 3
     cb_emit EIATTR_CBANK_PARAM_SIZE
-    cw_emit param_bytes
+    _ep → 64 elf_param_bytes_v
+    cw_emit _ep
 
     cb_emit 4
     cb_emit EIATTR_PARAM_CBANK
     cw_emit 8
     cd_emit 2
-    cbank_val (param_bytes << 16) | 528
+    cbank_val (elf_param_bytes << 16) | 528
     cd_emit cbank_val
 
     cb_emit 4
@@ -4739,11 +4987,15 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
         cw_emit 4
         cd_emit smem_size
 
-    nvinfo_k_size cubin_pos - nvinfo_k_off
+    _cp → 64 cubin_pos_v
+    _eko → 64 elf_nvinfo_k_off_v
+    ← 64 elf_nvinfo_k_size_v _cp - _eko
 
-    \\ .text.<kernel> (section 5)
+\\ ---- Sub-composition: emit .text + .nv.constant0 ----
+elf_emit_text_const0 code_buf code_size :
     calign 128
-    text_off cubin_pos
+    _cp → 64 cubin_pos_v
+    ← 64 elf_text_off_v _cp
 
     if== code_size 0
         for zb 0 48 1
@@ -4755,39 +5007,94 @@ elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_si
             cb_emit byte
         endfor
 
-    text_size cubin_pos - text_off
-    elf_put_u64 text_size (sym_kernel_off + 16)
+    _cp → 64 cubin_pos_v
+    _eto → 64 elf_text_off_v
+    ← 64 elf_text_size_v _cp - _eto
+    _ets → 64 elf_text_size_v
+    _eko → 64 elf_sym_kernel_off_v
+    elf_put_u64 _ets (_eko + 16)
 
-    \\ .nv.constant0.<kernel>
     calign 4
-    const0_off cubin_pos
-    const0_total 528 + param_bytes
+    _cp → 64 cubin_pos_v
+    ← 64 elf_const0_off_v _cp
+    _ep → 64 elf_param_bytes_v
+    const0_total 528 + _ep
     for c0i 0 const0_total 1
         cb_emit 0
     endfor
-    const0_size cubin_pos - const0_off
+    _cp → 64 cubin_pos_v
+    _eco → 64 elf_const0_off_v
+    ← 64 elf_const0_size_v _cp - _eco
 
-    \\ Section headers (9 x 64)
+\\ ---- Sub-composition: emit section headers + patch ELF header ----
+elf_emit_shdrs smem_size :
     calign 64
-    shdrs_off cubin_pos
+    _cp → 64 cubin_pos_v
+    ← 64 elf_shdrs_off_v _cp
 
-    shdr64_emit 0 0 0 0 0 0 0 0 0 0
-    shdr64_emit SN_shstrtab SHT_STRTAB 0 0 shstrtab_off shstrtab_size 0 0 1 0
-    shdr64_emit SN_strtab SHT_STRTAB 0 0 strtab_off strtab_size 0 0 1 0
-    shdr64_emit SN_symtab SHT_SYMTAB 0 0 symtab_off symtab_size 2 3 8 24
-    shdr64_emit SN_nvinfo SHT_LOPROC 0 0 nvinfo_off nvinfo_size 3 0 4 0
-    shdr64_emit SN_text SHT_PROGBITS 6 0 text_off text_size 3 3 128 0
-    shdr64_emit SN_nvinfo_k SHT_LOPROC SHF_INFO_LINK 0 nvinfo_k_off nvinfo_k_size 3 5 4 0
-    shdr64_emit SN_shared SHT_NOBITS 3 0 const0_off smem_size 0 0 16 0
-    shdr64_emit SN_const0 SHT_PROGBITS 66 0 const0_off const0_size 0 5 4 0
+    \\ Load all section metadata into locals for shdr calls
+    _sn1 → 64 elf_SN_shstrtab_v
+    _sn2 → 64 elf_SN_strtab_v
+    _sn3 → 64 elf_SN_symtab_v
+    _sn4 → 64 elf_SN_nvinfo_v
+    _sn5 → 64 elf_SN_text_v
+    _sn6 → 64 elf_SN_nvinfo_k_v
+    _sn7 → 64 elf_SN_shared_v
+    _sn8 → 64 elf_SN_const0_v
+    _o1 → 64 elf_shstrtab_off_v
+    _s1 → 64 elf_shstrtab_size_v
+    _o2 → 64 elf_strtab_off_v
+    _s2 → 64 elf_strtab_size_v
+    _o3 → 64 elf_symtab_off_v
+    _s3 → 64 elf_symtab_size_v
 
-    \\ Patch ELF header
+    shdr64_a 0 0 0 0 0
+    shdr64_b 0 0 0 0 0
+    shdr64_a _sn1 SHT_STRTAB 0 0 _o1
+    shdr64_b _s1 0 0 1 0
+    shdr64_a _sn2 SHT_STRTAB 0 0 _o2
+    shdr64_b _s2 0 0 1 0
+    shdr64_a _sn3 SHT_SYMTAB 0 0 _o3
+    shdr64_b _s3 2 3 8 24
+
+    _o4 → 64 elf_nvinfo_off_v
+    _s4 → 64 elf_nvinfo_size_v
+    _o5 → 64 elf_text_off_v
+    _s5 → 64 elf_text_size_v
+    _o6 → 64 elf_nvinfo_k_off_v
+    _s6 → 64 elf_nvinfo_k_size_v
+    _o7 → 64 elf_const0_off_v
+    _s7 → 64 elf_const0_size_v
+
+    shdr64_a _sn4 SHT_LOPROC 0 0 _o4
+    shdr64_b _s4 3 0 4 0
+    shdr64_a _sn5 SHT_PROGBITS 6 0 _o5
+    shdr64_b _s5 3 3 128 0
+    shdr64_a _sn6 SHT_LOPROC SHF_INFO_LINK 0 _o6
+    shdr64_b _s6 3 5 4 0
+    shdr64_a _sn7 SHT_NOBITS 3 0 _o7
+    shdr64_b smem_size 0 0 16 0
+    shdr64_a _sn8 SHT_PROGBITS 66 0 _o7
+    shdr64_b _s7 0 5 4 0
+
     elf_put_u64 0 32
-    elf_put_u64 shdrs_off 40
+    _eso → 64 elf_shdrs_off_v
+    elf_put_u64 _eso 40
     elf_put_u16 0 54
     elf_put_u16 0 56
     elf_put_u16 9 60
     elf_put_u16 1 62
+
+\\ ---- Orchestrator: calls sub-compositions in order ----
+elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size :
+    elf_init
+    elf_write_header
+    elf_emit_shstrtab kernel_name kernel_nlen
+    elf_emit_strtab_symtab kernel_name kernel_nlen
+    elf_emit_nvinfo reg_count
+    elf_emit_nvinfo_k n_kparams smem_size code_size
+    elf_emit_text_const0 code_buf code_size
+    elf_emit_shdrs smem_size
 
 \\ ============================================================
 \\ elf_save — Write cubin_buf to file
@@ -4797,7 +5104,7 @@ elf_save path :
     trap fd SYS_OPENAT -100 path 577 420
 
     written 0
-    remaining cubin_pos
+    remaining → 64 cubin_pos_v
     loop_write:
         if<= remaining 0
             goto done_write
@@ -4816,16 +5123,19 @@ elf_save path :
 \\ elf_write_cubin — Convenience: build ELF and write to file
 \\ ============================================================
 
-elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size elf_cooperative gridsync_off_ptr gridsync_cnt
+elf_write_cubin kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path
 
 \\ ============================================================
-\\ elf_write_simple — Non-cooperative kernel
+\\ elf_write_simple — Non-cooperative kernel (clears cooperative/gridsync state)
 \\ ============================================================
 
 elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size out_path :
-    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size 0 0 0
+    ← 64 gpu_cooperative_v 0
+    ← 64 gridsync_count_v 0
+    ← 64 exit_count_v 0
+    elf_build kernel_name kernel_nlen code_buf code_size n_kparams reg_count smem_size
     elf_save out_path
 
 
@@ -4837,7 +5147,7 @@ elf_write_simple kernel_name kernel_nlen code_buf code_size n_kparams reg_count 
 \\ Uses cubin_buf/cubin_pos as output buffer (same as GPU ELF writer).
 
 elf_build_arm64 code_buf code_size :
-    cubin_pos 0
+    ← 64 cubin_pos_v 0
 
     \\ ELF header (64 bytes)
     \\ e_ident: 7f 45 4c 46 02 01 01 00 (ELF64 LE SYSV)
@@ -4920,40 +5230,52 @@ elf_build_arm64 code_buf code_size :
 \\ ============================================================
 
 \\ mmap_file — open, get size via lseek, mmap, close fd
+\\ Returns base in X6, size in X7 (caller reads via ↑ $6, ↑ $7).
 \\ Returns base pointer and file size.
 host mmap_file path :
+    \\ Use X6/X7 for saved values (below REG_FIRST=9, safe from spills).
+    \\ X7 = saved path, X6 = saved fd, X5 = saved file_size
+    \\ (syscalls only use X0-X5 as args + X8 for number, so X6/X7 survive)
+
     \\ openat(AT_FDCWD, path, O_RDONLY, 0)
+    ↓ $7 path
     ↓ $8 56
     ↓ $0 -100
-    ↓ $1 path
+    ↓ $1 $7
     ↓ $2 0
     ↓ $3 0
     trap
-    fd ↑ $0
+    ↓ $6 $0
 
     \\ lseek(fd, 0, SEEK_END)
     ↓ $8 62
-    ↓ $0 fd
+    ↓ $0 $6
     ↓ $1 0
     ↓ $2 2
     trap
-    file_size ↑ $0
+    ↓ $5 $0
 
     \\ mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0)
+    \\ Save file_size (X5) to X7 before mmap clobbers it (path no longer needed)
+    ↓ $7 $5
     ↓ $8 222
     ↓ $0 0
-    ↓ $1 file_size
+    ↓ $1 $5
     ↓ $2 1
     ↓ $3 2
-    ↓ $4 fd
+    ↓ $4 $6
     ↓ $5 0
     trap
-    base ↑ $0
+
+    \\ Save mmap result (X0) to X6 before close clobbers X0
+    \\ file_size already in X7
+    ↓ $6 $0
 
     \\ close(fd)
     ↓ $8 57
-    ↓ $0 fd
+    ↓ $0 $4
     trap
+    \\ On return: X6 = base pointer, X7 = file size
 
 \\ write_file — open (create/trunc), write buffer, close
 host write_file path buf buf_len :
@@ -4991,7 +5313,7 @@ host write_file path buf buf_len :
     trap
 
 \\ ============================================================
-\\ lithos_main — Compiler entry point
+\\ main — Compiler entry point
 \\ ============================================================
 \\
 \\ Usage: lithos <source.ls> <output> [weights.safetensors]
@@ -5009,48 +5331,62 @@ host write_file path buf buf_len :
 \\   6. Write output file
 \\   7. Exit
 
-host lithos_main argc argv :
+main argc argv :
     \\ Validate argument count (need at least source and output)
     if< argc 3
-        \\ Too few arguments — exit with error
-        ↓ $8 93
-        ↓ $0 1
-        trap
+        goto main_exit_err
 
     \\ argv[0] = program name (skip)
     \\ argv[1] = source file path
     \\ argv[2] = output file path
-    \\ argv[3] = optional safetensors path
 
     src_path → 64 argv 8          \\ argv[1]
     out_path → 64 argv 16         \\ argv[2]
 
-    \\ Step 1: mmap the source file
-    src_base src_size mmap_file src_path
+    \\ Step 1: mmap the source file (returns base in X6, size in X7)
+    mmap_file src_path
+    src_base ↑ $6
+    src_size ↑ $7
 
     \\ Step 2: Lex the source
     lithos_lex src_base src_size
 
     \\ Step 3: Parse and emit machine code
-    lithos_parse tokens token_count src_base
+    tc → 32 token_count_buf
+    lithos_parse tokens tc src_base
 
-    \\ Step 4: Safetensors weights (loaded by safetensors.ls, linked separately)
+    \\ Step 4: Build ELF output — choose GPU or host based on what was emitted
+    _gp → 64 gpu_pos_v
+    if> _gp 0
+        goto main_gpu
+    _ap → 64 arm64_pos_v
+    if> _ap 0
+        goto main_arm64
+    goto main_exit_ok
 
-    \\ Step 5: Build ELF output
-    \\ For GPU kernels: wrap gpu_buf in cubin ELF
-    \\ For host code: wrap arm64_buf in ARM64 ELF
-    \\ Choose based on what was emitted
-    if> gpu_pos 0
-        \\ GPU output — build cubin
-        elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size gpu_cooperative gridsync_offsets gridsync_count
-        elf_save out_path
-    if> arm64_pos 0
-        \\ Host output — wrap in ARM64 ELF
-        elf_build_arm64 arm64_buf arm64_pos
-        elf_save out_path
+    \\ GPU output — build cubin
+    label main_gpu
+    _gp → 64 gpu_pos_v
+    _mr → 64 max_reg_v
+    _gs → 64 gpu_shmem_size_v
+    _nk → 64 gpu_n_kparams_v
+    _nl → 64 li_name_len_v
+    elf_build li_name_buf _nl gpu_buf _gp _nk _mr _gs
+    elf_save out_path
+    goto main_exit_ok
 
-    \\ Step 6: Exit successfully
+    \\ Host output — wrap in ARM64 ELF
+    label main_arm64
+    _ap → 64 arm64_pos_v
+    elf_build_arm64 arm64_buf _ap
+    elf_save out_path
+
+    label main_exit_ok
     ↓ $8 93
     ↓ $0 0
     trap
 
+    label main_exit_err
+    ↓ $8 93
+    ↓ $0 1
+    trap

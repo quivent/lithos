@@ -465,7 +465,7 @@ elf_arm64_header:
     // e_version = EV_CURRENT (1)
     mov     x0, #EV_CURRENT
     bl      ed_emit
-    // e_entry = BASE_ADDR + EHDR_SIZE + PHDR_SIZE
+    // e_entry = BASE_ADDR + EHDR_SIZE + PHDR_SIZE (start of _start stub)
     mov     x0, #BASE_ADDR
     add     x0, x0, #EHDR_SIZE
     add     x0, x0, #PHDR_SIZE
@@ -537,8 +537,10 @@ elf_arm64_phdr:
     // p_filesz = EHDR + PHDR + text + data
     mov     x0, x22
     bl      eq_emit
-    // p_memsz = filesz + bss_size
-    add     x0, x22, x21
+    // p_memsz = 0x100000 + bss_size (segment extends to BSS_BASE=0x500000 + bss)
+    // x21 = bss_size. 0x100000 = gap from BASE_ADDR (0x400000) to BSS_BASE (0x500000).
+    mov     x0, #0x100000
+    add     x0, x0, x21
     bl      eq_emit
     // p_align = PAGE_ALIGN (0x10000)
     mov     x0, #PAGE_ALIGN
@@ -574,8 +576,11 @@ elf_build_arm64:
     // Step 1: Reset buffer
     bl      elf_init
 
+    // Account for _start stub (16 bytes) in text size
+    add     x20, x20, #16
+
     // Step 2: ELF header (64 bytes)
-    mov     x0, x20                 // text_size
+    mov     x0, x20                 // text_size (includes stub)
     mov     x1, x22                 // data_size
     bl      elf_arm64_header
 
@@ -591,11 +596,44 @@ elf_build_arm64:
     adrp    x1, arm_text_off
     add     x1, x1, :lo12:arm_text_off
     str     x0, [x1]
-    // Copy text
+
+    // Emit _start stub: 4 instructions (16 bytes) before user code.
+    // LDR X0, [SP]              = 0xF94003E0  (argc)
+    // ADD X1, SP, #8            = 0x910023E1  (argv)
+    // MOVZ X28, #0x50, LSL #16  = 0xD2A00A1C  (X28 = 0x500000 = BSS base)
+    // B   <main_offset>
+    mov     w0, #0x03E0
+    movk    w0, #0xF940, lsl #16    // LDR X0, [SP]
+    bl      ed_emit
+    mov     w0, #0x23E1
+    movk    w0, #0x9100, lsl #16    // ADD X1, SP, #8
+    bl      ed_emit
+    mov     w0, #0x0A1C
+    movk    w0, #0xD2A0, lsl #16    // MOVZ X28, #0x50, LSL #16 (X28 = 0x500000)
+    bl      ed_emit
+    // B <main>: offset = (last_comp_addr - stub_B_position) / 4
+    // stub_B_position = 12 (4th instruction, byte offset 12 from text start)
+    // main is at last_comp_addr bytes into user code, which starts 16 bytes
+    // after text start. So target = 16 + last_comp_addr, source = 12.
+    // imm26 = (16 + last_comp_addr - 12) / 4 = (last_comp_addr + 4) / 4
+    adrp    x1, ls_last_comp_addr
+    add     x1, x1, :lo12:ls_last_comp_addr
+    ldr     x1, [x1]
+    adrp    x2, ls_code_buf
+    add     x2, x2, :lo12:ls_code_buf
+    sub     x1, x1, x2             // relative offset of main in user code
+    add     x1, x1, #4             // +4 for stub-to-code gap adjustment
+    lsr     w1, w1, #2             // convert to instruction count
+    and     w1, w1, #0x3FFFFFF     // mask to 26-bit immediate
+    mov     w0, #0x14000000         // B opcode
+    orr     w0, w0, w1
+    bl      ed_emit
+
+    // Copy user text (x20 already includes stub size from step 2)
     mov     x0, x19
-    mov     x1, x20
+    sub     x1, x20, #16           // original text_len without stub
     bl      emit_bytes
-    // Record size
+    // Record total text size (stub + user code)
     adrp    x1, arm_text_size
     add     x1, x1, :lo12:arm_text_size
     str     x20, [x1]

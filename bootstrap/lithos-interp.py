@@ -453,6 +453,42 @@ class Interp:
     def parse_expr(self):
         return self.parse_bits()
     def call_compo(self, name, atom_mode=False):
+        # Instrumentation
+        if not hasattr(self, '_call_counts'):
+            self._call_counts = {}
+            self._call_depth = 0
+            self._max_depth = 0
+            self._trace_stack = []
+        self._call_counts[name] = self._call_counts.get(name, 0) + 1
+        self._call_depth += 1
+        if self._call_depth > self._max_depth:
+            self._max_depth = self._call_depth
+        self._trace_stack.append(name)
+        # Trace first 10 parse_file calls + periodic
+        if name == 'parse_file':
+            cnt = self._call_counts.get(name, 0)
+            if cnt <= 15 or cnt % 500 == 0:
+                tp = self.globals.get('tok_pos', '<none>')
+                tt = self.globals.get('tok_total', '<none>')
+                import sys as _sys
+                tokens_addr = self.bufs.get('tokens', (0, 0))[0]
+                ty_val = 'N/A'
+                if isinstance(tp, int):
+                    idx = tp * 3
+                    try:
+                        ty_val = self.mem_read(tokens_addr + idx*4, 32)
+                    except Exception:
+                        ty_val = 'err'
+                print(f"[trace] parse_file #{cnt} depth={self._call_depth} tok_pos={tp}/{tt} mem_type_at_pos={ty_val}", file=_sys.stderr)
+                _sys.stderr.flush()
+        # Only hard-cap if truly pathological.
+        if self._call_depth > 2000 and name == 'parse_file':
+            import sys as _sys
+            tp = self.globals.get('tok_pos', '<none>')
+            tt = self.globals.get('tok_total', '<none>')
+            print(f"DEPTH={self._call_depth} parse_file tok_pos={tp} tok_total={tt}", file=_sys.stderr)
+            _sys.stderr.flush()
+            raise RuntimeError(f"call depth exceeded at {name}, tok_pos={tp}/{tt}")
         compo = self.compositions[name]
         params = compo['params']
         args = []
@@ -502,15 +538,24 @@ class Interp:
         self.frame_param_counts.pop()
         self.tk = saved_tk
 
-        # If no explicit return and the body's last-expr value is 0 (often
-        # because a trailing `trap` for close() clobbered X0), prefer the
-        # most recently captured local as the return value. This matches
-        # the Lithos convention where `base ↑ $0` captures the intended
-        # return of e.g. mmap_file.
-        if not explicit_return and ret == 0 and extras:
-            for ev in extras:
-                if ev != 0:
-                    return ev
+        # Removed: previous fallback that returned the first non-zero
+        # local when ret == 0 was overriding LEGITIMATE 0 returns.
+        # E.g. peek_type returning 0 at EOF was being clobbered with the
+        # local `idx` value. Source code should explicitly marshal
+        # multi-return values into globals (mmap_file does this now).
+        self._call_depth -= 1
+        self._trace_stack.pop()
+        if name == 'match_keyword' and os.environ.get('LITHOS_TRACE_MATCH_KEYWORD'):
+            import sys as _sys
+            try:
+                src_arg = args[0]
+                off_arg = args[1]
+                ln_arg = args[2]
+                text = bytes(self.mem[src_arg + off_arg:src_arg + off_arg + ln_arg]).decode('utf-8', errors='replace')
+            except Exception:
+                text = '<unk>'
+            print(f"TRACE match_keyword({text!r}, len={args[2] if len(args)>=3 else '?'}) -> {ret} (explicit={explicit_return})", file=_sys.stderr)
+            _sys.stderr.flush()
         return ret
     def exec_loop(self, body_indent):
         """Execute statements at body_indent until dedent."""
@@ -726,8 +771,17 @@ class Interp:
             return val
 
         if t[0] == TOK_REG_READ:  # ↑ $N bare
-            (void := self.parse_expr())
-            return 0
+            v = self.parse_expr()
+            self.regs[0] = m(v)
+            return v
+
+        if t[0] == TOK_MEM_LOAD:  # → width addr  as expression statement
+            # The last expression in a composition body is its return value,
+            # by convention kept in X0. Without this case, `→ 32 tokens idx`
+            # on its own line is dropped and the function returns garbage.
+            v = self.parse_expr()
+            self.regs[0] = m(v)
+            return v
 
         if t[0] == TOK_IF:
             return self.exec_if_chain()
@@ -1387,7 +1441,32 @@ def main():
         try:
             result['code'] = interp.run()
         except RuntimeError as e:
-            result['error'] = str(e)
+            import traceback as _tb
+            result['error'] = str(e) + "\n" + _tb.format_exc()
+        except RecursionError as e:
+            import traceback as _tb
+            result['error'] = "recursion: " + str(e) + "\n" + _tb.format_exc()
+        finally:
+            # Dump instrumentation
+            import sys as _sys
+            if hasattr(interp, '_call_counts'):
+                counts = interp._call_counts
+                print(f"=== INSTRUMENTATION ===", file=_sys.stderr)
+                print(f"max_depth={interp._max_depth}", file=_sys.stderr)
+                # Globals
+                g = getattr(interp, 'globals', {}) or {}
+                for gk in ('arm64_pos', 'gpu_pos', 'token_count'):
+                    print(f"global[{gk}]={g.get(gk, '<missing>')}", file=_sys.stderr)
+                # Top-called functions
+                emit_calls = {k: v for k, v in counts.items() if k.startswith('emit_')}
+                parse_calls = {k: v for k, v in counts.items() if k.startswith('parse_')}
+                elf_calls = {k: v for k, v in counts.items() if 'elf' in k or 'mach' in k or 'build' in k}
+                print(f"emit_* calls: {sorted(emit_calls.items(), key=lambda x:-x[1])[:10]}", file=_sys.stderr)
+                print(f"parse_* calls: {sorted(parse_calls.items(), key=lambda x:-x[1])[:10]}", file=_sys.stderr)
+                print(f"output_writer calls: {sorted(elf_calls.items(), key=lambda x:-x[1])[:10]}", file=_sys.stderr)
+                top10 = sorted(counts.items(), key=lambda x:-x[1])[:15]
+                print(f"top calls: {top10}", file=_sys.stderr)
+                _sys.stderr.flush()
     threading.stack_size(64 * 1024 * 1024)
     t = threading.Thread(target=runner)
     t.start()

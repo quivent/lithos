@@ -1,3 +1,4 @@
+.global ls_bss_offset
 .global ls_code_buf
 .global ls_code_pos
 .global ls_comp_count
@@ -6,6 +7,10 @@
 .global ls_data_pos
 .global ls_elf_buf
 .global ls_elf_pos
+.global ls_fwd_gotos
+.global ls_last_comp_addr
+.global ls_load_width
+.global ls_n_fwd_gotos
 .global ls_source_buf_ptr
 .global ls_source_len
 .global ls_sym_count
@@ -54,7 +59,7 @@
 .equ LS_CODE_BUF_SIZE,   1048576          // 1 MB
 .equ LS_TOKEN_BUF_SIZE,  1048572          // 87381 × 12 B (lexer cap)
 .equ LS_SYM_ENTRY_SIZE,  48
-.equ LS_SYM_MAX,         512
+.equ LS_SYM_MAX,         1024
 .equ LS_SYM_TABLE_SIZE,  (LS_SYM_ENTRY_SIZE * LS_SYM_MAX)   // 24 576
 .equ LS_COMP_ENTRY_SIZE, 48
 .equ LS_COMP_MAX,        256
@@ -93,6 +98,23 @@ ls_source_len:      .quad 0           // total source bytes
 
 .globl ls_data_pos
 ls_data_pos:        .quad 0           // byte offset into ls_data_buf
+
+.globl ls_last_comp_addr
+ls_last_comp_addr:  .quad 0           // code offset of last composition (entry point)
+
+.globl ls_load_width
+ls_load_width:      .word 0           // width literal for → operator (8/32/64)
+
+.globl ls_bss_offset
+ls_bss_offset:      .quad 0           // running BSS offset for buf allocations
+
+// Forward goto patch table: 256 entries of 40 bytes each
+// [0:32] label name bytes, [32:36] source offset in code_buf, [36:40] dummy
+.globl ls_fwd_gotos
+ls_fwd_gotos:       .space 10240      // 256 * 40
+
+.globl ls_n_fwd_gotos
+ls_n_fwd_gotos:     .word 0
 
 // ------------------------------------------------------------
 // .bss — the big shared buffers
