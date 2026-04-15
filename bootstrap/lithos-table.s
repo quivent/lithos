@@ -340,6 +340,19 @@ sym_pop_scope:
 // Register allocator — bump within statement, reset between
 // ============================================================
 
+// alloc_slot ( -- slot_offset )
+// Reserve 8 bytes on the current composition's frame and return the
+// positive offset from X29 (frame pointer).  Read site emits
+// LDR Xt, [X29, -slot]; write site emits STR Xt, [X29, -slot].
+alloc_slot:
+    adrp    x0, frame_size
+    add     x0, x0, :lo12:frame_size
+    ldr     w1, [x0]
+    add     w1, w1, #8
+    str     w1, [x0]
+    mov     w0, w1                      // slot offset = new frame_size
+    ret
+
 alloc_reg:
     adrp    x0, next_reg
     add     x0, x0, :lo12:next_reg
@@ -1384,6 +1397,13 @@ handle_composition:
     add     x0, x0, :lo12:spill_count
     str     wzr, [x0]
 
+    // Reset frame_size — this composition starts with an empty frame.
+    // Slots allocated via alloc_slot will grow this, and the prologue's
+    // placeholder SUB SP, SP, #0 will be patched at epilogue time.
+    adrp    x0, frame_size
+    add     x0, x0, :lo12:frame_size
+    str     wzr, [x0]
+
     // Increment scope
     adrp    x0, scope_depth
     add     x0, x0, :lo12:scope_depth
@@ -1412,6 +1432,16 @@ handle_composition:
     bl      emit32
     // MOV X29, SP
     MOVI32  w0, 0x910003FD
+    bl      emit32
+    // Emit placeholder SUB SP, SP, #0 — patched at epilogue with
+    // the final frame_size.  Record the placeholder's address so we
+    // can locate it later.  Encoding: SUB (imm) 64-bit, sh=0, imm12=0,
+    // Rn=SP(31), Rd=SP(31) = 0xD10003FF.
+    bl      emit_cur
+    adrp    x1, frame_patch_ptr
+    add     x1, x1, :lo12:frame_patch_ptr
+    str     x0, [x1]
+    MOVI32  w0, 0xD10003FF
     bl      emit32
 
     // Parse arguments — identifiers (or type keywords used as names) before the colon
@@ -1503,6 +1533,31 @@ handle_composition:
 
     // Flush any pending register spills before epilogue
     bl      reset_regs
+
+    // Patch the prologue's SUB SP, SP, #0 placeholder with the final
+    // frame_size, and emit a matching ADD SP, SP, #frame_size here
+    // so the stack is restored before the LDP/RET.  frame_size is
+    // always a multiple of 8 and (for now) less than 4096, so it
+    // fits in a single imm12 without the lsl-12 form.
+    adrp    x0, frame_size
+    add     x0, x0, :lo12:frame_size
+    ldr     w4, [x0]                    // w4 = frame_size
+    // Patch placeholder: at *frame_patch_ptr, OR (w4 << 10) into imm12
+    adrp    x0, frame_patch_ptr
+    add     x0, x0, :lo12:frame_patch_ptr
+    ldr     x5, [x0]                    // x5 = placeholder addr
+    ldr     w6, [x5]                    // current encoding
+    and     w7, w4, #0xFFF              // imm12 (= frame_size & 0xFFF)
+    lsl     w7, w7, #10
+    orr     w6, w6, w7
+    str     w6, [x5]
+    // Emit ADD SP, SP, #frame_size  (0x91000000 | (imm12<<10) | Rn=31<<5 | Rd=31)
+    and     w7, w4, #0xFFF
+    lsl     w7, w7, #10
+    movz    w0, #0x03FF                 // (SP<<5) | SP
+    movk    w0, #0x9100, lsl #16
+    orr     w0, w0, w7
+    bl      emit32
 
     // Emit epilogue: LDP X29, X30, [SP], #16; RET
     MOVI32  w0, 0xA8C17BFD
@@ -4414,6 +4469,17 @@ next_reg:   .space 4
 reg_floor:  .space 4
     .align 3
 spill_count: .space 4
+    .align 3
+// frame_size — number of stack bytes reserved for the current
+// composition's local slots (bindings + spilled params).  Reset to
+// 0 at each composition's prologue; grown by 8 for every slot
+// allocated via alloc_slot; used at epilogue to emit ADD SP, SP, #n.
+frame_size: .space 4
+    .align 3
+// frame_patch_ptr — address (inside ls_code_buf) of the SUB SP, SP
+// placeholder instruction emitted in the prologue.  Patched at the
+// epilogue with the final frame_size.
+frame_patch_ptr: .space 8
     .align 3
 emit_ptr:   .space 8
     .align 3
