@@ -667,8 +667,20 @@ lithos_lex src src_len :
 \\
 \\ ============================================================================
 
-RZ  0xFF
-PT  0x07
+const RZ 255
+const PT 7
+
+\\ ============================================================
+\\ sinst — CORE 16-BYTE INSTRUCTION EMITTER
+\\ ============================================================
+\\ Writes iword (8 bytes LE) then ctrl (8 bytes LE) into gpu_buf
+\\ at gpu_pos_v, advancing gpu_pos_v by 16 total.
+
+sinst iword ctrl :
+    _gp → 64 gpu_pos_v
+    ← 64 gpu_buf + _gp iword
+    ← 64 gpu_buf + (_gp + 8) ctrl
+    ← 64 gpu_pos_v _gp + 16
 
 \\ ============================================================
 \\ ARITHMETIC (§3.4) — FADD, FSUB, FMUL, FDIV, FFMA
@@ -1997,6 +2009,16 @@ buf emit_target_v      8
 buf any_gpu_v          8
 buf any_arm64_v        8
 
+\\ Current kernel metadata — populated by walk_top_level for each kernel.
+\\ NOTE: only ONE kernel's metadata is stored at a time. With multiple
+\\ kernels, only the LAST one's metadata survives — matching the fact that
+\\ the walker also only emits the last kernel's code into gpu_buf.
+buf cur_kernel_name_v 8    \\ pointer to current kernel name string
+buf cur_kernel_nlen_v 8    \\ length of current kernel name
+buf cur_n_kparams_v   8    \\ number of kernel params
+buf cur_reg_count_v   8    \\ highest register index used
+buf cur_smem_v        8    \\ shared memory size
+
 \\ ============================================================================
 \\ Token accessors — one token = 3 consecutive u32 words.
 \\ ============================================================================
@@ -2702,6 +2724,18 @@ walk_top_level :
 
     bind_args i
 
+    \\ Record this kernel's metadata. Only the LAST kernel survives in
+    \\ cur_*_v — see note above the cur_kernel_*_v globals.
+    if== is_host 0
+        kn_off → 32 comp_name_off_v + i * 4
+        kn_len → 32 comp_name_len_v + i * 4
+        kn_argc → 32 comp_arg_count_v + i * 4
+        src_base → 64 lex_src_v
+        ← 64 cur_kernel_name_v src_base + kn_off
+        ← 64 cur_kernel_nlen_v kn_len
+        ← 64 cur_n_kparams_v kn_argc
+        ← 64 cur_smem_v 0
+
     bs → 32 comp_body_start_v + i * 4
     be → 32 comp_body_end_v + i * 4
     walk_body bs be
@@ -2710,6 +2744,9 @@ walk_top_level :
     if== is_host 0
         emit_exit
         ← 64 any_gpu_v 1
+        \\ Record highest register index used (next_reg - 1).
+        nr → 64 next_reg_v
+        ← 64 cur_reg_count_v nr - 1
     if== is_host 1
         emit_a64_ret
         ← 64 any_arm64_v 1
@@ -2785,9 +2822,14 @@ host main argc argv :
 
     label main_gpu
     \\ Cubin (NVIDIA ELF) for the GPU side.
+    _kn → 64 cur_kernel_name_v
+    _kl → 64 cur_kernel_nlen_v
+    _nk → 64 cur_n_kparams_v
+    _rc → 64 cur_reg_count_v
+    _sm → 64 cur_smem_v
     _gp → 64 gpu_pos_v
     _op → 64 out_path_v
-    cubin_write gpu_buf _gp _op
+    cubin_write _kn _kl gpu_buf _gp _nk _rc _sm _op
     goto main_ok
 
     label main_arm64
