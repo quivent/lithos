@@ -1437,6 +1437,54 @@ handle_composition:
 .Lcomp_args_done:
     add     x19, x19, #TOK_STRIDE_SZ   // skip ':'
 
+    // Move parameters out of X0..X7 (caller-saved) into freshly
+    // allocated bindings (X9..) so they survive any subsequent BL.
+    // Without this, every function with parameters loses them as
+    // soon as the body makes its first call — `copy_bytes(buf, len)`
+    // turning into `copy_bytes(garbage, len)` after one emit_byte.
+    cbz     w8, .Lcomp_no_param_move
+    mov     w9, #0                      // arg index iterator
+.Lcomp_pmove_loop:
+    cmp     w9, w8
+    b.ge    .Lcomp_no_param_move
+    // Find the param's sym entry: it's at sym_count - argc + w9.
+    // Equivalently, sym_count - argc + w9 = sym_count - (argc - w9).
+    adrp    x0, ls_sym_count
+    add     x0, x0, :lo12:ls_sym_count
+    ldr     w1, [x0]                    // current sym_count
+    sub     w2, w8, w9
+    sub     w2, w1, w2                  // index of the w9-th param
+    adrp    x3, ls_sym_table
+    add     x3, x3, :lo12:ls_sym_table
+    mov     w4, #SYM_SIZE
+    madd    x3, x2, x4, x3              // &sym_table[index]
+    // Allocate a fresh register and emit MOV new, Xw9
+    stp     x3, x9, [sp, #-16]!
+    stp     x8, xzr, [sp, #-16]!
+    bl      alloc_reg                   // w0 = new reg
+    ldp     x8, xzr, [sp], #16
+    ldp     x3, x9, [sp], #16
+    mov     w5, w0                      // new reg
+    mov     w0, w5                      // dest = new reg
+    mov     w1, w9                      // src = Xw9 (the arg reg)
+    stp     x3, x5, [sp, #-16]!
+    stp     x8, x9, [sp, #-16]!
+    bl      emit_mov_reg
+    ldp     x8, x9, [sp], #16
+    ldp     x3, x5, [sp], #16
+    // Update sym entry to point to the new register and bump reg_floor
+    str     w5, [x3, #SYM_REG]
+    adrp    x0, reg_floor
+    add     x0, x0, :lo12:reg_floor
+    ldr     w1, [x0]
+    add     w2, w5, #1
+    cmp     w2, w1
+    b.le    1f
+    str     w2, [x0]
+1:  add     w9, w9, #1
+    b       .Lcomp_pmove_loop
+.Lcomp_no_param_move:
+
     // Parse body
     bl      skip_newlines
     ldr     w0, [x19]
