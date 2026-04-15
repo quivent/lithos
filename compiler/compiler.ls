@@ -2411,12 +2411,16 @@ walk_body body_start body_end :
             _pbo → 64 pending_bind_off_v
             _existing sym_find _pbo _pbl
             rb vpop
-            if!= _existing -1
+            \\ Single dispatch: reassign if found, new binding if not.
+            \\ Using if/else instead of two consecutive if blocks —
+            \\ the interp's exec_if_chain treats adjacent ifs at the
+            \\ same indent as one chain, which can skip both bodies.
+            if>= _existing 0
                 \\ Reassignment: store result into existing slot.
                 et → 64 emit_target_v
                 if== et 1
                     emit_a64_stur rb 29 _existing
-            if== _existing -1
+            else
                 \\ New binding: allocate a slot, store, record.
                 slot alloc_slot
                 et → 64 emit_target_v
@@ -2436,11 +2440,11 @@ walk_body body_start body_end :
             _pbo → 64 pending_bind_off_v
             _existing sym_find _pbo _pbl
             rb vpop
-            if!= _existing -1
+            if>= _existing 0
                 et → 64 emit_target_v
                 if== et 1
                     emit_a64_stur rb 29 _existing
-            if== _existing -1
+            else
                 slot alloc_slot
                 et → 64 emit_target_v
                 if== et 1
