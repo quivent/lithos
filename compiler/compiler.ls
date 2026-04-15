@@ -1769,7 +1769,7 @@ sym_find name_off name_len :
     i i + 1
     goto sf_loop
     label sf_miss
-    -1
+    return 0
 
 \\ Composition table helpers
 
@@ -1783,6 +1783,8 @@ comp_add name_off name_len arg_count body_start body_end is_host :
     ← 32 comp_arg_count_v + n * 4 arg_count
     ← 32 comp_body_start_v + n * 4 body_start
     ← 32 comp_body_end_v + n * 4 body_end
+    \\ Initialize code_off to -1 (sentinel: not yet emitted).
+    ← 32 comp_code_off_v + n * 4 0xFFFFFFFF
     ← 32 comp_is_host_v + n * 4 is_host
     ← 64 comp_count_v n + 1
 
@@ -1836,13 +1838,14 @@ alloc_scratch :
     ← 64 scratch_idx_v si + 1
     return r
 
-\\ alloc_slot — allocate a FP-relative stack slot for a new binding.
-\\ Returns the NEGATIVE offset from FP (e.g. -8, -16, -24...).
+\\ alloc_slot — allocate a stack slot for a new binding.
+\\ Returns the POSITIVE slot number (8, 16, 24...).  Callers negate
+\\ it to get the FP-relative offset for STUR/LDUR.  This way sym_find
+\\ can return 0 for "not found" without colliding with valid slots.
 alloc_slot :
     s → 64 frame_slot_v
     ← 64 frame_slot_v s + 8
-    neg 0 - s
-    return neg
+    return s
 
 \\ Legacy name — compositions that call alloc_reg get alloc_scratch.
 alloc_reg :
@@ -2049,7 +2052,7 @@ bind_args comp_idx :
     \\ Emit: STUR Xi, [X29, #slot]  (slot is negative, e.g. -8)
     et → 64 emit_target_v
     if== et 1
-        emit_a64_stur i 29 slot
+        emit_a64_stur i 29 (0 - slot)
     sym_add off len slot
     i i + 1
     goto ba_loop
@@ -2432,17 +2435,17 @@ walk_body body_start body_end :
             \\ Using if/else instead of two consecutive if blocks —
             \\ the interp's exec_if_chain treats adjacent ifs at the
             \\ same indent as one chain, which can skip both bodies.
-            if>= _existing 0
+            if> _existing 0
                 \\ Reassignment: store result into existing slot.
                 et → 64 emit_target_v
                 if== et 1
-                    emit_a64_stur rb 29 _existing
+                    emit_a64_stur rb 29 (0 - _existing)
             else
                 \\ New binding: allocate a slot, store, record.
                 slot alloc_slot
                 et → 64 emit_target_v
                 if== et 1
-                    emit_a64_stur rb 29 slot
+                    emit_a64_stur rb 29 (0 - slot)
                 sym_add _pbo _pbl slot
             ← 64 pending_bind_len_v 0
         ← 64 stmt_start_v 1
@@ -2457,15 +2460,15 @@ walk_body body_start body_end :
             _pbo → 64 pending_bind_off_v
             _existing sym_find _pbo _pbl
             rb vpop
-            if>= _existing 0
+            if> _existing 0
                 et → 64 emit_target_v
                 if== et 1
-                    emit_a64_stur rb 29 _existing
+                    emit_a64_stur rb 29 (0 - _existing)
             else
                 slot alloc_slot
                 et → 64 emit_target_v
                 if== et 1
-                    emit_a64_stur rb 29 slot
+                    emit_a64_stur rb 29 (0 - slot)
                 sym_add _pbo _pbl slot
             ← 64 pending_bind_len_v 0
         return 0
@@ -2535,8 +2538,8 @@ walk_body body_start body_end :
                             ← 64 stmt_start_v 0
                             goto wb_loop
         slot sym_find off len
-        if!= slot -1
-            \\ Known symbol.  At statement start it's a reassignment
+        if> slot 0
+            \\ Known symbol (slot > 0).  At statement start it's a reassignment
             \\ target (stash as pending_bind; the newline handler will
             \\ STUR the expression result into the same slot).
             \\ Mid-expression it's a read — load from slot into scratch.
@@ -2562,20 +2565,93 @@ walk_body body_start body_end :
             et → 64 emit_target_v
             scratch alloc_scratch
             if== et 1
-                emit_a64_ldur scratch 29 slot
+                emit_a64_ldur scratch 29 (0 - slot)
             vpush_with_op scratch
             goto wb_loop
         cidx comp_find off len
         if>= cidx 0
             ← 64 stmt_start_v 0
-            \\ Inline expansion (spec §4.1): recursively walk the referenced
-            \\ composition's body. Symbols/regs are shared with the caller —
-            \\ this is compile-time concatenation, not a function call.
-            cbs → 32 comp_body_start_v + cidx * 4
-            cbe → 32 comp_body_end_v + cidx * 4
-            saved → 64 walk_pos_v
-            walk_body cbs cbe
-            ← 64 walk_pos_v saved
+            et → 64 emit_target_v
+            \\ BL-based composition call.  Parse arguments from the
+            \\ remaining tokens on this line, MOV each into X0..X7,
+            \\ then emit BL to the composition's code offset.
+            \\ Result comes back in X0.
+            if== et 1
+                \\ Parse and emit arguments.
+                arg_idx 0
+                label bl_arg_loop
+                _wp → 64 walk_pos_v
+                _nt tok_type _wp
+                \\ Stop at line boundaries and operators.
+                if== _nt 1
+                    goto bl_arg_done
+                if== _nt 0
+                    goto bl_arg_done
+                if== _nt 2
+                    goto bl_arg_done
+                if== _nt 50
+                    goto bl_arg_done
+                if== _nt 51
+                    goto bl_arg_done
+                if== _nt 52
+                    goto bl_arg_done
+                if== _nt 53
+                    goto bl_arg_done
+                \\ Evaluate one argument atom.
+                if== _nt 3
+                    \\ Integer literal.
+                    _aoff tok_offset _wp
+                    _alen tok_length _wp
+                    _aval parse_int_tok _aoff _alen
+                    _ar alloc_scratch
+                    emit_a64_mov_imm _ar _aval
+                    \\ MOV X<arg_idx>, X<_ar>
+                    _amov 0xAA0003E0 | (_ar << 16) | arg_idx
+                    arm64_emit32 _amov
+                    ← 64 walk_pos_v _wp + 1
+                    arg_idx arg_idx + 1
+                    goto bl_arg_loop
+                if== _nt 5
+                    \\ Identifier — check sym table for a binding.
+                    _aoff tok_offset _wp
+                    _alen tok_length _wp
+                    _aslot sym_find _aoff _alen
+                    ← 64 walk_pos_v _wp + 1
+                    if>= _aslot 0
+                        \\ Known binding — LDUR from slot, MOV to arg reg.
+                        _ar alloc_scratch
+                        emit_a64_ldur _ar 29 (0 - _aslot)
+                        _amov 0xAA0003E0 | (_ar << 16) | arg_idx
+                        arm64_emit32 _amov
+                    arg_idx arg_idx + 1
+                    goto bl_arg_loop
+                \\ Skip unrecognized arg tokens.
+                ← 64 walk_pos_v _wp + 1
+                goto bl_arg_loop
+                label bl_arg_done
+
+                \\ Emit BL.  If the target composition was already
+                \\ emitted (code_off != sentinel 0xFFFFFFFF), compute
+                \\ delta directly.  Otherwise record a forward fixup.
+                _target → 32 comp_code_off_v + cidx * 4
+                _cur → 64 arm64_pos_v
+                if!= _target 0xFFFFFFFF
+                    _delta _target - _cur
+                    emit_a64_bl _delta
+                else
+                    \\ Forward reference: placeholder + fixup entry.
+                    _fc → 64 bl_fixup_count_v
+                    ← 32 bl_fixup_comp_v + _fc * 4 cidx
+                    ← 32 bl_fixup_site_v + _fc * 4 _cur
+                    ← 64 bl_fixup_count_v _fc + 1
+                    arm64_emit32 0x94000000
+
+                \\ Result in X0.  Push onto vstack via scratch.
+                _rr alloc_scratch
+                \\ MOV X<_rr>, X0 = ORR X<_rr>, XZR, X0
+                _rmov 0xAA0003E0 | (0 << 16) | _rr
+                arm64_emit32 _rmov
+                vpush_with_op _rr
             goto wb_loop
         \\ Unknown identifier at statement start — it's a new binding target.
         \\ Stash the name; the expression on the rest of the line will push
@@ -2711,8 +2787,6 @@ walk_top_level :
     is_host → 32 comp_is_host_v + i * 4
     ← 64 emit_target_v is_host
 
-    bind_args i
-
     \\ Record this kernel's metadata. Only the LAST kernel survives in
     \\ cur_*_v — see note above the cur_kernel_*_v globals.
     if== is_host 0
@@ -2733,10 +2807,14 @@ walk_top_level :
 
     \\ Host prologue: STP FP,LR; MOV FP,SP; SUB SP,SP,#512 (frame).
     \\ Bindings live at [FP, #-8], [FP, #-16], etc.
+    \\ MUST come BEFORE bind_args which emits STUR [FP, #-slot] —
+    \\ FP is only valid after MOV FP, SP.
     if== is_host 1
         emit_a64_stp_fp_lr
         emit_a64_mov_fp_sp
         emit_a64_sub_imm 31 31 512
+
+    bind_args i
 
     bs → 32 comp_body_start_v + i * 4
     be → 32 comp_body_end_v + i * 4
