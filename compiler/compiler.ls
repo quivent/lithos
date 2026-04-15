@@ -2601,9 +2601,14 @@ walk_collect :
             goto wc_body_done
         nt tok_type j
         if== nt 2
-            \\ Still indented — keep scanning.
-            i i + 2
-            goto wc_body
+            \\ INDENT token — check its value.  indent > 0 means the
+            \\ body continues.  indent == 0 means column 0 — new top-level.
+            nind tok_length j
+            if> nind 0
+                i i + 2
+                goto wc_body
+            \\ indent == 0: body ends at the newline.
+            goto wc_body_done
         if== nt 1
             \\ Blank line — consume and continue.
             i j
