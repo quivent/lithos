@@ -15,6 +15,16 @@ cli/target/
 # OS
 .DS_Store
 *.swp
+*.dSYM/
+
+# Claude Code local config
+.claude/
+
+# Compiled bootstrap binaries (keep .c/.s sources)
+bootstrap/lithos-boot
+bootstrap/lithos-boot-*
+!bootstrap/lithos-boot-*.c
+!bootstrap/lithos-boot-*.s
 
 # Hive forage identity pointer (system-dependent absolute paths — do not track)
 .hive/
