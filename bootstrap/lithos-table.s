@@ -2804,8 +2804,11 @@ handle_if:
     mov     w1, #CC_NE
     b       .Lif_cc_emit
 .Lif_cc_emit:
-    // Emit B.cond placeholder (condition in w1)
-    mov     w0, #0                  // placeholder offset
+    // emit_b_cond convention: w0 = condition code, x1 = target.
+    // The condition was being computed into w1 above, but emit_b_cond
+    // reads it from w0.  Move it.
+    mov     w0, w1
+    mov     x1, #0                  // placeholder target — patched later
     bl      emit_b_cond
     mov     w0, #1
     str     w0, [sp, #16]          // patch type 1 = B.cond
