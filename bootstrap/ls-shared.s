@@ -88,6 +88,14 @@ ls_load_width:      .word 0           // width literal for → operator (8/32/64
 .globl ls_bss_offset
 ls_bss_offset:      .quad 0           // running BSS offset for buf allocations
 
+// Forward goto patch table: 256 entries of 40 bytes each
+// [0:32] label name bytes, [32:36] source offset in code_buf, [36:40] dummy
+.globl ls_fwd_gotos
+ls_fwd_gotos:       .space 10240      // 256 * 40
+
+.globl ls_n_fwd_gotos
+ls_n_fwd_gotos:     .word 0
+
 // ------------------------------------------------------------
 // .bss — the big shared buffers
 // ------------------------------------------------------------

@@ -182,6 +182,8 @@
 .extern ls_sym_table
 .extern ls_token_buf
 .extern ls_bss_offset
+.extern ls_fwd_gotos
+.extern ls_n_fwd_gotos
 
 // ============================================================
 // .text — all code
@@ -979,6 +981,11 @@ parse_tokens:
     add     x0, x0, :lo12:ls_bss_offset
     str     xzr, [x0]
 
+    // Reset forward-goto patch table count
+    adrp    x0, ls_n_fwd_gotos
+    add     x0, x0, :lo12:ls_n_fwd_gotos
+    str     wzr, [x0]
+
     // Clear scope
     adrp    x0, scope_depth
     add     x0, x0, :lo12:scope_depth
@@ -1675,8 +1682,65 @@ handle_ident_stmt:
     ldp     x29, x30, [sp], #16
     ret
 .Lhi_goto_fwd:
-    // Forward goto — emit NOP placeholder
-    bl      emit_nop
+    // Forward goto — record in patch table, emit B placeholder (0x14000000)
+    // x19 points at the label name token.
+    // Record: name bytes + source offset in code_buf.
+    ldr     w2, [x19, #4]           // source offset of name token
+    ldr     w3, [x19, #8]           // name length
+    // Save tokp for later
+    str     x19, [sp, #-16]!
+    // Get current emit position (code_buf offset)
+    bl      emit_cur                 // x0 = emit_ptr
+    adrp    x4, ls_code_buf
+    add     x4, x4, :lo12:ls_code_buf
+    sub     x5, x0, x4              // x5 = offset in code_buf
+    // Append to patch table
+    adrp    x6, ls_n_fwd_gotos
+    add     x6, x6, :lo12:ls_n_fwd_gotos
+    ldr     w7, [x6]
+    adrp    x8, ls_fwd_gotos
+    add     x8, x8, :lo12:ls_fwd_gotos
+    mov     x9, #40
+    mul     x9, x7, x9
+    add     x8, x8, x9              // x8 = &fwd_gotos[w7]
+    // Copy label name (up to 32 bytes)
+    ldr     x19, [sp]                // restore tokp
+    ldr     w2, [x19, #4]           // source offset
+    ldr     w3, [x19, #8]           // length
+    cmp     w3, #32
+    b.lt    1f
+    mov     w3, #32
+1:  add     x9, x28, x2             // src + offset
+    mov     w10, #0
+.Lfg_copy:
+    cmp     w10, w3
+    b.ge    .Lfg_copy_done
+    ldrb    w11, [x9, x10]
+    strb    w11, [x8, x10]
+    add     w10, w10, #1
+    b       .Lfg_copy
+.Lfg_copy_done:
+    // Pad remaining bytes with 0
+    cmp     w10, #32
+    b.ge    .Lfg_pad_done
+.Lfg_pad:
+    strb    wzr, [x8, x10]
+    add     w10, w10, #1
+    cmp     w10, #32
+    b.lt    .Lfg_pad
+.Lfg_pad_done:
+    // Store source offset at [x8 + 32]
+    str     w5, [x8, #32]
+    // Also store length at [x8 + 36]
+    str     w3, [x8, #36]
+    // Increment fwd_gotos count
+    add     w7, w7, #1
+    str     w7, [x6]
+    ldr     x19, [sp], #16
+    // Emit B with placeholder offset 0 (0x14000000)
+    mov     w0, #0x14000000
+    movk    w0, #0x1400, lsl #16
+    bl      emit32
     add     x19, x19, #TOK_STRIDE_SZ
     ldp     x29, x30, [sp], #16
     ret
@@ -2190,12 +2254,76 @@ handle_label:
     b.ne    parse_error
 
     bl      emit_cur
+    str     x0, [sp, #-16]!        // save label address
     mov     w2, w0
     mov     w1, #KIND_LOCAL_REG
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
+
+    // Patch any forward gotos that target this label.
+    // Scan ls_fwd_gotos; for each entry whose name matches, emit B fix at the source offset.
+    ldr     x22, [sp]               // label address (emit_ptr absolute)
+    adrp    x8, ls_n_fwd_gotos
+    add     x8, x8, :lo12:ls_n_fwd_gotos
+    ldr     w9, [x8]                // count
+    cbz     w9, .Lhl_no_patches
+    adrp    x10, ls_fwd_gotos
+    add     x10, x10, :lo12:ls_fwd_gotos
+    mov     w11, #0                 // index
+    // Get label name info
+    ldr     w12, [x19, #4]          // name source offset
+    ldr     w13, [x19, #8]          // name length
+    cmp     w13, #32
+    b.lt    .Lhl_len_ok
+    mov     w13, #32
+.Lhl_len_ok:
+    add     x14, x28, x12           // label name ptr (src + offset)
+.Lhl_scan:
+    cmp     w11, w9
+    b.ge    .Lhl_no_patches
+    mov     x15, #40
+    mul     x15, x11, x15
+    add     x15, x10, x15           // &fwd_gotos[i]
+    // Check if name length matches
+    ldr     w16, [x15, #36]         // stored length
+    cmp     w16, w13
+    b.ne    .Lhl_next
+    // Compare name bytes
+    mov     w17, #0
+.Lhl_cmp:
+    cmp     w17, w13
+    b.ge    .Lhl_match
+    ldrb    w20, [x14, x17]
+    ldrb    w21, [x15, x17]
+    cmp     w20, w21
+    b.ne    .Lhl_next
+    add     w17, w17, #1
+    b       .Lhl_cmp
+.Lhl_match:
+    // Found matching forward goto — patch it
+    // Source offset in code_buf is at [x15 + 32]
+    ldr     w17, [x15, #32]        // source offset in code_buf
+    adrp    x20, ls_code_buf
+    add     x20, x20, :lo12:ls_code_buf
+    add     x20, x20, x17           // absolute address of the B instruction
+    // Compute offset: (label_addr - source_addr) / 4
+    sub     x21, x22, x20
+    asr     x21, x21, #2
+    and     w21, w21, #0x3FFFFFF
+    // Build B instruction: 0x14000000 | imm26
+    mov     w2, #0x14000000
+    movk    w2, #0x1400, lsl #16
+    orr     w2, w2, w21
+    str     w2, [x20]
+    // Invalidate this entry by setting length to 0 so it won't rematch
+    str     wzr, [x15, #36]
+.Lhl_next:
+    add     w11, w11, #1
+    b       .Lhl_scan
+.Lhl_no_patches:
+    add     sp, sp, #16            // discard saved label address
     add     x19, x19, #TOK_STRIDE_SZ
 
     ldp     x29, x30, [sp], #16
