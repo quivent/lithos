@@ -2093,260 +2093,317 @@ classify_number src offset length :
         i i + 1
 
 \\ ============================================================================
+\\ Lexer helper compositions (flat, max 2-level nesting)
+\\ ============================================================================
+
+\\ lex_match_twochar — match two-character operators
+\\ Returns token type (0 = no match)
+lex_match_twochar c cn :
+    tok 0
+    if== c 61
+        if== cn 61
+            tok 55
+            return
+    if== c 33
+        if== cn 61
+            tok 56
+            return
+    if== c 60
+        if== cn 61
+            tok 59
+            return
+        if== cn 60
+            tok 64
+            return
+    if== c 62
+        if== cn 61
+            tok 60
+            return
+        if== cn 62
+            tok 65
+            return
+
+\\ lex_match_e2 — match 0xE2-prefixed UTF-8 tokens (3-byte sequences)
+\\ Returns token type (0 = no match)
+lex_match_e2 b1 b2 :
+    tok 0
+    if== b1 0x86
+        if== b2 0x92
+            tok 36
+            return
+        if== b2 0x90
+            tok 37
+            return
+        if== b2 0x91
+            tok 38
+            return
+        if== b2 0x93
+            tok 39
+            return
+    if== b1 0x96
+        if== b2 0xB3
+            tok 76
+            return
+        if== b2 0xBD
+            tok 77
+            return
+    if== b1 0x88
+        if== b2 0x9A
+            tok 79
+            return
+    if== b1 0x89
+        if== b2 0x85
+            tok 80
+            return
+        if== b2 0xA1
+            tok 81
+            return
+
+\\ ============================================================================
 \\ Main lexer
 \\ ============================================================================
+
+\\ lex — flat control flow for bootstrap compatibility.
+\\ Single composition using goto/label. No sub-compositions for dispatch
+\\ (globals don't survive calls in the bootstrap).
 
 lex src src_len :
     pos 0
     token_count 0
-    lineprologue 1
+    lp 1
 
-    while pos < src_len
-        c src [ pos ]
+    label lex_loop
+    if>= pos src_len
+        goto lex_done
+    c → 8 (src + pos)
 
-        if lineprologue
-            indent 0
-            while pos < src_len
-                ic src [ pos ]
-                if ic == 32
-                    indent indent + 1
-                    pos pos + 1
-                elif ic == 9
-                    indent indent + 4
-                    pos pos + 1
-                else
-                    goto indent_done
-            label indent_done
-            emit_token 2 pos indent
-            lineprologue 0
-            if pos >= src_len
-                return
-            c src [ pos ]
-
-        if c == 10
-            emit_token 1 pos 1
-            pos pos + 1
-            lineprologue 1
-            if pos < src_len
-                c2 src [ pos ]
-                if c2 == 13
-                    pos pos + 1
-            continue
-
-        if c == 13
-            emit_token 1 pos 1
-            pos pos + 1
-            lineprologue 1
-            if pos < src_len
-                c2 src [ pos ]
-                if c2 == 10
-                    pos pos + 1
-            continue
-
-        if c == 32 | c == 9
-            pos pos + 1
-            continue
-
-        if c == 35
-            emit_token 78 pos 1
-            pos pos + 1
-            continue
-
-        if c == 92
-            if pos + 1 < src_len
-                c2 src [ pos + 1 ]
-                if c2 == 92
-                    pos scan_to_eol src pos src_len
-                    continue
-
-        digit is_digit c
-        if digit
-            start pos
-            pos scan_number src pos src_len
-            length pos - start
-            num_type classify_number src start length
-            emit_token num_type start length
-            continue
-
-        if c == 45
-            if pos + 1 < src_len
-                cnext src [ pos + 1 ]
-                ndig is_digit cnext
-                if ndig
-                    start pos
-                    pos pos + 1
-                    pos scan_number src pos src_len
-                    length pos - start
-                    num_type classify_number src start length
-                    emit_token num_type start length
-                    continue
-
-        alpha is_alpha c
-        if alpha
-            start pos
-            pos scan_ident src pos src_len
-            length pos - start
-            kw match_keyword src start length
-            emit_token kw start length
-            continue
-
-        if pos + 1 < src_len
-            cnext src [ pos + 1 ]
-            if c == 61 & cnext == 61
-                emit_token 55 pos 2
-                pos pos + 2
-                continue
-            if c == 33 & cnext == 61
-                emit_token 56 pos 2
-                pos pos + 2
-                continue
-            if c == 60 & cnext == 61
-                emit_token 59 pos 2
-                pos pos + 2
-                continue
-            if c == 62 & cnext == 61
-                emit_token 60 pos 2
-                pos pos + 2
-                continue
-            if c == 60 & cnext == 60
-                emit_token 64 pos 2
-                pos pos + 2
-                continue
-            if c == 62 & cnext == 62
-                emit_token 65 pos 2
-                pos pos + 2
-                continue
-
-        \\ Multi-byte UTF-8 tokens
-        if c == 0xE2
-            if pos + 2 < src_len
-                b1 src [ pos + 1 ]
-                b2 src [ pos + 2 ]
-                if b1 == 0x86 & b2 == 0x92
-                    emit_token 36 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x90
-                    emit_token 37 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x91
-                    emit_token 38 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x86 & b2 == 0x93
-                    emit_token 39 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x96 & b2 == 0xB3
-                    emit_token 76 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x96 & b2 == 0xBD
-                    emit_token 77 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x88 & b2 == 0x9A
-                    emit_token 79 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x89 & b2 == 0x85
-                    emit_token 80 pos 3
-                    pos pos + 3
-                    continue
-                if b1 == 0x89 & b2 == 0xA1
-                    emit_token 81 pos 3
-                    pos pos + 3
-                    continue
-        if c == 0xCE
-            if pos + 1 < src_len
-                b1 src [ pos + 1 ]
-                if b1 == 0xA3
-                    emit_token 75 pos 2
-                    pos pos + 2
-                    continue
-
-        \\ Single-character operators and punctuation
-        if c == 43
-            emit_token 50 pos 1
-            pos pos + 1
-            continue
-        if c == 45
-            emit_token 51 pos 1
-            pos pos + 1
-            continue
-        if c == 42
-            emit_token 52 pos 1
-            pos pos + 1
-            continue
-        if c == 47
-            emit_token 53 pos 1
-            pos pos + 1
-            continue
-        if c == 61
-            emit_token 54 pos 1
-            pos pos + 1
-            continue
-        if c == 60
-            emit_token 57 pos 1
-            pos pos + 1
-            continue
-        if c == 62
-            emit_token 58 pos 1
-            pos pos + 1
-            continue
-        if c == 38
-            emit_token 61 pos 1
-            pos pos + 1
-            continue
-        if c == 124
-            emit_token 62 pos 1
-            pos pos + 1
-            continue
-        if c == 94
-            emit_token 63 pos 1
-            pos pos + 1
-            continue
-        if c == 91
-            emit_token 67 pos 1
-            pos pos + 1
-            continue
-        if c == 93
-            emit_token 68 pos 1
-            pos pos + 1
-            continue
-        if c == 40
-            emit_token 69 pos 1
-            pos pos + 1
-            continue
-        if c == 41
-            emit_token 70 pos 1
-            pos pos + 1
-            continue
-        if c == 44
-            emit_token 71 pos 1
-            pos pos + 1
-            continue
-        if c == 58
-            emit_token 72 pos 1
-            pos pos + 1
-            continue
-        if c == 46
-            emit_token 73 pos 1
-            pos pos + 1
-            continue
-        if c == 64
-            emit_token 74 pos 1
-            pos pos + 1
-            continue
-        \\ $ -> TOK_DOLLAR (97)
-        if c == 36
-            emit_token 97 pos 1
-            pos pos + 1
-            continue
-
+    \\ ---- Indent at start of line ----
+    if== lp 0
+        goto lex_skip_indent
+    indent 0
+    label lex_indent_loop
+    if>= pos src_len
+        goto lex_indent_done
+    c → 8 (src + pos)
+    if== c 32
+        indent indent + 1
         pos pos + 1
+        goto lex_indent_loop
+    if== c 9
+        indent indent + 4
+        pos pos + 1
+        goto lex_indent_loop
+    label lex_indent_done
+    emit_token 2 pos indent
+    lp 0
+    if>= pos src_len
+        goto lex_done
+    c → 8 (src + pos)
+    label lex_skip_indent
 
+    \\ ---- Whitespace ----
+    if== c 32
+        pos pos + 1
+        goto lex_loop
+    if== c 9
+        pos pos + 1
+        goto lex_loop
+
+    \\ ---- Newline LF ----
+    if== c 10
+        emit_token 1 pos 1
+        pos pos + 1
+        lp 1
+        goto lex_loop
+
+    \\ ---- Newline CR ----
+    if== c 13
+        emit_token 1 pos 1
+        pos pos + 1
+        lp 1
+        goto lex_loop
+
+    \\ ---- Comment \\\\ ----
+    if== c 92
+        goto lex_try_comment
+    goto lex_not_comment
+    label lex_try_comment
+    if>= pos + 1 src_len
+        goto lex_not_comment
+    t → 8 (src + pos + 1)
+    if== t 92
+        pos scan_to_eol src pos src_len
+        goto lex_loop
+    label lex_not_comment
+
+    \\ ---- Number ----
+    t is_digit c
+    if t
+        start pos
+        pos scan_number src pos src_len
+        len pos - start
+        t classify_number src start len
+        emit_token t start len
+        goto lex_loop
+
+    \\ ---- Negative number ----
+    if== c 45
+        goto lex_try_neg
+    goto lex_not_neg
+    label lex_try_neg
+    if>= pos + 1 src_len
+        goto lex_not_neg
+    t → 8 (src + pos + 1)
+    t is_digit t
+    if== t 0
+        goto lex_not_neg
+    start pos
+    pos pos + 1
+    pos scan_number src pos src_len
+    len pos - start
+    t classify_number src start len
+    emit_token t start len
+    goto lex_loop
+    label lex_not_neg
+
+    \\ ---- Identifier / keyword ----
+    t is_alpha c
+    if t
+        start pos
+        pos scan_ident src pos src_len
+        len pos - start
+        t match_keyword src start len
+        emit_token t start len
+        goto lex_loop
+
+    \\ ---- Two-byte operators ----
+    if>= pos + 1 src_len
+        goto lex_no_twochar
+    t → 8 (src + pos + 1)
+    t lex_match_twochar c t
+    if t
+        emit_token t pos 2
+        pos pos + 2
+        goto lex_loop
+    label lex_no_twochar
+
+    \\ ---- UTF-8 multi-byte tokens ----
+    if== c 0xE2
+        goto lex_try_e2
+    if== c 0xCE
+        goto lex_try_ce
+    goto lex_no_utf8
+
+    label lex_try_e2
+    if>= pos + 2 src_len
+        goto lex_no_utf8
+    start → 8 (src + pos + 1)
+    t → 8 (src + pos + 2)
+    t lex_match_e2 start t
+    if t
+        emit_token t pos 3
+        pos pos + 3
+        goto lex_loop
+    goto lex_no_utf8
+
+    label lex_try_ce
+    if>= pos + 1 src_len
+        goto lex_no_utf8
+    t → 8 (src + pos + 1)
+    if== t 0xA3
+        emit_token 75 pos 2
+        pos pos + 2
+        goto lex_loop
+
+    label lex_no_utf8
+
+    \\ ---- Single-character operators ----
+    if== c 43
+        emit_token 50 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 42
+        emit_token 52 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 47
+        emit_token 53 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 61
+        emit_token 54 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 60
+        emit_token 57 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 62
+        emit_token 58 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 38
+        emit_token 61 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 124
+        emit_token 62 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 94
+        emit_token 63 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 91
+        emit_token 67 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 93
+        emit_token 68 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 40
+        emit_token 69 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 41
+        emit_token 70 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 44
+        emit_token 71 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 58
+        emit_token 72 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 46
+        emit_token 73 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 64
+        emit_token 74 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 36
+        emit_token 97 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 35
+        emit_token 78 pos 1
+        pos pos + 1
+        goto lex_loop
+    if== c 45
+        emit_token 51 pos 1
+        pos pos + 1
+        goto lex_loop
+
+    \\ Unknown — skip
+    pos pos + 1
+    goto lex_loop
+
+    label lex_done
     emit_token 0 pos 0
 
 \\ ============================================================================
@@ -5091,15 +5148,11 @@ host write_file path buf buf_len :
 main argc argv :
     \\ Validate argument count (need at least source and output)
     if< argc 3
-        \\ Too few arguments — exit with error
-        ↓ $8 93
-        ↓ $0 1
-        trap
+        goto main_exit_err
 
     \\ argv[0] = program name (skip)
     \\ argv[1] = source file path
     \\ argv[2] = output file path
-    \\ argv[3] = optional safetensors path
 
     src_path → 64 argv 8          \\ argv[1]
     out_path → 64 argv 16         \\ argv[2]
@@ -5115,26 +5168,30 @@ main argc argv :
     \\ Step 3: Parse and emit machine code
     lithos_parse tokens token_count src_base
 
-    \\ Step 4: Safetensors weights (loaded by safetensors.ls, linked separately)
-
-    \\ Step 5: Build ELF output
-    \\ For GPU kernels: wrap gpu_buf in cubin ELF
-    \\ For host code: wrap arm64_buf in ARM64 ELF
-    \\ Choose based on what was emitted
+    \\ Step 4: Build ELF output — choose GPU or host based on what was emitted
     if> gpu_pos 0
-        \\ GPU output — build cubin
-        elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size gpu_cooperative gridsync_offsets gridsync_count
-        elf_save out_path
+        goto main_gpu
     if> arm64_pos 0
-        \\ Host output — wrap in ARM64 ELF
-        elf_build_arm64 arm64_buf arm64_pos
-        elf_save out_path
+        goto main_arm64
+    goto main_exit_ok
 
-    \\ Step 6: Exit successfully
+    \\ GPU output — build cubin (elf_build takes 7 params, all globals)
+    label main_gpu
+    elf_build li_name_buf li_name_len gpu_buf gpu_pos gpu_n_kparams max_reg gpu_shmem_size
+    elf_save out_path
+    goto main_exit_ok
+
+    \\ Host output — wrap in ARM64 ELF
+    label main_arm64
+    elf_build_arm64 arm64_buf arm64_pos
+    elf_save out_path
+
+    label main_exit_ok
     ↓ $8 93
     ↓ $0 0
     trap
 
+    label main_exit_err
     ↓ $8 93
-    ↓ $0 0
+    ↓ $0 1
     trap
