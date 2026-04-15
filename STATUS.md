@@ -110,17 +110,65 @@ Lithos controls everything above the line. Below the line is either NVIDIA's dri
 
 ## Next steps
 
-### Immediate (no GPU needed)
-1. **Fix codegen register allocator** — avoid R0/R1, reserve them per SM90 convention (frame pointer, etc). This is the last blocker for compiling .ls source to working cubins.
-2. **Fix stage-1 output generation** — bootstrap compiles compiler.ls, stage-1 runs but doesn't write output
-3. **Self-host** — stage-1 compiles compiler.ls → stage-2, compare binaries
+### Immediate next step (has been unblocked)
+
+**Test `elementwise.ls` on GPU.** Two critical bugs were fixed that previously produced illegal instructions:
+
+1. **IADD3/IMAD ctrl word encoding** (emit_sm90.py) — extra41 bits weren't setting predicate sources to PT. Result: `IMAD.U32.X R12, R13, R13, ~R13, !PT` garbage instead of clean `IMAD`. Fixed: `extra41 = 0x0FF1E000 | rs3` (IADD3), `0x078E0200 | rs3` (IMAD).
+
+2. **`temp()` returned duplicate registers** (codegen.py) — used `id(object())` for names, but Python GCs the throwaway and recycles memory addresses. Every temp got the same register, so `IMAD Rd, tid, tid, tid` instead of `IMAD Rd, ctaid, blockdim, tid`. Fixed with monotonic counter.
+
+After fixes, `elementwise.ls` disassembles to semantically correct SASS:
+```
+S2R R13, SR_TID.X
+S2R R14, SR_CTAID.X
+IADD3 R15, RZ, 0x100, RZ        ; blockdim = 256
+IMAD R12, R14, R15, R13          ; global_idx = ctaid * 256 + tid
+IADD3 R14, RZ, 0x4, RZ           ; stride = 4
+IMAD R13, R12, R14, RZ           ; byte_offset = idx * 4
+IADD3 R15, P0, R9, UR13, RZ      ; addr = input + offset
+LDG.E R16, desc[UR0][R15.64]     ; load input[idx]
+...
+```
+
+**To test on 192.222.50.140:**
+```bash
+cd ~/lithos && git pull origin exp
+cd bootstrap-py && rm -rf __pycache__
+python3 main.py ../inference/elementwise.ls -o /tmp/elem.cubin --target gpu
+/tmp/test_sass /tmp/elem.cubin
+```
+
+If it runs correctly, **lithos has compiled .ls source to executable GPU opcodes end-to-end** — the v0.3 milestone.
+
+### Likely next bugs if elementwise.ls fails
+
+The SASS looks correct but there may still be issues:
+
+- **LDG/STG with UR registers** — the `desc[UR0][R15.64]` syntax means the memory operation uses a uniform register descriptor. We're emitting this, but if the uniform register isn't populated the load fails. May need a ULDC instruction to set up UR0/UR4 first.
+- **Unused reg count** — if get_register_count() returns too few, SM may allocate insufficient registers for the kernel.
+- **FADD on uninitialized reg** — if we emit `FADD R13, R13, R13` where R13 holds the loaded value, that's fine. But if the load went to a different reg and we FADD the wrong one, garbage out.
+
+### After elementwise works
+
+4. **Compile `gemv.ls`** (186 lines, GPTQ W4A16 GEMV) — real inference kernel. Uses shared memory, warp reductions, dequantization. Will surface gaps in codegen for more complex patterns.
+
+5. **Fix stage-1 output generation** — the assembly-bootstrap-produced stage-1 compiler runs (no segfault, BSS fix worked) but doesn't write its output file. Bug is in compiler.ls's own ELF writer composition.
+
+6. **Self-host** — stage-1 compiles compiler.ls → stage-2. Fixed point: stage-2 compiles compiler.ls → stage-3, and stage-2 == stage-3 byte-exact.
 
 ### On GH200 (needs GPU)
-4. **Test compiler-pipeline kernel** — .ls source → lexer → parser → codegen → emitter → cubin → execute
-5. **Test lithos runtime path** — QMD + SPD + pushbuffer + doorbell, bypassing CUDA API entirely
-6. **Compile and run full inference kernel** — gemv.ls (186 lines GPTQ W4A16 GEMV)
-7. **First token** — forward pass through Qwen 3.5 27B
-8. **Full inference** — autoregressive generation, EOS detection, streaming output
+
+7. **Lithos runtime path** — QMD + SPD + pushbuffer + doorbell, bypassing `cuModuleLoadData` and `cuLaunchKernel`. Runtime encoding validated byte-exact against nvcc (tools/test_runtime_encoding.py passes). Actual submission requires either:
+   - lithos.ko loaded (means unbinding nvidia, risky on single machine)
+   - vfio-pci (generic Linux, no NVIDIA code)
+   - Fresh machine we don't mind reconfiguring
+
+8. **Full inference pipeline** — all 10 inference kernels compiled, runtime wired, weights loaded from safetensors.
+
+9. **First token** — forward pass through Qwen 3.5 27B. 64 layers (48 DeltaNet + 16 full-attention), GPTQ W4A16.
+
+10. **Autoregressive generation** — EOS detection, streaming output, performance tuning.
 
 ### On macOS
 9. **Verify lithos-stage1 correctness** — compile simple .ls programs, verify output
