@@ -2325,13 +2325,24 @@ walk_body body_start body_end :
         return 0
     t tok_type p
 
-    \\ Statement-terminator newline: commit any pending binding.
+    \\ Statement-terminator newline: commit any pending binding or
+    \\ reassignment, then reset stmt_start / pending_op.
     if== t 1
+        ← 64 pending_op_v 0
         _pbl → 64 pending_bind_len_v
         if> _pbl 0
             _pbo → 64 pending_bind_off_v
+            _existing sym_find _pbo _pbl
             rb vpop
-            sym_add _pbo _pbl rb
+            if>= _existing 0
+                et → 64 emit_target_v
+                if== et 1
+                    \\ Reassignment: MOV Xexisting, Xrb
+                    \\ ORR Xd, XZR, Xm = 0xAA0003E0 | (Rm<<16) | Rd
+                    movw 0xAA0003E0 | (rb << 16) | _existing
+                    arm64_emit32 movw
+            if< _existing 0
+                sym_add _pbo _pbl rb
             ← 64 pending_bind_len_v 0
         ← 64 stmt_start_v 1
         ← 64 walk_pos_v p + 1
@@ -2343,8 +2354,15 @@ walk_body body_start body_end :
         _pbl → 64 pending_bind_len_v
         if> _pbl 0
             _pbo → 64 pending_bind_off_v
+            _existing sym_find _pbo _pbl
             rb vpop
-            sym_add _pbo _pbl rb
+            if>= _existing 0
+                et → 64 emit_target_v
+                if== et 1
+                    movw 0xAA0003E0 | (rb << 16) | _existing
+                    arm64_emit32 movw
+            if< _existing 0
+                sym_add _pbo _pbl rb
             ← 64 pending_bind_len_v 0
         return 0
 
@@ -2414,7 +2432,33 @@ walk_body body_start body_end :
                             goto wb_loop
         r sym_find off len
         if>= r 0
-            ← 64 stmt_start_v 0
+            \\ Known symbol.  At statement start it's a reassignment
+            \\ target (stash as pending_bind; the newline handler will
+            \\ MOV the expression result into the existing reg).
+            \\ Mid-expression it's a normal read — push the reg.
+            _ss0 → 64 stmt_start_v
+            if== _ss0 1
+                \\ Peek next token — if it's a structural delimiter
+                \\ (newline/eof/indent), this is a bare `i` read
+                \\ statement (returns i in X0), not a reassignment.
+                npk → 64 walk_pos_v
+                ntk tok_type npk
+                if== ntk 1
+                    ← 64 stmt_start_v 0
+                    vpush_with_op r
+                    goto wb_loop
+                if== ntk 0
+                    ← 64 stmt_start_v 0
+                    vpush_with_op r
+                    goto wb_loop
+                if== ntk 2
+                    ← 64 stmt_start_v 0
+                    vpush_with_op r
+                    goto wb_loop
+                ← 64 pending_bind_off_v off
+                ← 64 pending_bind_len_v len
+                ← 64 stmt_start_v 0
+                goto wb_loop
             vpush_with_op r
             goto wb_loop
         cidx comp_find off len
