@@ -789,6 +789,60 @@ emit_a64_cos rd ra :
     arm64_emit32 0xD503201F
 
 \\ INTEGER (64-bit — Xd, Xn, Xm)
+\\
+\\ compiler.ls uses `+`/`-`/`*`/`/` for integer pointer arithmetic,
+\\ buffer indexing, etc.  The walker used to emit the FP variants for
+\\ every arith operator regardless of operand type, which produced
+\\ garbage when stage1 tried to self-host (every `tokens + idx*12` in
+\\ the host code became a FADD on register numbers reinterpreted as
+\\ FP registers).  These integer emitters let the walker pick the
+\\ right flavour for ARM64 host targets.
+
+\\ MOV Xd, #imm  — loads a 64-bit immediate via MOVZ + up to 3 MOVKs.
+\\ Handles negatives via sign-bit scan: each 16-bit slice equal to 0xFFFF
+\\ is skipped on MOVN-shortcut only if the full low-chain is all-ones;
+\\ for simplicity we always use MOVZ + MOVK and emit 4 instructions for
+\\ negative 64-bit values.
+emit_a64_mov_imm rd imm :
+    w0 imm & 0xFFFF
+    w1 (imm >> 16) & 0xFFFF
+    w2 (imm >> 32) & 0xFFFF
+    w3 (imm >> 48) & 0xFFFF
+    \\ MOVZ Xd, #w0, lsl #0  = 0xD2800000 | (w0<<5) | Rd
+    enc 0xD2800000 | (w0 << 5) | rd
+    arm64_emit32 enc
+    if!= w1 0
+        \\ MOVK Xd, #w1, lsl #16  = 0xF2A00000 | (w1<<5) | Rd
+        enc 0xF2A00000 | (w1 << 5) | rd
+        arm64_emit32 enc
+    if!= w2 0
+        \\ MOVK Xd, #w2, lsl #32  = 0xF2C00000 | (w2<<5) | Rd
+        enc 0xF2C00000 | (w2 << 5) | rd
+        arm64_emit32 enc
+    if!= w3 0
+        \\ MOVK Xd, #w3, lsl #48  = 0xF2E00000 | (w3<<5) | Rd
+        enc 0xF2E00000 | (w3 << 5) | rd
+        arm64_emit32 enc
+
+\\ ADD Xd, Xn, Xm  = 0x8B000000 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_add rd ra rb :
+    val 0x8B000000 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
+
+\\ SUB Xd, Xn, Xm  = 0xCB000000 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_sub rd ra rb :
+    val 0xCB000000 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
+
+\\ MUL Xd, Xn, Xm  = MADD Xd,Xn,Xm,XZR = 0x9B007C00 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_mul rd ra rb :
+    val 0x9B007C00 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
+
+\\ SDIV Xd, Xn, Xm  = 0x9AC00C00 | (Rm<<16) | (Rn<<5) | Rd
+emit_a64_sdiv rd ra rb :
+    val 0x9AC00C00 | (rb << 16) | (ra << 5) | rd
+    arm64_emit32 val
 
 \\ BRANCHES
 
@@ -1868,7 +1922,11 @@ bind_args comp_idx :
 emit_primitive t :
     et → 64 emit_target_v
 
-    \\ Binary FP: + - * /
+    \\ Binary arith: + - * /
+    \\ GPU target (et==0) uses float MUFU/FFMA — Lithos is an FP
+    \\ language on SM90.  ARM64 host target (et==1) uses integer
+    \\ ops because compiler.ls's host glue does pointer arithmetic,
+    \\ BSS offset math, byte indexing, etc. — all integer.
     if== t 50
         rb vpop
         ra vpop
@@ -1876,7 +1934,7 @@ emit_primitive t :
         if== et 0
             emit_fadd rd ra rb
         if== et 1
-            emit_a64_fadd rd ra rb
+            emit_a64_add rd ra rb
         vpush rd
         return 1
     if== t 51
@@ -1886,7 +1944,7 @@ emit_primitive t :
         if== et 0
             emit_fsub rd ra rb
         if== et 1
-            emit_a64_fsub rd ra rb
+            emit_a64_sub rd ra rb
         vpush rd
         return 1
     if== t 52
@@ -1896,7 +1954,7 @@ emit_primitive t :
         if== et 0
             emit_fmul rd ra rb
         if== et 1
-            emit_a64_fmul rd ra rb
+            emit_a64_mul rd ra rb
         vpush rd
         return 1
     if== t 53
@@ -1906,7 +1964,7 @@ emit_primitive t :
         if== et 0
             emit_fdiv rd ra rb rd
         if== et 1
-            emit_a64_fdiv rd ra rb
+            emit_a64_sdiv rd ra rb
         vpush rd
         return 1
 
@@ -2230,6 +2288,8 @@ walk_body body_start body_end :
         et → 64 emit_target_v
         if== et 0
             emit_mov_imm rd val
+        if== et 1
+            emit_a64_mov_imm rd val
         vpush rd
         ← 64 walk_pos_v p + 1
         goto wb_loop
@@ -2238,6 +2298,8 @@ walk_body body_start body_end :
         et → 64 emit_target_v
         if== et 0
             emit_mov_imm rd 0
+        if== et 1
+            emit_a64_mov_imm rd 0
         vpush rd
         ← 64 walk_pos_v p + 1
         goto wb_loop

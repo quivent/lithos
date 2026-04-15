@@ -2263,6 +2263,34 @@ parse_binding_compose:
     bl      parse_expr              // result reg in w0
     mov     w4, w0
 
+    // If parse_expr returned an arg/return register (X0..X8), MOV
+    // the value into a fresh allocator slot so consecutive call
+    // bindings don't share X0.
+    cmp     w4, #REG_FIRST
+    b.ge    .Lbind_no_x0_move
+    // Save x19 explicitly (parse_expr-clobbered position) and w4
+    // (current binding reg = X0..X7) before allocating.
+    sub     sp, sp, #16
+    str     x19, [sp, #0]
+    str     w4, [sp, #8]
+    bl      alloc_reg
+    mov     w5, w0
+    ldr     x19, [sp, #0]
+    ldr     w4, [sp, #8]
+    add     sp, sp, #16
+    // Emit MOV Xfresh, Xw4
+    sub     sp, sp, #16
+    str     x19, [sp, #0]
+    str     w5, [sp, #8]
+    mov     w0, w5
+    mov     w1, w4
+    bl      emit_mov_reg
+    ldr     x19, [sp, #0]
+    ldr     w5, [sp, #8]
+    add     sp, sp, #16
+    mov     w4, w5
+.Lbind_no_x0_move:
+
     // Save post-expr position, restore x19 to name for sym_add
     ldr     x5, [sp]
     str     x19, [sp]
