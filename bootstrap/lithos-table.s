@@ -135,7 +135,8 @@
 // The target program uses X9-X28 freely. The parser's own X19-X28 are separate.
 // X18 is reserved on macOS but usable in the target (Linux GH200).
 .equ REG_FIRST,     9
-.equ REG_LAST,      28
+.equ REG_LAST,      27
+.equ REG_BSS_BASE,  28     // X28 reserved to hold BSS base address
 
 // Condition codes
 .equ CC_EQ, 0
@@ -180,6 +181,7 @@
 .extern ls_sym_count
 .extern ls_sym_table
 .extern ls_token_buf
+.extern ls_bss_offset
 
 // ============================================================
 // .text — all code
@@ -972,6 +974,11 @@ parse_tokens:
     add     x0, x0, :lo12:ls_sym_count
     str     wzr, [x0]
 
+    // Reset BSS allocation offset (for buf declarations)
+    adrp    x0, ls_bss_offset
+    add     x0, x0, :lo12:ls_bss_offset
+    str     xzr, [x0]
+
     // Clear scope
     adrp    x0, scope_depth
     add     x0, x0, :lo12:scope_depth
@@ -1187,12 +1194,29 @@ parse_buf_decl:
     mov     w2, w0                      // w2 = buf size for SYM_REG
     mov     x19, x20                    // restore x19 to name token
 .Lbuf_add_sym:
+    // Save size on stack (w2 gets clobbered by sym_add)
+    stp     x2, xzr, [sp, #-16]!
+    // Compute BSS offset: current ls_bss_offset
+    adrp    x4, ls_bss_offset
+    add     x4, x4, :lo12:ls_bss_offset
+    ldr     x5, [x4]
+    // Store BSS offset in SYM_REG instead of size.
+    mov     w2, w5
     mov     w1, #KIND_BUF
-    // w2 = buf size (stored in SYM_REG field for BSS computation)
     adrp    x3, scope_depth
     add     x3, x3, :lo12:scope_depth
     ldr     w3, [x3]
     bl      sym_add
+    // Restore size to x6
+    ldp     x6, xzr, [sp], #16
+    // Advance ls_bss_offset by buf size (aligned to 8 bytes)
+    adrp    x4, ls_bss_offset
+    add     x4, x4, :lo12:ls_bss_offset
+    ldr     x5, [x4]
+    add     x5, x5, x6
+    add     x5, x5, #7
+    and     x5, x5, #-8
+    str     x5, [x4]
     add     x19, x19, #TOK_STRIDE_SZ   // skip name
     ldr     w0, [x19]
     cmp     w0, #TOK_INT
@@ -2008,10 +2032,14 @@ parse_mem_store:
 
     bl      parse_expr              // width
     mov     w4, w0
+    stp     x4, xzr, [sp, #-16]!
     bl      parse_expr              // addr (base, possibly with +offset inline)
     mov     w5, w0
+    ldp     x4, xzr, [sp], #16
+    stp     x4, x5, [sp, #-16]!
     bl      parse_expr              // value (or offset if there's a 4th operand)
     mov     w6, w0
+    ldp     x4, x5, [sp], #16
     // Check for 4th operand: if present, w6 is offset and next expr is value
     cmp     x19, x27
     b.hs    .Lstore_emit
@@ -3089,6 +3117,44 @@ parse_atom:
     ldr     w1, [x0, #SYM_KIND]
     cmp     w1, #KIND_COMP
     b.eq    .La_ident_unknown       // dispatch as expression-level call
+    // Check if it's a buf — emit ADD Xresult, X28 (BSS_BASE), #offset
+    cmp     w1, #KIND_BUF
+    b.ne    .La_ident_reg
+    // Buf: compute address as BSS_BASE + offset
+    ldr     w2, [x0, #SYM_REG]      // w2 = BSS offset
+    add     x19, x19, #TOK_STRIDE_SZ
+    // Save offset on stack; alloc_reg clobbers caller-saved regs
+    stp     x2, xzr, [sp, #-16]!
+    bl      alloc_reg               // w0 = fresh register for result
+    mov     w4, w0                  // result register
+    ldp     x2, xzr, [sp], #16
+    // Emit: ADD Xresult, X28, #(offset & 0xFFF)
+    // ARM64 ADD imm encoding: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd
+    and     w5, w2, #0xFFF
+    lsl     w5, w5, #10
+    mov     w6, #28
+    lsl     w6, w6, #5
+    orr     w0, w4, w5
+    orr     w0, w0, w6
+    movk    w0, #0x9100, lsl #16
+    stp     x2, x4, [sp, #-16]!    // save offset and result reg
+    bl      emit32
+    ldp     x2, x4, [sp], #16
+    // If offset >= 4096, emit another ADD with LSL #12
+    lsr     w5, w2, #12
+    cbz     w5, .La_buf_done
+    and     w5, w5, #0xFFF
+    lsl     w5, w5, #10             // imm12 << 10
+    lsl     w6, w4, #5              // Rn=Xresult
+    orr     w0, w4, w5
+    orr     w0, w0, w6
+    movk    w0, #0x9140, lsl #16    // ADD (imm, LSL #12): sh=1 (bit 22)
+    bl      emit32
+.La_buf_done:
+    mov     w0, w4                  // return result register
+    ldp     x29, x30, [sp], #16
+    ret
+.La_ident_reg:
     ldr     w0, [x0, #SYM_REG]
     add     x19, x19, #TOK_STRIDE_SZ
     // Check for array subscript: name[expr]

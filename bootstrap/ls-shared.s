@@ -85,6 +85,9 @@ ls_last_comp_addr:  .quad 0           // code offset of last composition (entry 
 .globl ls_load_width
 ls_load_width:      .word 0           // width literal for → operator (8/32/64)
 
+.globl ls_bss_offset
+ls_bss_offset:      .quad 0           // running BSS offset for buf allocations
+
 // ------------------------------------------------------------
 // .bss — the big shared buffers
 // ------------------------------------------------------------

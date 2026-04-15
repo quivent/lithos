@@ -1,3 +1,4 @@
+ls_bss_offset build/ls-shared.o
 ls_code_buf build/ls-shared.o
 ls_code_pos build/ls-shared.o
 ls_comp_count build/ls-shared.o
