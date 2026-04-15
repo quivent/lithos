@@ -1620,6 +1620,26 @@ buf next_reg_v         8
 \\ Scan cursor used by body walker.
 buf walk_pos_v         8
 
+\\ Statement-level binding + simple infix support.
+\\
+\\ Binding: when the walker sees the first token of a statement and it
+\\ is an unknown IDENT (not in sym_table, not a composition, not a
+\\ label), that token is the binding target.  The rest of the line is
+\\ walked as an expression that leaves one value on vstack.  At the
+\\ terminating newline we pop and sym_add(name, result).
+\\
+\\ Infix: Lithos expressions are infix (`idx tc * 12`).  A stack
+\\ machine needs RPN (`tc 12 *`), so we track a pending operator:
+\\ when an operator token is seen we stash its type instead of
+\\ popping, and when the next atom is pushed we immediately apply the
+\\ stashed op to (prev_top, new_value) → result, and push result.
+\\ No precedence — strict left-to-right evaluation.  compiler.ls uses
+\\ this style ubiquitously (`idx tc * 12`, `i i + 1`, `buf + written`).
+buf stmt_start_v           8
+buf pending_bind_off_v     8
+buf pending_bind_len_v     8
+buf pending_op_v           8   \\ token type of pending binary op, 0=none
+
 \\ Emit target: 0 = GPU (SASS), 1 = ARM64 (host).
 buf emit_target_v      8
 
@@ -1764,6 +1784,42 @@ vpop :
     ← 64 vstack_sp_v sp
     r → 32 vstack_v + sp * 4
     r
+
+\\ Push a value and, if there's a pending infix operator, apply it to
+\\ (previous top, this value) before pushing the result.  Called
+\\ whenever the walker encounters an atom (integer literal, ident
+\\ reference, buf address, reg-read result) inside an expression.
+\\
+\\ Left-to-right, no precedence: `a + b * c` becomes `((a+b)*c)`.
+\\ compiler.ls uses single-op expressions almost everywhere, so the
+\\ LTR behavior is fine in practice.
+vpush_with_op reg :
+    op → 64 pending_op_v
+    if== op 0
+        vpush reg
+        return 0
+    \\ Apply the pending op to (stack_top, reg).
+    lhs vpop
+    rd alloc_reg
+    et → 64 emit_target_v
+    \\ +
+    if== op 50
+        if== et 1
+            emit_a64_add rd lhs reg
+    \\ -
+    if== op 51
+        if== et 1
+            emit_a64_sub rd lhs reg
+    \\ *
+    if== op 52
+        if== et 1
+            emit_a64_mul rd lhs reg
+    \\ /
+    if== op 53
+        if== et 1
+            emit_a64_sdiv rd lhs reg
+    ← 64 pending_op_v 0
+    vpush rd
 
 \\ Phase 1 — Scan for top-level compositions.
 \\ A composition header is:  IDENT (IDENT*) COLON NEWLINE
@@ -2253,24 +2309,48 @@ parse_int_tok offset length :
 
 walk_body body_start body_end :
     ← 64 walk_pos_v body_start
+    ← 64 stmt_start_v 1
+    ← 64 pending_bind_off_v 0
+    ← 64 pending_bind_len_v 0
     label wb_loop
     p → 64 walk_pos_v
     if>= p body_end
+        \\ Finalize any trailing binding without a terminating newline.
+        _pbl → 64 pending_bind_len_v
+        if> _pbl 0
+            _pbo → 64 pending_bind_off_v
+            rb vpop
+            sym_add _pbo _pbl rb
+            ← 64 pending_bind_len_v 0
         return 0
     t tok_type p
 
-    \\ Skip structural tokens.
+    \\ Statement-terminator newline: commit any pending binding.
     if== t 1
+        _pbl → 64 pending_bind_len_v
+        if> _pbl 0
+            _pbo → 64 pending_bind_off_v
+            rb vpop
+            sym_add _pbo _pbl rb
+            ← 64 pending_bind_len_v 0
+        ← 64 stmt_start_v 1
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 2
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 0
+        _pbl → 64 pending_bind_len_v
+        if> _pbl 0
+            _pbo → 64 pending_bind_off_v
+            rb vpop
+            sym_add _pbo _pbl rb
+            ← 64 pending_bind_len_v 0
         return 0
 
-    \\ Integer / float literal — load immediate, push.
+    \\ Integer / float literal — load immediate, push (folding pending op).
     if== t 3
+        ← 64 stmt_start_v 0
         off tok_offset p
         len tok_length p
         val parse_int_tok off len
@@ -2280,17 +2360,18 @@ walk_body body_start body_end :
             emit_mov_imm rd val
         if== et 1
             emit_a64_mov_imm rd val
-        vpush rd
+        vpush_with_op rd
         ← 64 walk_pos_v p + 1
         goto wb_loop
     if== t 4
+        ← 64 stmt_start_v 0
         rd alloc_reg
         et → 64 emit_target_v
         if== et 0
             emit_mov_imm rd 0
         if== et 1
             emit_a64_mov_imm rd 0
-        vpush rd
+        vpush_with_op rd
         ← 64 walk_pos_v p + 1
         goto wb_loop
 
@@ -2308,12 +2389,14 @@ walk_body body_start body_end :
         walk_if_kw
         goto wb_loop
 
-    \\ Identifier: arg lookup, composition reference, or pseudo-primitive.
+    \\ Identifier: binding target, arg lookup, composition reference, or
+    \\ pseudo-primitive.
     if== t 5
         off tok_offset p
         len tok_length p
         ← 64 walk_pos_v p + 1
-        \\ Builtin: `trap` → SVC #0 on host.
+        \\ Builtin: `trap` → SVC #0 on host.  Must run BEFORE the binding
+        \\ check because `trap` with no binding-target must still work.
         if== len 4
             src → 64 lex_src_v
             tb0 → 8 src + off
@@ -2327,13 +2410,16 @@ walk_body body_start body_end :
                             et → 64 emit_target_v
                             if== et 1
                                 arm64_emit32 0xD4000001
+                            ← 64 stmt_start_v 0
                             goto wb_loop
         r sym_find off len
         if>= r 0
-            vpush r
+            ← 64 stmt_start_v 0
+            vpush_with_op r
             goto wb_loop
         cidx comp_find off len
         if>= cidx 0
+            ← 64 stmt_start_v 0
             \\ Inline expansion (spec §4.1): recursively walk the referenced
             \\ composition's body. Symbols/regs are shared with the caller —
             \\ this is compile-time concatenation, not a function call.
@@ -2343,13 +2429,56 @@ walk_body body_start body_end :
             walk_body cbs cbe
             ← 64 walk_pos_v saved
             goto wb_loop
-        \\ Unknown identifier — allocate a placeholder register so downstream
-        \\ operators still have something to pop.
+        \\ Unknown identifier at statement start — it's a new binding target.
+        \\ Stash the name; the expression on the rest of the line will push
+        \\ one value onto vstack, which the newline handler commits via
+        \\ sym_add.  Also check for `name :` label form — if the next token
+        \\ is COLON, skip both tokens (label definition, no binding).
+        _ss → 64 stmt_start_v
+        if== _ss 1
+            np → 64 walk_pos_v
+            nt tok_type np
+            if== nt 72
+                \\ `name :` label — consume the COLON, no binding.
+                ← 64 walk_pos_v np + 1
+                ← 64 stmt_start_v 0
+                goto wb_loop
+            ← 64 pending_bind_off_v off
+            ← 64 pending_bind_len_v len
+            ← 64 stmt_start_v 0
+            goto wb_loop
+        \\ Unknown identifier mid-expression — treat as placeholder.
         rd alloc_reg
         vpush rd
         goto wb_loop
 
-    \\ Primitive operator?
+    \\ Infix binary operator?  Stash as pending op; vpush_with_op will
+    \\ apply it when the right operand gets pushed.  This lets the
+    \\ stack machine handle infix Lithos syntax (`a + b`, `idx * 12`)
+    \\ without needing precedence.
+    if== t 50
+        ← 64 stmt_start_v 0
+        ← 64 pending_op_v 50
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 51
+        ← 64 stmt_start_v 0
+        ← 64 pending_op_v 51
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 52
+        ← 64 stmt_start_v 0
+        ← 64 pending_op_v 52
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+    if== t 53
+        ← 64 stmt_start_v 0
+        ← 64 pending_op_v 53
+        ← 64 walk_pos_v p + 1
+        goto wb_loop
+
+    \\ Non-infix primitive operator — SASS-only primitives, etc.
+    ← 64 stmt_start_v 0
     ← 64 walk_pos_v p + 1
     ok emit_primitive t
     if== ok 1
