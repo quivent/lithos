@@ -179,18 +179,13 @@ match_keyword src offset length :
                 if== b2 114
                     kw_type 16
                     return
-
-    if== length 3
-        b0 → 8 (src + offset)
-        b1 → 8 (src + offset + 1)
-        b2 → 8 (src + offset + 2)
         \\ "buf" -> BUF (98)
         if== b0 98
             if== b1 117
                 if== b2 102
                     kw_type 98
                     return
-        \\ "var" -> VAR (99) — treated like IDENT for now
+        \\ "var" -> VAR (99)
         if== b0 118
             if== b1 97
                 if== b2 114
@@ -2568,17 +2563,29 @@ wb_parse_cond tok_pos :
     return _cond
 
 \\ wb_emit_if — emit CMP + B.cond for an ARM64 `if` statement.
+\\ Handles both `if== a b` (two-operand comparison) and bare `if expr`
+\\ (truthy check — branch if expr == 0).
 wb_emit_if tok_pos :
-    _cond wb_parse_cond tok_pos
-    _icond _cond ^ 1
+    _iflen tok_length tok_pos
     ← 64 walk_pos_v tok_pos + 1
-    _op1 alloc_scratch
-    _op2 alloc_scratch
-    wb_eval_one_atom _op1
-    wb_eval_one_atom _op2
-    emit_a64_cmp_reg _op1 _op2
-    _bsite → 64 arm64_pos_v
-    emit_a64_bcond_ph _icond
+    if== _iflen 2
+        \\ Bare `if expr` — truthy check.  CMP expr, XZR; B.EQ skip.
+        _op1 alloc_scratch
+        wb_eval_one_atom _op1
+        emit_a64_cmp_reg _op1 31
+        _bsite → 64 arm64_pos_v
+        emit_a64_bcond_ph 0
+    else
+        \\ `if== a b` / `if> a b` etc. — two-operand comparison.
+        _cond wb_parse_cond tok_pos
+        _icond _cond ^ 1
+        _op1 alloc_scratch
+        _op2 alloc_scratch
+        wb_eval_one_atom _op1
+        wb_eval_one_atom _op2
+        emit_a64_cmp_reg _op1 _op2
+        _bsite → 64 arm64_pos_v
+        emit_a64_bcond_ph _icond
     _ci → 64 current_indent_v
     _body_ind _ci + 4
     _isd → 64 if_stack_depth_v
