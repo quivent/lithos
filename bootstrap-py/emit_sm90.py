@@ -849,6 +849,60 @@ class SM90Emitter:
         iword = OP_MUFU | (self._track_rd(rd) << 16) | (rs << 32)
         self._sinst(iword, _ctrl_mufu(MUFU_EX2, 7))
 
+    def emit_mufu_lg2(self, rd: int, rs: int) -> None:
+        """MUFU.LG2 Rd, Rs -- log2(x) approximation."""
+        iword = OP_MUFU | (self._track_rd(rd) << 16) | (rs << 32)
+        self._sinst(iword, _ctrl_mufu(MUFU_LG2, 7))
+
+    def emit_mufu_sin(self, rd: int, rs: int) -> None:
+        """MUFU.SIN Rd, Rs -- sine approximation."""
+        iword = OP_MUFU | (self._track_rd(rd) << 16) | (rs << 32)
+        self._sinst(iword, _ctrl_mufu(MUFU_SIN, 7))
+
+    def emit_mufu_cos(self, rd: int, rs: int) -> None:
+        """MUFU.COS Rd, Rs -- cosine approximation."""
+        iword = OP_MUFU | (self._track_rd(rd) << 16) | (rs << 32)
+        self._sinst(iword, _ctrl_mufu(MUFU_COS, 7))
+
+    def emit_mufu_rsq(self, rd: int, rs: int) -> None:
+        """MUFU.RSQ Rd, Rs -- reciprocal sqrt approximation."""
+        iword = OP_MUFU | (self._track_rd(rd) << 16) | (rs << 32)
+        self._sinst(iword, _ctrl_mufu(MUFU_RSQ, 7))
+
+    def emit_mufu_sqrt(self, rd: int, rs: int) -> None:
+        """MUFU.SQRT Rd, Rs -- sqrt approximation."""
+        iword = OP_MUFU | (self._track_rd(rd) << 16) | (rs << 32)
+        self._sinst(iword, _ctrl_mufu(MUFU_SQRT, 7))
+
+    # ===========================================================
+    # FP16 -> FP32 widening conversion
+    # ===========================================================
+
+    def emit_cvt_f16_to_f32(self, rd: int, rs: int) -> None:
+        """Widen low FP16 half of Rs into FP32 Rd.
+
+        Emits `HADD2.F32 Rd, -RZ, Rs.H0_H0`, which is exactly what nvcc
+        generates for cvt.f32.f16 on SM_90. Encoding verified byte-exact
+        against kernels/gptq_matvec_tc.sass:
+          HADD2.F32 R3,  -RZ, R0.H0_H0  ->  iword 0x20000000ff037230
+                                            ctrl  0x004fc80000004100
+          HADD2.F32 R14, -RZ, R0.H0_H0  ->  iword 0x20000000ff0e7230
+
+        Fields:
+          [15:0]  opcode 0x7230 (HADD2 with F32 output)
+          [23:16] Rd
+          [31:24] Ra = RZ (0xff), negated via high modifier bits
+          [39:32] Rs
+          [63:48] 0x2000 — combined F32 output + H0_H0 broadcast + negate-Ra
+        """
+        iword = (0x7230
+                 | (self._track_rd(rd) << 16)
+                 | (RZ << 24)
+                 | (rs << 32)
+                 | (0x2000 << 48))
+        ctrl = 0x004fc80000004100
+        self._sinst(iword, ctrl)
+
     # ===========================================================
     # EMITTER PROTOCOL (CodeGenerator compatibility layer)
     # ===========================================================

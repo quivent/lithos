@@ -443,6 +443,35 @@ class CodeGenerator:
                 src_reg = self._emit_expr(args[1])
                 self.emitter.emit_mufu_rcp(dst_reg, src_reg)
                 return
+            elif name == "lg" and len(args) == 2:
+                # log2(x) -- used by decay_gate.ls for softplus
+                dst_reg = self._emit_expr(args[0])
+                src_reg = self._emit_expr(args[1])
+                self.emitter.emit_mufu_lg2(dst_reg, src_reg)
+                return
+            elif name == "sin" and len(args) == 2:
+                # sine -- used by attend.ls for RoPE
+                dst_reg = self._emit_expr(args[0])
+                src_reg = self._emit_expr(args[1])
+                self.emitter.emit_mufu_sin(dst_reg, src_reg)
+                return
+            elif name == "cos" and len(args) == 2:
+                # cosine -- used by attend.ls for RoPE
+                dst_reg = self._emit_expr(args[0])
+                src_reg = self._emit_expr(args[1])
+                self.emitter.emit_mufu_cos(dst_reg, src_reg)
+                return
+            elif name == "rsqrt" and len(args) == 2:
+                # 1/sqrt(x) -- used by reduce.ls for RMSNorm, attend.ls for scale
+                dst_reg = self._emit_expr(args[0])
+                src_reg = self._emit_expr(args[1])
+                self.emitter.emit_mufu_rsq(dst_reg, src_reg)
+                return
+            elif name == "sqrt" and len(args) == 2:
+                dst_reg = self._emit_expr(args[0])
+                src_reg = self._emit_expr(args[1])
+                self.emitter.emit_mufu_sqrt(dst_reg, src_reg)
+                return
 
         # Default: ARM64-style call via registers + BL
         for i, arg in enumerate(args):

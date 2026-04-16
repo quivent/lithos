@@ -269,12 +269,6 @@ The following are NEVER written in source. The compiler derives them:
 | Tiling | `***`, `project` | Compiler decides tile shape |
 | Grid synchronization | Layer boundaries | Cooperative barrier |
 
-### 4.3 Self-Hosting
-
-The compiler (`compiler/compiler.ls`, 5,467 lines) is written in Lithos with
-7 sections: ARM64 backend, GPU backend, Lexer, Parser, Safetensors reader,
-ELF writer, Main entry. Bootstrapped from pure ARM64 assembly (`bootstrap/*.s`).
-
 ---
 
 ## 5. Type System
@@ -290,6 +284,23 @@ The compiler infers types from usage context. There are no type declarations,
 type annotations, or type errors. If you write `* -1` on a vector, you get
 elementwise negation. If you write `** -1` on a vector, you get the same thing
 with an explicit loop.
+
+### 5.1 Shape Annotations
+
+| Symbol | Shape | Rank |
+|--------|-------|------|
+| `[]` | vector | 1 |
+| `[][]` | matrix | 2 |
+| `[][][]` | layer | 3 |
+
+Shape annotations follow a kernel name to declare the rank of data it operates on.
+Used in kernel pipeline listings (unroll files) for readability.
+
+```
+RMSNorm []              \\ vector
+QKVProjection [][]      \\ matrix
+Recurrence [][][]       \\ layer
+```
 
 ---
 
